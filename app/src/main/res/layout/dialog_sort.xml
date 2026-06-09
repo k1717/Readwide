@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RadioGroup xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/sort_group"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <RadioButton android:id="@+id/sort_name_asc" android:text="@string/sort_name_asc" android:layout_width="match_parent" android:layout_height="48dp" />
+    <RadioButton android:id="@+id/sort_name_desc" android:text="@string/sort_name_desc" android:layout_width="match_parent" android:layout_height="48dp" />
+    <RadioButton android:id="@+id/sort_date_new" android:text="@string/sort_date_new" android:layout_width="match_parent" android:layout_height="48dp" />
+    <RadioButton android:id="@+id/sort_date_old" android:text="@string/sort_date_old" android:layout_width="match_parent" android:layout_height="48dp" />
+    <RadioButton android:id="@+id/sort_size_large" android:text="@string/sort_size_large" android:layout_width="match_parent" android:layout_height="48dp" />
+    <RadioButton android:id="@+id/sort_size_small" android:text="@string/sort_size_small" android:layout_width="match_parent" android:layout_height="48dp" />
+    <RadioButton android:id="@+id/sort_type" android:text="@string/sort_type" android:layout_width="match_parent" android:layout_height="48dp" />
+
+</RadioGroup>

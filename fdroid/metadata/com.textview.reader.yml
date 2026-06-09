@@ -1,0 +1,44 @@
+# Draft metadata for an F-Droid Data merge request.
+# Copy this file to fdroiddata/metadata/com.textview.reader.yml and replace
+# the commit value with the final immutable Git commit hash for the 1.0.0 tag.
+
+Categories:
+  - Reading
+License: Apache-2.0
+AuthorName: k1717
+AuthorEmail: readwide.kj7w5@addy.io
+SourceCode: https://github.com/k1717/Readwide
+IssueTracker: https://github.com/k1717/Readwide/issues
+Changelog: https://github.com/k1717/Readwide/blob/main/CHANGELOG.md
+Summary: Local-first reader and file browser
+Description: |-
+  Readwide is a local-first Android reader and file browser for TXT, PDF,
+  EPUB, Word documents, images, comic archives, and archive workflows.
+
+  The default build does not request INTERNET permission and does not include
+  ads, analytics, account login, Firebase, Google Play Services, or Junrar /
+  UnRAR-license fallback code. Android Auto Backup is disabled.
+
+  Readwide is designed for local files and therefore requests broad file access
+  on modern Android versions. This is used for user-selected reading, browsing,
+  copy, move, delete, archive extraction, and archive creation workflows.
+
+  The Android applicationId remains com.textview.reader for update
+  compatibility with the previous TextView Reader 2.2.6 line when signed with
+  the same key.
+RepoType: git
+Repo: https://github.com/k1717/Readwide.git
+Builds:
+  - versionName: '1.0.0'
+    versionCode: 10000
+    commit: REPLACE_WITH_FINAL_GIT_COMMIT_HASH_FOR_V1_0_0
+    rm:
+      - gradle/wrapper/gradle-wrapper.jar
+    gradle:
+      - 'yes'
+    prebuild:
+      - chmod +x gradlew scripts/clean_removed_sources.sh
+AutoUpdateMode: Version v%v
+UpdateCheckMode: Tags
+CurrentVersion: '1.0.0'
+CurrentVersionCode: 10000

@@ -1,0 +1,5 @@
+// Top-level build file for TextView.
+// Uses the modern Gradle plugins block instead of the old buildscript/allprojects style.
+plugins {
+    id 'com.android.application' version '9.2.0' apply false
+}

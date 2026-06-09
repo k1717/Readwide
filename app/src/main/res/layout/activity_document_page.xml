@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/document_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#121212"
+    android:orientation="vertical">
+    <com.google.android.material.appbar.AppBarLayout
+        android:id="@+id/document_appbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#000000"
+        android:elevation="0dp">
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="#000000"
+            app:navigationIconTint="@android:color/white"
+            app:titleTextColor="@android:color/white" />
+    </com.google.android.material.appbar.AppBarLayout>
+    <FrameLayout
+        android:id="@+id/document_search_panel_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#121212"
+        android:paddingStart="12dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone" />
+
+    <FrameLayout
+        android:id="@+id/document_viewport"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#121212">
+        <WebView
+            android:id="@+id/document_webview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#121212" />
+        <ProgressBar
+            android:id="@+id/loading_progress"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="center"
+            android:background="@android:color/transparent"
+            android:visibility="gone" />
+        <FrameLayout
+            android:id="@+id/document_search_overlay_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:background="@android:color/transparent"
+            android:paddingStart="12dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="8dp"
+            android:visibility="gone" />
+    </FrameLayout>
+    <LinearLayout
+        android:id="@+id/document_bottom_scroller"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#DD000000"
+        android:elevation="12dp"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="6dp">
+        <TextView
+            android:id="@+id/document_page_status"
+            android:layout_width="match_parent"
+            android:layout_height="22dp"
+            android:gravity="center"
+            android:textColor="#E0E0E0"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+        <LinearLayout
+            android:id="@+id/document_bottom_bar"
+            android:layout_width="match_parent"
+            android:layout_height="66dp"
+            android:baselineAligned="false"
+            android:gravity="center"
+            android:orientation="horizontal">
+            <TextView
+                android:id="@+id/btn_prev_page"
+                style="@style/ReaderBottomButton"
+                android:drawableTop="@drawable/ic_bottom_arrow_left"
+                android:text="@string/previous_page" />
+            <TextView
+                android:id="@+id/btn_next_page"
+                style="@style/ReaderBottomButton"
+                android:drawableTop="@drawable/ic_bottom_arrow_right"
+                android:text="@string/next_page" />
+            <TextView
+                android:id="@+id/btn_document_search"
+                style="@style/ReaderBottomButton"
+                android:drawableTop="@drawable/ic_bottom_search"
+                android:text="@string/find" />
+
+            <TextView
+                android:id="@+id/btn_page_move"
+                style="@style/ReaderBottomButton"
+                android:drawableTop="@drawable/ic_bottom_page"
+                android:text="@string/bottom_page" />
+            <TextView
+                android:id="@+id/btn_bookmarks"
+                style="@style/ReaderBottomButton"
+                android:drawableTop="@drawable/ic_bottom_bookmark"
+                android:text="@string/bookmark" />
+            <TextView
+                android:id="@+id/btn_more"
+                style="@style/ReaderBottomButton"
+                android:drawableTop="@drawable/ic_bottom_more_horiz"
+                android:text="@string/more" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

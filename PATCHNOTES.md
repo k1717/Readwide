@@ -1,0 +1,105 @@
+# Patch Notes
+
+## Readwide 1.0.0
+
+### Release scope
+
+- Readwide 1.0.0 is the public continuation of TextView Reader 2.2.6.
+- The app name is now Readwide, but the Android package/application ID stays unchanged for update compatibility with the TextView 2.2.6 line when signed with the same key.
+- Settings now points to `https://github.com/k1717/Readwide/releases` for update information.
+
+### Final changes included in this upload
+
+- Readwide branding is applied across app labels, Settings, backup text, TTS labels, public docs, and developer contact text.
+- Developer contact email is `readwide.kj7w5@addy.io`.
+- Main language selection uses a compact row and rounded picker dialog instead of a long settings page.
+- Major UI language options were added with first-pass translated resources; missing strings fall back to English.
+- Recent-file multi-select actions can wrap long English labels instead of clipping.
+- Launcher icons were replaced with the approved Readwide book artwork and adjusted for safer launcher margins.
+- The custom reading theme editor now respects status-bar/cutout insets, so the top back button no longer overlaps the system bar.
+- Reading-theme selection now shows a normal check mark again instead of broken encoded text.
+- The custom reading theme editor's top app-bar/status-inset area now follows the active main theme bar color instead of showing a gray strip.
+- The update link now uses the standard GitHub releases URL: `https://github.com/k1717/Readwide/releases`.
+- RAR implementation comments and public packaging notes were cleaned for clearer FOSS/provenance wording.
+- Launcher icon provenance is documented as project-owned generated artwork.
+- The unused optional local RAR5 decoder bridge/readme was removed from the default public source tree.
+- RAR detailed failure messages no longer expose internal pass-number wording.
+- The public Gradle dependency graph no longer includes a local `app/libs/*.jar` hook.
+- Release signing is conditional, so F-Droid-style source builders can assemble an unsigned release without a private keystore.
+- The unused Foojay toolchain resolver plugin was removed from `settings.gradle`.
+- Readwide backup export filenames are ignored by git.
+- Public docs are cleaned into release-result sections instead of internal pass-by-pass logs.
+
+### Archive and FOSS boundary
+
+- Default builds remain FOSS-oriented: no Junrar/UnRAR-license fallback code and no default `INTERNET` permission.
+- ZIP, 7z, TAR-family, ALZ, EGG, and limited RAR/CBR support remain as documented in the archive support matrix.
+- Split/multi-volume RAR and encrypted RAR were not re-tested for this release package and are not guaranteed.
+- RAR solid archives, PPMd, custom VM filters, broad SFX, RAR5 compressed/solid/encrypted-header cases, and unusual variants remain backend-dependent or unsupported.
+
+## TextView Reader 2.2.6
+
+### Release scope
+
+- TextView Reader 2.2.6 is the direct base for Readwide 1.0.0.
+- Privacy, license, and archive-backend boundaries from this line are preserved in Readwide unless noted otherwise.
+
+### Final changes included in this release
+
+- Android Auto Backup is disabled.
+- New PIN storage uses salted PBKDF2 verifier strings with legacy migration.
+- Default builds have no `INTERNET` permission, no app-network update check, no telemetry, no ads, and no account system.
+- Developer contact uses the user's mail app or copies the address when no mail app is available.
+- Junrar/UnRAR-license fallback code is removed from the default build.
+- Common compressed RAR3/RAR4 attempts route through bundled libarchive-android, with first-party Java kept for metadata, stored entries, safe paths, diagnostics, and selected stored RAR5 paths.
+- Archive password prompts use compact buttons and include a password visibility toggle.
+- Long archive errors open in a scrollable/copyable dialog.
+
+### Known support boundaries
+
+- Split/multi-volume RAR and encrypted RAR are not guaranteed.
+- First-party compressed RAR is not complete.
+- RAR5 compressed/solid/encrypted-header cases remain backend-dependent.
+
+## TextView Reader 2.2.5
+
+### Release scope
+
+- Focused on archive fallback handling, smoother folder navigation, file-operation progress, and activity refactoring.
+
+### Final changes included in this release
+
+- ZIP extraction falls back to Apache Commons Compress for non-encrypted unsupported methods where bundled codecs can decode them.
+- Pending ZIP creation runs in the destination folder where the queued action is executed.
+- Viewer returns, drawer shortcuts, recent-folder navigation, and already-loaded folder revisits preserve or restore cached folder state when safe.
+- Multi-select delete progress can be reopened after confirmation/backgrounding.
+- Browse-state, archive list shaping, archive image sequence loading, and archive create/extract planning were split into focused controllers/helpers.
+
+### Known support boundaries
+
+- Encrypted ZIP entries stay on Zip4j.
+- AES plus unsupported ZIP methods remain unsupported.
+- ZIP creation is plain ZIP only.
+
+## TextView Reader 2.2.4
+
+### Release scope
+
+- Focused on public license packaging, queued archive work, archive safety, and theme editing.
+
+### Final changes included in this release
+
+- First-party source ships under Apache License 2.0 with `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md`.
+- Compress actions enter the pending-action queue instead of running immediately.
+- Pending copy, move, extract, and compress actions share the same queue flow.
+- ALZ supports Store/Deflate/BZip2 extraction with CRC verification.
+- EGG supports Store/Deflate/BZip2/AZO/LZMA through the first-party parser.
+- 7z/CB7 split volumes open from the first part through a concatenated seekable channel.
+- Archive preview and extraction include safer path handling, overwrite handling, free-space guards, and cache pruning.
+- Main-theme and reading-theme color editors include a palette picker plus HEX/RGB input.
+
+### Known support boundaries
+
+- The older 2.2.4 RAR fallback path is not part of the default Readwide 1.0.0 FOSS-oriented package.
+- RAR creation is not implemented.
+- ALZ/EGG encrypted, split, solid, and unusual legacy variants remain limited or unsupported.

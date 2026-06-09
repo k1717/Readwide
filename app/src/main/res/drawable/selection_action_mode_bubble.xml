@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Background drawable for the contextual action-mode toolbar that appears
+    on text selection. Renders as a dark rounded "black bubble" so the
+    floating "복사 / 번역 / 모두 선택 / 공유" toolbar is consistently dark
+    in both light and dark app modes.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#1F1F1F" />
+    <corners android:radius="22dp" />
+</shape>

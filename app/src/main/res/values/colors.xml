@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light theme colors: light content, neutral app bars, no green toolbar. -->
+    <color name="md_theme_light_primary">#202124</color>
+    <color name="md_theme_light_onPrimary">#FFFFFF</color>
+    <color name="md_theme_light_primaryContainer">#E8EAED</color>
+    <color name="md_theme_light_surface">#FFFFFF</color>
+    <color name="md_theme_light_onSurface">#202124</color>
+    <color name="md_theme_light_surfaceVariant">#F1F3F4</color>
+    <color name="md_theme_light_onSurfaceVariant">#5F6368</color>
+    <color name="md_theme_light_outline">#8A9099</color>
+
+    <!-- Dark theme colors: black/dark reader surfaces. -->
+    <color name="md_theme_dark_primary">#000000</color>
+    <color name="md_theme_dark_onPrimary">#E8EAED</color>
+    <color name="md_theme_dark_primaryContainer">#111111</color>
+    <color name="md_theme_dark_surface">#000000</color>
+    <color name="md_theme_dark_onSurface">#E8EAED</color>
+    <color name="md_theme_dark_surfaceVariant">#111111</color>
+    <color name="md_theme_dark_onSurfaceVariant">#B0B0B0</color>
+    <color name="md_theme_dark_outline">#9AA0A6</color>
+</resources>

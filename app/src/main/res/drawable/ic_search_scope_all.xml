@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Back folder: visible upper band only. Kept separate from the middle/front
+         layers so tint alpha does not compound at the exposed edge. -->
+    <path
+        android:fillAlpha="0.30"
+        android:fillColor="#FF000000"
+        android:pathData="M6,3.8h4.2l1.8,1.8h6.5c0.55,0 1,0.45 1,1v0.35H6V3.8z" />
+    <!-- Middle folder: visible middle band only. This avoids the darker right/bottom
+         seam that happened when it overlapped with the front folder. -->
+    <path
+        android:fillAlpha="0.58"
+        android:fillColor="#FF000000"
+        android:pathData="M4.5,7h4.6l1.9,1.9h8.7c0.55,0 1,0.45 1,1v1.65H4.5V7z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M3,10.6h5l2,2h11v5.8c0,0.55 -0.45,1 -1,1H4c-0.55,0 -1,-0.45 -1,-1V10.6z" />
+</vector>

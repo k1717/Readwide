@@ -1,0 +1,7 @@
+Readwide는 TXT, PDF, EPUB, Word 문서, 이미지, 만화 압축파일, 일반 압축파일 흐름을 다루는 로컬 우선 Android 리더 및 파일 브라우저입니다.
+
+TXT/PDF/EPUB/Word/이미지 읽기, 압축파일 내부 이미지 시퀀스 보기, 최근 파일, 폴더/검색 범위 제어, 다중 선택, 복사/이동/삭제/압축 해제/압축 생성 대기열, 진행 상태 UI를 지원합니다.
+
+기본 빌드는 INTERNET 권한을 요청하지 않으며 광고, 분석, 계정 시스템을 포함하지 않습니다. Android Auto Backup도 비활성화되어 있습니다. 넓은 파일 접근 권한은 사용자가 선택한 로컬 폴더와 파일을 읽고 관리하기 위해 사용됩니다.
+
+Readwide 1.0.0은 TextView Reader 2.2.6의 공개 후속 버전입니다. 동일한 서명키로 업데이트할 수 있도록 Android applicationId는 com.textview.reader로 유지됩니다.

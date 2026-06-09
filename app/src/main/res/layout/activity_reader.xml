@@ -1,0 +1,272 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/reader_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <com.textview.reader.view.CustomReaderView
+        android:id="@+id/reader_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000" />
+
+    <LinearLayout
+        android:id="@+id/loading_box"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@android:color/transparent"
+        android:gravity="center"
+        android:visibility="gone"
+        android:minWidth="110dp"
+        android:minHeight="112dp"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingTop="24dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="22dp">
+
+        <ProgressBar
+            android:id="@+id/loading_progress"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:background="@android:color/transparent"
+            android:indeterminateTint="#E0E0E0"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/loading_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@android:color/transparent"
+            android:textColor="#E0E0E0"
+            android:textSize="15sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <androidx.appcompat.widget.Toolbar
+        android:id="@+id/toolbar"
+        android:layout_width="1dp"
+        android:layout_height="1dp"
+        android:visibility="gone" />
+
+    <View
+        android:id="@+id/page_drag_panel"
+        android:layout_width="1dp"
+        android:layout_height="1dp"
+        android:visibility="gone" />
+
+    <!-- Gray strip covers Android status bar area plus page indicator. -->
+    <TextView
+        android:id="@+id/reader_page_status"
+        android:layout_width="match_parent"
+        android:layout_height="24dp"
+        android:layout_gravity="top"
+        android:background="#000000"
+        android:gravity="bottom|center_horizontal"
+        android:paddingBottom="4dp"
+        android:text="1 / 1"
+        android:textColor="#E0E0E0"
+        android:textSize="12sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/reader_file_title"
+        android:layout_width="match_parent"
+        android:layout_height="30dp"
+        android:layout_gravity="top"
+        android:background="#000000"
+        android:ellipsize="middle"
+        android:gravity="center"
+        android:maxLines="1"
+        android:paddingStart="36dp"
+        android:paddingEnd="36dp"
+        android:textColor="#E0E0E0"
+        android:textSize="14sp"
+        android:visibility="gone" />
+
+    <View
+        android:id="@+id/nav_bar_spacer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_gravity="bottom"
+        android:background="#000000"
+        android:visibility="visible" />
+
+    <LinearLayout
+        android:id="@+id/bottom_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#DD000000"
+        android:elevation="0dp"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="6dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/position_label"
+            android:layout_width="match_parent"
+            android:layout_height="22dp"
+            android:gravity="center"
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp"
+            android:text="1 / 1"
+            android:textColor="#E0E0E0"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <!-- Slider track spans roughly from the first bottom button center to the last.
+             The page indicator remains in place; only the slider is lifted slightly. -->
+        <SeekBar
+            android:id="@+id/seek_bar"
+            android:layout_width="match_parent"
+            android:layout_height="34dp"
+            android:layout_gravity="center_horizontal"
+            android:maxHeight="4dp"
+            android:minHeight="4dp"
+            android:paddingStart="48dp"
+            android:paddingEnd="48dp"
+            android:splitTrack="false"
+            android:progressBackgroundTint="#555555"
+            android:progressTint="#9E9E9E"
+            android:thumbTint="#D6D6D6" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="66dp"
+            android:baselineAligned="false"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <HorizontalScrollView
+                android:id="@+id/toolbar_action_scroll"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="5"
+                android:fillViewport="false"
+                android:overScrollMode="never"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/toolbar_scroll_actions"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:baselineAligned="false"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/btn_home"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_home"
+                        android:text="@string/toolbar_home" />
+
+                    <TextView
+                        android:id="@+id/btn_open_file"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_open_file"
+                        android:text="@string/toolbar_open_file" />
+
+                    <TextView
+                        android:id="@+id/btn_find"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_search"
+                        android:text="@string/find" />
+
+                    <TextView
+                        android:id="@+id/btn_page_move"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_page"
+                        android:text="@string/bottom_page" />
+
+                    <TextView
+                        android:id="@+id/btn_bookmark"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_bookmark"
+                        android:text="@string/bookmark" />
+
+                    <TextView
+                        android:id="@+id/btn_auto_page"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_auto_page"
+                        android:text="@string/auto_page_turn_toolbar" />
+
+                    <TextView
+                        android:id="@+id/btn_settings"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_settings"
+                        android:text="@string/settings" />
+
+                    <TextView
+                        android:id="@+id/btn_tts"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_tts"
+                        android:text="@string/tts_toolbar" />
+
+                    <TextView
+                        android:id="@+id/btn_font"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_font"
+                        android:text="@string/font" />
+
+                    <TextView
+                        android:id="@+id/btn_rule_add"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_rule_add"
+                        android:text="@string/toolbar_rule_add" />
+
+                    <TextView
+                        android:id="@+id/btn_rule_manage"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_rules"
+                        android:text="@string/toolbar_rule_manage" />
+
+                    <TextView
+                        android:id="@+id/btn_text_encoding"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_encoding"
+                        android:text="@string/toolbar_text_encoding" />
+                </LinearLayout>
+            </HorizontalScrollView>
+
+            <TextView
+                android:id="@+id/btn_more"
+                style="@style/ReaderBottomButton"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:drawableTop="@drawable/ic_bottom_more_horiz"
+                android:text="@string/more" />
+        </LinearLayout>
+    </LinearLayout>
+
+</FrameLayout>
