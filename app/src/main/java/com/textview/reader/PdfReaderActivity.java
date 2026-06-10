@@ -28,6 +28,7 @@ import android.widget.LinearLayout;
 import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.OverScroller;
 import android.widget.SeekBar;
 import android.widget.Space;
 import android.widget.TextView;
@@ -85,6 +86,9 @@ public class PdfReaderActivity extends AppCompatActivity {
     // stay unchanged.
     private static final float PDF_ZOOMED_HORIZONTAL_PAN_ACCELERATION = 1.62f;
     private static final float PDF_ZOOMED_VERTICAL_PAN_ACCELERATION = 1.45f;
+    private static final float PDF_ZOOMED_FLING_VELOCITY_SCALE = 0.92f;
+    private static final float PDF_CONTINUOUS_HORIZONTAL_FLING_VELOCITY_SCALE = 0.82f;
+
 
     View root;
     View pdfAppBar;
@@ -108,6 +112,11 @@ public class PdfReaderActivity extends AppCompatActivity {
     ScrollView pdfVScroll;
     private ScaleGestureDetector scaleGestureDetector;
     private GestureDetector gestureDetector;
+    private OverScroller pdfFlingScroller;
+    private final Runnable pdfFlingRunnable = this::continuePdfViewportFling;
+    private int lastPdfFlingX = 0;
+    private int lastPdfFlingY = 0;
+    private boolean pdfContinuousHorizontalFling = false;
     private float touchStartX;
     private float touchStartY;
     private boolean pinchZoomChanged = false;
@@ -252,6 +261,7 @@ public class PdfReaderActivity extends AppCompatActivity {
     private void applyPdfDisplayMode() {
         boolean continuous = verticalPageSlideMode;
         pendingPageSlideDirection = 0;
+        stopPdfViewportFling();
         resetViewportGesture();
 
         if (pdfContinuousList != null) {
@@ -342,6 +352,7 @@ public class PdfReaderActivity extends AppCompatActivity {
             }
 
             pdfContinuousList.postDelayed(() -> {
+                if (activityDestroyed || pdfContinuousList == null) return;
                 suppressContinuousScrollSync = false;
                 updatePageStatus();
             }, smooth ? 360L : 220L);
@@ -455,6 +466,7 @@ public class PdfReaderActivity extends AppCompatActivity {
     }
 
     private void beginViewportGesture(@NonNull MotionEvent event, boolean insideViewport, boolean trackScrollableEdges) {
+        stopPdfViewportFling();
         gestureStartRawX = event.getRawX();
         gestureStartRawY = event.getRawY();
         lastPanRawX = gestureStartRawX;
@@ -537,6 +549,115 @@ public class PdfReaderActivity extends AppCompatActivity {
         gestureStartedAtBottomEdge = true;
     }
 
+    private boolean startPdfViewportFling(float velocityX, float velocityY) {
+        if (activityDestroyed || pdfFlingScroller == null || isPdfAtOriginalZoom()) return false;
+        if (verticalPageSlideMode) {
+            return startContinuousPdfHorizontalFling(velocityX, velocityY);
+        }
+        return startSinglePagePdfFling(velocityX, velocityY);
+    }
+
+    private boolean startSinglePagePdfFling(float velocityX, float velocityY) {
+        if (!isPdfContentScrollable()) return false;
+        int startX = pdfHScroll != null ? pdfHScroll.getScrollX() : 0;
+        int startY = pdfVScroll != null ? pdfVScroll.getScrollY() : 0;
+        int maxX = getPdfHorizontalScrollRange();
+        int maxY = getPdfVerticalScrollRange();
+        if (maxX <= 0 && maxY <= 0) return false;
+
+        int flingVelocityX = maxX > 0
+                ? Math.round(-velocityX * PDF_ZOOMED_FLING_VELOCITY_SCALE)
+                : 0;
+        int flingVelocityY = maxY > 0
+                ? Math.round(-velocityY * PDF_ZOOMED_FLING_VELOCITY_SCALE)
+                : 0;
+        if (Math.abs(flingVelocityX) < ViewConfiguration.get(this).getScaledMinimumFlingVelocity()
+                && Math.abs(flingVelocityY) < ViewConfiguration.get(this).getScaledMinimumFlingVelocity()) {
+            return false;
+        }
+
+        pdfContinuousHorizontalFling = false;
+        lastPdfFlingX = startX;
+        lastPdfFlingY = startY;
+        pdfFlingScroller.fling(startX, startY, flingVelocityX, flingVelocityY, 0, maxX, 0, maxY);
+        postPdfFlingStep();
+        return true;
+    }
+
+    private boolean startContinuousPdfHorizontalFling(float velocityX, float velocityY) {
+        if (pdfContinuousAdapter == null || !pdfContinuousAdapter.canPanVisiblePageHorizontally()) return false;
+        if (Math.abs(velocityX) < Math.abs(velocityY) * 1.15f) return false;
+
+        int current = pdfContinuousAdapter.getVisiblePageHorizontalPanOffset();
+        int max = pdfContinuousAdapter.getVisiblePageHorizontalPanRange();
+        if (max <= 0) return false;
+        int flingVelocityX = Math.round(-velocityX * PDF_CONTINUOUS_HORIZONTAL_FLING_VELOCITY_SCALE);
+        if (Math.abs(flingVelocityX) < ViewConfiguration.get(this).getScaledMinimumFlingVelocity()) return false;
+
+        pdfContinuousHorizontalFling = true;
+        lastPdfFlingX = current;
+        lastPdfFlingY = 0;
+        pdfFlingScroller.fling(current, 0, flingVelocityX, 0, 0, max, 0, 0);
+        postPdfFlingStep();
+        return true;
+    }
+
+    private void continuePdfViewportFling() {
+        if (activityDestroyed || pdfFlingScroller == null) return;
+        if (!pdfFlingScroller.computeScrollOffset()) return;
+
+        int currentX = pdfFlingScroller.getCurrX();
+        int currentY = pdfFlingScroller.getCurrY();
+        if (pdfContinuousHorizontalFling) {
+            if (pdfContinuousAdapter != null) {
+                pdfContinuousAdapter.setVisiblePageHorizontalPanOffset(currentX);
+            }
+        } else {
+            if (pdfHScroll != null) {
+                pdfHScroll.scrollTo(currentX, pdfHScroll.getScrollY());
+            }
+            if (pdfVScroll != null) {
+                pdfVScroll.scrollTo(pdfVScroll.getScrollX(), currentY);
+            }
+        }
+        lastPdfFlingX = currentX;
+        lastPdfFlingY = currentY;
+
+        if (!pdfFlingScroller.isFinished()) {
+            postPdfFlingStep();
+        }
+    }
+
+    private void postPdfFlingStep() {
+        View target = pdfViewport != null ? pdfViewport : root;
+        if (target != null) {
+            target.removeCallbacks(pdfFlingRunnable);
+            target.postOnAnimation(pdfFlingRunnable);
+        } else {
+            handler.removeCallbacks(pdfFlingRunnable);
+            handler.post(pdfFlingRunnable);
+        }
+    }
+
+    private void stopPdfViewportFling() {
+        if (pdfFlingScroller != null && !pdfFlingScroller.isFinished()) {
+            pdfFlingScroller.forceFinished(true);
+        }
+        if (pdfViewport != null) pdfViewport.removeCallbacks(pdfFlingRunnable);
+        if (root != null) root.removeCallbacks(pdfFlingRunnable);
+        handler.removeCallbacks(pdfFlingRunnable);
+    }
+
+    private int getPdfHorizontalScrollRange() {
+        if (pdfHScroll == null || pdfHScroll.getChildCount() == 0) return 0;
+        return Math.max(0, pdfHScroll.getChildAt(0).getWidth() - pdfHScroll.getWidth());
+    }
+
+    private int getPdfVerticalScrollRange() {
+        if (pdfVScroll == null || pdfVScroll.getChildCount() == 0) return 0;
+        return Math.max(0, pdfVScroll.getChildAt(0).getHeight() - pdfVScroll.getHeight());
+    }
+
     private boolean handlePdfTapGesture(@NonNull MotionEvent event, boolean insideViewport) {
         if (!insideViewport || gestureDetector == null) return false;
         boolean handled = gestureDetector.onTouchEvent(event);
@@ -576,12 +697,12 @@ public class PdfReaderActivity extends AppCompatActivity {
 
     private void panPdfContent(float deltaX, float deltaY) {
         if (pdfHScroll != null && isPdfHorizontallyScrollable()) {
-            int maxX = Math.max(0, pdfHScroll.getChildAt(0).getWidth() - pdfHScroll.getWidth());
+            int maxX = getPdfHorizontalScrollRange();
             int nextX = Math.max(0, Math.min(maxX, pdfHScroll.getScrollX() + Math.round(deltaX)));
             pdfHScroll.scrollTo(nextX, pdfHScroll.getScrollY());
         }
         if (pdfVScroll != null && isPdfVerticallyScrollable()) {
-            int maxY = Math.max(0, pdfVScroll.getChildAt(0).getHeight() - pdfVScroll.getHeight());
+            int maxY = getPdfVerticalScrollRange();
             int nextY = Math.max(0, Math.min(maxY, pdfVScroll.getScrollY() + Math.round(deltaY)));
             pdfVScroll.scrollTo(pdfVScroll.getScrollX(), nextY);
         }
@@ -807,9 +928,11 @@ public class PdfReaderActivity extends AppCompatActivity {
 
 
     void installPdfGestures() {
+        pdfFlingScroller = new OverScroller(this);
         scaleGestureDetector = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScaleBegin(ScaleGestureDetector detector) {
+                stopPdfViewportFling();
                 capturePinchZoomFocus(detector);
                 applyPageImagePivotFromRaw(activePinchFocusRawX, activePinchFocusRawY);
                 return true;
@@ -855,8 +978,14 @@ public class PdfReaderActivity extends AppCompatActivity {
 
             @Override
             public boolean onDoubleTap(MotionEvent e) {
+                stopPdfViewportFling();
                 toggleDoubleTapZoom(e);
                 return true;
+            }
+
+            @Override
+            public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
+                return startPdfViewportFling(velocityX, velocityY);
             }
         });
     }
@@ -1533,6 +1662,7 @@ public class PdfReaderActivity extends AppCompatActivity {
     }
 
     private void renderCurrentPage(boolean showLoadingIndicator) {
+        stopPdfViewportFling();
         if (verticalPageSlideMode) {
             renderContinuousPages();
             return;
@@ -1844,6 +1974,7 @@ public class PdfReaderActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        stopPdfViewportFling();
         cancelPdfBackgroundMemoryTrim();
         ViewerRegistry.unregister(this);
         activityDestroyed = true;

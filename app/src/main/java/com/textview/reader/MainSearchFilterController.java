@@ -170,6 +170,7 @@ final class MainSearchFilterController {
                         v.getParent().requestDisallowInterceptTouchEvent(false);
                         v.postDelayed(fileTypeFilterSnapRunnable, 110L);
                         v.postDelayed(() -> {
+                            if (activity.activityDestroyed) return;
                             if (activity.drawerLayout != null && !activity.drawerLayout.isDrawerOpen(GravityCompat.START)) {
                                 activity.drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED, GravityCompat.START);
                             }

@@ -1,4 +1,25 @@
-# Patch Notes
+## Readwide 1.0.1
+
+### Release scope
+
+- Readwide 1.0.1 keeps the same Android package identity for update compatibility with earlier compatible builds when signed with the same key.
+- This release focuses on viewer polish, portable backup/bookmark handling, archive safety, lifecycle hardening, and public GitHub/F-Droid packaging cleanup.
+
+### Final changes included in this release
+
+- Missing bookmark target files remain visible with a theme-matched file-missing label. Tapping one opens an explanation dialog and keeps the bookmark for later file rebind.
+- Backup import restores last directory, recent folders, and folder shortcuts only when those directories exist on the current device. Invalid imported paths are skipped without deleting valid current-device entries.
+- TXT bookmark positions remain based on character position, line number, anchor text, and file fingerprint. Cached Page X/Y values are treated as layout-dependent cache and refresh under the current device layout when the file is opened.
+- Zoomed PDF pages can fling/pan with inertia in single-page mode, and zoomed pages in vertical continuous mode can fling horizontally.
+- Image viewer landscape safe-area handling was fixed for Android 3-button navigation. Wide images open fit-to-width, tall images open fit-to-height, and detail/original decode is kept after returning from zoom.
+- Archive filename decoding, password-protected archive image preview, ALZ/EGG streaming extraction, archive preview cache pruning, and archive failure messages were hardened while keeping archive support claims conservative.
+- Public GitHub/F-Droid documents, Fastlane changelogs, and release-note files were cleaned into result-focused Readwide 1.0.1 sections.
+
+### Archive and FOSS boundary
+
+- Default builds remain local-first and FOSS-oriented: no default `INTERNET` permission, no ads, no analytics, no account system, no app-network update check, Android Auto Backup disabled, and no Junrar/UnRAR-license fallback in the default build.
+- ZIP, 7z, TAR-family, ALZ, EGG, and limited RAR/CBR support remain as documented in the archive support matrix.
+- RAR support is still limited and should not be advertised as complete compatibility.
 
 ## Readwide 1.0.0
 
@@ -13,7 +34,7 @@
 - Readwide branding is applied across app labels, Settings, backup text, TTS labels, public docs, and developer contact text.
 - Developer contact email is `readwide.kj7w5@addy.io`.
 - Main language selection uses a compact row and rounded picker dialog instead of a long settings page.
-- Major UI language options were added with first-pass translated resources; missing strings fall back to English.
+- Major UI language options were added with initial translated resources; missing strings fall back to English.
 - Recent-file multi-select actions can wrap long English labels instead of clipping.
 - Launcher icons were replaced with the approved Readwide book artwork and adjusted for safer launcher margins.
 - The custom reading theme editor now respects status-bar/cutout insets, so the top back button no longer overlaps the system bar.
@@ -23,12 +44,12 @@
 - RAR implementation comments and public packaging notes were cleaned for clearer FOSS/provenance wording.
 - Launcher icon provenance is documented as project-owned generated artwork.
 - The unused optional local RAR5 decoder bridge/readme was removed from the default public source tree.
-- RAR detailed failure messages no longer expose internal pass-number wording.
+- RAR detailed failure messages no longer expose development-session wording.
 - The public Gradle dependency graph no longer includes a local `app/libs/*.jar` hook.
 - Release signing is conditional, so F-Droid-style source builders can assemble an unsigned release without a private keystore.
 - The unused Foojay toolchain resolver plugin was removed from `settings.gradle`.
 - Readwide backup export filenames are ignored by git.
-- Public docs are cleaned into release-result sections instead of internal pass-by-pass logs.
+- Public docs are cleaned into release-result sections instead of development-session notes.
 
 ### Archive and FOSS boundary
 

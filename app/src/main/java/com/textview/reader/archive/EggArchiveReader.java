@@ -10,6 +10,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.OutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.RandomAccessFile;
@@ -304,14 +305,15 @@ final class EggArchiveReader {
         // a locale code page applies; we decode UTF-8 (the common modern case)
         // and fall back to the platform default if that produces nothing useful.
         int offset = 0;
+        int localeCodePage = 0;
         boolean hasLocale = (gpb & (1 << 5)) != 0;
         if (hasLocale && payload.length >= 2) {
-            offset = 2; // skip locale code
+            localeCodePage = (payload[0] & 0xff) | ((payload[1] & 0xff) << 8);
+            offset = 2;
         }
         int nameLen = payload.length - offset;
         if (nameLen <= 0) return "";
-        String name = new String(payload, offset, nameLen, StandardCharsets.UTF_8);
-        return name.replace('\\', '/');
+        return ArchiveFilenameDecoder.decodeEggName(payload, offset, nameLen, localeCodePage).replace('\\', '/');
     }
 
     // ----- Extraction -----
@@ -347,20 +349,11 @@ final class EggArchiveReader {
         if (!parent.exists() && !parent.mkdirs()) throw new IOException("Cannot create output directory");
 
         boolean ok = false;
-        try (FileOutputStream out = new FileOutputStream(outFile)) {
+        try (OutputStream out = new FileOutputStream(outFile)) {
             CRC32 runningCrc = new CRC32();
             for (EggBlock block : entry.blocks) {
                 if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");
-                byte[] plain = decodeBlock(raf, block, progress);
-                // Per-block CRC verification (unsigned compare).
-                CRC32 blockCrc = new CRC32();
-                blockCrc.update(plain);
-                if (block.crc != 0 && (blockCrc.getValue() & 0xffffffffL) != block.crc) {
-                    throw new IOException("EGG block CRC mismatch");
-                }
-                runningCrc.update(plain);
-                out.write(plain);
-                if (progress != null) progress.addDoneBytes(plain.length);
+                writeBlock(raf, block, out, runningCrc, progress);
             }
             out.flush();
             ok = true;
@@ -374,94 +367,149 @@ final class EggArchiveReader {
         }
     }
 
-    @NonNull
-    private static byte[] decodeBlock(@NonNull RandomAccessFile raf,
-                                      @NonNull EggBlock block,
-                                      @Nullable FileOperationProgress progress) throws IOException {
-        if (block.compSize < 0 || block.compSize > MAX_ENTRY_BYTES) {
+    private static void writeBlock(@NonNull RandomAccessFile raf,
+                                   @NonNull EggBlock block,
+                                   @NonNull OutputStream out,
+                                   @NonNull CRC32 runningCrc,
+                                   @Nullable FileOperationProgress progress) throws IOException {
+        if (block.compSize < 0 || block.compSize > MAX_ENTRY_BYTES || block.uncompSize > MAX_ENTRY_BYTES) {
             throw new ArchiveSupport.UnsupportedArchiveFeatureException("EGG block size out of range");
         }
-        byte[] compressed = new byte[(int) block.compSize];
-        raf.seek(block.dataOffset);
-        raf.readFully(compressed);
-        if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");
-
         switch (block.method) {
             case COMP_STORE:
-                return compressed;
+                try (InputStream in = openBlockInputStream(raf, block, 0L)) {
+                    copyDecodedBlock(in, out, runningCrc, block, progress);
+                }
+                return;
             case COMP_DEFLATE:
-                return readAll(new InflaterInputStream(new ByteArrayInputStream(compressed), new Inflater(true)),
-                        block.uncompSize, progress);
+                try (InputStream in = new InflaterInputStream(openBlockInputStream(raf, block, 0L), new Inflater(true))) {
+                    copyDecodedBlock(in, out, runningCrc, block, progress);
+                }
+                return;
             case COMP_BZIP:
-                return readAll(new BZip2CompressorInputStream(new ByteArrayInputStream(compressed)),
-                        block.uncompSize, progress);
-            case COMP_AZO:
-                return decodeAzoBlock(compressed, block.uncompSize);
+                try (InputStream in = new BZip2CompressorInputStream(openBlockInputStream(raf, block, 0L))) {
+                    copyDecodedBlock(in, out, runningCrc, block, progress);
+                }
+                return;
             case COMP_LZMA:
-                return decodeLzmaBlock(compressed, block.uncompSize, progress);
+                writeLzmaBlock(raf, block, out, runningCrc, progress);
+                return;
+            case COMP_AZO:
+                writeAzoBlock(raf, block, out, runningCrc, progress);
+                return;
             default:
                 throw new ArchiveSupport.UnsupportedArchiveFeatureException(
                         "Unsupported EGG compression method " + block.method);
         }
     }
 
-
     @NonNull
-    private static byte[] decodeAzoBlock(@NonNull byte[] data, long uncompSize) throws IOException {
-        try {
-            return AzoDecoder.decode(data, uncompSize);
-        } catch (IOException e) {
-            if (e instanceof ArchiveSupport.UnsupportedArchiveFeatureException) throw e;
-            throw new ArchiveSupport.UnsupportedArchiveFeatureException(
-                    "EGG AZO block could not be decoded: " + e.getMessage());
+    private static InputStream openBlockInputStream(@NonNull RandomAccessFile raf,
+                                                    @NonNull EggBlock block,
+                                                    long payloadOffset) throws IOException {
+        long offset = block.dataOffset + payloadOffset;
+        long length = block.compSize - payloadOffset;
+        if (payloadOffset < 0L || length < 0L) {
+            throw new ArchiveSupport.UnsupportedArchiveFeatureException("EGG block size out of range");
+        }
+        return new RandomAccessFileBoundedInputStream(raf, offset, length, false);
+    }
+
+    private static void copyDecodedBlock(@NonNull InputStream input,
+                                         @NonNull OutputStream out,
+                                         @NonNull CRC32 runningCrc,
+                                         @NonNull EggBlock block,
+                                         @Nullable FileOperationProgress progress) throws IOException {
+        CRC32 blockCrc = new CRC32();
+        byte[] chunk = new byte[64 * 1024];
+        long total = 0L;
+        int read;
+        while ((read = input.read(chunk)) != -1) {
+            if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");
+            total += read;
+            if (total > MAX_ENTRY_BYTES) {
+                throw new ArchiveSupport.UnsupportedArchiveFeatureException("EGG entry exceeds size limit");
+            }
+            blockCrc.update(chunk, 0, read);
+            runningCrc.update(chunk, 0, read);
+            out.write(chunk, 0, read);
+            if (progress != null) progress.addDoneBytes(read);
+        }
+        if (block.crc != 0 && (blockCrc.getValue() & 0xffffffffL) != block.crc) {
+            throw new IOException("EGG block CRC mismatch");
         }
     }
 
-    @NonNull
-    private static byte[] decodeLzmaBlock(@NonNull byte[] data,
-                                           long uncompSize,
-                                           @Nullable FileOperationProgress progress) throws IOException {
-        // EGG prepends a 9-byte LZMA data header (5-byte properties + 4-byte
-        // dictionary/size hint observed in compatible EGG LZMA blocks). org.tukaani LZMAInputStream accepts the
-        // 5 properties bytes plus an explicit uncompressed size.
-        if (data.length < LZMA_DATA_HEADER_SIZE) {
+    private static void writeAzoBlock(@NonNull RandomAccessFile raf,
+                                      @NonNull EggBlock block,
+                                      @NonNull OutputStream out,
+                                      @NonNull CRC32 runningCrc,
+                                      @Nullable FileOperationProgress progress) throws IOException {
+        byte[] compressed = readCompressedBlock(raf, block);
+        byte[] plain = decodeAzoBlock(compressed, block.uncompSize);
+        CRC32 blockCrc = new CRC32();
+        blockCrc.update(plain);
+        if (block.crc != 0 && (blockCrc.getValue() & 0xffffffffL) != block.crc) {
+            throw new IOException("EGG block CRC mismatch");
+        }
+        runningCrc.update(plain);
+        out.write(plain);
+        if (progress != null) progress.addDoneBytes(plain.length);
+    }
+
+    private static void writeLzmaBlock(@NonNull RandomAccessFile raf,
+                                       @NonNull EggBlock block,
+                                       @NonNull OutputStream out,
+                                       @NonNull CRC32 runningCrc,
+                                       @Nullable FileOperationProgress progress) throws IOException {
+        if (block.compSize < LZMA_DATA_HEADER_SIZE) {
             throw new ArchiveSupport.UnsupportedArchiveFeatureException("Truncated EGG LZMA header");
         }
-        byte propsByte = data[0];
-        int dictSize = (data[1] & 0xff)
-                | ((data[2] & 0xff) << 8)
-                | ((data[3] & 0xff) << 16)
-                | ((data[4] & 0xff) << 24);
-        ByteArrayInputStream body = new ByteArrayInputStream(data, LZMA_DATA_HEADER_SIZE,
-                data.length - LZMA_DATA_HEADER_SIZE);
-        try {
-            return readAll(new LZMAInputStream(body, uncompSize, propsByte, dictSize), uncompSize, progress);
+        byte[] header = new byte[LZMA_DATA_HEADER_SIZE];
+        synchronized (raf) {
+            raf.seek(block.dataOffset);
+            raf.readFully(header);
+        }
+        byte propsByte = header[0];
+        int dictSize = (header[1] & 0xff)
+                | ((header[2] & 0xff) << 8)
+                | ((header[3] & 0xff) << 16)
+                | ((header[4] & 0xff) << 24);
+        try (InputStream body = openBlockInputStream(raf, block, LZMA_DATA_HEADER_SIZE);
+             InputStream in = new LZMAInputStream(body, block.uncompSize, propsByte, dictSize)) {
+            copyDecodedBlock(in, out, runningCrc, block, progress);
         } catch (IOException e) {
+            if (e instanceof ArchiveSupport.UnsupportedArchiveFeatureException) throw (ArchiveSupport.UnsupportedArchiveFeatureException) e;
+            String message = e.getMessage();
+            if (message != null && message.toLowerCase(java.util.Locale.ROOT).contains("crc")) throw e;
             throw new ArchiveSupport.UnsupportedArchiveFeatureException(
                     "EGG LZMA block could not be decoded: " + e.getMessage());
         }
     }
 
     @NonNull
-    private static byte[] readAll(@NonNull InputStream input,
-                                  long expectedSize,
-                                  @Nullable FileOperationProgress progress) throws IOException {
-        int initial = (expectedSize > 0 && expectedSize <= MAX_ENTRY_BYTES) ? (int) expectedSize : 64 * 1024;
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream(initial);
-        byte[] chunk = new byte[64 * 1024];
-        try (InputStream in = input) {
-            int read;
-            long total = 0;
-            while ((read = in.read(chunk)) != -1) {
-                if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");
-                total += read;
-                if (total > MAX_ENTRY_BYTES) {
-                    throw new ArchiveSupport.UnsupportedArchiveFeatureException("EGG entry exceeds size limit");
-                }
-                buffer.write(chunk, 0, read);
-            }
+    private static byte[] readCompressedBlock(@NonNull RandomAccessFile raf,
+                                              @NonNull EggBlock block) throws IOException {
+        if (block.compSize < 0 || block.compSize > MAX_ENTRY_BYTES) {
+            throw new ArchiveSupport.UnsupportedArchiveFeatureException("EGG block size out of range");
         }
-        return buffer.toByteArray();
+        byte[] compressed = new byte[(int) block.compSize];
+        synchronized (raf) {
+            raf.seek(block.dataOffset);
+            raf.readFully(compressed);
+        }
+        return compressed;
+    }
+
+    @NonNull
+    private static byte[] decodeAzoBlock(@NonNull byte[] data, long uncompSize) throws IOException {
+        try {
+            return AzoDecoder.decode(data, uncompSize);
+        } catch (IOException e) {
+            if (e instanceof ArchiveSupport.UnsupportedArchiveFeatureException) throw (ArchiveSupport.UnsupportedArchiveFeatureException) e;
+            throw new ArchiveSupport.UnsupportedArchiveFeatureException(
+                    "EGG AZO block could not be decoded: " + e.getMessage());
+        }
     }
 
     // ----- Helpers -----

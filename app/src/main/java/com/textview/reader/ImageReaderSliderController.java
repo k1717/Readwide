@@ -25,6 +25,8 @@ final class ImageReaderSliderController {
     private LinearLayout sliderBar;
     private SeekBar imageSlider;
     private TextView imageSliderLabel;
+    private int leftInset;
+    private int rightInset;
     private int bottomInset;
 
     ImageReaderSliderController(@NonNull ImageReaderActivity activity, @NonNull Listener listener) {
@@ -38,7 +40,7 @@ final class ImageReaderSliderController {
         sliderBar.setOrientation(LinearLayout.VERTICAL);
         sliderBar.setGravity(Gravity.CENTER);
         sliderBar.setBackgroundColor(Color.argb(210, 0, 0, 0));
-        applyBottomInset(0);
+        applySystemInsets(0, 0, 0);
 
         imageSliderLabel = new TextView(activity);
         imageSliderLabel.setTextColor(Color.WHITE);
@@ -70,13 +72,15 @@ final class ImageReaderSliderController {
         return sliderBar;
     }
 
-    void applyBottomInset(int inset) {
-        bottomInset = Math.max(0, inset);
+    void applySystemInsets(int left, int right, int bottom) {
+        leftInset = Math.max(0, left);
+        rightInset = Math.max(0, right);
+        bottomInset = Math.max(0, bottom);
         if (sliderBar == null) return;
         sliderBar.setPadding(
-                activity.dpToPx(18),
+                activity.dpToPx(18) + leftInset,
                 activity.dpToPx(8),
-                activity.dpToPx(18),
+                activity.dpToPx(18) + rightInset,
                 activity.dpToPx(10) + bottomInset);
     }
 

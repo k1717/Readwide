@@ -140,8 +140,12 @@ final class DocumentSearchController {
         targetContainer.requestLayout();
         if (shouldOverlayDocumentSearchPanel()) {
             activity.fixedLayoutFindOffsetActive = true;
-            targetContainer.post(activity::applyFixedLayoutFindOffsetCssIfNeeded);
-            targetContainer.postDelayed(activity::applyFixedLayoutFindOffsetCssIfNeeded, 180);
+            targetContainer.post(() -> {
+                if (!activity.activityDestroyed) activity.applyFixedLayoutFindOffsetCssIfNeeded();
+            });
+            targetContainer.postDelayed(() -> {
+                if (!activity.activityDestroyed) activity.applyFixedLayoutFindOffsetCssIfNeeded();
+            }, 180);
         } else if (activity.webView != null) {
             activity.webView.requestLayout();
         }
@@ -273,7 +277,7 @@ final class DocumentSearchController {
             if (canMoveWithinPage && activity.webView != null) {
                 // Roll back the forced same-page follow correction.  Let WebView's
                 // native findNext()/FindListener own match selection and scrolling;
-                // the previous manual ordinal + reveal pass made Word results drift
+                // the previous manual ordinal + reveal step made Word results drift
                 // under the find popup on some documents.
                 activity.webView.findNext(forward);
                 return;
@@ -300,7 +304,9 @@ final class DocumentSearchController {
             return;
         }
         activity.webView.postDelayed(() -> {
-            if (!activity.activityDestroyed) applyDocumentSearchHighlight(activity.activeDocumentSearchQuery, !activity.documentSearchSelectLastAfterCount);
+            if (!activity.activityDestroyed && activity.webView != null) {
+                applyDocumentSearchHighlight(activity.activeDocumentSearchQuery, !activity.documentSearchSelectLastAfterCount);
+            }
         }, 60);
     }
 

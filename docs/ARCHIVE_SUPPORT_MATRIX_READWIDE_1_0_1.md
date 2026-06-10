@@ -1,4 +1,4 @@
-# Archive support matrix for Readwide 1.0.0 / TextView Reader 2.2.6 base
+# Archive support matrix for Readwide 1.0.1
 
 This matrix is the public wording source for archive support claims. It separates recognized formats, implemented paths, backend-dependent attempts, and unsupported boundaries.
 
@@ -22,6 +22,10 @@ This matrix is the public wording source for archive support claims. It separate
 | Single compressor streams | `.gz`, `.bz2`, `.xz`, `.lzma`, `.Z` |
 | RAR / CBR | `.rar`, `.cbr`, recognized RAR signatures in selected files |
 | ALZ / EGG | `.alz`, `.egg` |
+
+## Filename encoding notes
+
+Readwide 1.0.1 adds best-effort automatic decoding for legacy archive entry names in the paths where raw name bytes are available. ZIP raw central-directory names, first-party ALZ names, and first-party EGG names can fall back from UTF-8 to common legacy code pages including MS949/CP949, GB18030/GBK, Big5, Shift_JIS, Windows-1252, Windows-1250, Windows-1257, Windows-1251, KOI8-R, IBM866, Windows-1253, Windows-1254, Windows-1255, Windows-1256, Windows-874, Windows-1258, and IBM437. EGG locale code-page hints are honored when present. 7z and libarchive-backed RAR paths generally receive already-decoded names from their backend, so they are not re-decoded here.
 
 ## ZIP / ZIPX / CBZ
 
@@ -69,7 +73,7 @@ This matrix is the public wording source for archive support claims. It separate
 
 | Case | Status | Notes |
 |---|---|---|
-| Store/Deflate/BZip2 ALZ entries | Supported, limited | First-party reader with CRC verification; BZip2 depends on Commons Compress. |
+| Store/Deflate/BZip2 ALZ entries | Supported, limited | First-party reader streams supported payloads to the output file with CRC verification; BZip2 depends on Commons Compress. |
 | Covered ALZ ZipCrypto-style encryption | Supported, limited | Only covered ALZ encryption cases. Needs broader real fixture QA. |
 | Broad legacy ALZ variants and split edge cases | Not guaranteed | Do not claim broad ALZ compatibility. |
 
@@ -77,7 +81,7 @@ This matrix is the public wording source for archive support claims. It separate
 
 | Case | Status | Notes |
 |---|---|---|
-| Store/Deflate/BZip2/AZO/LZMA EGG entries | Supported, limited | First-party reader, xunazo-derived AZO path, CRC checks. Needs broader real fixture QA. |
+| Store/Deflate/BZip2/AZO/LZMA EGG entries | Supported, limited | First-party reader streams Store/Deflate/BZip2/LZMA blocks with per-block CRC checks; AZO remains block-buffered through the xunazo-derived decoder. Needs broader real fixture QA. |
 | Encrypted EGG | Unsupported | Fails cleanly. |
 | Split EGG | Unsupported | Fails cleanly. |
 | Solid EGG | Unsupported | Fails cleanly. |
@@ -96,3 +100,10 @@ Avoid wording such as:
 - split/multi-volume RAR supported;
 - RAR5 compressed supported by first-party Java;
 - libarchive handles all RAR variants.
+
+
+## Archive preview cache and failure UI
+
+Archive image preview uses temporary app-private cache files so the normal image/PDF/TXT viewers can open archive entries through file paths. Readwide 1.0.1 separates ordinary preview cache from password/sensitive archive preview cache. The sensitive cache has smaller size/count limits and a shorter age limit. These files are disposable generated cache data, not user documents.
+
+Archive failures are surfaced with family-specific support-boundary messages where possible. The UI distinguishes password required, bad password or unsupported encryption, unsupported feature/backend boundary, and corrupt/incomplete/CRC failure cases instead of collapsing every archive failure into one generic message.

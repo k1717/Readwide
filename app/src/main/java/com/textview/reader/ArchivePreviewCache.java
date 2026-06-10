@@ -12,7 +12,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.Locale;
 
 /**
  * Builds stable-but-content-aware cache paths for archive preview extraction.
@@ -24,10 +23,20 @@ import java.util.Locale;
  */
 final class ArchivePreviewCache {
     private static final String ROOT_NAME = "archive_preview";
+    private static final String SENSITIVE_ROOT_NAME = "archive_preview_sensitive";
     private static final int MAX_SAFE_BASE_CHARS = 96;
     private static final int MAX_ARCHIVE_CACHE_DIRS = 32;
     private static final long MAX_ARCHIVE_CACHE_BYTES = 256L * 1024L * 1024L;
     private static final long MAX_ARCHIVE_CACHE_AGE_MS = 14L * 24L * 60L * 60L * 1000L;
+    private static final int MAX_SENSITIVE_ARCHIVE_CACHE_DIRS = 8;
+    private static final long MAX_SENSITIVE_ARCHIVE_CACHE_BYTES = 64L * 1024L * 1024L;
+    private static final long MAX_SENSITIVE_ARCHIVE_CACHE_AGE_MS = 24L * 60L * 60L * 1000L;
+    private static final long SAFE_PRUNE_THROTTLE_MS = 6L * 60L * 60L * 1000L;
+    private static final long SENSITIVE_PRUNE_THROTTLE_MS = 30L * 60L * 1000L;
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
+    private static final Object PRUNE_LOCK = new Object();
+    private static long lastSafePruneAtMs = 0L;
+    private static long lastSensitivePruneAtMs = 0L;
 
     private ArchivePreviewCache() {}
 
@@ -35,7 +44,24 @@ final class ArchivePreviewCache {
     static File outputFileForEntry(@NonNull Context context,
                                    @NonNull File archiveFile,
                                    @NonNull String entryPath) {
-        File archiveDir = new File(new File(context.getCacheDir(), ROOT_NAME), archiveFingerprint(archiveFile));
+        return outputFileForEntry(context, archiveFile, entryPath, false);
+    }
+
+    @NonNull
+    static File outputFileForEntry(@NonNull Context context,
+                                   @NonNull File archiveFile,
+                                   @NonNull String entryPath,
+                                   boolean sensitive) {
+        File root = new File(context.getCacheDir(), sensitive ? SENSITIVE_ROOT_NAME : ROOT_NAME);
+        File archiveDir = new File(root, archiveFingerprint(archiveFile));
+        // Touch the archive cache directory when it is used so pruning prefers
+        // old/inactive archives. This is intentionally best-effort.
+        try {
+            if (!archiveDir.exists()) archiveDir.mkdirs();
+            //noinspection ResultOfMethodCallIgnored
+            archiveDir.setLastModified(System.currentTimeMillis());
+        } catch (SecurityException ignored) {
+        }
         return new File(archiveDir, cacheFileNameForEntry(entryPath));
     }
 
@@ -48,10 +74,37 @@ final class ArchivePreviewCache {
     }
 
     static void pruneOtherArchiveCaches(@NonNull Context context, @NonNull File activeArchiveFile) {
-        File root = new File(context.getCacheDir(), ROOT_NAME);
+        String active = archiveFingerprint(activeArchiveFile);
+        long now = System.currentTimeMillis();
+        boolean pruneSafe;
+        boolean pruneSensitive;
+        synchronized (PRUNE_LOCK) {
+            pruneSafe = now - lastSafePruneAtMs > SAFE_PRUNE_THROTTLE_MS;
+            pruneSensitive = now - lastSensitivePruneAtMs > SENSITIVE_PRUNE_THROTTLE_MS;
+            if (pruneSafe) lastSafePruneAtMs = now;
+            if (pruneSensitive) lastSensitivePruneAtMs = now;
+        }
+        if (pruneSafe) {
+            pruneRoot(new File(context.getCacheDir(), ROOT_NAME), active,
+                    MAX_ARCHIVE_CACHE_DIRS,
+                    MAX_ARCHIVE_CACHE_BYTES,
+                    MAX_ARCHIVE_CACHE_AGE_MS);
+        }
+        if (pruneSensitive) {
+            pruneRoot(new File(context.getCacheDir(), SENSITIVE_ROOT_NAME), active,
+                    MAX_SENSITIVE_ARCHIVE_CACHE_DIRS,
+                    MAX_SENSITIVE_ARCHIVE_CACHE_BYTES,
+                    MAX_SENSITIVE_ARCHIVE_CACHE_AGE_MS);
+        }
+    }
+
+    private static void pruneRoot(@NonNull File root,
+                                  @NonNull String activeFingerprint,
+                                  int maxDirs,
+                                  long maxBytes,
+                                  long maxAgeMs) {
         File[] children = root.listFiles();
         if (children == null || children.length == 0) return;
-        String active = archiveFingerprint(activeArchiveFile);
         Arrays.sort(children, Comparator.comparingLong(File::lastModified));
 
         long now = System.currentTimeMillis();
@@ -62,21 +115,21 @@ final class ArchivePreviewCache {
             dirCount++;
             long childSize = sizeOf(child);
             totalBytes = safeAdd(totalBytes, childSize);
-            if (!active.equals(child.getName()) && now - child.lastModified() > MAX_ARCHIVE_CACHE_AGE_MS) {
+            if (!activeFingerprint.equals(child.getName()) && now - child.lastModified() > maxAgeMs) {
                 deleteRecursively(child);
                 dirCount--;
                 totalBytes = Math.max(0L, totalBytes - childSize);
             }
         }
 
-        if (dirCount <= MAX_ARCHIVE_CACHE_DIRS && totalBytes <= MAX_ARCHIVE_CACHE_BYTES) return;
+        if (dirCount <= maxDirs && totalBytes <= maxBytes) return;
         File[] refreshed = root.listFiles();
         if (refreshed == null || refreshed.length == 0) return;
         Arrays.sort(refreshed, Comparator.comparingLong(File::lastModified));
         for (File child : refreshed) {
-            if (dirCount <= MAX_ARCHIVE_CACHE_DIRS && totalBytes <= MAX_ARCHIVE_CACHE_BYTES) break;
+            if (dirCount <= maxDirs && totalBytes <= maxBytes) break;
             if (child == null || !child.isDirectory()) continue;
-            if (active.equals(child.getName())) continue;
+            if (activeFingerprint.equals(child.getName())) continue;
             long childSize = sizeOf(child);
             deleteRecursively(child);
             dirCount--;
@@ -129,9 +182,13 @@ final class ArchivePreviewCache {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] bytes = digest.digest(value.getBytes(StandardCharsets.UTF_8));
-            StringBuilder builder = new StringBuilder(bytes.length * 2);
-            for (byte b : bytes) builder.append(String.format(Locale.ROOT, "%02x", b & 0xff));
-            return builder.toString();
+            char[] out = new char[bytes.length * 2];
+            for (int i = 0; i < bytes.length; i++) {
+                int byteValue = bytes[i] & 0xff;
+                out[i * 2] = HEX[byteValue >>> 4];
+                out[i * 2 + 1] = HEX[byteValue & 0x0f];
+            }
+            return new String(out);
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 is required by Android", e);
         }

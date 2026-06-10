@@ -324,12 +324,20 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         activity.jumpToAbsoluteCharPosition(charPosition,
                 activity.prefs.getTtsLastPageNumber(),
                 activity.getDisplayedTotalPageCount());
-        activity.handler.postDelayed(() -> start(resumeContinuous), 420L);
+        activity.handler.postDelayed(() -> {
+            if (!activity.activityDestroyed) start(resumeContinuous);
+        }, 420L);
     }
 
     @Override
     public void onInit(int status) {
         activity.runOnUiThread(() -> {
+            if (activity.activityDestroyed) {
+                initializing = false;
+                pendingStart = false;
+                pendingVoiceDialog = false;
+                return;
+            }
             initializing = false;
             if (status != TextToSpeech.SUCCESS || tts == null) {
                 initialized = false;
@@ -445,7 +453,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     private void handleUtteranceStart(String utteranceId) {
         activity.runOnUiThread(() -> {
-            if (!active || utteranceId == null) return;
+            if (activity.activityDestroyed || !active || utteranceId == null) return;
             int segmentIndex = segmentIndexFromUtteranceId(utteranceId);
             if (segmentIndex < 0 || segmentIndex >= queuedSegments.size()) return;
             TtsSpeechSegment segment = queuedSegments.get(segmentIndex);
@@ -465,7 +473,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     private void handleUtteranceDone(String utteranceId) {
         activity.runOnUiThread(() -> {
-            if (!active || !TextUtils.equals(utteranceId, lastQueuedUtteranceId)) return;
+            if (activity.activityDestroyed || !active || !TextUtils.equals(utteranceId, lastQueuedUtteranceId)) return;
             int generation = speechGeneration;
             if (continuous && canAdvancePage()) {
                 advanceAndSpeakNextPage(generation);
@@ -480,7 +488,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     private void handleUtteranceError(String utteranceId) {
         activity.runOnUiThread(() -> {
-            if (!active || !isCurrentGenerationUtterance(utteranceId)) return;
+            if (activity.activityDestroyed || !active || !isCurrentGenerationUtterance(utteranceId)) return;
             stop(false);
             clearTtsHighlight();
             ShortToast.show(activity, R.string.tts_engine_unavailable);
@@ -510,7 +518,9 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         boolean wasContinuous = continuous || (activity.prefs != null && activity.prefs.getTtsLastContinuous());
         stopInternal(false, false);
         activity.pageBy(direction, true);
-        activity.handler.postDelayed(() -> start(wasContinuous), NEXT_PAGE_DELAY_MS);
+        activity.handler.postDelayed(() -> {
+            if (!activity.activityDestroyed) start(wasContinuous);
+        }, NEXT_PAGE_DELAY_MS);
     }
 
     private boolean canAdvancePage() {

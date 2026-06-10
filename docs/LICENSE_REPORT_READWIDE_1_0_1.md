@@ -1,6 +1,6 @@
-# TextView Reader 2.2.6 direct dependency license report
+# Readwide 1.0.1 direct dependency license report
 
-This report records the direct dependencies declared by the default 2.2.6 source package and the project-level license boundary used for public source/APK release review.
+This report records the direct dependencies declared by the default Readwide 1.0.1 source package and the project-level license boundary used for public source/APK release review.
 
 Scope and limits:
 
@@ -13,7 +13,7 @@ Scope and limits:
 
 | Component | Version / path | Purpose | License position |
 | --- | --- | --- | --- |
-| TextView Reader first-party source | repository source | Android local reader/file manager/archive viewer | Apache License 2.0; see `LICENSE` and `NOTICE` |
+| Readwide first-party source | repository source | Android local reader/file manager/archive viewer | Apache License 2.0; see `LICENSE` and `NOTICE` |
 | Modified Java AZO decoder port | `AzoDecoder.java` | EGG method-3/AZO extraction only | zlib license notice retained from `kippler/xunazo`; altered-source status documented in source and `THIRD_PARTY_NOTICES.md` |
 
 ## Runtime dependencies declared in `app/build.gradle`
@@ -47,13 +47,13 @@ Scope and limits:
 | --- | --- | --- |
 | Gradle wrapper / Gradle | Build system wrapper and build runtime | Apache License 2.0 |
 | Android Gradle Plugin `com.android.application` 9.2.0 | Android build plugin resolved from Google Maven | Android SDK / Google Maven distribution terms; not vendored as app runtime code |
-| Gradle Foojay Toolchains Resolver Convention Plugin 1.0.0 | Java toolchain resolver | Apache License 2.0; resolved at build time |
+| Java toolchain resolver plugin | not declared | `settings.gradle` intentionally avoids the extra Foojay resolver plugin for this release package. |
 
 ## Release checklist tied to this report
 
 Before publishing a source or APK release:
 
-1. Include `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `PRIVACY.md`, `docs/FOSS_STATUS.md`, this report, and `docs/SBOM_2_2_6.spdx.json` with release materials.
+1. Include `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `PRIVACY.md`, `docs/FOSS_STATUS.md`, this report, and `docs/SBOM_READWIDE_1_0_1.spdx.json` with release materials.
 2. Confirm `app/libs` is absent or contains no optional local jars.
 3. Confirm no Junrar/UnRAR-license code or jar is bundled in the default source/APK.
 4. Confirm native dependency notices for libarchive-android/libarchive and zstd-jni/Zstandard are kept with binary release materials.

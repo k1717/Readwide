@@ -62,6 +62,10 @@ final class ReaderLifecycleController {
             activity.autoPageTurnController = null;
         }
         activity.releaseTts();
+        if (activity.readerToolbarController != null) {
+            activity.readerToolbarController.release();
+            activity.readerToolbarController = null;
+        }
         activity.handler.removeCallbacksAndMessages(null);
         if (activity.readerShellController != null) activity.readerShellController.cancelViewerBackToast();
         activity.saveReadingState();

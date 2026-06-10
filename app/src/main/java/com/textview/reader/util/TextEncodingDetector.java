@@ -276,7 +276,7 @@ final class TextEncodingDetector {
         }
 
         // Accuracy-first legacy detection:
-        // Do not return immediately from a Korean/Cyrillic pre-pass.  CP949,
+        // Do not return immediately from a Korean/Cyrillic pre-check.  CP949,
         // ISO-8859-5, Windows-1251, KOI8, and many Western encodings can all
         // produce "valid" Unicode from the same bytes.  Decode all candidate
         // families, score the decoded text, then choose the strongest family.
@@ -860,8 +860,8 @@ final class TextEncodingDetector {
             return false;
         }
 
-        // Legacy detector work is expensive. Only pay for the 512 KiB pass when
-        // the first-pass decision is genuinely weak or detector-family consensus
+        // Legacy detector work is expensive. Only pay for the 512 KiB scan when
+        // the initial decision is genuinely weak or detector-family consensus
         // did not produce a high-confidence result.
         return result.confidence < FileUtils.EncodingResult.HIGH_CONFIDENCE;
     }

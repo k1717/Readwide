@@ -330,7 +330,7 @@ final class MainDrawerGestureController {
         }
 
         drawerView.postDelayed(() -> {
-            if (activity.drawerLayout == null) return;
+            if (activity.activityDestroyed || activity.drawerLayout == null) return;
             if (!activity.drawerLayout.isDrawerOpen(GravityCompat.START)
                     && activity.drawerSlideOffset >= 0.30f) {
                 drawerView.setTranslationX(0f);
@@ -383,7 +383,7 @@ final class MainDrawerGestureController {
 
         if (drawerView != null) {
             drawerView.postDelayed(() -> {
-                if (activity.drawerLayout == null) return;
+                if (activity.activityDestroyed || activity.drawerLayout == null) return;
                 if (activity.drawerLayout.isDrawerVisible(GravityCompat.START)
                         && !activity.drawerLayout.isDrawerOpen(GravityCompat.START)) {
                     forceDrawerClosedVisualState(drawerView);

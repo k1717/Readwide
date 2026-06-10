@@ -33,6 +33,7 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.content.ContextCompat;
@@ -70,7 +71,9 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
     private PrefsManager prefs;
     private BookmarkManager bookmarkManager;
     private File archiveFile;
+    private final Object passwordHandoffLock = new Object();
     private char[] archivePassword;
+    private char[] pendingAcceptedArchivePassword;
     private String currentPrefix = "";
     private List<ArchiveSupport.EntryInfo> allEntries = new ArrayList<>();
 
@@ -146,6 +149,9 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
     protected void onDestroy() {
         hideImagePreviewLoadingWindow();
         destroyed = true;
+        mainHandler.removeCallbacksAndMessages(null);
+        clearArchivePassword();
+        clearPendingAcceptedArchivePassword();
         executor.shutdownNow();
         super.onDestroy();
     }
@@ -157,6 +163,47 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
             return;
         }
         super.onBackPressed();
+    }
+
+    private void setArchivePassword(@Nullable char[] password) {
+        clearArchivePassword();
+        archivePassword = PasswordChars.cloneOf(password);
+        PasswordChars.clear(password);
+    }
+
+    @Nullable
+    private char[] snapshotArchivePassword() {
+        return PasswordChars.cloneOf(archivePassword);
+    }
+
+    private void clearArchivePassword() {
+        if (archivePassword != null) {
+            PasswordChars.clear(archivePassword);
+            archivePassword = null;
+        }
+    }
+
+    private void storePendingAcceptedArchivePassword(@Nullable char[] password) {
+        synchronized (passwordHandoffLock) {
+            PasswordChars.clear(pendingAcceptedArchivePassword);
+            pendingAcceptedArchivePassword = PasswordChars.cloneOf(password);
+        }
+    }
+
+    @Nullable
+    private char[] takePendingAcceptedArchivePassword() {
+        synchronized (passwordHandoffLock) {
+            char[] password = pendingAcceptedArchivePassword;
+            pendingAcceptedArchivePassword = null;
+            return password;
+        }
+    }
+
+    private void clearPendingAcceptedArchivePassword() {
+        synchronized (passwordHandoffLock) {
+            PasswordChars.clear(pendingAcceptedArchivePassword);
+            pendingAcceptedArchivePassword = null;
+        }
     }
 
     private void saveHostArchiveRecentState() {
@@ -480,19 +527,33 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
     private void loadArchiveEntries(@Nullable char[] password) {
         showLoading(true, getString(R.string.loading));
         executor.execute(() -> {
+            char[] acceptedPassword = null;
             try {
+                acceptedPassword = PasswordChars.cloneOf(password);
                 List<ArchiveSupport.EntryInfo> entries = ArchiveSupport.listEntries(archiveFile, password);
-                if (password != null) archivePassword = password;
-                mainHandler.post(() -> {
-                    if (destroyed) return;
-                    allEntries = entries;
-                    currentPrefix = "";
-                    archiveFolderSortStack.clear();
-                    archiveSortMode = rootArchiveSortMode();
-                    renderCurrentFolder();
-                    showLoading(false, null);
-                    maybeAutoOpenComicArchive();
+                final char[] acceptedPasswordForUi = acceptedPassword;
+                acceptedPassword = null;
+                storePendingAcceptedArchivePassword(acceptedPasswordForUi);
+                boolean posted = mainHandler.post(() -> {
+                    char[] passwordForUi = takePendingAcceptedArchivePassword();
+                    try {
+                        if (destroyed) return;
+                        setArchivePassword(passwordForUi);
+                        allEntries = entries;
+                        currentPrefix = "";
+                        archiveFolderSortStack.clear();
+                        archiveSortMode = rootArchiveSortMode();
+                        renderCurrentFolder();
+                        showLoading(false, null);
+                        maybeAutoOpenComicArchive();
+                    } finally {
+                        PasswordChars.clear(passwordForUi);
+                    }
                 });
+                if (!posted) {
+                    clearPendingAcceptedArchivePassword();
+                }
+                PasswordChars.clear(acceptedPasswordForUi);
             } catch (ArchiveSupport.PasswordRequiredException e) {
                 mainHandler.post(() -> {
                     if (destroyed) return;
@@ -503,8 +564,9 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                 mainHandler.post(() -> {
                     if (destroyed) return;
                     showLoading(false, null);
-                    ShortToast.show(this, ArchiveFailureMessages.unsupportedFeatureMessageRes(archiveFile));
-                    finish();
+                    showArchiveSupportBoundaryDialog(
+                            ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, e.getMessage()),
+                            true);
                 });
             } catch (Exception e) {
                 mainHandler.post(() -> {
@@ -513,6 +575,9 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                     ShortToast.show(this, R.string.archive_open_failed);
                     finish();
                 });
+            } finally {
+                PasswordChars.clear(acceptedPassword);
+                PasswordChars.clear(password);
             }
         });
     }
@@ -648,34 +713,41 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         }
         showLoading(true, null);
         File outFile = buildPreviewOutputFile(entry);
+        final File archiveSnapshot = archiveFile;
+        final char[] passwordSnapshot = snapshotArchivePassword();
         executor.execute(() -> {
-            ArchiveSupport.ExtractionResult result = ArchiveSupport.extractSingleEntryDetailed(
-                    archiveFile,
-                    entry.path,
-                    outFile,
-                    archivePassword);
-            mainHandler.post(() -> {
-                if (destroyed) return;
-                showLoading(false, null);
-                if (!result.success || !outFile.exists()) {
-                    if (shouldAskArchivePassword(result)) {
-                        showPasswordDialog(passwordText -> {
-                            archivePassword = passwordText.toCharArray();
-                            extractEntryAndOpen(entry);
-                        });
-                    } else {
-                        showArchiveEntryExtractionFailure(result);
+            try {
+                ArchiveSupport.ExtractionResult result = ArchiveSupport.extractSingleEntryDetailed(
+                        archiveSnapshot,
+                        entry.path,
+                        outFile,
+                        passwordSnapshot);
+                mainHandler.post(() -> {
+                    if (destroyed) return;
+                    showLoading(false, null);
+                    if (!result.success || !outFile.exists()) {
+                        if (shouldAskArchivePassword(result)) {
+                            showPasswordDialog(passwordText -> {
+                                setArchivePassword(passwordText.toCharArray());
+                                extractEntryAndOpen(entry);
+                            });
+                        } else {
+                            showArchiveEntryExtractionFailure(result);
+                        }
+                        return;
                     }
-                    return;
-                }
-                openExtractedFile(outFile);
-            });
+                    openExtractedFile(outFile);
+                });
+            } finally {
+                PasswordChars.clear(passwordSnapshot);
+            }
         });
     }
 
     @NonNull
     private File buildPreviewOutputFile(@NonNull ArchiveSupport.EntryInfo entry) {
-        return ArchiveImageSequenceLoader.outputFileForEntry(this, archiveFile, entry);
+        boolean sensitive = archivePassword != null && archivePassword.length > 0;
+        return ArchiveImageSequenceLoader.outputFileForEntry(this, archiveFile, entry, sensitive);
     }
 
     private void extractImageSiblingEntriesAndOpen(@NonNull ArchiveSupport.EntryInfo selectedEntry) {
@@ -733,11 +805,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                 && selectedEntry == null
                 && archiveFile != null
                 && shouldAutoOpenArchiveAsComic();
-        if (archivePassword == null || archivePassword.length == 0) {
-            openLazyArchiveImageSequence(selectedEntry, useSavedPosition, sequence, targetIndex, finishAfterOpen);
-            return;
-        }
-        openFullyExtractedArchiveImageSequence(selectedEntry, useSavedPosition, sequence, targetIndex, finishAfterOpen);
+        openLazyArchiveImageSequence(selectedEntry, useSavedPosition, sequence, targetIndex, finishAfterOpen);
     }
 
 
@@ -746,17 +814,26 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                                               @NonNull List<ArchiveSupport.EntryInfo> sequence,
                                               int targetIndex,
                                               boolean finishAfterOpen) {
+        final char[] passwordForExtraction = snapshotArchivePassword();
+        final android.content.Context appContext = getApplicationContext();
+        final File archiveSnapshot = archiveFile;
+        final ArrayList<ArchiveSupport.EntryInfo> sequenceSnapshot = new ArrayList<>(sequence);
         executor.execute(() -> {
-            ArchiveImageSequenceLoader.Result result = ArchiveImageSequenceLoader.loadLazy(
-                    this,
-                    archiveFile,
-                    sequence,
-                    targetIndex);
-            mainHandler.post(() -> handleArchiveImageSequenceResult(
-                    selectedEntry,
-                    useSavedPosition,
-                    result,
-                    finishAfterOpen));
+            try {
+                ArchiveImageSequenceLoader.Result result = ArchiveImageSequenceLoader.loadLazy(
+                        appContext,
+                        archiveSnapshot,
+                        sequenceSnapshot,
+                        targetIndex,
+                        passwordForExtraction);
+                mainHandler.post(() -> handleArchiveImageSequenceResult(
+                        selectedEntry,
+                        useSavedPosition,
+                        result,
+                        finishAfterOpen));
+            } finally {
+                PasswordChars.clear(passwordForExtraction);
+            }
         });
     }
 
@@ -765,18 +842,26 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                                                         @NonNull List<ArchiveSupport.EntryInfo> sequence,
                                                         int targetIndex,
                                                         boolean finishAfterOpen) {
+        final char[] passwordForExtraction = snapshotArchivePassword();
+        final android.content.Context appContext = getApplicationContext();
+        final File archiveSnapshot = archiveFile;
+        final ArrayList<ArchiveSupport.EntryInfo> sequenceSnapshot = new ArrayList<>(sequence);
         executor.execute(() -> {
-            ArchiveImageSequenceLoader.Result result = ArchiveImageSequenceLoader.loadFully(
-                    this,
-                    archiveFile,
-                    sequence,
-                    targetIndex,
-                    archivePassword);
-            mainHandler.post(() -> handleArchiveImageSequenceResult(
-                    selectedEntry,
-                    useSavedPosition,
-                    result,
-                    finishAfterOpen));
+            try {
+                ArchiveImageSequenceLoader.Result result = ArchiveImageSequenceLoader.loadFully(
+                        appContext,
+                        archiveSnapshot,
+                        sequenceSnapshot,
+                        targetIndex,
+                        passwordForExtraction);
+                mainHandler.post(() -> handleArchiveImageSequenceResult(
+                        selectedEntry,
+                        useSavedPosition,
+                        result,
+                        finishAfterOpen));
+            } finally {
+                PasswordChars.clear(passwordForExtraction);
+            }
         });
     }
 
@@ -789,7 +874,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         if (!result.selectedReady || result.imagePaths.isEmpty()) {
             if (shouldAskArchivePassword(result.extractionResult)) {
                 showPasswordDialog(passwordText -> {
-                    archivePassword = passwordText.toCharArray();
+                    setArchivePassword(passwordText.toCharArray());
                     openArchiveImageSequence(selectedEntry, useSavedPosition);
                 });
             } else {
@@ -814,7 +899,27 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
     }
 
     private void showArchiveEntryExtractionFailure(@Nullable ArchiveSupport.ExtractionResult result) {
+        if (ArchiveFailureMessages.shouldShowSupportBoundaryDialog(result)) {
+            showArchiveSupportBoundaryDialog(result, false);
+            return;
+        }
         ShortToast.show(this, ArchiveFailureMessages.entryFailureMessageRes(archiveFile, result));
+    }
+
+    private void showArchiveSupportBoundaryDialog(@Nullable ArchiveSupport.ExtractionResult result,
+                                                  boolean finishOnClose) {
+        if (destroyed) return;
+        String message = ArchiveFailureMessages.supportBoundaryDetail(this, archiveFile, result);
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.archive_support_boundary_title)
+                .setMessage(message)
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    if (finishOnClose) finish();
+                })
+                .setOnCancelListener(dialog -> {
+                    if (finishOnClose) finish();
+                })
+                .show();
     }
 
     @NonNull
@@ -844,16 +949,36 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         final ArrayList<String> sequencePaths = new ArrayList<>(imagePaths);
         final ArrayList<String> sequenceNames = new ArrayList<>(displayNames);
         final ArrayList<String> sequenceEntryPaths = new ArrayList<>(entryPaths);
-        String token = ImageSequenceHandoffStore.put(() ->
-                new ImageSequenceHandoffStore.Sequence(sequencePaths, sequenceNames, sequenceEntryPaths));
+        final char[] passwordForHandoff = snapshotArchivePassword();
+        String token = ImageSequenceHandoffStore.put(new ImageSequenceHandoffStore.ClearableProvider() {
+            @Nullable
+            @Override
+            public ImageSequenceHandoffStore.Sequence build() {
+                return new ImageSequenceHandoffStore.Sequence(
+                        sequencePaths,
+                        sequenceNames,
+                        sequenceEntryPaths,
+                        passwordForHandoff);
+            }
+
+            @Override
+            public void clear() {
+                PasswordChars.clear(passwordForHandoff);
+            }
+        });
         Intent intent = new Intent(this, ImageReaderActivity.class);
         intent.putExtra(ImageReaderActivity.EXTRA_FILE_PATH, imagePaths.get(safeIndex));
         intent.putExtra(ImageReaderActivity.EXTRA_SEQUENCE_HANDOFF_TOKEN, token);
         intent.putExtra(ImageReaderActivity.EXTRA_SOURCE_ARCHIVE_PATH, archiveFile.getAbsolutePath());
         intent.putExtra(ImageReaderActivity.EXTRA_ALLOW_FILE_OPS, false);
-        startActivity(intent);
-        overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
-        if (finishAfterOpen) finish();
+        try {
+            startActivity(intent);
+            overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
+            if (finishAfterOpen) finish();
+        } catch (RuntimeException e) {
+            ImageSequenceHandoffStore.discard(token);
+            ShortToast.show(this, R.string.image_open_failed);
+        }
     }
 
     private void openExtractedFile(@NonNull File file) {

@@ -10,10 +10,10 @@ import java.util.TreeMap;
 /**
  * Small first-party PPMd suballocator scaffold.
  *
- * <p>RAR3/RAR4 PPMd uses a custom allocator for model contexts and state arrays. Pass 32 does
- * not implement the complete RAR PPMd allocator/model coupling yet; it introduces a bounded, tested
- * unit allocator so future PPMd context code has one place for memory ownership and validation
- * instead of scattering ad-hoc byte arrays through the unpacker.</p>
+ * <p>RAR3/RAR4 PPMd uses a custom allocator for model contexts and state arrays. This
+ * class does not implement the complete RAR PPMd allocator/model coupling; it provides a
+ * bounded unit allocator so future PPMd context code has one place for memory ownership and
+ * validation instead of scattering ad-hoc byte arrays through the unpacker.</p>
  */
 final class RarPpmdSubAllocator {
     static final int UNIT_SIZE_BYTES = 12;

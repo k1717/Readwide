@@ -120,6 +120,20 @@
     <string name="archive_extract_unsupported_rar">This RAR uses compression, solid mode, encryption, or another unsupported RAR feature</string>
     <string name="archive_extract_unsupported_alz">This ALZ variant is not supported yet</string>
     <string name="archive_extract_unsupported_egg">Unsupported EGG archive variant</string>
+    <string name="archive_bad_password">Password is incorrect, or this encryption method is not supported</string>
+    <string name="archive_corrupt_or_incomplete">Archive is damaged, incomplete, or failed checksum verification</string>
+    <string name="archive_extract_unsupported_zip">This ZIP/ZIPX uses an unsupported compression/encryption combination</string>
+    <string name="archive_extract_unsupported_7z">This 7z/CB7 uses an unsupported method, split chain, solid block, or encryption combination</string>
+    <string name="archive_support_boundary_title">Archive support boundary</string>
+    <string name="archive_support_boundary_rar">RAR support is limited. Readwide can list many RAR files, open stored entries, and try compressed RAR through the bundled libarchive backend, but solid, split, encrypted, header-encrypted, RAR5 compressed, PPMd/VM-filtered, and unusual SFX variants are not guaranteed.</string>
+    <string name="archive_support_boundary_zip">ZIP/CBZ support is broad for normal and encrypted ZIP through Zip4j. Some ZIPX combinations, especially encryption plus special compression methods such as XZ, BZip2, ZSTD, or Deflate64, may not be extractable by the current backend routing.</string>
+    <string name="archive_support_boundary_7z">7z/CB7 support depends on Apache Commons Compress. Normal, password, and standard split chains are attempted, but unsupported method chains, damaged/missing volumes, and some solid archive single-entry reads may fail or be slow.</string>
+    <string name="archive_support_boundary_alz">ALZ support covers Store, Deflate, BZip2, and covered ZipCrypto-style entries. Broader split, encrypted, descriptor-heavy, or unusual ESTsoft variants remain best-effort.</string>
+    <string name="archive_support_boundary_egg">EGG support covers Store, Deflate, BZip2, AZO, and LZMA blocks in non-solid, non-split, non-encrypted archives. Encrypted, split, and solid EGG archives are not supported.</string>
+    <string name="archive_support_boundary_generic">This archive uses a feature outside the current supported extraction boundary.</string>
+    <string name="archive_support_boundary_bad_password">The password was rejected, or the archive uses an encryption variant that this build cannot verify/extract.</string>
+    <string name="archive_support_boundary_corrupt">The archive may be incomplete or damaged, or the decoded data failed a checksum/CRC check.</string>
+    <string name="archive_support_boundary_detail_prefix">Backend detail:</string>
     <string name="archive_extract_conflict_title">Extraction folder already exists</string>
     <string name="archive_extract_conflict_message">An item named %1$s already exists in this folder.</string>
     <string name="extracted_folder_fallback">Extracted</string>
@@ -680,4 +694,9 @@ Rules: %2$d enabled rules</string>
     <string name="palette_hue">Hue</string>
     <string name="theme_list_preview_text">Aa Bb Cc ABC abc 123</string>
     <string name="theme_editor_preview_text">Aa Bb Cc ABC abc 123\nThis sample shows how reading text will look.\nThis is a preview. 1234567890</string>
+    <string name="bookmark_file_missing_badge">File missing</string>
+    <string name="bookmark_missing_path">Missing path</string>
+    <string name="bookmark_file_missing_title">Bookmark file missing</string>
+    <string name="bookmark_file_missing_message">This bookmark was imported or saved, but the original file is not available at the saved path.</string>
+    <string name="bookmark_file_missing_rebind_note">The bookmark will stay saved. If you copy the same file to this device and open it, Readwide can try to reconnect it by file name, size, and fingerprint.</string>
 </resources>

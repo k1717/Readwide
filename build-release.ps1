@@ -1,4 +1,4 @@
-# Readwide / TextView Reader release build helper.
+# Readwide release build helper.
 #
 # This script intentionally does not store signing passwords. It reads the
 # keystore password at runtime and passes signing values to Gradle through

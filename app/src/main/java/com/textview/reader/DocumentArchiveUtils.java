@@ -22,6 +22,8 @@ import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 
 final class DocumentArchiveUtils {
+    private static final int DETECTION_TEXT_READ_LIMIT_BYTES = 512 * 1024;
+
     private DocumentArchiveUtils() {}
 
     static boolean detectEpubFixedLayoutLike(ZipFile zip) {
@@ -41,7 +43,7 @@ final class DocumentArchiveUtils {
                         String opfPath = fullPathAttr.getNodeValue();
                         ZipEntry opfEntry = zip.getEntry(opfPath);
                         if (opfEntry != null) {
-                            String opf = readZipEntryString(zip, opfEntry);
+                            String opf = readZipEntryPreviewString(zip, opfEntry);
                             String lower = opf != null ? opf.toLowerCase(Locale.US) : "";
                             if (lower.contains("rendition:layout") && lower.contains("pre-paginated")) return true;
                             if (lower.contains("fixed layout") || lower.contains("fixed-layout")) return true;
@@ -58,7 +60,7 @@ final class DocumentArchiveUtils {
                 ZipEntry entry = entries.nextElement();
                 if (entry == null || entry.isDirectory() || !isEpubHtmlPath(entry.getName())) continue;
                 scanned++;
-                String html = readZipEntryString(zip, entry);
+                String html = readZipEntryPreviewString(zip, entry);
                 if (html == null) continue;
                 java.util.regex.Matcher m = viewport.matcher(html);
                 if (m.find()) {
@@ -89,7 +91,7 @@ final class DocumentArchiveUtils {
                     continue;
                 }
                 scanned++;
-                String text = readZipEntryString(zip, entry);
+                String text = readZipEntryPreviewString(zip, entry);
                 if (text == null) continue;
                 String compact = text.toLowerCase(Locale.US);
                 if (compact.contains("@font-face") || compact.contains("font-family")) {
@@ -179,11 +181,31 @@ final class DocumentArchiveUtils {
         }
     }
 
+    static String readZipEntryPreviewString(ZipFile zip, ZipEntry entry) throws IOException {
+        try (InputStream is = zip.getInputStream(entry)) {
+            byte[] data = readAtMostBytes(is, DETECTION_TEXT_READ_LIMIT_BYTES);
+            return new String(data, StandardCharsets.UTF_8);
+        }
+    }
+
     static byte[] readAllBytes(InputStream is) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         byte[] buf = new byte[8192];
         int n;
         while ((n = is.read(buf)) != -1) out.write(buf, 0, n);
+        return out.toByteArray();
+    }
+
+    private static byte[] readAtMostBytes(InputStream is, int maxBytes) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(8192, Math.max(0, maxBytes)));
+        byte[] buf = new byte[8192];
+        int remaining = Math.max(0, maxBytes);
+        while (remaining > 0) {
+            int n = is.read(buf, 0, Math.min(buf.length, remaining));
+            if (n == -1) break;
+            out.write(buf, 0, n);
+            remaining -= n;
+        }
         return out.toByteArray();
     }
 

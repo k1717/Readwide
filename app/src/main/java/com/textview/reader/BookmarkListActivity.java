@@ -652,13 +652,13 @@ public class BookmarkListActivity extends AppCompatActivity
     private void openBookmarkTarget(@NonNull Bookmark bookmark) {
         String path = bookmark.getFilePath();
         if (path == null || path.trim().isEmpty()) {
-            ShortToast.show(this, getString(R.string.file_not_found_prefix) + "(missing path)");
+            showMissingBookmarkFileDialog(bookmark, getString(R.string.bookmark_missing_path));
             return;
         }
 
         File target = new File(path.trim());
         if (!target.exists()) {
-            ShortToast.show(this, getString(R.string.file_not_found_prefix) + path);
+            showMissingBookmarkFileDialog(bookmark, path);
             return;
         }
 
@@ -685,7 +685,81 @@ public class BookmarkListActivity extends AppCompatActivity
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         startActivity(intent);
     }
+    private void showMissingBookmarkFileDialog(@NonNull Bookmark bookmark, @NonNull String missingPath) {
+        int bg = bookmarkDialogBgColor();
+        int fg = bookmarkTextColor();
+        int sub = bookmarkSubTextColor();
 
+        LinearLayout dialogPanel = new LinearLayout(this);
+        dialogPanel.setOrientation(LinearLayout.VERTICAL);
+        dialogPanel.setBackgroundColor(Color.TRANSPARENT);
+
+        dialogPanel.addView(makeBookmarkDialogTitle(getString(R.string.bookmark_file_missing_title), fg),
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackgroundColor(Color.TRANSPARENT);
+        box.setPadding(dpToPx(22), dpToPx(12), dpToPx(22), dpToPx(12));
+
+        TextView fileName = new TextView(this);
+        fileName.setText(bookmark.getFileName() != null && !bookmark.getFileName().trim().isEmpty()
+                ? bookmark.getFileName().trim()
+                : getString(R.string.bookmark));
+        fileName.setTextColor(fg);
+        fileName.setTextSize(15f);
+        fileName.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        fileName.setPadding(0, 0, 0, dpToPx(8));
+        box.addView(fileName, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView message = new TextView(this);
+        message.setText(getString(R.string.bookmark_file_missing_message));
+        message.setTextColor(fg);
+        message.setTextSize(14f);
+        message.setLineSpacing(0f, 1.15f);
+        message.setPadding(0, 0, 0, dpToPx(10));
+        box.addView(message, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView pathView = new TextView(this);
+        pathView.setText(missingPath);
+        pathView.setTextColor(sub);
+        pathView.setTextSize(12f);
+        pathView.setLineSpacing(0f, 1.10f);
+        pathView.setPadding(0, 0, 0, dpToPx(10));
+        box.addView(pathView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView note = new TextView(this);
+        note.setText(getString(R.string.bookmark_file_missing_rebind_note));
+        note.setTextColor(sub);
+        note.setTextSize(13f);
+        note.setLineSpacing(0f, 1.15f);
+        box.addView(note, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        dialogPanel.addView(box, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout actions = makeBookmarkDialogActionRow(bg, fg);
+        TextView ok = makeBookmarkDialogActionText(getString(R.string.ok), fg, Gravity.CENTER);
+        actions.addView(ok, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dpToPx(46)));
+        dialogPanel.addView(actions, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        android.app.Dialog dialog = createBookmarkDialog(dialogPanel, bg);
+        ok.setOnClickListener(v -> dialog.dismiss());
+        dialog.show();
+    }
 
 
     @Override

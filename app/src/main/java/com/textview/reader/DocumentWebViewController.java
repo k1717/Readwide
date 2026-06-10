@@ -36,7 +36,7 @@ final class DocumentWebViewController {
         activity.webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         activity.webView.addJavascriptInterface(activity.new WordSelectionBridge(), "TextViewSelectionBridge");
         activity.webView.setFindListener((activeMatchOrdinal, numberOfMatches, isDoneCounting) -> {
-            if (!isDoneCounting) return;
+            if (activity.activityDestroyed || activity.webView == null || !isDoneCounting) return;
             activity.activeDocumentSearchPage = activity.currentPage;
             activity.activeDocumentSearchCountOnPage = Math.max(0, numberOfMatches);
             activity.activeDocumentSearchOrdinal = numberOfMatches > 0
@@ -78,6 +78,7 @@ final class DocumentWebViewController {
             @Override
             public void onPageFinished(@NonNull WebView view, @NonNull String url) {
                 super.onPageFinished(view, url);
+                if (activity.activityDestroyed || activity.webView == null) return;
                 if (activity.progressBar != null) activity.progressBar.setVisibility(View.GONE);
                 activity.installWordSelectionCleanupScript();
                 activity.applyFixedLayoutFindOffsetCssIfNeeded();

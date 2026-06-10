@@ -1,7 +1,7 @@
-Readwide is a local-first Android reader and file browser for text, documents, images, comic archives, and archive workflows.
+Readwide is a local-first Android reader and file browser for TXT, PDF, EPUB, Word documents, images, comic archives, and common archive workflows.
 
-Supported reader paths include TXT, PDF, EPUB, Word documents, images, and sorted image sequences inside supported archives. File operations include browsing, search scope controls, recent files, multi-select actions, queued copy/move/delete/extract/compress operations, and progress UI.
+It supports TXT/PDF/EPUB/Word reading, image viewing, archive image sequences, recent files, folder/search controls, multi-select file operations, copy/move/delete/extract/compress queues, and progress UI.
 
-The default build does not request INTERNET permission, does not include ads or analytics, does not use an account system, and disables Android Auto Backup. Broad file access is requested so the app can work as a local reader and file manager for user-selected folders and files.
+The default build does not request the INTERNET permission and does not include ads, analytics, an account system, cloud sync, telemetry, or a developer-operated upload backend. Android Auto Backup is disabled. Broad file access is used for local file browsing and management of user-selected folders and files.
 
-Readwide 1.0.0 is the public successor to TextView Reader 2.2.6. The Android applicationId remains com.textview.reader for update compatibility when signed with the same key.
+Readwide 1.0.1 is the current public package. The Android applicationId remains com.textview.reader for update compatibility with earlier compatible builds when signed with the same key.

@@ -6,9 +6,9 @@ This file records third-party components that are used by the Android build or b
 
 ## Default FOSS build boundary
 
-The default Readwide 1.0.0 source package continues from the TextView Reader 2.2.6 FOSS-friendly line: first-party source is Apache License 2.0, Junrar/UnRAR-license fallback code is not bundled, and the normal dependency graph uses FOSS-compatible licenses recorded below. The default source package contains no optional decoder jar in `app/libs`; in a clean package the folder may be absent. Adding any local jar creates a custom build that must be audited separately before being described as FOSS.
+The default Readwide 1.0.1 source package is the current FOSS-friendly public line: first-party source is Apache License 2.0, Junrar/UnRAR-license fallback code is not bundled, and the normal dependency graph uses FOSS-compatible licenses recorded below. The default source package contains no optional decoder jar in `app/libs`; in a clean package the folder may be absent. Adding any local jar creates a custom build that must be audited separately before being described as FOSS.
 
-See `docs/FOSS_STATUS.md` for the project-level FOSS assessment and release checklist. A direct-dependency license report is included at `docs/LICENSE_REPORT_2_2_6.md`, and a source-declared direct-dependency SPDX draft is included at `docs/SBOM_2_2_6.spdx.json`. These do not replace a fully resolved Gradle/transitive SBOM for stricter repository submission.
+See `docs/FOSS_STATUS.md` for the project-level FOSS assessment and release checklist. A direct-dependency license report is included at `docs/LICENSE_REPORT_READWIDE_1_0_1.md`, and a source-declared direct-dependency SPDX draft is included at `docs/SBOM_READWIDE_1_0_1.spdx.json`. These do not replace a fully resolved Gradle/transitive SBOM for stricter repository submission.
 
 ## Runtime / app dependencies
 
@@ -167,7 +167,7 @@ License: Android Software Development Kit License / Google Maven distribution te
 
 ## Release-distribution note
 
-The Gradle packaging block may exclude duplicate `META-INF/LICENSE*` and `META-INF/NOTICE*` files from packaged Android resources to avoid resource merge conflicts. That does not remove the need to provide third-party notices with public binary releases. Include this file, the root `LICENSE`, `NOTICE`, `docs/LICENSE_REPORT_2_2_6.md`, and `docs/SBOM_2_2_6.spdx.json` with public source and binary release materials.
+The Gradle packaging block may exclude duplicate `META-INF/LICENSE*` and `META-INF/NOTICE*` files from packaged Android resources to avoid resource merge conflicts. That does not remove the need to provide third-party notices with public binary releases. Include this file, the root `LICENSE`, `NOTICE`, `docs/LICENSE_REPORT_READWIDE_1_0_1.md`, and `docs/SBOM_READWIDE_1_0_1.spdx.json` with public source and binary release materials.
 
 ## RAR5 key-derivation algorithm reference
 

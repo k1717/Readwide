@@ -54,6 +54,7 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
         int count;
         boolean expanded;
         boolean currentFile;
+        boolean fileMissing;
         Bookmark bookmark;
 
         static Row section(String title, int count) {
@@ -64,7 +65,7 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             return r;
         }
 
-        static Row folder(String filePath, String expansionKey, String fileName, int count, boolean expanded, boolean currentFile) {
+        static Row folder(String filePath, String expansionKey, String fileName, int count, boolean expanded, boolean currentFile, boolean fileMissing) {
             Row r = new Row();
             r.type = TYPE_FOLDER;
             r.filePath = filePath;
@@ -73,6 +74,7 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             r.count = count;
             r.expanded = expanded;
             r.currentFile = currentFile;
+            r.fileMissing = fileMissing;
             return r;
         }
 
@@ -82,6 +84,7 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             r.bookmark = b;
             r.filePath = b.getFilePath();
             r.fileName = b.getFileName();
+            r.fileMissing = isMissingFilePath(r.filePath);
             return r;
         }
     }
@@ -207,8 +210,9 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
 
                 boolean expanded = expandedFolders.contains(expansionKey);
                 boolean current = currentFilePath != null && currentFilePath.equals(path);
+                boolean missing = isMissingFilePath(path);
 
-                rows.add(Row.folder(path, expansionKey, fileName, bookmarks.size(), expanded, current));
+                rows.add(Row.folder(path, expansionKey, fileName, bookmarks.size(), expanded, current, missing));
                 folderCount++;
                 if (expanded) {
                     for (Bookmark b : bookmarks) rows.add(Row.bookmark(b));
@@ -257,6 +261,11 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
 
     private static String expansionKeyFor(int rank, String groupKey) {
         return "bookmark-folder:v2:" + rank + ":" + safeString(groupKey);
+    }
+
+    private static boolean isMissingFilePath(String path) {
+        if (path == null || path.trim().isEmpty()) return true;
+        return !new File(path.trim()).exists();
     }
 
     private static long stableIdFor(@NonNull Row row) {
@@ -407,6 +416,10 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             int cardStroke = row.currentFile
                     ? blendColors(dialogBgColor, textColor, lightDialog ? 0.360f : 0.460f)
                     : folderBorderColor;
+            if (row.fileMissing) {
+                cardFill = blendColors(cardFill, textColor, lightDialog ? 0.030f : 0.040f);
+                cardStroke = blendColors(dialogBgColor, textColor, lightDialog ? 0.300f : 0.420f);
+            }
             itemView.setBackground(rowBackground(cardFill, cardStroke, 11f, 1.4f, itemView));
 
             arrow.setText(row.expanded ? "▾" : "▸");
@@ -416,11 +429,21 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             title.setText(prefix + row.fileName);
             title.setTextColor(textColor);
 
-            meta.setText(row.count + (row.count == 1 ? " bookmark" : " bookmarks"));
-            meta.setTextColor(subTextColor);
+            String countText = row.count + (row.count == 1 ? " bookmark" : " bookmarks");
+            meta.setText(row.fileMissing
+                    ? countText + "  •  " + itemView.getContext().getString(R.string.bookmark_file_missing_badge)
+                    : countText);
+            meta.setTextColor(row.fileMissing
+                    ? blendColors(dialogBgColor, textColor, lightDialog ? 0.820f : 0.880f)
+                    : subTextColor);
 
-            path.setText(row.filePath != null ? row.filePath : "");
-            path.setTextColor(pathTextColor);
+            String pathText = row.filePath != null && !row.filePath.trim().isEmpty()
+                    ? row.filePath
+                    : itemView.getContext().getString(R.string.bookmark_missing_path);
+            path.setText(pathText);
+            path.setTextColor(row.fileMissing
+                    ? blendColors(dialogBgColor, textColor, lightDialog ? 0.640f : 0.760f)
+                    : pathTextColor);
         }
     }
 
@@ -494,8 +517,14 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
                 int page = Math.max(1, Math.min(total, bookmark.getPageNumber()));
                 pageText = "Page " + page + " / " + total + "  •  ";
             }
-            meta.setText(pageText + "Position " + range + "  •  " + dateStr);
-            meta.setTextColor(pathTextColor);
+            boolean missing = isMissingFilePath(bookmark.getFilePath());
+            String missingPrefix = missing
+                    ? itemView.getContext().getString(R.string.bookmark_file_missing_badge) + "  •  "
+                    : "";
+            meta.setText(missingPrefix + pageText + "Position " + range + "  •  " + dateStr);
+            meta.setTextColor(missing
+                    ? blendColors(dialogBgColor, textColor, lightDialog ? 0.690f : 0.780f)
+                    : pathTextColor);
 
             btnDelete.setColorFilter(subTextColor);
             btnDelete.setBackgroundColor(Color.TRANSPARENT);

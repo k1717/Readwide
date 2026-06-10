@@ -4,7 +4,7 @@ import androidx.annotation.NonNull;
 
 import java.io.IOException;
 
-/** Connects the pass-32 order-0 model primitive to the pass-30 PPMd control layer. */
+/** Connects the order-0 model primitive to the RAR3/RAR4 PPMd control layer. */
 final class Rar3PpmdOrder0SymbolSource implements Rar3PpmdSymbolSource {
     @NonNull private final RarPpmdRangeDecoder rangeDecoder;
     @NonNull private final Rar3PpmdOrder0Model model;

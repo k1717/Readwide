@@ -273,6 +273,23 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
         return holder != null && holder.panHorizontally(deltaX);
     }
 
+    int getVisiblePageHorizontalPanRange() {
+        PageViewHolder holder = findBestVisibleHolder();
+        return holder != null ? holder.getHorizontalPanRange() : 0;
+    }
+
+    int getVisiblePageHorizontalPanOffset() {
+        PageViewHolder holder = findBestVisibleHolder();
+        if (holder == null) return 0;
+        int range = holder.getHorizontalPanRange();
+        return range > 0 ? holder.getHorizontalPanOffset(range) : 0;
+    }
+
+    boolean setVisiblePageHorizontalPanOffset(int offset) {
+        PageViewHolder holder = findBestVisibleHolder();
+        return holder != null && holder.setHorizontalPanOffset(offset);
+    }
+
     class PageViewHolder extends RecyclerView.ViewHolder {
         private final ImageView image;
         private Bitmap displayedBitmap;
@@ -352,13 +369,23 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
             return next != current;
         }
 
-        private int getHorizontalPanRange() {
+        int getHorizontalPanRange() {
             if (activity.pdfContinuousList == null) return 0;
             int viewport = Math.max(1, activity.pdfContinuousList.getWidth());
             return Math.max(0, imageWidth - viewport);
         }
 
-        private int getHorizontalPanOffset(int range) {
+        private boolean setHorizontalPanOffset(int offset) {
+            int range = getHorizontalPanRange();
+            if (range <= 0 || boundPage == RecyclerView.NO_POSITION) return false;
+            int next = Math.max(0, Math.min(range, offset));
+            int current = getHorizontalPanOffset(range);
+            pagePanXCache.put(boundPage, next);
+            applyHorizontalPan();
+            return next != current;
+        }
+
+        int getHorizontalPanOffset(int range) {
             if (boundPage == RecyclerView.NO_POSITION) return 0;
             int stored = pagePanXCache.get(boundPage, Integer.MIN_VALUE);
             if (stored == Integer.MIN_VALUE) {

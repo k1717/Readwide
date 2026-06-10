@@ -2,7 +2,7 @@
 
 ## Readwide Launcher Artwork
 
-The Readwide launcher/adaptive/play-store icon assets are project-owned generated artwork supplied by the project maintainer for the Readwide 1.0.0 release line.
+The Readwide launcher/adaptive/play-store icon assets are project-owned generated artwork supplied by the project maintainer for the Readwide 1.0.x release line.
 
 - Source reference: `docs/readwide_launcher_icon_source.png`
 - Generated Android assets: `app/src/main/res/mipmap-*` launcher and adaptive icon PNG resources

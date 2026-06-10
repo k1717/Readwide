@@ -9,7 +9,7 @@ import java.io.IOException;
  *
  * <p>This is deliberately only the arithmetic range layer. It does not implement the PPMd
  * statistical model, SEE contexts, memory allocator, or RAR-specific model initialization yet.
- * Those remain first-party gaps until real PPMd fixtures pass CRC.</p>
+ * Those remain first-party gaps until real PPMd fixtures satisfy CRC validation.</p>
  */
 final class RarPpmdRangeDecoder {
     private static final long MASK_32 = 0xffff_ffffL;

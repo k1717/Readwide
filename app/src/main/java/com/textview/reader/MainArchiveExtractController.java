@@ -440,7 +440,8 @@ final class MainArchiveExtractController {
                             firstUnsupportedArchiveName = archive.getName();
                             firstUnsupportedDetail = result.detail;
                         }
-                    } else if (result.failure == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED) passwordFailedCount++;
+                    } else if (result.failure == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED
+                            || result.failure == ArchiveSupport.ExtractionFailure.BAD_PASSWORD) passwordFailedCount++;
                 }
             }
 
@@ -505,9 +506,11 @@ final class MainArchiveExtractController {
     private void showArchiveExtractionFailure(@NonNull File archive,
                                               @NonNull ArchiveSupport.ExtractionResult result) {
         String message = activity.getString(ArchiveFailureMessages.extractionFailureMessageRes(archive, result));
-        if (result.failure == ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE
-                && hasFailureDetail(result.detail)) {
-            showArchiveExtractionFailureDetailDialog(message, archive.getName(), result.detail);
+        if (ArchiveFailureMessages.shouldShowSupportBoundaryDialog(result)) {
+            showArchiveExtractionFailureDetailDialog(
+                    message,
+                    archive.getName(),
+                    ArchiveFailureMessages.supportBoundaryDetail(activity, archive, result));
             return;
         }
         ShortToast.show(activity, ArchiveFailureMessages.extractionFailureMessageRes(archive, result));

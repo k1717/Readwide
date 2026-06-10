@@ -567,7 +567,9 @@ public class DocumentPageActivity extends AppCompatActivity {
                 resetDocumentZoom();
                 clearDocumentEdgeArm();
                 if (webView != null) {
-                    webView.postDelayed(() -> documentDoubleTapResetSequence = false, 360);
+                    webView.postDelayed(() -> {
+                        if (!activityDestroyed) documentDoubleTapResetSequence = false;
+                    }, 360);
                 }
                 return true;
             }

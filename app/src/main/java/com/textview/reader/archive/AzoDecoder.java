@@ -10,7 +10,7 @@ import java.util.zip.CRC32;
 /**
  * Java AZO decoder for EGG method-3 payloads.
  *
- * <p>This file is a modified Java port for TextView Reader based on the
+ * <p>This file is a modified Java port for Readwide based on the
  * zlib-licensed kippler/xunazo AZO decoder. The implementation is intentionally
  * package-private and extraction-only; it is not used to create EGG/AZO data.</p>
  *

@@ -6,7 +6,6 @@ import androidx.annotation.Nullable;
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 
 import java.io.ByteArrayInputStream;
-import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -14,8 +13,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PushbackInputStream;
+import java.io.SequenceInputStream;
 import java.io.RandomAccessFile;
-import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -231,96 +231,147 @@ final class AlzipArchiveReader {
                                             @Nullable FileOperationProgress progress) throws IOException {
         if (progress != null && !progress.checkpoint()) throw new IOException("ALZ extraction cancelled");
         if (entry.directory) return;
-        if (entry.compressedSize > Integer.MAX_VALUE) {
-            throw new ArchiveSupport.UnsupportedArchiveFeatureException("ALZ entry is too large for this decoder pass");
+        if (entry.compressedSize < 0L) {
+            throw new ArchiveSupport.UnsupportedArchiveFeatureException("ALZ entry has an invalid size");
         }
         File parent = outFile.getParentFile();
         if (parent == null) throw new IOException("Output file has no parent");
         if (!parent.exists() && !parent.mkdirs()) throw new IOException("Cannot create output directory");
-        byte[] payload = new byte[(int) entry.compressedSize];
-        try (RandomAccessFile raf = new RandomAccessFile(archive, "r")) {
-            raf.seek(entry.dataOffset);
-            raf.readFully(payload);
-        }
-        if (progress != null && !progress.checkpoint()) throw new IOException("ALZ extraction cancelled");
-        if (entry.encrypted) {
-            if (password == null || password.length == 0) throw new ArchiveSupport.PasswordRequiredException();
-            if (entry.encryptedHeader == null) throw new IOException("Missing ALZ encryption header");
-            AlzipZipCrypto crypto = new AlzipZipCrypto(password);
-            if (!crypto.checkHeader(entry.encryptedHeader, entry.passwordCheckByte())) {
-                throw new IOException("Invalid ALZ password");
-            }
-            crypto.decryptInPlace(payload, 0, payload.length);
-        }
-        byte[] plain = decodePayload(entry, payload, progress);
-        verifyCrc(entry, plain);
-        try (OutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
-            if (progress != null && !progress.checkpoint()) throw new IOException("ALZ extraction cancelled");
-            out.write(plain);
-            if (progress != null && (entry.method == COMP_STORED || entry.method == COMP_BZIP2)) {
-                progress.addDoneBytes(plain.length);
+
+        boolean ok = false;
+        try (InputStream decoded = openDecodedPayloadStream(archive, entry, password, progress);
+             OutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+            CRC32 crc = new CRC32();
+            copyDecodedPayload(decoded, out, crc, progress);
+            verifyCrc(entry, crc.getValue());
+            out.flush();
+            ok = true;
+        } finally {
+            if (!ok) {
+                try { //noinspection ResultOfMethodCallIgnored
+                    outFile.delete();
+                } catch (SecurityException ignored) {
+                }
             }
         }
     }
 
     @NonNull
-    private static byte[] decodePayload(@NonNull AlzEntry entry,
-                                        @NonNull byte[] payload,
-                                        @Nullable FileOperationProgress progress) throws IOException {
-        if (entry.method == COMP_STORED) return payload;
-        if (entry.method == COMP_DEFLATE) {
-            return readAll(new InflaterInputStream(new ByteArrayInputStream(payload), new Inflater(true)), progress);
-        }
-        if (entry.method == COMP_BZIP2) {
-            // ALZ's BZip2 method carries a BZip2 stream. commons-compress (already
-            // a project dependency) decodes the standard "BZh"-prefixed form. Some
-            // ALZ writers omit the 2-byte "BZ" magic, so if the payload lacks it we
-            // prepend it before decoding. The entry CRC is verified by the caller
-            // afterward, so a wrong stream shape fails loudly rather than yielding
-            // silent corruption.
-            byte[] stream = payload;
-            if (!(payload.length >= 3 && payload[0] == 'B' && payload[1] == 'Z' && payload[2] == 'h')) {
-                if (payload.length >= 1 && payload[0] == 'h') {
-                    // Missing only the "BZ" prefix.
-                    byte[] prefixed = new byte[payload.length + 2];
-                    prefixed[0] = 'B';
-                    prefixed[1] = 'Z';
-                    System.arraycopy(payload, 0, prefixed, 2, payload.length);
-                    stream = prefixed;
-                }
+    private static InputStream openDecodedPayloadStream(@NonNull File archive,
+                                                        @NonNull AlzEntry entry,
+                                                        @Nullable char[] password,
+                                                        @Nullable FileOperationProgress progress) throws IOException {
+        InputStream payload = openPayloadStream(archive, entry, password);
+        try {
+            if (entry.method == COMP_STORED) return payload;
+            if (entry.method == COMP_DEFLATE) {
+                return new InflaterInputStream(payload, new Inflater(true));
             }
-            try {
-                return readAll(new BZip2CompressorInputStream(new ByteArrayInputStream(stream)), null);
-            } catch (IOException e) {
+            if (entry.method == COMP_BZIP2) {
+                return new BZip2CompressorInputStream(ensureAlzBzipHeader(payload));
+            }
+            throw new ArchiveSupport.UnsupportedArchiveFeatureException("Unsupported ALZ compression method");
+        } catch (IOException | RuntimeException e) {
+            try { payload.close(); } catch (IOException ignored) {}
+            if (e instanceof ArchiveSupport.UnsupportedArchiveFeatureException) throw (ArchiveSupport.UnsupportedArchiveFeatureException) e;
+            if (entry.method == COMP_BZIP2) {
                 throw new ArchiveSupport.UnsupportedArchiveFeatureException(
                         "ALZ BZip2 stream could not be decoded: " + e.getMessage());
             }
+            throw e;
         }
-        throw new ArchiveSupport.UnsupportedArchiveFeatureException("Unsupported ALZ compression method");
     }
 
-    private static void verifyCrc(@NonNull AlzEntry entry, @NonNull byte[] plain) throws IOException {
+    @NonNull
+    private static InputStream openPayloadStream(@NonNull File archive,
+                                                 @NonNull AlzEntry entry,
+                                                 @Nullable char[] password) throws IOException {
+        InputStream raw = new RandomAccessFileBoundedInputStream(
+                new RandomAccessFile(archive, "r"),
+                entry.dataOffset,
+                entry.compressedSize);
+        if (!entry.encrypted) return raw;
+        if (password == null || password.length == 0) {
+            try { raw.close(); } catch (IOException ignored) {}
+            throw new ArchiveSupport.PasswordRequiredException();
+        }
+        if (entry.encryptedHeader == null) {
+            try { raw.close(); } catch (IOException ignored) {}
+            throw new IOException("Missing ALZ encryption header");
+        }
+        AlzipZipCrypto crypto = new AlzipZipCrypto(password);
+        if (!crypto.checkHeader(entry.encryptedHeader, entry.passwordCheckByte())) {
+            try { raw.close(); } catch (IOException ignored) {}
+            throw new IOException("Invalid ALZ password");
+        }
+        return new AlzDecryptingInputStream(raw, crypto);
+    }
+
+    @NonNull
+    private static InputStream ensureAlzBzipHeader(@NonNull InputStream payload) throws IOException {
+        PushbackInputStream in = new PushbackInputStream(payload, 3);
+        byte[] probe = new byte[3];
+        int count = 0;
+        while (count < probe.length) {
+            int read = in.read(probe, count, probe.length - count);
+            if (read <= 0) break;
+            count += read;
+        }
+        if (count > 0) in.unread(probe, 0, count);
+        if (count >= 3 && probe[0] == 'B' && probe[1] == 'Z' && probe[2] == 'h') return in;
+        if (count >= 1 && probe[0] == 'h') {
+            return new SequenceInputStream(new ByteArrayInputStream(new byte[] {'B', 'Z'}), in);
+        }
+        return in;
+    }
+
+    private static void copyDecodedPayload(@NonNull InputStream decoded,
+                                           @NonNull OutputStream out,
+                                           @NonNull CRC32 crc,
+                                           @Nullable FileOperationProgress progress) throws IOException {
+        byte[] buffer = new byte[BUFFER_SIZE];
+        int read;
+        while ((read = decoded.read(buffer)) != -1) {
+            if (progress != null && !progress.checkpoint()) throw new IOException("ALZ extraction cancelled");
+            crc.update(buffer, 0, read);
+            out.write(buffer, 0, read);
+            if (progress != null) progress.addDoneBytes(read);
+        }
+    }
+
+    private static void verifyCrc(@NonNull AlzEntry entry, long actualCrc) throws IOException {
         if (entry.crc < 0) return;
-        CRC32 crc = new CRC32();
-        crc.update(plain);
-        if ((crc.getValue() & 0xffffffffL) != (entry.crc & 0xffffffffL)) {
+        if ((actualCrc & 0xffffffffL) != (entry.crc & 0xffffffffL)) {
             throw new IOException("ALZ CRC mismatch");
         }
     }
 
-    @NonNull
-    private static byte[] readAll(@NonNull InputStream input,
-                                  @Nullable FileOperationProgress progress) throws IOException {
-        try (InputStream in = input;
-             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
-            byte[] buffer = new byte[BUFFER_SIZE];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                if (progress != null && !progress.checkpoint()) throw new IOException("ALZ extraction cancelled");
-                out.write(buffer, 0, read);
-                if (progress != null) progress.addDoneBytes(read);
-            }
-            return out.toByteArray();
+    private static final class AlzDecryptingInputStream extends InputStream {
+        @NonNull private final InputStream source;
+        @NonNull private final AlzipZipCrypto crypto;
+
+        AlzDecryptingInputStream(@NonNull InputStream source, @NonNull AlzipZipCrypto crypto) {
+            this.source = source;
+            this.crypto = crypto;
+        }
+
+        @Override
+        public int read() throws IOException {
+            byte[] one = new byte[1];
+            int read = read(one, 0, 1);
+            return read <= 0 ? -1 : (one[0] & 0xff);
+        }
+
+        @Override
+        public int read(@NonNull byte[] buffer, int offset, int length) throws IOException {
+            int read = source.read(buffer, offset, length);
+            if (read > 0) crypto.decryptInPlace(buffer, offset, read);
+            return read;
+        }
+
+        @Override
+        public void close() throws IOException {
+            source.close();
         }
     }
 
@@ -393,11 +444,7 @@ final class AlzipArchiveReader {
 
     @NonNull
     private static String decodeAlzName(@NonNull byte[] bytes) {
-        try {
-            return new String(bytes, Charset.forName("MS949"));
-        } catch (Exception ignored) {
-            return new String(bytes, StandardCharsets.UTF_8);
-        }
+        return ArchiveFilenameDecoder.decodeLegacyName(bytes);
     }
 
     private static int readIntLE(@NonNull RandomAccessFile raf) throws IOException {

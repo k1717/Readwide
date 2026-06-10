@@ -38,7 +38,7 @@ public class ZoomImageView extends AppCompatImageView {
     private float fitScale = 1f;
     private float defaultScale = 1f;
     private float maxScale = 5f;
-    private boolean smallImageWidthFillDefault;
+    private boolean adaptiveFitDefaultDiffersFromOriginal;
     private float lastX;
     private float lastY;
     private int lastScrollerX;
@@ -227,18 +227,21 @@ public class ZoomImageView extends AppCompatImageView {
         float bh = imageHeight;
         if (bw <= 0 || bh <= 0) return;
         matrix.reset();
-        fitScale = Math.min(contentW / bw, contentH / bh);
-        if (fitScale <= 0f) fitScale = 1f;
         float fitWidthScale = contentW / bw;
+        float fitHeightScale = contentH / bh;
+        fitScale = Math.min(fitWidthScale, fitHeightScale);
+        if (fitScale <= 0f) fitScale = 1f;
 
-        // Small images now open in a width-filled reading state instead of the
-        // old original-size state. Keep the true original size as minScale so
-        // double tap and pinch can still return to 1:1 without treating the
-        // initial width-filled view as an extra zoomed-in state.
-        smallImageWidthFillDefault = bw <= contentW && bh <= contentH && fitWidthScale > 1f;
-        minScale = smallImageWidthFillDefault ? 1f : Math.min(1f, fitScale);
-        defaultScale = smallImageWidthFillDefault ? fitWidthScale : minScale;
-        maxScale = Math.max(Math.max(Math.max(minScale, fitScale), defaultScale) * 5f, 5f);
+        // Use an adaptive reading fit instead of a fixed width-fill default:
+        // pages wider than the viewport open fitted to width, while pages taller
+        // than the viewport open fitted to height. The full-image contain scale
+        // remains available as the minimum zoom, and double tap toggles between
+        // the adaptive fit and true 1:1 whenever those two states differ.
+        defaultScale = chooseAdaptiveFitScale(bw, bh, contentW, contentH, fitWidthScale, fitHeightScale);
+        if (defaultScale <= 0f) defaultScale = fitScale;
+        minScale = Math.min(1f, fitScale);
+        adaptiveFitDefaultDiffersFromOriginal = Math.abs(defaultScale - 1f) > getDoubleTapBaseEpsilon();
+        maxScale = Math.max(Math.max(Math.max(minScale, fitScale), Math.max(defaultScale, 1f)) * 5f, 5f);
         float dx = getPaddingLeft() + (contentW - bw * defaultScale) * 0.5f;
         float dy = getPaddingTop() + (contentH - bh * defaultScale) * 0.5f;
         matrix.postScale(defaultScale, defaultScale);
@@ -290,30 +293,45 @@ public class ZoomImageView extends AppCompatImageView {
     }
 
     private boolean willDoubleTapZoomIn(float current) {
-        if (smallImageWidthFillDefault) {
-            return current <= minScale + getDoubleTapBaseEpsilon();
-        }
-        return current <= defaultScale + getDoubleTapBaseEpsilon();
+        return getDoubleTapTargetScale(current) > current + getDoubleTapBaseEpsilon();
     }
 
     private float getDoubleTapTargetScale(float current) {
-        if (smallImageWidthFillDefault) {
-            // Small image toggle is intentionally reversed from the previous build:
-            // initial/default = width-filled, double tap = original 1:1, next double
-            // tap = width-filled again.
-            return current <= minScale + getDoubleTapBaseEpsilon() ? defaultScale : minScale;
+        float epsilon = getDoubleTapBaseEpsilon();
+        if (adaptiveFitDefaultDiffersFromOriginal && 1f >= minScale - epsilon && 1f <= maxScale + epsilon) {
+            if (Math.abs(current - 1f) <= epsilon) {
+                return defaultScale;
+            }
+            if (Math.abs(current - defaultScale) <= epsilon) {
+                return 1f;
+            }
+            float lower = Math.min(defaultScale, 1f);
+            float upper = Math.max(defaultScale, 1f);
+            if (current > lower + epsilon && current < upper - epsilon) {
+                return 1f;
+            }
+            return defaultScale;
         }
-        return willDoubleTapZoomIn(current) ? getDoubleTapZoomScale() : defaultScale;
+        return current <= defaultScale + epsilon ? getDoubleTapZoomScale() : defaultScale;
     }
 
     private float getDoubleTapZoomScale() {
-        if (smallImageWidthFillDefault) return defaultScale;
         if (fitScale > minScale + getDoubleTapBaseEpsilon()) {
             return fitScale;
         }
         int contentW = getContentWidth();
         float fitWidthScale = contentW > 0 ? contentW / (float) imageWidth : minScale;
         return Math.max(minScale * 2.5f, fitWidthScale);
+    }
+
+    private float chooseAdaptiveFitScale(float bitmapWidth, float bitmapHeight, int contentWidth, int contentHeight, float fitWidthScale, float fitHeightScale) {
+        if (bitmapWidth <= 0f || bitmapHeight <= 0f || contentWidth <= 0 || contentHeight <= 0) return fitScale;
+        float imageAspect = bitmapWidth / bitmapHeight;
+        float contentAspect = contentWidth / (float) contentHeight;
+        if (imageAspect >= contentAspect) {
+            return fitWidthScale;
+        }
+        return fitHeightScale;
     }
 
     private float getDoubleTapBaseEpsilon() {

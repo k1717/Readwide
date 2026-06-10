@@ -175,6 +175,10 @@ public class PrefsManager {
         JSONObject values = root.optJSONObject("values");
         if (values == null) return;
 
+        String previousLastDirectory = prefs.getString("last_directory", null);
+        String previousRecentFolders = prefs.getString("recent_folders", "");
+        String previousFolderShortcuts = prefs.getString("folder_shortcuts", "");
+
         SharedPreferences.Editor editor = prefs.edit();
         if (!merge) {
             for (String key : prefs.getAll().keySet()) {
@@ -186,6 +190,7 @@ public class PrefsManager {
         while (keys.hasNext()) {
             String key = keys.next();
             if (key == null || isBackupExcludedKey(key)) continue;
+            if (isDeviceLocalDirectoryPreferenceKey(key)) continue;
 
             JSONObject item = values.optJSONObject(key);
             if (item == null) continue;
@@ -215,6 +220,105 @@ public class PrefsManager {
         }
 
         editor.commit();
+        importDeviceLocalDirectoryPreferences(values,
+                previousLastDirectory,
+                previousRecentFolders,
+                previousFolderShortcuts);
+    }
+
+    /**
+     * Directory UI preferences are useful in a backup, but only if the restored
+     * paths are real directories on the current device.  Import accessible
+     * backup paths; when a backup path does not exist here, do not import it.
+     * Existing local drawer/recent directory settings are kept if the backup has
+     * no accessible replacement.  Bookmarks and reading states are intentionally
+     * handled elsewhere because they can rebind through portable file identity.
+     */
+    private void importDeviceLocalDirectoryPreferences(JSONObject values,
+                                                       String previousLastDirectory,
+                                                       String previousRecentFolders,
+                                                       String previousFolderShortcuts) {
+        SharedPreferences.Editor editor = prefs.edit();
+
+        String importedLastDirectory = readBackupStringPreference(values, "last_directory");
+        String validLastDirectory = isExistingDirectory(importedLastDirectory)
+                ? importedLastDirectory.trim()
+                : firstExistingDirectory(previousLastDirectory, 1);
+        putOrRemoveString(editor, "last_directory", validLastDirectory);
+
+        String importedRecentFolders = readBackupStringPreference(values, "recent_folders");
+        String validRecentFolders = joinExistingDirectories(importedRecentFolders, 20);
+        if (validRecentFolders == null || validRecentFolders.isEmpty()) {
+            validRecentFolders = joinExistingDirectories(previousRecentFolders, 20);
+        }
+        putOrRemoveString(editor, "recent_folders", validRecentFolders);
+
+        String importedFolderShortcuts = readBackupStringPreference(values, "folder_shortcuts");
+        String validFolderShortcuts = joinExistingDirectories(importedFolderShortcuts, 30);
+        if (validFolderShortcuts == null || validFolderShortcuts.isEmpty()) {
+            validFolderShortcuts = joinExistingDirectories(previousFolderShortcuts, 30);
+        }
+        putOrRemoveString(editor, "folder_shortcuts", validFolderShortcuts);
+
+        editor.apply();
+    }
+
+    private boolean isDeviceLocalDirectoryPreferenceKey(String key) {
+        return "last_directory".equals(key)
+                || "recent_folders".equals(key)
+                || "folder_shortcuts".equals(key);
+    }
+
+    private String readBackupStringPreference(JSONObject values, String key) {
+        if (values == null || key == null) return null;
+        JSONObject item = values.optJSONObject(key);
+        if (item == null) return null;
+        return item.optString("value", null);
+    }
+
+    private void putOrRemoveString(SharedPreferences.Editor editor, String key, String value) {
+        if (editor == null || key == null) return;
+        if (value == null || value.trim().isEmpty()) editor.remove(key);
+        else editor.putString(key, value.trim());
+    }
+
+    private String firstExistingDirectory(String raw, int limit) {
+        String joined = joinExistingDirectories(raw, limit);
+        if (joined == null || joined.isEmpty()) return null;
+        int newline = joined.indexOf('\n');
+        return newline >= 0 ? joined.substring(0, newline) : joined;
+    }
+
+    private String joinExistingDirectories(String raw, int limit) {
+        if (raw == null || raw.trim().isEmpty()) return "";
+        LinkedHashSet<String> kept = new LinkedHashSet<>();
+        String[] parts = raw.split("\n");
+        for (String part : parts) {
+            if (part == null) continue;
+            String path = part.trim();
+            if (path.isEmpty()) continue;
+            if (!isExistingDirectory(path)) continue;
+            kept.add(path);
+            if (limit > 0 && kept.size() >= limit) break;
+        }
+        StringBuilder sb = new StringBuilder();
+        int count = 0;
+        for (String path : kept) {
+            if (count++ > 0) sb.append('\n');
+            sb.append(path);
+        }
+        return sb.toString();
+    }
+
+    private boolean isExistingDirectory(String path) {
+        if (path == null || path.trim().isEmpty()) return false;
+        if (path.startsWith("content://")) return false;
+        try {
+            File file = new File(path.trim());
+            return file.exists() && file.isDirectory();
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
 

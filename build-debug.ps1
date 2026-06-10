@@ -1,4 +1,4 @@
-# Readwide / TextView Reader debug build helper.
+# Readwide debug build helper.
 
 $ErrorActionPreference = "Stop"
 

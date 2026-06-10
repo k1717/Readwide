@@ -39,7 +39,7 @@ The app may store local data needed for reading and file-browser behavior:
 - PDF reading-mode preference;
 - saved TXT display rules, including rule text, scope, enabled state, case-sensitivity setting, regex setting, ordering, and source-file labels/paths used for current-file-only rules;
 - disposable TXT page/index cache metadata for large-file handling;
-- temporary extracted archive entries used when opening files from archives.
+- temporary extracted archive entries used when opening files from archives, including a separate shorter-lived sensitive cache for password-protected archive previews.
 
 This data is used locally by the app. It is not uploaded by Readwide.
 
@@ -49,7 +49,7 @@ Folder shortcuts and recent-file records may store local path strings selected o
 
 ## Archive browsing and extraction
 
-Opening a file inside an archive may temporarily extract that selected entry into app cache so the appropriate viewer can read it. Long-press archive extraction writes files only after the user chooses a destination and confirms the extraction/conflict choice. Temporary archive cache data is disposable and is not a cloud upload or network transfer.
+Opening a file inside an archive may temporarily extract that selected entry into app cache so the appropriate viewer can read it. Long-press archive extraction writes files only after the user chooses a destination and confirms the extraction/conflict choice. Temporary archive cache data is disposable and is not a cloud upload or network transfer. Password-protected archive previews use a separate app-private sensitive preview cache with shorter/smaller pruning limits, because previewing such archives necessarily creates temporary decoded files for the image/PDF/TXT viewers.
 
 ## Opening or sharing files with other apps
 
@@ -90,3 +90,8 @@ The app requests storage access so it can open local documents selected by the u
 ## Generated cache data
 
 Disposable TXT page/index cache bookkeeping and temporary archive-entry extraction data are used only for generated cache data under app cache storage. Cache cleanup must not remove bookmarks, reading history, saved reading position, folder shortcuts, or user documents.
+
+
+## Sensitive archive preview cache
+
+Password-protected archive images may be temporarily extracted to the app-private sensitive preview cache for viewing. Readwide now validates the currently supplied password against the requested archive entry before reusing a cached sensitive preview file, stores archive-image handoff passwords only in memory, and clears password character arrays when the archive/image viewer flow is closed.

@@ -43,20 +43,23 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 public final class ArchiveSupport {
     private ArchiveSupport() {}
 
-    private static final Pattern RAR_NEW_STYLE_PART = Pattern.compile("^(.*)\\.part(\\d+)\\.rar$", Pattern.CASE_INSENSITIVE);
-    private static final Pattern RAR_OLD_STYLE_PART = Pattern.compile("^(.*)\\.r(\\d{2,3})$", Pattern.CASE_INSENSITIVE);
-    private static final Pattern EGG_VOLUME_PART = Pattern.compile("^(.*)\\.vol(\\d+)\\.egg$", Pattern.CASE_INSENSITIVE);
-    private static final Pattern ALZ_VOLUME_PART = Pattern.compile("^(.*)\\.a(\\d{2,3})$", Pattern.CASE_INSENSITIVE);
 
     private static final long MAX_EXTRACTION_TOTAL_BYTES = 32L * 1024L * 1024L * 1024L;
     private static final long MIN_EXTRACTION_FREE_MARGIN_BYTES = 64L * 1024L * 1024L;
+    private static final int ZIP_RAW_NAME_CACHE_MAX_ENTRIES = 8;
+    private static final Map<String, List<ZipRawName>> ZIP_RAW_NAME_CACHE = new LinkedHashMap<String, List<ZipRawName>>(
+            ZIP_RAW_NAME_CACHE_MAX_ENTRIES, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, List<ZipRawName>> eldest) {
+            return size() > ZIP_RAW_NAME_CACHE_MAX_ENTRIES;
+        }
+    };
 
     public enum Type {
         ZIP,
@@ -90,7 +93,9 @@ public final class ArchiveSupport {
     public enum ExtractionFailure {
         NONE,
         PASSWORD_REQUIRED,
+        BAD_PASSWORD,
         UNSUPPORTED_FEATURE,
+        CORRUPT_ARCHIVE,
         FAILED
     }
 
@@ -141,42 +146,12 @@ public final class ArchiveSupport {
 
     @Nullable
     public static Type getSupportedArchiveType(@NonNull File file) {
-        if (!file.isFile()) return null;
-        Type splitType = getAlzipSplitArchiveType(file);
-        if (splitType != null) return splitType;
-        Type nameType = getSupportedArchiveType(file.getName());
-        if (nameType != null) return nameType;
-        return hasEmbeddedRarSignatureForSfx(file) ? Type.RAR : null;
+        return ArchiveTypeDetector.fromFile(file);
     }
 
     @Nullable
     public static Type getSupportedArchiveType(@NonNull String fileName) {
-        String name = fileName.toLowerCase(Locale.ROOT);
-        if (SevenZSplitVolumeResolver.isSevenZSplitPartName(fileName)) return Type.SEVEN_Z;
-        if (isFirstNumericSplitName(name)) {
-            Type splitBaseType = getSupportedArchiveType(name.substring(0, name.length() - 4));
-            if (splitBaseType != null) return splitBaseType;
-        }
-        if (isFirstRarSplitName(name)) return Type.RAR;
-        if (RAR_OLD_STYLE_PART.matcher(name).matches()) return Type.RAR;
-        if (EGG_VOLUME_PART.matcher(name).matches()) return Type.EGG;
-        if (name.endsWith(".zip") || name.endsWith(".zipx") || name.endsWith(".cbz")) return Type.ZIP;
-        if (name.endsWith(".rar") || name.endsWith(".cbr")) return Type.RAR;
-        if (name.endsWith(".alz")) return Type.ALZ;
-        if (name.endsWith(".egg")) return Type.EGG;
-        if (name.endsWith(".7z") || name.endsWith(".cb7")) return Type.SEVEN_Z;
-        if (name.endsWith(".tar.gz") || name.endsWith(".tgz")) return Type.TAR_GZ;
-        if (name.endsWith(".tar.bz2") || name.endsWith(".tbz2") || name.endsWith(".tbz")) return Type.TAR_BZ2;
-        if (name.endsWith(".tar.xz") || name.endsWith(".txz")) return Type.TAR_XZ;
-        if (name.endsWith(".tar.lzma") || name.endsWith(".tlz")) return Type.TAR_LZMA;
-        if (name.endsWith(".tar.z") || name.endsWith(".taz")) return Type.TAR_Z;
-        if (name.endsWith(".tar") || name.endsWith(".cbt")) return Type.TAR;
-        if (name.endsWith(".gz")) return Type.SINGLE_GZ;
-        if (name.endsWith(".bz2")) return Type.SINGLE_BZ2;
-        if (name.endsWith(".xz")) return Type.SINGLE_XZ;
-        if (name.endsWith(".lzma")) return Type.SINGLE_LZMA;
-        if (name.endsWith(".z")) return Type.SINGLE_Z;
-        return null;
+        return ArchiveTypeDetector.fromFileName(fileName);
     }
 
     public static boolean isSupportedArchive(@NonNull File file) {
@@ -188,73 +163,15 @@ public final class ArchiveSupport {
     }
 
     private static boolean isFirstNumericSplitName(@NonNull String lowerName) {
-        return lowerName.endsWith(".001") && lowerName.length() > 4;
+        return ArchiveTypeDetector.isFirstNumericSplitName(lowerName);
     }
 
-    private static boolean hasEmbeddedRarSignatureForSfx(@NonNull File file) {
-        String name = file.getName().toLowerCase(Locale.ROOT);
-        if (!name.endsWith(".exe") && !name.endsWith(".sfx") && !name.endsWith(".bin")) {
-            return false;
-        }
-        try {
-            return RarArchiveReader.findEmbeddedRarSignatureOffsetForBackend(file) >= 0L;
-        } catch (IOException | SecurityException ignored) {
-            return false;
-        }
-    }
-
-    private static boolean isFirstNumericSplitArchive(@NonNull File file) {
-        return isFirstNumericSplitName(file.getName().toLowerCase(Locale.ROOT));
+    private static boolean isFirstNumericSplitArchive(@NonNull File archive) {
+        return ArchiveTypeDetector.isFirstNumericSplitName(archive.getName().toLowerCase(Locale.ROOT));
     }
 
     public static String getArchiveOutputBaseName(@NonNull File archive, @NonNull String fallback) {
-        String name = archive.getName();
-        String lower = name.toLowerCase(Locale.ROOT);
-        if (isFirstNumericSplitName(lower)
-                || SevenZSplitVolumeResolver.isSevenZSplitPartName(name)) {
-            name = name.substring(0, name.length() - 4);
-            lower = lower.substring(0, lower.length() - 4);
-        }
-        Matcher rarPartMatcher = RAR_NEW_STYLE_PART.matcher(name);
-        if (rarPartMatcher.matches()) {
-            name = rarPartMatcher.group(1) + ".rar";
-            lower = name.toLowerCase(Locale.ROOT);
-        }
-        String[] archiveExtensions = new String[] {
-                ".tar.gz",
-                ".tar.bz2",
-                ".tar.xz",
-                ".tar.lzma",
-                ".tar.z",
-                ".tgz",
-                ".tbz2",
-                ".tbz",
-                ".txz",
-                ".tlz",
-                ".taz",
-                ".lzma",
-                ".bz2",
-                ".gz",
-                ".xz",
-                ".z",
-                ".zip",
-                ".zipx",
-                ".cbz",
-                ".rar",
-                ".cbr",
-                ".alz",
-                ".egg",
-                ".cb7",
-                ".7z",
-                ".cbt",
-                ".tar"
-        };
-        for (String ext : archiveExtensions) {
-            if (lower.endsWith(ext) && name.length() > ext.length()) {
-                return name.substring(0, name.length() - ext.length());
-            }
-        }
-        return name.length() > 0 ? name : fallback;
+        return ArchiveTypeDetector.outputBaseName(archive, fallback);
     }
 
     public static boolean canUsePassword(@NonNull File archive) {
@@ -358,9 +275,13 @@ public final class ArchiveSupport {
             List<EntryInfo> result = new ArrayList<>();
             @SuppressWarnings("unchecked")
             List<FileHeader> headers = zip.getFileHeaders();
-            for (FileHeader header : headers) {
+            List<ZipRawName> rawNames = getZipRawNames(archive);
+            if (rawNames.size() != headers.size()) rawNames = Collections.emptyList();
+            for (int i = 0; i < headers.size(); i++) {
+                FileHeader header = headers.get(i);
                 if (header == null) continue;
-                String path = sanitizeEntryPathForList(header.getFileName());
+                String displayName = zipDisplayName(rawNames, i, header.getFileName());
+                String path = sanitizeEntryPathForList(displayName);
                 if (path == null) continue;
                 result.add(new EntryInfo(path, header.isDirectory(), header.getUncompressedSize(), 0L));
             }
@@ -416,6 +337,104 @@ public final class ArchiveSupport {
     }
 
     @NonNull
+    private static List<ZipRawName> getZipRawNames(@NonNull File archive) {
+        String key = zipRawNameCacheKey(archive);
+        synchronized (ZIP_RAW_NAME_CACHE) {
+            List<ZipRawName> cached = ZIP_RAW_NAME_CACHE.get(key);
+            if (cached != null) return cached;
+        }
+        List<ZipRawName> parsed = readZipRawNames(archive);
+        List<ZipRawName> stable = parsed.isEmpty()
+                ? Collections.emptyList()
+                : Collections.unmodifiableList(new ArrayList<>(parsed));
+        synchronized (ZIP_RAW_NAME_CACHE) {
+            ZIP_RAW_NAME_CACHE.put(key, stable);
+        }
+        return stable;
+    }
+
+    @NonNull
+    private static String zipRawNameCacheKey(@NonNull File archive) {
+        String path;
+        try {
+            path = archive.getCanonicalPath();
+        } catch (IOException | SecurityException ignored) {
+            path = archive.getAbsolutePath();
+        }
+        return path + "\n" + archive.length() + "\n" + archive.lastModified();
+    }
+
+    @NonNull
+    private static List<ZipRawName> readZipRawNames(@NonNull File archive) {
+        long length = archive.length();
+        if (length <= 0L) return Collections.emptyList();
+        int eocdSearchSize = (int) Math.min(length, 22L + 0xffffL);
+        byte[] tail = new byte[eocdSearchSize];
+        try (RandomAccessFile raf = new RandomAccessFile(archive, "r")) {
+            raf.seek(Math.max(0L, length - eocdSearchSize));
+            raf.readFully(tail);
+
+            int eocdOffset = -1;
+            for (int i = tail.length - 22; i >= 0; i--) {
+                if (readIntLE(tail, i) == 0x06054b50) {
+                    eocdOffset = i;
+                    break;
+                }
+            }
+            if (eocdOffset < 0 || eocdOffset + 22 > tail.length) return Collections.emptyList();
+            int expectedEntries = readUInt16LE(tail, eocdOffset + 10);
+            long centralSize = readUInt32LE(tail, eocdOffset + 12);
+            long centralOffset = readUInt32LE(tail, eocdOffset + 16);
+            if (expectedEntries == 0xffff || centralSize == 0xffffffffL || centralOffset == 0xffffffffL) {
+                return Collections.emptyList();
+            }
+            if (centralSize <= 0L || centralSize > 4L * 1024L * 1024L) return Collections.emptyList();
+            if (centralOffset < 0L || centralOffset + centralSize > length) return Collections.emptyList();
+            byte[] central = new byte[(int) centralSize];
+            raf.seek(centralOffset);
+            raf.readFully(central);
+            ArrayList<ZipRawName> result = new ArrayList<>();
+            for (int i = 0; i + 46 <= central.length; i++) {
+                int sig = readIntLE(central, i);
+                if (sig != 0x02014b50) break;
+                int flags = readUInt16LE(central, i + 8);
+                int nameLength = readUInt16LE(central, i + 28);
+                int extraLength = readUInt16LE(central, i + 30);
+                int commentLength = readUInt16LE(central, i + 32);
+                int nameStart = i + 46;
+                int nameEnd = nameStart + nameLength;
+                if (nameLength <= 0 || nameEnd > central.length) return Collections.emptyList();
+                byte[] rawNameBytes = copyOfRange(central, nameStart, nameLength);
+                String decoded = ArchiveFilenameDecoder.decodeZipName(rawNameBytes, (flags & 0x0800) != 0);
+                boolean directory = decoded.replace('\\', '/').endsWith("/");
+                result.add(new ZipRawName(decoded, directory));
+                long next = (long) nameEnd + extraLength + commentLength;
+                if (next <= i || next > central.length) return Collections.emptyList();
+                i = (int) next - 1;
+            }
+            return result.size() == expectedEntries ? result : Collections.emptyList();
+        } catch (IOException | SecurityException ignored) {
+            return Collections.emptyList();
+        }
+    }
+
+    @NonNull
+    private static String zipDisplayName(@NonNull List<ZipRawName> rawNames, int index, @Nullable String fallback) {
+        if (index >= 0 && index < rawNames.size()) {
+            String name = rawNames.get(index).decodedName;
+            if (name != null && name.length() > 0) return name;
+        }
+        return fallback == null ? "" : fallback;
+    }
+
+    @NonNull
+    private static byte[] copyOfRange(@NonNull byte[] data, int offset, int length) {
+        byte[] out = new byte[length];
+        System.arraycopy(data, offset, out, 0, length);
+        return out;
+    }
+
+    @NonNull
     private static List<EntryInfo> listRawZipEntries(@NonNull File archive,
                                                      @Nullable char[] password) throws IOException {
         if (hasZipEncryptedHeaderSignature(archive) && (password == null || password.length == 0)) {
@@ -438,7 +457,9 @@ public final class ArchiveSupport {
             int nameStart = i + 46;
             int nameEnd = nameStart + nameLength;
             if (nameLength <= 0 || nameEnd > tail.length) continue;
-            String rawName = new String(tail, nameStart, nameLength, StandardCharsets.UTF_8);
+            int flags = readUInt16LE(tail, i + 8);
+            byte[] rawNameBytes = copyOfRange(tail, nameStart, nameLength);
+            String rawName = ArchiveFilenameDecoder.decodeZipName(rawNameBytes, (flags & 0x0800) != 0);
             String path = sanitizeEntryPathForList(rawName);
             if (path != null) {
                 long size = readUInt32LE(tail, i + 24);
@@ -1022,17 +1043,7 @@ public final class ArchiveSupport {
 
     @NonNull
     private static ExtractionFailure classifyExtractionFailure(@NonNull Exception e) {
-        String message = e.getMessage();
-        String lower = message == null ? "" : message.toLowerCase(Locale.ROOT);
-        if (lower.contains("password") || lower.contains("decrypt")) {
-            return ExtractionFailure.PASSWORD_REQUIRED;
-        }
-        if (lower.contains("not supported") || lower.contains("unsupported")
-                || lower.contains("unknown compression method")
-                || lower.contains("not available yet")) {
-            return ExtractionFailure.UNSUPPORTED_FEATURE;
-        }
-        return ExtractionFailure.FAILED;
+        return ArchiveFailureClassifier.classify(e);
     }
 
     private static boolean isUnknownZipCompression(@NonNull Exception e) {
@@ -1208,38 +1219,20 @@ public final class ArchiveSupport {
     }
 
     private static boolean isFirstRarSplitName(@NonNull String lowerName) {
-        Matcher matcher = RAR_NEW_STYLE_PART.matcher(lowerName);
-        if (matcher.matches()) {
-            try {
-                return Integer.parseInt(matcher.group(2)) == 1;
-            } catch (NumberFormatException ignored) {
-                return false;
-            }
-        }
-        return lowerName.endsWith(".rar");
+        return ArchiveTypeDetector.isFirstRarSplitName(lowerName);
     }
 
     private static boolean isRarSplitPart(@NonNull File file) {
-        String lower = file.getName().toLowerCase(Locale.ROOT);
-        return lower.endsWith(".rar") || RAR_NEW_STYLE_PART.matcher(lower).matches() || RAR_OLD_STYLE_PART.matcher(lower).matches();
+        return ArchiveTypeDetector.isRarSplitPart(file);
     }
 
     @Nullable
     private static Type getAlzipSplitArchiveType(@NonNull File file) {
-        String lower = file.getName().toLowerCase(Locale.ROOT);
-        if (EGG_VOLUME_PART.matcher(lower).matches()) return Type.EGG;
-        Matcher alzPart = ALZ_VOLUME_PART.matcher(lower);
-        if (!alzPart.matches()) return null;
-        File parent = file.getParentFile();
-        if (parent == null) return null;
-        String prefix = file.getName().substring(0, lower.lastIndexOf(".a"));
-        File first = new File(parent, prefix + ".alz");
-        return first.exists() && first.isFile() ? Type.ALZ : null;
+        return ArchiveTypeDetector.getAlzipSplitArchiveType(file);
     }
 
     private static boolean isAlzipSplitPart(@NonNull File file) {
-        String lower = file.getName().toLowerCase(Locale.ROOT);
-        return EGG_VOLUME_PART.matcher(lower).matches() || ALZ_VOLUME_PART.matcher(lower).matches();
+        return ArchiveTypeDetector.isAlzipSplitPart(file);
     }
 
     @NonNull
@@ -1249,7 +1242,7 @@ public final class ArchiveSupport {
         String name = selectedPart.getName();
         String lower = name.toLowerCase(Locale.ROOT);
         if (type == Type.EGG) {
-            Matcher eggPart = EGG_VOLUME_PART.matcher(lower);
+            Matcher eggPart = ArchiveTypeDetector.EGG_VOLUME_PART.matcher(lower);
             if (eggPart.matches()) {
                 String prefix = name.substring(0, lower.lastIndexOf(".vol"));
                 File first = new File(parent, prefix + ".vol1.egg");
@@ -1257,7 +1250,7 @@ public final class ArchiveSupport {
             }
         }
         if (type == Type.ALZ) {
-            Matcher alzPart = ALZ_VOLUME_PART.matcher(lower);
+            Matcher alzPart = ArchiveTypeDetector.ALZ_VOLUME_PART.matcher(lower);
             if (alzPart.matches()) {
                 String prefix = name.substring(0, lower.lastIndexOf(".a"));
                 File first = new File(parent, prefix + ".alz");
@@ -1273,12 +1266,12 @@ public final class ArchiveSupport {
         if (parent == null) throw new IOException("RAR split archive has no parent directory");
         String name = selectedPart.getName();
         String lower = name.toLowerCase(Locale.ROOT);
-        Matcher newStyle = RAR_NEW_STYLE_PART.matcher(lower);
+        Matcher newStyle = ArchiveTypeDetector.RAR_NEW_STYLE_PART.matcher(lower);
         if (newStyle.matches()) {
             String originalPrefix = name.substring(0, lower.lastIndexOf(".part"));
             return collectNewStyleRarParts(parent, originalPrefix);
         }
-        Matcher oldStyle = RAR_OLD_STYLE_PART.matcher(lower);
+        Matcher oldStyle = ArchiveTypeDetector.RAR_OLD_STYLE_PART.matcher(lower);
         if (oldStyle.matches()) {
             String originalPrefix = name.substring(0, name.length() - 4);
             return collectOldStyleRarParts(parent, originalPrefix);
@@ -1373,20 +1366,23 @@ public final class ArchiveSupport {
             boolean sawEntry = false;
             @SuppressWarnings("unchecked")
             List<FileHeader> headers = zip.getFileHeaders();
+            List<ZipRawName> rawNames = getZipRawNames(archive);
             if (progress != null) progress.setTotalBytes(sumZipPayloadBytes(headers));
-            for (FileHeader header : headers) {
+            for (int i = 0; i < headers.size(); i++) {
+                FileHeader header = headers.get(i);
                 if (header == null) continue;
                 if (progress != null && !progress.checkpoint()) return false;
-                File out = resolveArchiveEntryOutput(targetDir, header.getFileName());
+                String displayName = zipDisplayName(rawNames, i, header.getFileName());
+                File out = resolveArchiveEntryOutput(targetDir, displayName);
                 if (out == null) return false;
                 sawEntry = true;
-                if (header.isDirectory() || header.getFileName().replace('\\', '/').endsWith("/")) {
-                    if (entryProgress != null) entryProgress.onDirectory(header.getFileName());
+                if (header.isDirectory() || displayName.replace('\\', '/').endsWith("/")) {
+                    if (entryProgress != null) entryProgress.onDirectory(displayName);
                     if (!out.exists() && !out.mkdirs()) return false;
                     continue;
                 }
-                if (entryProgress != null) entryProgress.onFile(header.getFileName());
-                else if (progress != null) progress.setDetail(header.getFileName());
+                if (entryProgress != null) entryProgress.onFile(displayName);
+                else if (progress != null) progress.setDetail(displayName);
                 File outParent = out.getParentFile();
                 if (outParent == null) return false;
                 if (!outParent.exists() && !outParent.mkdirs()) return false;
@@ -1425,26 +1421,33 @@ public final class ArchiveSupport {
                                                          @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
         boolean sawEntry = false;
         boolean extractedAny = false;
+        List<ZipRawName> rawNames = getZipRawNames(archive);
         try (org.apache.commons.compress.archivers.zip.ZipFile zip =
                      org.apache.commons.compress.archivers.zip.ZipFile.builder()
                              .setFile(archive)
                              .get()) {
             java.util.Enumeration<ZipArchiveEntry> entries = zip.getEntries();
+            int entryIndex = 0;
             while (entries.hasMoreElements()) {
                 ZipArchiveEntry entry = entries.nextElement();
-                if (entry == null) continue;
-                String path = sanitizeEntryPathForList(entry.getName());
+                if (entry == null) {
+                    entryIndex++;
+                    continue;
+                }
+                String displayName = zipDisplayName(rawNames, entryIndex, entry.getName());
+                entryIndex++;
+                String path = sanitizeEntryPathForList(displayName);
                 if (path == null) continue;
                 if (onlyEntryPath != null && !onlyEntryPath.equals(path)) continue;
 
-                File out = resolveArchiveEntryOutput(targetDir, entry.getName());
+                File out = resolveArchiveEntryOutput(targetDir, displayName);
                 if (out == null) {
                     if (onlyEntryPath != null) return false;
                     continue;
                 }
                 sawEntry = true;
                 if (entry.isDirectory() || entry.getName().replace('\\', '/').endsWith("/")) {
-                    if (entryProgress != null) entryProgress.onDirectory(entry.getName());
+                    if (entryProgress != null) entryProgress.onDirectory(displayName);
                     if (!out.exists() && !out.mkdirs()) return false;
                     continue;
                 }
@@ -1459,8 +1462,8 @@ public final class ArchiveSupport {
                 File outParent = out.getParentFile();
                 if (outParent == null) return false;
                 if (!outParent.exists() && !outParent.mkdirs()) return false;
-                if (entryProgress != null) entryProgress.onFile(entry.getName());
-                else if (progress != null) progress.setDetail(entry.getName());
+                if (entryProgress != null) entryProgress.onFile(displayName);
+                else if (progress != null) progress.setDetail(displayName);
                 try (InputStream in = zip.getInputStream(entry)) {
                     if (!writeArchiveEntryStream(in, out, progress)) return false;
                 } catch (LinkageError missingCodec) {
@@ -1490,10 +1493,15 @@ public final class ArchiveSupport {
             }
             @SuppressWarnings("unchecked")
             List<FileHeader> headers = zip.getFileHeaders();
-            for (FileHeader header : headers) {
+            List<ZipRawName> rawNames = getZipRawNames(archive);
+            if (rawNames.size() != headers.size()) rawNames = Collections.emptyList();
+            for (int i = 0; i < headers.size(); i++) {
+                FileHeader header = headers.get(i);
                 if (header == null || header.isDirectory()) continue;
-                String path = sanitizeEntryPathForList(header.getFileName());
-                if (!entryPath.equals(path)) continue;
+                String displayName = zipDisplayName(rawNames, i, header.getFileName());
+                String path = sanitizeEntryPathForList(displayName);
+                String zip4jPath = sanitizeEntryPathForList(header.getFileName());
+                if (!entryPath.equals(path) && !entryPath.equals(zip4jPath)) continue;
                 try (InputStream in = zip.getInputStream(header)) {
                     return writeArchiveEntryStream(in, outFile);
                 }
@@ -1511,16 +1519,25 @@ public final class ArchiveSupport {
     private static boolean extractSingleZipEntryWithCommonsCompress(@NonNull File archive,
                                                                     @NonNull String entryPath,
                                                                     @NonNull File outFile) throws IOException {
+        List<ZipRawName> rawNames = getZipRawNames(archive);
         try (org.apache.commons.compress.archivers.zip.ZipFile zip =
                      org.apache.commons.compress.archivers.zip.ZipFile.builder()
                              .setFile(archive)
                              .get()) {
             java.util.Enumeration<ZipArchiveEntry> entries = zip.getEntries();
+            int entryIndex = 0;
             while (entries.hasMoreElements()) {
                 ZipArchiveEntry entry = entries.nextElement();
-                if (entry == null || entry.isDirectory()) continue;
-                String path = sanitizeEntryPathForList(entry.getName());
-                if (!entryPath.equals(path)) continue;
+                if (entry == null) {
+                    entryIndex++;
+                    continue;
+                }
+                String displayName = zipDisplayName(rawNames, entryIndex, entry.getName());
+                entryIndex++;
+                if (entry.isDirectory()) continue;
+                String path = sanitizeEntryPathForList(displayName);
+                String commonsPath = sanitizeEntryPathForList(entry.getName());
+                if (!entryPath.equals(path) && !entryPath.equals(commonsPath)) continue;
                 if (!zip.canReadEntryData(entry)) {
                     throw new UnsupportedArchiveFeatureException(
                             "ZIP entry uses an unsupported compression method");
@@ -1553,16 +1570,17 @@ public final class ArchiveSupport {
                     TarArchiveEntry tarEntry = (TarArchiveEntry) entry;
                     if (tarEntry.isSymbolicLink() || tarEntry.isLink()) return false;
                 }
-                File out = resolveArchiveEntryOutput(targetDir, entry.getName());
+                String displayName = entry.getName();
+                File out = resolveArchiveEntryOutput(targetDir, displayName);
                 if (out == null) return false;
                 sawEntry = true;
-                if (entry.isDirectory() || entry.getName().replace('\\', '/').endsWith("/")) {
-                    if (entryProgress != null) entryProgress.onDirectory(entry.getName());
+                if (entry.isDirectory() || displayName.replace('\\', '/').endsWith("/")) {
+                    if (entryProgress != null) entryProgress.onDirectory(displayName);
                     if (!out.exists() && !out.mkdirs()) return false;
                     continue;
                 }
-                if (entryProgress != null) entryProgress.onFile(entry.getName());
-                else if (progress != null) progress.setDetail(entry.getName());
+                if (entryProgress != null) entryProgress.onFile(displayName);
+                else if (progress != null) progress.setDetail(displayName);
                 if (!writeArchiveEntryStream(tar, out, progress)) return false;
             }
             return sawEntry;
@@ -1603,16 +1621,17 @@ public final class ArchiveSupport {
             SevenZArchiveEntry entry;
             while ((entry = sevenZ.getNextEntry()) != null) {
                 if (progress != null && !progress.checkpoint()) return false;
-                File out = resolveArchiveEntryOutput(targetDir, entry.getName());
+                String displayName = entry.getName();
+                File out = resolveArchiveEntryOutput(targetDir, displayName);
                 if (out == null) return false;
                 sawEntry = true;
-                if (entry.isDirectory() || entry.getName().replace('\\', '/').endsWith("/")) {
-                    if (entryProgress != null) entryProgress.onDirectory(entry.getName());
+                if (entry.isDirectory() || displayName.replace('\\', '/').endsWith("/")) {
+                    if (entryProgress != null) entryProgress.onDirectory(displayName);
                     if (!out.exists() && !out.mkdirs()) return false;
                     continue;
                 }
-                if (entryProgress != null) entryProgress.onFile(entry.getName());
-                else if (progress != null) progress.setDetail(entry.getName());
+                if (entryProgress != null) entryProgress.onFile(displayName);
+                else if (progress != null) progress.setDetail(displayName);
                 File outParent = out.getParentFile();
                 if (outParent == null) return false;
                 if (!outParent.exists() && !outParent.mkdirs()) return false;
@@ -1823,6 +1842,16 @@ public final class ArchiveSupport {
         String p = path.replace('\\', '/');
         if (directory && !p.endsWith("/")) p += "/";
         return p;
+    }
+
+    private static final class ZipRawName {
+        final String decodedName;
+        final boolean directory;
+
+        ZipRawName(@NonNull String decodedName, boolean directory) {
+            this.decodedName = decodedName;
+            this.directory = directory;
+        }
     }
 
     private static int readIntLE(@NonNull byte[] data, int offset) {

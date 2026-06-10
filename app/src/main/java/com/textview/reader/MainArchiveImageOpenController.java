@@ -4,6 +4,7 @@ import android.content.Intent;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 
 import com.textview.reader.archive.ArchiveSupport;
 import com.textview.reader.util.FileUtils;
@@ -137,18 +138,33 @@ final class MainArchiveImageOpenController {
                 openArchivePreview(archiveFile);
                 break;
             case DirectOpenResult.ACTION_UNSUPPORTED:
-                ShortToast.show(activity, ArchiveFailureMessages.unsupportedFeatureMessageRes(archiveFile));
+                showArchiveSupportBoundaryDialog(archiveFile,
+                        ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, null));
                 break;
             case DirectOpenResult.ACTION_OPEN_FAILED:
                 ShortToast.show(activity, R.string.archive_open_failed);
                 break;
             case DirectOpenResult.ACTION_ENTRY_FAILED:
             default:
-                ShortToast.show(activity, ArchiveFailureMessages.entryFailureMessageRes(archiveFile, result.extractionResult));
+                if (ArchiveFailureMessages.shouldShowSupportBoundaryDialog(result.extractionResult)) {
+                    showArchiveSupportBoundaryDialog(archiveFile, result.extractionResult);
+                } else {
+                    ShortToast.show(activity, ArchiveFailureMessages.entryFailureMessageRes(archiveFile, result.extractionResult));
+                }
                 break;
         }
     }
 
+
+    private void showArchiveSupportBoundaryDialog(@NonNull File archiveFile,
+                                                  @Nullable ArchiveSupport.ExtractionResult result) {
+        if (activity.activityDestroyed || activity.isFinishing()) return;
+        new AlertDialog.Builder(activity)
+                .setTitle(R.string.archive_support_boundary_title)
+                .setMessage(ArchiveFailureMessages.supportBoundaryDetail(activity, archiveFile, result))
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
     private void openImageReader(@NonNull File archiveFile,
                                  @Nullable ArchiveImageSequenceLoader.Result result) {
         if (result == null || result.imagePaths.isEmpty()) {
@@ -167,9 +183,14 @@ final class MainArchiveImageOpenController {
         intent.putExtra(ImageReaderActivity.EXTRA_SEQUENCE_HANDOFF_TOKEN, token);
         intent.putExtra(ImageReaderActivity.EXTRA_SOURCE_ARCHIVE_PATH, archiveFile.getAbsolutePath());
         intent.putExtra(ImageReaderActivity.EXTRA_ALLOW_FILE_OPS, false);
-        activity.startActivity(intent);
-        activity.overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
-        activity.finishIfReturnToViewerMode();
+        try {
+            activity.startActivity(intent);
+            activity.overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
+            activity.finishIfReturnToViewerMode();
+        } catch (RuntimeException e) {
+            ImageSequenceHandoffStore.discard(token);
+            ShortToast.show(activity, R.string.image_open_failed);
+        }
     }
 
     private void openArchivePreview(@NonNull File archiveFile) {

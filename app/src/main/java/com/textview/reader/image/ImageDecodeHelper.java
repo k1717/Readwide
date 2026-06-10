@@ -148,7 +148,7 @@ public final class ImageDecodeHelper {
                 return bitmap == null ? null : new BitmapDecodeResult(bitmap, sourceWidth, sourceHeight, sample);
             } catch (OutOfMemoryError oom) {
                 sample *= 2;
-                System.gc();
+                Thread.yield();
             }
         }
         return null;

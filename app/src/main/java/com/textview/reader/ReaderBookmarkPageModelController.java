@@ -46,10 +46,28 @@ final class ReaderBookmarkPageModelController {
     }
 
     void syncCurrentFileBookmarksToLargeTextExactPageModel() {
-        if (!activity.largeTextEstimateActive
-                || activity.bookmarkManager == null
+        if (activity.bookmarkManager == null
                 || activity.filePath == null
                 || activity.readerView == null) return;
+
+        List<Bookmark> currentBookmarks = activity.bookmarkManager.getBookmarksForFile(activity.filePath);
+        if (currentBookmarks.isEmpty()) return;
+
+        List<Bookmark> changed = new ArrayList<>();
+        if (!activity.largeTextEstimateActive) {
+            int total = Math.max(1, activity.readerView.getTotalPageCount());
+            for (Bookmark bookmark : currentBookmarks) {
+                if (bookmark == null) continue;
+                int page = activity.readerView.getPageNumberForCharPosition(bookmark.getCharPosition());
+                if (updateBookmarkPageModelFieldsIfChanged(bookmark, page, total, "")) {
+                    changed.add(bookmark);
+                }
+            }
+            if (!changed.isEmpty()) {
+                activity.bookmarkManager.saveBookmarkPageMetadataRefresh(changed);
+            }
+            return;
+        }
 
         String currentSignature = buildCurrentLargeTextBookmarkPageSignature();
         ArrayList<CustomReaderView.PageTextAnchor> anchors =
@@ -57,10 +75,6 @@ final class ReaderBookmarkPageModelController {
         if (anchors == null || anchors.isEmpty()) return;
 
         int total = Math.max(1, anchors.size());
-        List<Bookmark> currentBookmarks = activity.bookmarkManager.getBookmarksForFile(activity.filePath);
-        if (currentBookmarks.isEmpty()) return;
-
-        List<Bookmark> changed = new ArrayList<>();
         for (Bookmark bookmark : currentBookmarks) {
             if (bookmark == null) continue;
             int page = activity.findExactLargeTextPageForChar(anchors, bookmark.getCharPosition());
@@ -75,6 +89,16 @@ final class ReaderBookmarkPageModelController {
 
     int[] resolveBookmarkDisplayPageTarget(@NonNull Bookmark bookmark, int absoluteCharPosition) {
         if (!activity.largeTextEstimateActive) {
+            if (activity.readerView != null) {
+                int total = Math.max(1, activity.readerView.getTotalPageCount());
+                int page = activity.readerView.getPageNumberForCharPosition(absoluteCharPosition);
+                if (updateBookmarkPageModelFieldsIfChanged(bookmark, page, total, "")) {
+                    List<Bookmark> changed = new ArrayList<>();
+                    changed.add(bookmark);
+                    activity.bookmarkManager.saveBookmarkPageMetadataRefresh(changed);
+                }
+                return new int[] { page, total };
+            }
             return new int[] {
                     Math.max(0, bookmark.getPageNumber()),
                     Math.max(0, bookmark.getTotalPages())

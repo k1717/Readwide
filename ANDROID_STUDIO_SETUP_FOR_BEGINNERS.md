@@ -1,6 +1,6 @@
-# TextView Reader - Android Studio Beginner Setup
+# Readwide - Android Studio Beginner Setup
 
-TextView Reader is a Java Android reader for TXT, PDF, EPUB, Word, image, and archive workflows. It includes local file browsing, bookmarks, reader themes, custom fonts, image sequence viewing, and viewer-specific layout controls.
+Readwide is a Java Android reader for TXT, PDF, EPUB, Word, image, and archive workflows. It includes local file browsing, bookmarks, reader themes, custom fonts, image sequence viewing, and viewer-specific layout controls.
 
 ## 1. Open the project
 

@@ -1,5 +1,43 @@
 # Changelog
 
+## Readwide 1.0.1 - 2026-06-09
+
+### Release scope
+
+- Kept Android metadata at `versionCode 10001` and `versionName "1.0.1"`.
+- Kept the existing Android `applicationId` / package name so Readwide 1.0.1 remains update-compatible with earlier compatible builds when signed with the same key.
+- Focused on viewer polish, portable backup/bookmark handling, archive safety, lifecycle hardening, and public GitHub/F-Droid packaging cleanup.
+
+### Final changes included in this upload
+
+- Missing bookmark target files remain visible in the bookmark list with a theme-matched **File missing / 파일 없음** label. Tapping one opens a themed explanation dialog while preserving the bookmark for later portable rebind.
+- Backup import keeps `last_directory`, `recent_folders`, and `folder_shortcuts` only when those folders exist on the current device. Invalid imported paths are skipped, and valid current-device entries are preserved when the backup has no accessible replacement.
+- TXT bookmark imports treat `pageNumber`, `totalPages`, and `pageLayoutSignature` as layout-dependent cache. Character position, logical line, surrounding anchor text, and file fingerprint remain the stable bookmark location, and Page X/Y refreshes under the current device layout when the file is opened or the bookmark is used.
+- Zoomed PDF pages can fling/pan with inertia in single-page mode, and zoomed pages in vertical continuous mode support horizontal fling across the visible page while original-scale swipes keep their page-turn behavior.
+- Image viewer landscape safe-area handling now respects Android 3-button navigation on the right side of the screen.
+- Image viewer default fitting is adaptive: wide images open fit-to-width and tall images open fit-to-height. Double tap toggles against true 1:1 scale when applicable.
+- Image viewer keeps successfully decoded detail/original bitmaps after returning from zoom to adaptive-fit view, avoiding repeated detail re-decodes for the same image.
+- Archive-backed image viewer recent/saved-position reopen paths were hardened so deferred image sequence metadata is applied before decoding, with fallback handling for missing or invalid handoff metadata.
+- Legacy archive entry filename decoding was expanded for raw ZIP central-directory names and first-party ALZ/EGG name fields, covering Korean, Chinese, Japanese, Cyrillic, Greek, Turkish, Hebrew, Arabic, Thai, Vietnamese, Western/Central/Baltic Latin, and DOS ZIP code pages where raw name bytes are available.
+- Password-protected archive image viewing uses selected-image-first lazy extraction after password entry. Password-sensitive preview cache reuse validates the current password before trusting cached output.
+- ALZ Store/Deflate/BZip2 and EGG Store/Deflate/BZip2/LZMA extraction paths stream to output with CRC verification where the format path allows it.
+- Archive failure messages now distinguish password-required, bad-password, unsupported-feature, corrupt-archive, and generic failures, with conservative family-specific support-boundary details.
+- Added external RAR and non-RAR archive fixture report tooling for local compatibility QA without broadening public archive compatibility claims.
+- Removed forced process-wide `System.gc()` calls from image decode OOM retry; retries increase sample size and yield instead.
+- Added lifecycle guards and cleanup for document WebView callbacks, PDF delayed callbacks, TXT TTS callbacks, reader-toolbar delayed work, drawer delayed work, image sequence handoffs, archive password snapshots, and font-scan callbacks.
+- Bounded EPUB fixed-layout/font detection reads so large HTML/CSS entries are not fully loaded during detection-only scans.
+- Public GitHub/F-Droid documentation, release notes, archive/RAR/license report filenames, and Fastlane changelogs were normalized for the Readwide 1.0.1 release line.
+
+### Archive support boundary
+
+- ZIP/CBZ stays on Zip4j as the primary path, with Apache Commons Compress fallback for non-encrypted unsupported ZIP methods where bundled codecs can read them.
+- 7z/CB7, TAR-family archives, and single-compressor streams continue through Apache Commons Compress.
+- ALZ and EGG remain limited first-party implementations with documented method coverage and unsupported encrypted/split/solid variants.
+- RAR/CBR remains libarchive-primary with scoped first-party Java support for metadata, safe paths, stored entries, selected stored split paths, RAR4 Unicode names, diagnostics, and covered RAR5 stored-entry handling.
+- RAR creation is not implemented.
+- Split/multi-volume RAR and encrypted RAR are not guaranteed.
+- Solid RAR, PPMd, custom VM filters, broad SFX, RAR5 compressed/solid/encrypted-header cases, and unusual RAR variants remain backend-dependent or unsupported unless a specific file is covered by the bundled backend.
+
 ## Readwide 1.0.0 - 2026-06-09
 
 ### Release scope
@@ -14,7 +52,7 @@
 - Updated launcher/app display branding, settings wording, backup wording, exported backup filename prefix, TTS media-session label, and developer-contact documentation to Readwide.
 - Changed the developer contact address to `readwide.kj7w5@addy.io`.
 - Reworked the main language setting from a long radio-button page into a compact selected-language row with a rounded picker dialog.
-- Added selectable major UI languages and first-pass resource coverage for the expanded language list. Untranslated strings fall back to the default English resources.
+- Added selectable major UI languages and initial resource coverage for the expanded language list. Untranslated strings fall back to the default English resources.
 - Fixed the recent-file multi-select menu so long English actions such as `Remove from recent list` can wrap instead of being clipped.
 - Replaced launcher/adaptive/play-store icon assets with the approved Readwide book artwork and adjusted launcher safe margins to avoid clipped-looking edges.
 - Fixed the custom reading theme create/edit screen so the top app bar respects the Android status bar and display cutout, preventing the back button from overlapping system UI.
@@ -23,7 +61,7 @@
 - Switched the public update URL to the standard GitHub releases page: `https://github.com/k1717/Readwide/releases`.
 - Cleaned RAR source comments so the public FOSS package describes first-party RAR work as independent implementation based on public format behavior and fixture validation, not as UnRAR source porting.
 - Documented launcher icon provenance as project-owned generated artwork and removed the unused optional local RAR5 decoder bridge/readme from the public source package.
-- Removed internal pass-number wording from RAR diagnostic strings and comments so detailed archive failures use release-facing wording.
+- Removed development-session wording from RAR diagnostic strings and comments so detailed archive failures use release-facing wording.
 - Removed the default `app/libs/*.jar` dependency hook so the public FOSS/F-Droid-oriented source tree has no local optional jar path in the Gradle dependency graph.
 - Made release signing conditional so F-Droid-style source builds can run `assembleRelease` without a private developer keystore and produce an unsigned release artifact.
 - Removed the unused Foojay toolchain resolver plugin from `settings.gradle` to keep the build script leaner for reproducible source-build review.
@@ -40,12 +78,6 @@
 - RAR creation is not implemented.
 - Split/multi-volume RAR and encrypted RAR were not re-tested for this release package and are not guaranteed.
 - Solid RAR, PPMd, custom VM filters, broad SFX, RAR5 compressed/solid/encrypted-header cases, and unusual RAR variants remain backend-dependent or unsupported unless a specific file is covered by the bundled backend.
-
-### GitHub package cleanup
-
-- Public root docs now describe final release results instead of pass-by-pass internal logs.
-- Generated GitHub ZIP packages exclude build output, IDE folders, local SDK files, private signing material, APK outputs, scratch logs, and internal pass-report documents.
-- Generated GitHub ZIP packages use POSIX-style `/` entry separators for Linux/macOS/GitHub-friendly extraction.
 
 ## TextView Reader 2.2.6 - 2026-06-07
 

@@ -2,8 +2,8 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "Readwide 1.0.0 direct-dependency SBOM",
-  "documentNamespace": "https://github.com/k1717/Readwide/spdx/readwide-1.0.0-direct",
+  "name": "Readwide 1.0.1 direct-dependency SBOM",
+  "documentNamespace": "https://github.com/k1717/Readwide/spdx/readwide-1.0.1-direct",
   "creationInfo": {
     "created": "2026-06-07T00:00:00Z",
     "creators": [

@@ -532,7 +532,8 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
 
     @Override
     protected void onDestroy() {
-        hideImageOpenLoadingWindow();
+        if (mainImageOpenController != null) mainImageOpenController.onDestroy();
+        else hideImageOpenLoadingWindow();
         activityDestroyed = true;
         pendingDrawerNavigationEntry = null;
         drawerNavigationPending = false;

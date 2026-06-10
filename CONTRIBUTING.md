@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for improving TextView Reader.
+Thank you for improving Readwide.
 
 ## Development setup
 

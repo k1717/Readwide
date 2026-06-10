@@ -11,6 +11,7 @@ import org.junit.rules.TemporaryFolder;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
@@ -38,6 +39,24 @@ public class EggArchiveReaderTest {
         assertEquals(1, entries.size());
         assertEquals("book/page001.txt", entries.get(0).path);
         assertEquals(6L, entries.get(0).size);
+    }
+
+
+    @Test
+    public void listEntries_eggCp949FilenameWithLocale_autoDecodes() throws Exception {
+        byte[] payload = "stored".getBytes(StandardCharsets.UTF_8);
+        File archive = buildEggArchiveWithNameBytes(
+                "한글/page001.txt".getBytes(Charset.forName("MS949")),
+                949,
+                payload,
+                0,
+                payload,
+                false);
+
+        List<ArchiveSupport.EntryInfo> entries = ArchiveSupport.listEntries(archive, null);
+
+        assertEquals(1, entries.size());
+        assertEquals("한글/page001.txt", entries.get(0).path);
     }
 
     @Test
@@ -105,8 +124,12 @@ public class EggArchiveReaderTest {
 
     private File buildEggArchiveWithStoredPayload(String entryName, byte[] plainPayload, int method,
                                                   byte[] storedPayload, boolean encrypted) throws Exception {
+        return buildEggArchiveWithNameBytes(entryName.getBytes(StandardCharsets.UTF_8), 0, plainPayload, method, storedPayload, encrypted);
+    }
+
+    private File buildEggArchiveWithNameBytes(byte[] name, int localeCodePage, byte[] plainPayload, int method,
+                                              byte[] storedPayload, boolean encrypted) throws Exception {
         File archive = tempFolder.newFile("fixture-" + System.nanoTime() + ".egg");
-        byte[] name = entryName.getBytes(StandardCharsets.UTF_8);
         CRC32 crc = new CRC32();
         crc.update(plainPayload);
 
@@ -121,8 +144,10 @@ public class EggArchiveReaderTest {
             writeLongLE(out, plainPayload.length);
 
             writeIntLE(out, MAGIC_FILENAME);
-            out.write(0);
-            writeShortLE(out, name.length);
+            boolean hasLocale = localeCodePage > 0;
+            out.write(hasLocale ? (1 << 5) : 0);
+            writeShortLE(out, name.length + (hasLocale ? 2 : 0));
+            if (hasLocale) writeShortLE(out, localeCodePage);
             out.write(name);
 
             if (encrypted) {

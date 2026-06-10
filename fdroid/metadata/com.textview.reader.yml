@@ -1,6 +1,6 @@
 # Draft metadata for an F-Droid Data merge request.
 # Copy this file to fdroiddata/metadata/com.textview.reader.yml and replace
-# the commit value with the final immutable Git commit hash for the 1.0.0 tag.
+# the commit value with the final immutable Git commit hash for the 1.0.1 tag.
 
 Categories:
   - Reading
@@ -29,16 +29,16 @@ Description: |-
 RepoType: git
 Repo: https://github.com/k1717/Readwide.git
 Builds:
-  - versionName: '1.0.0'
-    versionCode: 10000
-    commit: REPLACE_WITH_FINAL_GIT_COMMIT_HASH_FOR_V1_0_0
+  - versionName: '1.0.1'
+    versionCode: 10001
+    commit: REPLACE_WITH_FINAL_GIT_COMMIT_HASH_FOR_V1_0_1
     rm:
       - gradle/wrapper/gradle-wrapper.jar
     gradle:
       - 'yes'
     prebuild:
-      - chmod +x gradlew scripts/clean_removed_sources.sh
+      - chmod +x gradlew scripts/clean_removed_sources.sh scripts/generate_rar_fixture_reports.sh scripts/generate_archive_fixture_reports.sh
 AutoUpdateMode: Version v%v
 UpdateCheckMode: Tags
-CurrentVersion: '1.0.0'
-CurrentVersionCode: 10000
+CurrentVersion: '1.0.1'
+CurrentVersionCode: 10001

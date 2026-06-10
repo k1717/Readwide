@@ -15,6 +15,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
@@ -85,6 +86,23 @@ public class AlzipArchiveReaderTest {
         assertEquals("book/", entries.get(0).path);
         assertEquals("book/page001.txt", entries.get(1).path);
         assertEquals(6L, entries.get(1).size);
+    }
+
+
+    @Test
+    public void listEntries_alzCp949Filename_autoDecodes() throws Exception {
+        byte[] payload = "stored".getBytes(StandardCharsets.UTF_8);
+        File archive = buildAlzArchiveWithNameBytes(
+                "한글/page001.txt".getBytes(Charset.forName("MS949")),
+                payload,
+                0,
+                false,
+                null);
+
+        List<ArchiveSupport.EntryInfo> entries = ArchiveSupport.listEntries(archive, null);
+
+        assertEquals("한글/", entries.get(0).path);
+        assertEquals("한글/page001.txt", entries.get(1).path);
     }
 
     @Test
@@ -170,6 +188,14 @@ public class AlzipArchiveReaderTest {
                                  int method,
                                  boolean encrypted,
                                  char[] password) throws Exception {
+        return buildAlzArchiveWithNameBytes(entryName.getBytes(StandardCharsets.UTF_8), plainPayload, method, encrypted, password);
+    }
+
+    private File buildAlzArchiveWithNameBytes(byte[] name,
+                                             byte[] plainPayload,
+                                             int method,
+                                             boolean encrypted,
+                                             char[] password) throws Exception {
         File archive = tempFolder.newFile("fixture-" + System.nanoTime() + ".alz");
         byte[] storedPayload = method == 2 ? rawDeflate(plainPayload) : plainPayload;
         CRC32 crc = new CRC32();
@@ -181,7 +207,6 @@ public class AlzipArchiveReaderTest {
             encryptedHeader = encryptor.encrypt(header);
             storedPayload = encryptor.encrypt(storedPayload);
         }
-        byte[] name = entryName.getBytes(StandardCharsets.UTF_8);
         try (FileOutputStream out = new FileOutputStream(archive)) {
             writeIntLE(out, 0x015a4c41);
             writeIntLE(out, 0);

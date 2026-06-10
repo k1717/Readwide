@@ -13,6 +13,7 @@ import org.junit.rules.TemporaryFolder;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Enumeration;
 import java.util.List;
@@ -238,6 +239,46 @@ public class ExternalArchiveFixtureSmokeTest {
     }
 
     @Test
+    public void rarFixtureMatrixReport_generatesExtractionSmokeMarkdown() throws Exception {
+        File root = fixtureRoot();
+        File bundle = rarFixtureBundle(root);
+        File rarRoot = extractRarFixtures(bundle);
+        File build = new File(rarRoot, "rar-test-files-master/build");
+        File probeDir = tempFolder.newFolder("rar-matrix-probes");
+
+        RarFixtureMatrixReport report = RarFixtureMatrixReport.generate(build, null, 1, probeDir);
+        String markdown = report.toMarkdown();
+
+        assertTrue("Expected at least one listed RAR fixture", report.listedCount() > 0);
+        assertTrue(markdown.contains("RAR real-fixture extraction matrix"));
+        assertTrue(markdown.contains("first-file extraction"));
+        assertTrue(markdown.contains("testfile.rar3.rar"));
+
+        String outDirPath = System.getProperty("textview.rarFixtureReportOutDir");
+        if (outDirPath == null || outDirPath.trim().length() == 0) {
+            outDirPath = System.getenv("TEXTVIEW_RAR_FIXTURE_REPORT_OUT_DIR");
+        }
+        if (outDirPath != null && outDirPath.trim().length() > 0) {
+            File outDir = new File(outDirPath);
+            assertTrue(outDir.exists() || outDir.mkdirs());
+            Files.write(new File(outDir, "rar_fixture_matrix.md").toPath(),
+                    markdown.getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(outDir, "rar_fixture_boundary.md").toPath(),
+                    RarFixtureReport.generate(build, null, 1).toMarkdown().getBytes(StandardCharsets.UTF_8));
+            File solidProbeDir = new File(outDir, "rar_solid_probes");
+            assertTrue(solidProbeDir.exists() || solidProbeDir.mkdirs());
+            Files.write(new File(outDir, "rar_solid_boundary.md").toPath(),
+                    RarSolidFixtureReport.generate(build, null, 1, solidProbeDir)
+                            .toMarkdown()
+                            .getBytes(StandardCharsets.UTF_8));
+            Files.write(new File(outDir, "rar_solid_first_party_probe.md").toPath(),
+                    RarSolidFirstPartyProbe.resultsToMarkdown(
+                            RarSolidFirstPartyProbe.probeReadableArchives(build, null, solidProbeDir, true))
+                            .getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
     public void rarSolidFixtureReport_separatesLibarchiveAndFirstPartyBoundaries() throws Exception {
         File root = fixtureRoot();
         File bundle = rarFixtureBundle(root);
@@ -283,6 +324,35 @@ public class ExternalArchiveFixtureSmokeTest {
             assertSampleRarExtractsFirstFile(archive);
         }
         assumeTrue("Missing sample-1.rar through sample-5.rar fixtures in " + root.getAbsolutePath(), foundAny);
+    }
+
+
+    @Test
+    public void archiveFixtureMatrixReport_writesDiagnosticMarkdownWhenRequested() throws Exception {
+        File root = fixtureRoot();
+        String outDirPath = System.getProperty("textview.archiveFixtureReportOutDir");
+        if (outDirPath == null || outDirPath.trim().length() == 0) {
+            outDirPath = System.getenv("TEXTVIEW_ARCHIVE_FIXTURE_REPORT_OUT_DIR");
+        }
+        assumeTrue("Archive fixture report output dir not requested",
+                outDirPath != null && outDirPath.trim().length() > 0);
+
+        String passwordText = System.getProperty("textview.archiveFixturePassword");
+        if (passwordText == null) passwordText = System.getenv("TEXTVIEW_ARCHIVE_FIXTURE_PASSWORD");
+        char[] password = passwordText == null || passwordText.length() == 0
+                ? null
+                : passwordText.toCharArray();
+        try {
+            File outDir = new File(outDirPath);
+            assertTrue(outDir.exists() || outDir.mkdirs());
+            File probes = new File(outDir, "archive_probes");
+            assertTrue(probes.exists() || probes.mkdirs());
+            ArchiveFixtureMatrixReport report = ArchiveFixtureMatrixReport.generate(root, password, probes);
+            Files.write(new File(outDir, "archive_fixture_matrix.md").toPath(),
+                    report.toMarkdown().getBytes(StandardCharsets.UTF_8));
+        } finally {
+            if (password != null) java.util.Arrays.fill(password, '\0');
+        }
     }
 
     private void assertPasswordArchiveWorks(File archive) throws Exception {

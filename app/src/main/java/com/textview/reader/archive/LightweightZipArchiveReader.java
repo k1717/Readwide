@@ -88,7 +88,7 @@ final class LightweightZipArchiveReader {
             if (entry == null || entry.isDirectory()) return false;
             if (!isSupportedMethod(entry.getMethod())) return false;
             ZipEntryInfo info = fromZipEntry(entry);
-            return extractEntry(zip, info, outFile);
+            return info != null && extractEntry(zip, info, outFile);
         }
     }
 

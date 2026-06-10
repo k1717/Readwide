@@ -28,7 +28,7 @@ public class ArchiveExtractionResultTest {
                 null);
 
         assertFalse(result.success);
-        assertEquals(ArchiveSupport.ExtractionFailure.FAILED, result.failure);
+        assertEquals(ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE, result.failure);
         assertFalse(destination.exists());
     }
 
@@ -45,7 +45,7 @@ public class ArchiveExtractionResultTest {
                 null);
 
         assertFalse(result.success);
-        assertEquals(ArchiveSupport.ExtractionFailure.FAILED, result.failure);
+        assertEquals(ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE, result.failure);
         assertFalse(destination.exists());
     }
 
@@ -61,7 +61,7 @@ public class ArchiveExtractionResultTest {
                 null);
 
         assertFalse(result.success);
-        assertEquals(ArchiveSupport.ExtractionFailure.FAILED, result.failure);
+        assertEquals(ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE, result.failure);
         assertFalse(out.exists());
     }
 
@@ -77,7 +77,7 @@ public class ArchiveExtractionResultTest {
                 "secret".toCharArray());
 
         assertFalse(result.success);
-        assertEquals(ArchiveSupport.ExtractionFailure.FAILED, result.failure);
+        assertEquals(ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE, result.failure);
         assertFalse(out.exists());
     }
 

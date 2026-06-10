@@ -1,10 +1,10 @@
-# FOSS status for Readwide 1.0.0
+# FOSS status for Readwide 1.0.1
 
 This note summarizes the default source package and default release APK status for communities that require Free and Open Source Software (FOSS), such as r/FOSSdroid.
 
 ## Current assessment
 
-The default Readwide 1.0.0 source package is intended to fit the usual FOSS definition:
+The default Readwide 1.0.1 source package is intended to fit the usual FOSS definition:
 
 - the first-party source is licensed under Apache License 2.0;
 - the source code is included in the repository/source package;
@@ -14,7 +14,7 @@ The default Readwide 1.0.0 source package is intended to fit the usual FOSS defi
 - the source package does not include private signing files, keystores, build outputs, or bundled proprietary binary dependencies;
 - the app manifest disables Android app-data Auto Backup with `android:allowBackup="false"` for local-data privacy consistency.
 
-This is not a legal opinion, but it is the current project-level compliance position for the default Readwide 1.0.0 source/APK line, which continues from the TextView Reader 2.2.6 base.
+This is not a legal opinion, but it is the current project-level compliance position for the default Readwide 1.0.1 source/APK line.
 
 ## Default runtime dependency status
 
@@ -36,7 +36,7 @@ The default runtime dependency graph uses FOSS-compatible licenses:
 
 RAR/CBR support is deliberately extraction-only.
 
-Readwide 1.0.0 does **not** bundle Junrar or RARLAB UnRAR-license code in the default build. The old Junrar fallback was removed because UnRAR-style license restrictions can conflict with FOSS-focused distribution expectations.
+Readwide 1.0.1 does **not** bundle Junrar or RARLAB UnRAR-license code in the default build. The old Junrar fallback was removed because UnRAR-style license restrictions can conflict with FOSS-focused distribution expectations.
 
 The default RAR path is now:
 
@@ -70,8 +70,8 @@ When distributing APK/AAB files, keep these files available alongside the binary
 - `NOTICE`
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
-- `docs/LICENSE_REPORT_2_2_6.md`
-- `docs/SBOM_2_2_6.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_1.md`
+- `docs/SBOM_READWIDE_1_0_1.spdx.json`
 - this `docs/FOSS_STATUS.md` note
 
 The Gradle packaging block excludes duplicate dependency `META-INF/LICENSE*` / `META-INF/NOTICE*` resources to avoid Android packaging conflicts. That does not remove the release obligation to provide the project-level license and third-party notices with the source and binary release materials.
@@ -81,4 +81,4 @@ The Gradle packaging block excludes duplicate dependency `META-INF/LICENSE*` / `
 - RAR support is not complete. Common compressed RAR entries are attempted through libarchive-android by default, with first-party Java used for stored-entry fallback and metadata/safety handling. Split/multi-volume RAR and encrypted RAR are not guaranteed in the current GitHub-ready package because they have not been re-tested for this release. Broad compressed-solid/header-encrypted/SFX/unusual RAR variants are not guaranteed. ZIP/TAR/7z keep dedicated Java readers first, with libarchive retained for fallback and special cases.
 - Optional local jars are outside the default FOSS assessment unless explicitly audited and documented. No optional RAR decoder jar is wired into the default archive stack.
 - Android Gradle Plugin, Android SDK, and Gradle tooling are build-time tools resolved from their normal upstream channels; they are not vendored into the app source package.
-- This package includes a direct-dependency license report (`docs/LICENSE_REPORT_2_2_6.md`) and a source-declared direct-dependency SPDX draft (`docs/SBOM_2_2_6.spdx.json`). They are not a Gradle-resolved transitive SBOM. For stricter distribution channels, regenerate a full resolved dependency report/SBOM from a network-enabled build environment before submission.
+- This package includes a direct-dependency license report (`docs/LICENSE_REPORT_READWIDE_1_0_1.md`) and a source-declared direct-dependency SPDX draft (`docs/SBOM_READWIDE_1_0_1.spdx.json`). They are not a Gradle-resolved transitive SBOM. For stricter distribution channels, regenerate a full resolved dependency report/SBOM from a network-enabled build environment before submission.

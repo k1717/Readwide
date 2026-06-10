@@ -207,6 +207,9 @@ public class BookmarkManager {
             if (oldPath.equals(bookmark.getFilePath())) {
                 bookmark.setFilePath(newPath);
                 bookmark.setFileName(newName);
+                if (isTxtBookmark(bookmark)) {
+                    clearBookmarkPageMetadata(bookmark);
+                }
                 bookmarksChanged = true;
             }
         }
@@ -267,6 +270,9 @@ public class BookmarkManager {
             if (replacement != null) {
                 bookmark.setFilePath(replacement);
                 bookmark.setFileName(new File(replacement).getName());
+                if (isTxtBookmark(bookmark)) {
+                    clearBookmarkPageMetadata(bookmark);
+                }
                 bookmarksChanged = true;
             }
         }
@@ -558,6 +564,9 @@ public class BookmarkManager {
     public void importAll(String jsonString, boolean merge) {
         try {
             JSONObject root = new JSONObject(jsonString);
+            boolean importedBookmarks = false;
+            boolean importedReadingStates = false;
+            boolean importedSettings = false;
 
             // Import bookmarks
             Map<String, JSONObject> beginnerEditMap = readBeginnerEditableBookmarkMap(root);
@@ -603,6 +612,7 @@ public class BookmarkManager {
                     }
                 }
                 saveBookmarks();
+                importedBookmarks = true;
             }
 
             // Import reading states
@@ -618,6 +628,7 @@ public class BookmarkManager {
                     readingStates.put(key, state);
                 }
                 saveReadingStates();
+                importedReadingStates = true;
             }
 
             // Import settings and custom themes when present. Older backups that
@@ -625,11 +636,16 @@ public class BookmarkManager {
             JSONObject settingsObj = root.optJSONObject("settings");
             if (settingsObj != null) {
                 PrefsManager.getInstance(context).importSettingsFromJson(settingsObj, merge);
+                importedSettings = true;
             }
 
             JSONArray themesArr = root.optJSONArray("customThemes");
             if (themesArr != null) {
                 ThemeManager.getInstance(context).importCustomThemesFromJson(themesArr, merge);
+            }
+
+            if (importedBookmarks || importedReadingStates || importedSettings) {
+                invalidateTxtLayoutDependentPageMetadata("backup import or settings migration");
             }
         } catch (Exception e) {
             Log.e(TAG, "Import failed", e);
@@ -1354,6 +1370,9 @@ public class BookmarkManager {
             bookmark.setFileName(target.displayName);
             bookmark.setFileSizeBytes(target.sizeBytes);
             bookmark.setQuickFingerprint(target.quickFingerprint);
+            if (isTxtBookmark(bookmark)) {
+                clearBookmarkPageMetadata(bookmark);
+            }
             bookmark.setUpdatedAt(System.currentTimeMillis());
             bound++;
         }
@@ -1499,6 +1518,9 @@ public class BookmarkManager {
             String bookmarkPath = b.getFilePath();
             if (bookmarkPath != null && bookmarkPath.startsWith(oldPrefix)) {
                 b.setFilePath(bookmarkPath.replace(oldPrefix, newPrefix));
+                if (isTxtBookmark(b)) {
+                    clearBookmarkPageMetadata(b);
+                }
                 b.setUpdatedAt(System.currentTimeMillis());
                 count++;
             }
@@ -1523,6 +1545,62 @@ public class BookmarkManager {
         saveReadingStates();
 
         return count;
+    }
+
+
+    /**
+     * TXT displayed Page X/Y is layout dependent. Importing settings from another
+     * device or older app version can change font, line spacing, boundaries,
+     * screen-size assumptions, and the large-TXT partition model. Keep the stable
+     * location fields (charPosition, lineNumber, anchors) but discard stale page
+     * labels so the next real open recalculates them from the current layout.
+     */
+    private void invalidateTxtLayoutDependentPageMetadata(String reason) {
+        boolean bookmarksChanged = false;
+        for (Bookmark bookmark : bookmarks) {
+            if (!isTxtBookmark(bookmark)) continue;
+            if (clearBookmarkPageMetadata(bookmark)) {
+                bookmarksChanged = true;
+            }
+        }
+        if (bookmarksChanged) {
+            saveBookmarks();
+        }
+
+        boolean statesChanged = false;
+        for (ReaderState state : readingStates.values()) {
+            if (state == null || !isTxtLikePath(state.getFilePath())) continue;
+            if (state.getPageNumber() != 0 || state.getTotalPages() != 0) {
+                state.setPageNumber(0);
+                state.setTotalPages(0);
+                statesChanged = true;
+            }
+        }
+        if (statesChanged) {
+            saveReadingStates();
+        }
+    }
+
+    private boolean clearBookmarkPageMetadata(Bookmark bookmark) {
+        if (bookmark == null) return false;
+        boolean changed = bookmark.getPageNumber() != 0
+                || bookmark.getTotalPages() != 0
+                || (bookmark.getPageLayoutSignature() != null
+                && !bookmark.getPageLayoutSignature().isEmpty());
+        if (!changed) return false;
+        bookmark.setPageNumber(0);
+        bookmark.setTotalPages(0);
+        bookmark.setPageLayoutSignature("");
+        return true;
+    }
+
+    private boolean isTxtBookmark(Bookmark bookmark) {
+        return "TXT".equals(bookmarkFileType(bookmark));
+    }
+
+    private boolean isTxtLikePath(String path) {
+        if (path == null || path.trim().isEmpty()) return false;
+        return FileUtils.isTextFile(path);
     }
 
     // ========== Private I/O ==========

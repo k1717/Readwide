@@ -38,14 +38,14 @@ final class ShortToast {
     private static Toast showInternal(@NonNull Context context,
                                       @StringRes int messageRes,
                                       CharSequence message) {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            MAIN_HANDLER.post(() -> showInternal(context, messageRes, message));
-            return null;
-        }
-        cancelActiveToast();
         Context safeContext = context.getApplicationContext() != null
                 ? context.getApplicationContext()
                 : context;
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            MAIN_HANDLER.post(() -> showInternal(safeContext, messageRes, message));
+            return null;
+        }
+        cancelActiveToast();
         Toast toast = message != null
                 ? Toast.makeText(safeContext, message, Toast.LENGTH_SHORT)
                 : Toast.makeText(safeContext, messageRes, Toast.LENGTH_SHORT);

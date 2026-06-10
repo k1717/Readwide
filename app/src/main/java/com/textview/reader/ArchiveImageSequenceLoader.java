@@ -48,7 +48,15 @@ final class ArchiveImageSequenceLoader {
     static File outputFileForEntry(@NonNull Context context,
                                    @NonNull File archiveFile,
                                    @NonNull ArchiveSupport.EntryInfo entry) {
-        return ArchivePreviewCache.outputFileForEntry(context, archiveFile, entry.path);
+        return outputFileForEntry(context, archiveFile, entry, false);
+    }
+
+    @NonNull
+    static File outputFileForEntry(@NonNull Context context,
+                                   @NonNull File archiveFile,
+                                   @NonNull ArchiveSupport.EntryInfo entry,
+                                   boolean sensitive) {
+        return ArchivePreviewCache.outputFileForEntry(context, archiveFile, entry.path, sensitive);
     }
 
     @NonNull
@@ -56,11 +64,21 @@ final class ArchiveImageSequenceLoader {
                            @NonNull File archiveFile,
                            @NonNull List<ArchiveSupport.EntryInfo> sequence,
                            int targetIndex) {
+        return loadLazy(context, archiveFile, sequence, targetIndex, null);
+    }
+
+    @NonNull
+    static Result loadLazy(@NonNull Context context,
+                           @NonNull File archiveFile,
+                           @NonNull List<ArchiveSupport.EntryInfo> sequence,
+                           int targetIndex,
+                           @Nullable char[] password) {
+        boolean sensitiveCache = PasswordChars.hasPassword(password);
         ArrayList<String> imagePaths = new ArrayList<>();
         ArrayList<String> displayNames = new ArrayList<>();
         ArrayList<String> entryPaths = new ArrayList<>();
         for (ArchiveSupport.EntryInfo imageEntry : sequence) {
-            File outFile = outputFileForEntry(context, archiveFile, imageEntry);
+            File outFile = outputFileForEntry(context, archiveFile, imageEntry, sensitiveCache);
             imagePaths.add(outFile.getAbsolutePath());
             displayNames.add(imageEntry.name());
             entryPaths.add(imageEntry.path);
@@ -70,36 +88,28 @@ final class ArchiveImageSequenceLoader {
         ArchiveSupport.ExtractionResult selectedResult = null;
         if (targetIndex >= 0 && targetIndex < sequence.size()) {
             ArchiveSupport.EntryInfo targetEntry = sequence.get(targetIndex);
-            File targetFile = outputFileForEntry(context, archiveFile, targetEntry);
-            if (targetFile.exists() && targetFile.isFile() && targetFile.length() > 0L) {
-                selectedReady = true;
-                selectedResult = ArchiveSupport.ExtractionResult.success();
-            } else {
-                selectedResult = ArchiveSupport.extractSingleEntryDetailed(
-                        archiveFile,
-                        targetEntry.path,
-                        targetFile,
-                        null);
-                selectedReady = selectedResult.success;
-            }
+            File targetFile = outputFileForEntry(context, archiveFile, targetEntry, sensitiveCache);
+            selectedResult = ensureEntryReady(
+                    archiveFile,
+                    targetEntry.path,
+                    targetFile,
+                    password,
+                    sensitiveCache);
+            selectedReady = selectedResult.success;
         }
 
         int openIndex = targetIndex;
-        if (!selectedReady && shouldTryAlternateImageEntry(selectedResult)) {
+        if (!selectedReady && shouldTryAlternateImageEntry(selectedResult, PasswordChars.hasPassword(password))) {
             for (int i = 0; i < sequence.size(); i++) {
                 if (i == targetIndex) continue;
                 ArchiveSupport.EntryInfo imageEntry = sequence.get(i);
-                File outFile = outputFileForEntry(context, archiveFile, imageEntry);
-                if (outFile.exists() && outFile.isFile() && outFile.length() > 0L) {
-                    selectedReady = true;
-                    openIndex = i;
-                    break;
-                }
-                ArchiveSupport.ExtractionResult fallbackResult = ArchiveSupport.extractSingleEntryDetailed(
+                File outFile = outputFileForEntry(context, archiveFile, imageEntry, sensitiveCache);
+                ArchiveSupport.ExtractionResult fallbackResult = ensureEntryReady(
                         archiveFile,
                         imageEntry.path,
                         outFile,
-                        null);
+                        password,
+                        sensitiveCache);
                 if (fallbackResult.success && outFile.exists() && outFile.isFile() && outFile.length() > 0L) {
                     selectedReady = true;
                     openIndex = i;
@@ -111,10 +121,32 @@ final class ArchiveImageSequenceLoader {
         return new Result(imagePaths, displayNames, entryPaths, openIndex, selectedReady, selectedResult);
     }
 
+    @NonNull
+    private static ArchiveSupport.ExtractionResult ensureEntryReady(@NonNull File archiveFile,
+                                                                    @NonNull String entryPath,
+                                                                    @NonNull File outFile,
+                                                                    @Nullable char[] password,
+                                                                    boolean sensitiveCache) {
+        return ArchiveImageEntryCache.ensureReady(
+                archiveFile,
+                entryPath,
+                outFile,
+                password,
+                sensitiveCache,
+                null);
+    }
+
     static boolean shouldTryAlternateImageEntry(@Nullable ArchiveSupport.ExtractionResult result) {
-        return result != null
-                && !result.success
-                && result.failure != ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED;
+        return shouldTryAlternateImageEntry(result, false);
+    }
+
+    static boolean shouldTryAlternateImageEntry(@Nullable ArchiveSupport.ExtractionResult result,
+                                                boolean passwordProvided) {
+        if (result == null || result.success) return false;
+        if (result.failure == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED) return false;
+        if (result.failure == ArchiveSupport.ExtractionFailure.BAD_PASSWORD) return false;
+        if (passwordProvided && result.failure == ArchiveSupport.ExtractionFailure.FAILED) return false;
+        return true;
     }
 
     @NonNull
@@ -123,6 +155,7 @@ final class ArchiveImageSequenceLoader {
                             @NonNull List<ArchiveSupport.EntryInfo> sequence,
                             int targetIndex,
                             @Nullable char[] password) {
+        boolean sensitiveCache = PasswordChars.hasPassword(password);
         ArrayList<String> imagePaths = new ArrayList<>();
         ArrayList<String> displayNames = new ArrayList<>();
         ArrayList<String> entryPaths = new ArrayList<>();
@@ -131,20 +164,14 @@ final class ArchiveImageSequenceLoader {
         ArchiveSupport.ExtractionResult selectedResult = null;
         for (int i = 0; i < sequence.size(); i++) {
             ArchiveSupport.EntryInfo imageEntry = sequence.get(i);
-            File outFile = outputFileForEntry(context, archiveFile, imageEntry);
-            boolean ok;
-            ArchiveSupport.ExtractionResult result;
-            if (outFile.exists() && outFile.isFile() && outFile.length() > 0L) {
-                ok = true;
-                result = ArchiveSupport.ExtractionResult.success();
-            } else {
-                result = ArchiveSupport.extractSingleEntryDetailed(
-                        archiveFile,
-                        imageEntry.path,
-                        outFile,
-                        password);
-                ok = result.success;
-            }
+            File outFile = outputFileForEntry(context, archiveFile, imageEntry, sensitiveCache);
+            ArchiveSupport.ExtractionResult result = ensureEntryReady(
+                    archiveFile,
+                    imageEntry.path,
+                    outFile,
+                    password,
+                    sensitiveCache);
+            boolean ok = result.success;
             if (ok && outFile.exists()) {
                 if (i == targetIndex) {
                     extractedSelectedIndex = imagePaths.size();

@@ -5,8 +5,8 @@ import java.io.IOException;
 /**
  * Supplies already decoded RAR3/RAR4 PPMd symbols to the PPM control layer.
  *
- * <p>This is deliberately separated from the PPMd statistical model/range coder. Pass 30
- * implements the RAR-specific control semantics that sit <em>after</em> PPMd symbol decoding,
+ * <p>This is deliberately separated from the PPMd statistical model/range coder. The class
+ * models the RAR-specific control semantics that sit <em>after</em> PPMd symbol decoding,
  * while the actual PPMd model core remains a first-party gap.</p>
  */
 interface Rar3PpmdSymbolSource {

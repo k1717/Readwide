@@ -1,10 +1,10 @@
-# RAR status for Readwide 1.0.0
+# RAR status for Readwide 1.0.1
 
-This is the consolidated RAR status note for Readwide 1.0.0 and its TextView Reader 2.2.6 base. It replaces the internal pass-by-pass RAR decoder notes that were used during development.
+This is the consolidated RAR status note for Readwide 1.0.1. It replaces internal RAR decoder development notes with a release-facing compatibility boundary.
 
 ## Final support position
 
-Readwide 1.0.0, formerly TextView Reader, is **not** a complete RAR implementation.
+Readwide 1.0.1 is **not** a complete RAR implementation.
 
 The default FOSS-friendly build is:
 

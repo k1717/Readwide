@@ -27,6 +27,7 @@ import java.util.List;
 
 final class MainImageOpenController {
     private final MainActivity activity;
+    private final LinkedHashSet<String> pendingLaunchHandoffTokens = new LinkedHashSet<>();
     private Dialog imageOpenLoadingDialog;
 
     MainImageOpenController(@NonNull MainActivity activity) {
@@ -137,16 +138,51 @@ final class MainImageOpenController {
 
     void startWithLoading(@NonNull Intent intent) {
         showImageOpenLoadingWindow();
+        final String handoffToken = intent.getStringExtra(ImageReaderActivity.EXTRA_SEQUENCE_HANDOFF_TOKEN);
+        trackPendingHandoffToken(handoffToken);
         activity.fileSearchHandler.postDelayed(() -> {
-            if (activity.activityDestroyed || activity.isFinishing()) {
+            try {
+                if (activity.activityDestroyed || activity.isFinishing()) {
+                    ImageSequenceHandoffStore.discard(handoffToken);
+                    return;
+                }
+                activity.startActivity(intent);
+                activity.overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
+                activity.finishIfReturnToViewerMode();
+            } catch (RuntimeException e) {
+                ImageSequenceHandoffStore.discard(handoffToken);
+                ShortToast.show(activity, R.string.image_open_failed);
+            } finally {
+                untrackPendingHandoffToken(handoffToken);
                 hideImageOpenLoadingWindow();
-                return;
             }
-            activity.startActivity(intent);
-            activity.overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
-            hideImageOpenLoadingWindow();
-            activity.finishIfReturnToViewerMode();
         }, 90L);
+    }
+
+    void onDestroy() {
+        LinkedHashSet<String> tokens;
+        synchronized (pendingLaunchHandoffTokens) {
+            tokens = new LinkedHashSet<>(pendingLaunchHandoffTokens);
+            pendingLaunchHandoffTokens.clear();
+        }
+        for (String token : tokens) {
+            ImageSequenceHandoffStore.discard(token);
+        }
+        hideImageOpenLoadingWindow();
+    }
+
+    private void trackPendingHandoffToken(@Nullable String token) {
+        if (token == null || token.trim().isEmpty()) return;
+        synchronized (pendingLaunchHandoffTokens) {
+            pendingLaunchHandoffTokens.add(token);
+        }
+    }
+
+    private void untrackPendingHandoffToken(@Nullable String token) {
+        if (token == null || token.trim().isEmpty()) return;
+        synchronized (pendingLaunchHandoffTokens) {
+            pendingLaunchHandoffTokens.remove(token);
+        }
     }
 
     void showImageOpenLoadingWindow() {

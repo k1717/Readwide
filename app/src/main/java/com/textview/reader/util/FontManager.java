@@ -19,6 +19,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Scans for and manages fonts available on the device.
@@ -58,9 +60,42 @@ public class FontManager {
     };
 
     private static final String[] FONT_EXTENSIONS = {".ttf", ".otf", ".ttc"};
+    private static final int MAX_FONT_SCAN_DEPTH = 8;
+    private static final int MAX_FONT_SCAN_FILES_PER_ROOT = 2000;
 
     public interface OnScanCompleteListener {
         void onScanComplete(List<String> fontNames);
+    }
+
+    /**
+     * Best-effort cancellation handle for asynchronous font scans. The scan may
+     * already be inside Typeface/native font parsing, but a cancelled handle will
+     * suppress the main-thread callback and release the listener reference earlier.
+     */
+    public static final class ScanHandle {
+        private final AtomicBoolean cancelled = new AtomicBoolean(false);
+        private final AtomicReference<OnScanCompleteListener> listenerRef = new AtomicReference<>();
+
+        private ScanHandle(OnScanCompleteListener listener) {
+            listenerRef.set(listener);
+        }
+
+        public void cancel() {
+            cancelled.set(true);
+            listenerRef.set(null);
+        }
+
+        public boolean isCancelled() {
+            return cancelled.get();
+        }
+
+        OnScanCompleteListener listener() {
+            return listenerRef.get();
+        }
+
+        void clearListener() {
+            listenerRef.set(null);
+        }
     }
 
     private FontManager() {}
@@ -75,14 +110,15 @@ public class FontManager {
     /**
      * Scan for fonts asynchronously.
      */
-    public void scanFonts(Context context, OnScanCompleteListener listener) {
+    public ScanHandle scanFonts(Context context, OnScanCompleteListener listener) {
+        final ScanHandle handle = new ScanHandle(listener);
         final Context appContext = context != null ? context.getApplicationContext() : null;
         final Handler mainHandler = new Handler(Looper.getMainLooper());
         final ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.execute(() -> {
             List<String> names = Collections.emptyList();
             try {
-                if (appContext != null) {
+                if (appContext != null && !handle.isCancelled()) {
                     doScan(appContext);
                     names = getFontNames();
                 }
@@ -90,22 +126,39 @@ public class FontManager {
                 Log.e(TAG, "Font scan failed", e);
             } finally {
                 final List<String> callbackNames = names;
-                if (listener != null) {
-                    mainHandler.post(() -> listener.onScanComplete(callbackNames));
+                OnScanCompleteListener callback = handle.listener();
+                if (callback != null && !handle.isCancelled()) {
+                    boolean posted = mainHandler.post(() -> {
+                        try {
+                            OnScanCompleteListener current = handle.listener();
+                            if (current != null && !handle.isCancelled()) {
+                                current.onScanComplete(callbackNames);
+                            }
+                        } finally {
+                            handle.clearListener();
+                        }
+                    });
+                    if (!posted) {
+                        handle.clearListener();
+                    }
+                } else {
+                    handle.clearListener();
                 }
                 executor.shutdown();
             }
         });
+        return handle;
     }
 
     /**
      * Scan fonts synchronously.
      */
     public void scanFontsSync(Context context) {
-        doScan(context);
+        if (context == null) return;
+        doScan(context.getApplicationContext());
     }
 
-    private void doScan(Context context) {
+    private synchronized void doScan(Context context) {
         fontPaths.clear();
         userFontNames.clear();
         systemInstalledFontNames.clear();
@@ -159,16 +212,24 @@ public class FontManager {
     }
 
     private void scanDirectory(File dir, boolean userFont, boolean systemInstalledFont) {
+        scanDirectory(dir, userFont, systemInstalledFont, 0, new int[] {0});
+    }
+
+    private void scanDirectory(File dir, boolean userFont, boolean systemInstalledFont, int depth, int[] visitedFileCount) {
+        if (dir == null || depth > MAX_FONT_SCAN_DEPTH || visitedFileCount[0] >= MAX_FONT_SCAN_FILES_PER_ROOT) return;
         if (!dir.exists() || !dir.isDirectory() || !dir.canRead()) return;
 
         File[] files = dir.listFiles();
         if (files == null) return;
 
         for (File f : files) {
+            if (visitedFileCount[0] >= MAX_FONT_SCAN_FILES_PER_ROOT) return;
+            if (f == null) continue;
             if (f.isDirectory()) {
-                scanDirectory(f, userFont, systemInstalledFont); // recursive
+                scanDirectory(f, userFont, systemInstalledFont, depth + 1, visitedFileCount); // recursive
                 continue;
             }
+            visitedFileCount[0]++;
             String name = f.getName().toLowerCase();
             for (String ext : FONT_EXTENSIONS) {
                 if (name.endsWith(ext)) {
@@ -199,7 +260,7 @@ public class FontManager {
         }
     }
 
-    public List<String> getFontNames() {
+    public synchronized List<String> getFontNames() {
         List<String> names = new ArrayList<>(fontPaths.keySet());
         Collections.sort(names, (a, b) -> {
             // Keep defaults at top
@@ -212,17 +273,17 @@ public class FontManager {
         return names;
     }
 
-    public List<String> getAllSystemFontNames() {
+    public synchronized List<String> getAllSystemFontNames() {
         return getFontNames();
     }
 
-    public List<String> getSystemInstalledFontNames() {
+    public synchronized List<String> getSystemInstalledFontNames() {
         List<String> names = new ArrayList<>(systemInstalledFontNames);
         Collections.sort(names, String::compareToIgnoreCase);
         return names;
     }
 
-    public List<String> getUserFontNames() {
+    public synchronized List<String> getUserFontNames() {
         List<String> names = new ArrayList<>(userFontNames);
         Collections.sort(names, String::compareToIgnoreCase);
         return names;
@@ -260,7 +321,7 @@ public class FontManager {
      * removing a font from the compact picker only hides it from that picker, and the
      * source font remains available in the full list for re-adding later.
      */
-    public List<String> getUserAddedFontNames(Context context) {
+    public synchronized List<String> getUserAddedFontNames(Context context) {
         if (context == null) return getUserFontNames();
         if (!scanned) doScan(context);
 
@@ -290,7 +351,7 @@ public class FontManager {
     /**
      * Add a selected font to the compact Font picker.  Multiple fonts are retained.
      */
-    public boolean addUserFont(Context context, String fontName) {
+    public synchronized boolean addUserFont(Context context, String fontName) {
         if (context == null || fontName == null || fontName.trim().isEmpty()) return false;
         if (!scanned) doScan(context);
 
@@ -311,13 +372,13 @@ public class FontManager {
      * delete system fonts or font files, so the font can be added again from the full
      * Add font / All system fonts list.
      */
-    public boolean isRemovableUserFont(Context context, String fontName) {
+    public synchronized boolean isRemovableUserFont(Context context, String fontName) {
         if (context == null || fontName == null || fontName.trim().isEmpty()) return false;
         String key = fontName.trim();
         return getUserAddedFontNames(context).contains(key);
     }
 
-    public boolean removeUserFont(Context context, String fontName) {
+    public synchronized boolean removeUserFont(Context context, String fontName) {
         if (!isRemovableUserFont(context, fontName)) return false;
 
         String key = fontName.trim();
@@ -347,7 +408,7 @@ public class FontManager {
     /**
      * Get Typeface for a font name.
      */
-    public Typeface getTypeface(String fontName) {
+    public synchronized Typeface getTypeface(String fontName) {
         if (fontName == null || fontName.equals("default") || fontName.equals("DEFAULT")) {
             return Typeface.DEFAULT;
         }
@@ -391,7 +452,7 @@ public class FontManager {
         }
     }
 
-    public boolean isScanned() { return scanned; }
+    public synchronized boolean isScanned() { return scanned; }
 
     /**
      * Return the backing font file path for a scanned/imported font name.
@@ -408,7 +469,7 @@ public class FontManager {
      * their canonical filesystem path. System-family-selected fonts use the
      * family name as it appears in the user preference.
      */
-    public String getStableTypefaceKey(String fontName) {
+    public synchronized String getStableTypefaceKey(String fontName) {
         if (fontName == null || fontName.trim().isEmpty()
                 || fontName.equals("default") || fontName.equals("DEFAULT")) {
             return "default";
@@ -428,7 +489,7 @@ public class FontManager {
         }
     }
 
-    public String getFontPathForName(String fontName) {
+    public synchronized String getFontPathForName(String fontName) {
         if (fontName == null || fontName.trim().isEmpty()) return null;
         if (isSystemFamilyValue(fontName)) return null;
 
@@ -450,7 +511,7 @@ public class FontManager {
     /**
      * Copy a font file to the app's internal font directory.
      */
-    public String importFont(Context context, File sourceFile) {
+    public synchronized String importFont(Context context, File sourceFile) {
         File fontDir = new File(context.getFilesDir(), "fonts");
         if (!fontDir.exists()) fontDir.mkdirs();
 

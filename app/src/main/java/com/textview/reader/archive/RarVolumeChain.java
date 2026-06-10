@@ -15,7 +15,7 @@ import java.util.List;
  * <p>Keep split-chain discovery, segment conversion, and per-volume consistency checks
  * outside {@link RarArchiveReader}. RAR unpacking work is already complicated enough;
  * the main reader should stay a parser/router rather than becoming a multi-volume state
- * machine as each decoder pass adds more cases.</p>
+ * machine as additional decoder cases are added.</p>
  */
 final class RarVolumeChain {
     private RarVolumeChain() {}

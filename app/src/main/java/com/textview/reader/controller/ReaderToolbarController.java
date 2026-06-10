@@ -90,6 +90,18 @@ public final class ReaderToolbarController {
         });
     }
 
+
+    public void release() {
+        handler.removeCallbacksAndMessages(null);
+        if (actionScroll != null) {
+            actionScroll.setOnTouchListener(null);
+        }
+        actionScroll = null;
+        actionContainer = null;
+        snapScheduled = false;
+        userTouchingScroll = false;
+    }
+
     public void bindScrollableButton(@IdRes int viewId, @Nullable Runnable action) {
         View button = activity.findViewById(viewId);
         if (button == null) return;
@@ -138,6 +150,7 @@ public final class ReaderToolbarController {
         snapScheduled = true;
         handler.postDelayed(() -> {
             snapScheduled = false;
+            if (actionScroll == null) return;
             if (!userTouchingScroll) snapToNearestButton();
         }, 260L);
     }

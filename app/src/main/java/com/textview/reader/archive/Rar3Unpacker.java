@@ -16,7 +16,7 @@ import java.util.zip.CheckedOutputStream;
  * First-party RAR3/RAR4 compressed unpacker entry point.
  *
  * <p>This is deliberately still narrower than a support claim for real-world compressed RAR.
- * Normal compressed RAR remains owned by libarchive until this decoder can pass broader
+ * Normal compressed RAR remains owned by libarchive until this decoder has broader
  * CRC-verified real fixture coverage. The first-party path can now complete synthetic
  * classic-LZ blocks and a small set of real non-solid classic-LZ fixtures, write output, stop at
  * the declared unpacked size, and validate CRC where the caller supplies one.</p>
