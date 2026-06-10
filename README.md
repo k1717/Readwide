@@ -4,9 +4,9 @@ Readwide is a local Android reader and file-browser app for TXT, PDF, EPUB, Word
 
 Readwide 1.0.1 is the current public source package. Readwide is the public successor to TextView Reader; the launcher name and public repository changed to Readwide, while the Android `applicationId` remains `com.textview.reader` for update compatibility when the APK is signed with the same key.
 
-Public repository: `https://github.com/k1717/Readwide`
-
 Current version: **Readwide 1.0.1**
+
+Public repository: `https://github.com/k1717/Readwide`
 
 Update page: `https://github.com/k1717/Readwide/releases`
 
