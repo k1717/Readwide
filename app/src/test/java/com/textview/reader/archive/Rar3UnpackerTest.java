@@ -138,9 +138,7 @@ public class Rar3UnpackerTest {
     @Test
     public void unpack_syntheticSolidEntryCopiesFromPreviousEntryWindow() throws Exception {
         byte[] firstPacked = syntheticPayload(
-                block(new int[] {'A', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001"),
-                block(new int[] {'B', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001"),
-                block(new int[] {'C', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001"));
+                block(new int[] {'A', 'B', 'C', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "00011011"));
         byte[] secondPacked = syntheticPayload(blockWithDistance(
                 new int[] {'X', Rar3SymbolDecoder.SYMBOL_LONG_MATCH_FIRST},
                 new int[] {2},
@@ -180,12 +178,83 @@ public class Rar3UnpackerTest {
         assertArrayEquals("ABC".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(secondOut.toPath()));
     }
 
+
+    @Test
+    public void unpack_syntheticSolidPrimerCanDiscardOutputAndPreserveDictionary() throws Exception {
+        byte[] firstPacked = syntheticPayload(
+                block(new int[] {'A', 'B', 'C', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "00011011"));
+        byte[] secondPacked = syntheticPayload(blockWithDistance(
+                new int[] {'X', Rar3SymbolDecoder.SYMBOL_LONG_MATCH_FIRST},
+                new int[] {2},
+                "010"));
+        File firstArchive = writeArchive("solid-discard-first.rar", firstPacked);
+        File secondArchive = writeArchive("solid-discard-second.rar", secondPacked);
+        File secondOut = tempFolder.newFile("solid-discard-second.bin");
+        assertTrue(secondOut.delete());
+        Rar3SolidState solidState = new Rar3SolidState();
+
+        Rar3UnpackFileResult primer = Rar3Unpacker.unpackSolidPrimerToDiscard(
+                Rar3UnpackContext.forSolidEntry(
+                        firstArchive,
+                        0,
+                        firstPacked.length,
+                        3,
+                        0x33,
+                        false,
+                        false,
+                        false,
+                        crc("ABC"),
+                        solidState),
+                null);
+        Rar3Unpacker.unpack(Rar3UnpackContext.forSolidEntry(
+                secondArchive,
+                0,
+                secondPacked.length,
+                3,
+                0x33,
+                false,
+                false,
+                false,
+                crc("ABC"),
+                solidState), secondOut, null);
+
+        assertEquals(3, primer.written);
+        assertEquals(crc("ABC"), primer.actualCrc);
+        assertTrue(solidState.initialized());
+        assertArrayEquals("ABC".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(secondOut.toPath()));
+    }
+
+    @Test
+    public void unpack_solidDiscardPrimerRejectsCrcMismatchBeforeTargetDecode() throws Exception {
+        byte[] firstPacked = syntheticPayload(block(new int[] {'A', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001"));
+        File firstArchive = writeArchive("solid-discard-badcrc-first.rar", firstPacked);
+        Rar3SolidState solidState = new Rar3SolidState();
+
+        try {
+            Rar3Unpacker.unpackSolidPrimerToDiscard(
+                    Rar3UnpackContext.forSolidEntry(
+                            firstArchive,
+                            0,
+                            firstPacked.length,
+                            1,
+                            0x33,
+                            false,
+                            false,
+                            false,
+                            0x12345678L,
+                            solidState),
+                    null);
+        } catch (RarArchiveReader.UnsupportedRarFeatureException expected) {
+            assertTrue(expected.getMessage().contains("CRC"));
+            return;
+        }
+        throw new AssertionError("Discarded solid primers must still be CRC-gated");
+    }
+
     @Test
     public void unpack_syntheticSolidStateResetDropsPreviousDictionary() throws Exception {
         byte[] firstPacked = syntheticPayload(
-                block(new int[] {'A', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001"),
-                block(new int[] {'B', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001"),
-                block(new int[] {'C', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001"));
+                block(new int[] {'A', 'B', 'C', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "00011011"));
         byte[] secondPacked = syntheticPayload(blockWithDistance(
                 new int[] {'X', Rar3SymbolDecoder.SYMBOL_LONG_MATCH_FIRST},
                 new int[] {2},

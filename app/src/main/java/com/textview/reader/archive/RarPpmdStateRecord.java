@@ -13,11 +13,16 @@ import java.io.IOException;
  */
 final class RarPpmdStateRecord {
     static final int NO_SUCCESSOR = -1;
+    static final int SUCCESSOR_KIND_NONE = 0;
+    static final int SUCCESSOR_KIND_CONTEXT = 1;
+    static final int SUCCESSOR_KIND_PENDING_TEXT = 2;
     private static final int MAX_FREQUENCY = 0xffff;
 
     private final int symbol;
     private int frequency;
     private int successorPointer;
+    private int successorKind;
+    private int pendingSuccessorSymbol = -1;
 
     RarPpmdStateRecord(int symbol, int frequency) throws IOException {
         this(symbol, frequency, NO_SUCCESSOR);
@@ -30,6 +35,8 @@ final class RarPpmdStateRecord {
         this.symbol = symbol;
         this.frequency = frequency;
         this.successorPointer = successorPointer;
+        this.successorKind = successorPointer == NO_SUCCESSOR
+                ? SUCCESSOR_KIND_NONE : SUCCESSOR_KIND_CONTEXT;
     }
 
     int symbol() {
@@ -42,6 +49,26 @@ final class RarPpmdStateRecord {
 
     int successorPointer() {
         return successorPointer;
+    }
+
+    int successorKind() {
+        return successorKind;
+    }
+
+    int pendingSuccessorSymbol() {
+        return pendingSuccessorSymbol;
+    }
+
+    boolean hasSuccessor() {
+        return successorKind != SUCCESSOR_KIND_NONE;
+    }
+
+    boolean hasContextSuccessor() {
+        return successorKind == SUCCESSOR_KIND_CONTEXT && successorPointer != NO_SUCCESSOR;
+    }
+
+    boolean hasPendingTextSuccessor() {
+        return successorKind == SUCCESSOR_KIND_PENDING_TEXT;
     }
 
     void incrementFrequency(int delta) throws IOException {
@@ -64,12 +91,29 @@ final class RarPpmdStateRecord {
 
     void setSuccessorPointer(int successorPointer) throws IOException {
         validatePointer(successorPointer);
-        this.successorPointer = successorPointer;
+        if (successorPointer == NO_SUCCESSOR) {
+            this.successorPointer = NO_SUCCESSOR;
+            this.successorKind = SUCCESSOR_KIND_NONE;
+            this.pendingSuccessorSymbol = -1;
+        } else {
+            this.successorPointer = successorPointer;
+            this.successorKind = SUCCESSOR_KIND_CONTEXT;
+            this.pendingSuccessorSymbol = -1;
+        }
+    }
+
+    void setPendingTextSuccessor(int successorSymbol) throws IOException {
+        validateSymbol(successorSymbol);
+        this.successorPointer = NO_SUCCESSOR;
+        this.successorKind = SUCCESSOR_KIND_PENDING_TEXT;
+        this.pendingSuccessorSymbol = successorSymbol & 0xff;
     }
 
     @NonNull
     RarPpmdStateRecord copy() throws IOException {
-        return new RarPpmdStateRecord(symbol, frequency, successorPointer);
+        RarPpmdStateRecord copy = new RarPpmdStateRecord(symbol, frequency, successorPointer);
+        if (hasPendingTextSuccessor()) copy.setPendingTextSuccessor(pendingSuccessorSymbol);
+        return copy;
     }
 
     private static void validateSymbol(int symbol) throws IOException {

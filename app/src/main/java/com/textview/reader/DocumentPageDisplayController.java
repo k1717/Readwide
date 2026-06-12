@@ -2,7 +2,6 @@ package com.textview.reader;
 
 import androidx.annotation.NonNull;
 
-import java.util.Locale;
 
 final class DocumentPageDisplayController {
     private final DocumentPageActivity activity;
@@ -35,8 +34,8 @@ final class DocumentPageDisplayController {
             activity.webView.removeCallbacks(activity.releasePageTurnRunnable);
             activity.webView.postDelayed(activity.releasePageTurnRunnable, 190);
         }
-        int visualSlideDirection = activity.visualSlideDirectionForPageDelta(direction);
-        activity.pendingSlideDirection = visualSlideDirection;
+        activity.pendingSlideDirection = 0;
+        activity.snapDocumentPageTopAfterLoad = direction != 0;
         activity.currentPage = page;
         DocumentPageActivity.Page p = activity.pages.get(page);
         String baseUrl = "https://" + DocumentPageActivity.LOCAL_HOST + "/";
@@ -45,7 +44,7 @@ final class DocumentPageDisplayController {
             baseUrl = "https://" + DocumentPageActivity.LOCAL_HOST + DocumentPageActivity.EPUB_PREFIX + parent;
             if (!baseUrl.endsWith("/")) baseUrl += "/";
         }
-        prepareDocumentSlide(visualSlideDirection);
+        resetDocumentPageTransform();
         activity.wordSelectionActive = false;
         activity.webView.removeCallbacks(activity.checkWordSelectionAfterScrollRunnable);
         activity.webView.getSettings().setJavaScriptEnabled("Word".equals(activity.docType));
@@ -63,44 +62,25 @@ final class DocumentPageDisplayController {
                 "UTF-8",
                 null);
         updateStatus();
-        activity.saveReadingState();
+        if (!activity.isMarkdownDocument() && !activity.isRenderedContentAnchorDocument()) {
+            activity.saveReadingState();
+        }
     }
 
     void runSlideInAnimation() {
-        if (activity.webView == null) return;
-        int direction = activity.pendingSlideDirection;
-        activity.pendingSlideDirection = 0;
-        if (direction == 0) {
-            activity.webView.setTranslationX(0f);
-            activity.webView.setAlpha(1.0f);
-            activity.pageTurnInFlight = false;
-            return;
-        }
-        activity.webView.animate()
-                .translationX(0f)
-                .alpha(1.0f)
-                .setDuration(135)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator())
-                .withEndAction(() -> activity.pageTurnInFlight = false)
-                .start();
+        resetDocumentPageTransform();
+        activity.pageTurnInFlight = false;
     }
 
-    private void prepareDocumentSlide(int direction) {
-        if (activity.webView == null || direction == 0) return;
+    private void resetDocumentPageTransform() {
+        if (activity.webView == null) return;
         activity.webView.animate().cancel();
-        float distance = Math.max(activity.dpToPx(56), activity.webView.getWidth() * 0.18f);
-        activity.webView.setTranslationX(direction > 0 ? distance : -distance);
-        activity.webView.setAlpha(0.72f);
+        activity.webView.setTranslationX(0f);
+        activity.webView.setTranslationY(0f);
+        activity.webView.setAlpha(1.0f);
     }
 
     private void updateStatus() {
-        activity.pageStatus.setText(String.format(
-                Locale.getDefault(),
-                "%s %d / %d",
-                activity.docType,
-                activity.currentPage + 1,
-                activity.pages.size()));
-        activity.prevButton.setEnabled(activity.currentPage > 0);
-        activity.nextButton.setEnabled(activity.currentPage < activity.pages.size() - 1);
+        activity.updateDocumentPageStatusViews();
     }
 }

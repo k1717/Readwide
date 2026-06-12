@@ -32,12 +32,12 @@ public final class FileTypeFilter {
             case EPUB:
                 return FileUtils.isEpubFile(name);
             case WORD:
-                return FileUtils.isWordFile(name);
+                return FileUtils.isWordOrHwpFile(name);
             case IMAGE:
                 return FileUtils.isImageFile(name);
             case ALL:
             default:
-                return FileUtils.isVisibleInAllFilesFilter(name);
+                return true;
         }
     }
 

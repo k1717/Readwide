@@ -25,8 +25,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import org.json.JSONObject;
+
 /**
- * Bookmark list with top-level subsections by file type: TXT, PDF, EPUB, Word.
+ * Bookmark list with top-level subsections by file type: TXT, PDF, EPUB, Word. HWP/HWPX are grouped under Word.
  */
 public class BookmarkAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private static final int TYPE_SECTION = 0;
@@ -166,15 +168,17 @@ public class BookmarkAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         if ("TXT".equals(type)) return 0;
         if ("PDF".equals(type)) return 1;
         if ("EPUB".equals(type)) return 2;
-        if ("Word".equals(type)) return 3;
-        return 4;
+        if ("Markdown".equals(type)) return 3;
+        if ("Word".equals(type)) return 4;
+        return 5;
     }
 
     private static String displayType(Bookmark b) {
         String name = safeFileName(b);
         if (FileUtils.isPdfFile(name)) return "PDF";
         if (FileUtils.isEpubFile(name)) return "EPUB";
-        if (FileUtils.isWordFile(name)) return "Word";
+        if (FileUtils.isMarkdownFile(name)) return "Markdown";
+        if (FileUtils.isHwpFile(name) || FileUtils.isWordFile(name)) return "Word";
         return "TXT";
     }
 
@@ -250,7 +254,8 @@ public class BookmarkAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
 
             itemView.setBackgroundColor(bg);
 
-            String main = bookmark.getExcerpt();
+            String main = anchorPreviewForBookmark(bookmark);
+            if (main == null || main.trim().isEmpty()) main = bookmark.getExcerpt();
             if (main == null || main.trim().isEmpty()) main = bookmark.getDisplayText();
             if (main == null || main.trim().isEmpty()) main = positionLabel(bookmark);
             title.setText(main.trim());
@@ -280,12 +285,62 @@ public class BookmarkAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             btnDelete.setColorFilter(metaColor);
         }
 
+
+        private String anchorPreviewForBookmark(Bookmark bookmark) {
+            if (bookmark == null) return "";
+            String json = bookmark.getContentAnchorJson();
+            if (json == null || json.trim().isEmpty()) return "";
+            try {
+                JSONObject obj = new JSONObject(json);
+                String text = firstNonEmpty(
+                        obj.optString("text", ""),
+                        obj.optString("anchorText", ""),
+                        obj.optString("textAfter", ""),
+                        obj.optString("quote", ""),
+                        obj.optString("nearbyText", ""));
+                return compactAnchorPreview(text, 42);
+            } catch (Exception ignored) {
+                return "";
+            }
+        }
+
+        private String firstNonEmpty(String... values) {
+            if (values == null) return "";
+            for (String value : values) {
+                if (value != null) {
+                    String trimmed = value.replaceAll("\\s+", " ").trim();
+                    if (!trimmed.isEmpty()) return trimmed;
+                }
+            }
+            return "";
+        }
+
+        private String compactAnchorPreview(String text, int maxChars) {
+            if (text == null) return "";
+            String compact = text.replaceAll("\\s+", " ").trim();
+            if (compact.isEmpty()) return "";
+            if (compact.length() <= maxChars) return compact;
+            return compact.substring(0, Math.max(1, maxChars - 1)).trim() + "…";
+        }
+
+        private String pageLabel(Bookmark bookmark, int oneBasedFallback) {
+            int total = bookmark != null ? Math.max(0, bookmark.getTotalPages()) : 0;
+            int page = bookmark != null && bookmark.getPageNumber() > 0
+                    ? bookmark.getPageNumber()
+                    : oneBasedFallback;
+            if (total > 0) {
+                page = Math.max(1, Math.min(total, page));
+                return "Page " + page + " / " + total;
+            }
+            return "Page " + Math.max(1, page);
+        }
+
         private String positionLabel(Bookmark bookmark) {
             String type = displayType(bookmark);
             int oneBased = Math.max(1, bookmark.getCharPosition() + 1);
-            if ("PDF".equals(type)) return "PDF page " + oneBased;
-            if ("EPUB".equals(type)) return "EPUB section " + oneBased;
-            if ("Word".equals(type)) return "Word page " + oneBased;
+            if ("PDF".equals(type)) return pageLabel(bookmark, oneBased);
+            if ("EPUB".equals(type)) return pageLabel(bookmark, oneBased);
+            if ("Word".equals(type)) return pageLabel(bookmark, oneBased);
             int start = Math.max(0, bookmark.getCharPosition());
             int end = Math.max(start, bookmark.getEndPosition());
             return "Line " + bookmark.getLineNumber() + "  •  Pos " + start + "-" + end;

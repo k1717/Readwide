@@ -348,6 +348,11 @@
     <string name="sort_size_small">Size (smallest first)</string>
     <string name="sort_type">File type</string>
     <string name="storage_root">/storage</string>
+    <string name="tap_paging_txt">Tap page zones: TXT</string>
+    <string name="tap_paging_markdown">Tap page zones: Markdown</string>
+    <string name="tap_paging_pdf">Tap page zones: PDF</string>
+    <string name="tap_paging_epub">Tap page zones: EPUB</string>
+    <string name="tap_paging_word">Tap page zones: Word</string>
     <string name="tap_top_bottom_page">Use Tap Zones for Page Turns</string>
     <string name="tap_zone_mode">Tap Zone Layout</string>
     <string name="tap_zone_vertical">Vertical (top / middle / bottom)</string>
@@ -699,4 +704,10 @@ Rules: %2$d enabled rules</string>
     <string name="bookmark_file_missing_title">Bookmark file missing</string>
     <string name="bookmark_file_missing_message">This bookmark was imported or saved, but the original file is not available at the saved path.</string>
     <string name="bookmark_file_missing_rebind_note">The bookmark will stay saved. If you copy the same file to this device and open it, Readwide can try to reconnect it by file name, size, and fingerprint.</string>
+    <string name="image_view_options">View options</string>
+    <string name="image_slider_direction_ltr">Image flow: left to right</string>
+    <string name="image_tap_paging_on">Touch page zones: On</string>
+    <string name="image_tap_paging_off">Touch page zones: Off</string>
+    <string name="image_slider_direction_rtl">Image flow: right to left</string>
+    <string name="epub_force_reader_theme_colors">EPUB: use reading theme colors</string>
 </resources>

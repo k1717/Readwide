@@ -99,7 +99,8 @@ final class ArchiveImageSequenceLoader {
         }
 
         int openIndex = targetIndex;
-        if (!selectedReady && shouldTryAlternateImageEntry(selectedResult, PasswordChars.hasPassword(password))) {
+        if (!selectedReady && ArchiveSupport.getSupportedArchiveType(archiveFile) != ArchiveSupport.Type.RAR
+                && shouldTryAlternateImageEntry(selectedResult, PasswordChars.hasPassword(password))) {
             for (int i = 0; i < sequence.size(); i++) {
                 if (i == targetIndex) continue;
                 ArchiveSupport.EntryInfo imageEntry = sequence.get(i);
@@ -184,7 +185,8 @@ final class ArchiveImageSequenceLoader {
                 selectedResult = result;
             }
         }
-        if (!selectedExtracted && !imagePaths.isEmpty() && selectedResult != null
+        if (ArchiveSupport.getSupportedArchiveType(archiveFile) != ArchiveSupport.Type.RAR
+                && !selectedExtracted && !imagePaths.isEmpty() && selectedResult != null
                 && selectedResult.failure == ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE) {
             extractedSelectedIndex = 0;
             selectedExtracted = true;

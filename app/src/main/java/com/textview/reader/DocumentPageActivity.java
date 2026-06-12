@@ -50,8 +50,13 @@ import com.textview.reader.model.Theme;
 import com.textview.reader.util.BookmarkManager;
 import com.textview.reader.util.FileUtils;
 import com.textview.reader.util.FontManager;
+import com.textview.reader.util.HwpTextExtractor;
 import com.textview.reader.util.PrefsManager;
+import com.textview.reader.util.TapZoneMath;
+import com.textview.reader.util.MarkdownVisualPageMath;
 import com.textview.reader.util.ThemeManager;
+
+import org.json.JSONObject;
 
 import org.w3c.dom.Document;
 import org.w3c.dom.NamedNodeMap;
@@ -85,10 +90,14 @@ import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 
 /**
- * Page-style viewer for EPUB and OOXML Word files.
+ * Page-style viewer for EPUB, Markdown, and OOXML Word files.
  *
  * EPUB: renders each original spine XHTML/HTML document inside WebView, preserving
  * the EPUB's markup/CSS/images as much as Android WebView allows.
+ *
+ * Markdown: renders .md/.markdown as a dedicated document WebView page.  This path
+ * intentionally does not use the TXT exact-page model, so Markdown tables and
+ * rendered syntax can use normal HTML layout while the plain TXT reader remains exact.
  *
  * Word: renders OOXML document content as formatted HTML pages. Explicit Word page
  * breaks are respected; when a document has no page breaks, the content is split
@@ -98,6 +107,8 @@ public class DocumentPageActivity extends AppCompatActivity {
     public static final String EXTRA_FILE_PATH = "file_path";
     public static final String EXTRA_FILE_URI = "file_uri";
     public static final String EXTRA_JUMP_TO_PAGE = "jump_page";
+    public static final String EXTRA_MARKDOWN_SOURCE_OFFSET = "markdown_source_offset";
+    public static final String EXTRA_CONTENT_ANCHOR_JSON = "content_anchor_json";
 
     static final String LOCAL_HOST = "textview.local";
     static final String EPUB_PREFIX = "/epub/";
@@ -106,22 +117,31 @@ public class DocumentPageActivity extends AppCompatActivity {
     private static final String DOCUMENT_FONT_DEFAULT = "document_default";
     private static final String FONT_OPTION_SYSTEM_CURRENT = "system_current";
     private static final int WORD_PARAGRAPHS_PER_PAGE = 28;
+    private static final int HWP_PARAGRAPHS_PER_PAGE = 34;
+    private static final int HWP_TARGET_CHARS_PER_PAGE = 3600;
     // Match toolbar-triggered document popups to the Go to Page bottom offset.
     static final int DOCUMENT_TOOLBAR_POPUP_Y_DP = 74;
+    private static final long DOCUMENT_CHROME_TRANSITION_MS = 145L;
 
     Toolbar toolbar;
     View documentAppBar;
     View documentBottomChrome;
+    View documentNavBarSpacer;
     boolean documentChromeVisible = true;
     WebView webView;
     ProgressBar progressBar;
     TextView pageStatus;
+    TextView topPageStatus;
     TextView prevButton;
     TextView nextButton;
     TextView searchButton;
     TextView pageButton;
     TextView bookmarkButton;
     TextView moreButton;
+    SeekBar documentPageSeekBar;
+    boolean documentPageSeekBarUserTracking = false;
+    int lastMarkdownMaxScrollYPx = 0;
+    int lastMarkdownCurrentRawScrollYPx = 0;
     int readerBg = Color.rgb(18, 18, 18);
     int readerFg = Color.rgb(232, 234, 237);
     int readerToolbarBg = Color.rgb(18, 18, 18);
@@ -149,6 +169,22 @@ public class DocumentPageActivity extends AppCompatActivity {
     private int lastAppliedEpubBottomToolbarHeightPx = Integer.MIN_VALUE;
     private int lastAppliedEpubEffectiveBottomMarginPx = Integer.MIN_VALUE;
     int currentPage = 0;
+    int markdownVisualCurrentPage = 0;
+    int markdownVisualTotalPages = 1;
+    int lastStableMarkdownViewportHeightPx = 0;
+    int lastStableMarkdownContentHeightPx = 0;
+    int lastExpandedDocumentTopChromeHeightPx = 0;
+    int lastExpandedDocumentBottomChromeHeightPx = 0;
+    int pendingMarkdownRestoreScrollY = -1;
+    int pendingMarkdownRestorePage = -1;
+    int pendingMarkdownRestoreSourceOffset = -1;
+    String markdownSourceText = "";
+    volatile int lastMarkdownSourceOffset = 0;
+    volatile int lastMarkdownSourceLine = 1;
+    volatile String lastMarkdownAnchorText = "";
+    String pendingDocumentRestoreAnchorJson = "";
+    volatile String lastDocumentContentAnchorJson = "";
+    boolean snapDocumentPageTopAfterLoad = false;
     int pendingSlideDirection = 0;
     private int wordSwipeTouchSlop = 0;
     private float wordSwipeStartX = 0f;
@@ -158,6 +194,7 @@ public class DocumentPageActivity extends AppCompatActivity {
     boolean pageTurnInFlight = false;
     private GestureDetector documentGestureDetector;
     private boolean documentDoubleTapResetSequence = false;
+    private boolean documentTapPagingSequence = false;
     private int armedDocumentEdgeDirection = 0;
     private long armedDocumentEdgeTimeMs = 0L;
     private boolean wordGestureStartedAtLeftEdge = true;
@@ -299,8 +336,10 @@ public class DocumentPageActivity extends AppCompatActivity {
         Theme theme = ThemeManager.getInstance(this).getActiveTheme();
         if (theme == null) {
             return "theme:null:" + readerBg + ":" + readerFg + ":" + readerLine
-                    + "|epubFontSize=" + (("EPUB".equals(docType) && prefs != null)
-                    ? prefs.getFontSize() : PrefsManager.DEFAULT_FONT_SIZE);
+                    + "|docFontSize=" + ((("EPUB".equals(docType) || "Markdown".equals(docType)) && prefs != null)
+                    ? prefs.getFontSize() : PrefsManager.DEFAULT_FONT_SIZE)
+                + "|epubThemeColors=" + (("EPUB".equals(docType) && prefs != null)
+                    ? prefs.getEpubForceReaderThemeColors() : false);
         }
         String backgroundImagePath = theme.getBackgroundImagePath();
         return theme.getId()
@@ -310,8 +349,10 @@ public class DocumentPageActivity extends AppCompatActivity {
                 + "|link=" + theme.getLinkColor()
                 + "|img=" + (backgroundImagePath != null ? backgroundImagePath : "")
                 + "|alpha=" + theme.getBackgroundImageAlpha()
-                + "|epubFontSize=" + (("EPUB".equals(docType) && prefs != null)
-                ? prefs.getFontSize() : PrefsManager.DEFAULT_FONT_SIZE);
+                + "|docFontSize=" + ((("EPUB".equals(docType) || "Markdown".equals(docType)) && prefs != null)
+                ? prefs.getFontSize() : PrefsManager.DEFAULT_FONT_SIZE)
+                + "|epubThemeColors=" + (("EPUB".equals(docType) && prefs != null)
+                ? prefs.getEpubForceReaderThemeColors() : false);
     }
 
     void refreshDocumentPageThemeIfNeeded(String currentThemeSignature, boolean pageThemeChanged) {
@@ -342,12 +383,12 @@ public class DocumentPageActivity extends AppCompatActivity {
 
     void applyDocumentSystemBarColors() {
         resolveReaderThemeColors();
-        int bg = readerBg;
-        int toolbarBg = readerToolbarBg;
-        getWindow().setStatusBarColor(toolbarBg);
-        getWindow().setNavigationBarColor(bg);
+        int bodyBg = readerBg;
+        int statusBg = documentChromeVisible ? readerToolbarBg : bodyBg;
+        getWindow().setStatusBarColor(statusBg);
+        getWindow().setNavigationBarColor(bodyBg);
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            getWindow().setNavigationBarDividerColor(bg);
+            getWindow().setNavigationBarDividerColor(bodyBg);
         }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             getWindow().setNavigationBarContrastEnforced(false);
@@ -355,13 +396,36 @@ public class DocumentPageActivity extends AppCompatActivity {
         }
         androidx.core.view.WindowInsetsControllerCompat controller =
                 androidx.core.view.WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
-        controller.setAppearanceLightStatusBars(!isDarkColor(toolbarBg));
-        controller.setAppearanceLightNavigationBars(!isDarkColor(bg));
+        if (controller != null) {
+            controller.setAppearanceLightStatusBars(!isDarkColor(statusBg));
+            controller.setAppearanceLightNavigationBars(!isDarkColor(bodyBg));
+        }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             int flags = getWindow().getDecorView().getSystemUiVisibility();
-            if (!isDarkColor(bg)) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            if (!isDarkColor(bodyBg)) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
             else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                if (!isDarkColor(statusBg)) flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
             getWindow().getDecorView().setSystemUiVisibility(flags);
+        }
+        applyDocumentChromeFillColors();
+    }
+
+    void applyDocumentChromeFillColors() {
+        int topFillerBg = documentChromeVisible ? readerToolbarBg : readerBg;
+        if (documentAppBar != null) {
+            documentAppBar.setBackgroundColor(topFillerBg);
+        }
+        if (toolbar != null) {
+            toolbar.setBackgroundColor(readerToolbarBg);
+        }
+        if (topPageStatus != null) {
+            topPageStatus.setBackgroundColor(readerBg);
+        }
+        if (documentNavBarSpacer != null) {
+            documentNavBarSpacer.setBackgroundColor(readerBg);
         }
     }
 
@@ -373,6 +437,20 @@ public class DocumentPageActivity extends AppCompatActivity {
         return UiColorUtils.blendColors(base, overlay, overlayAlpha);
     }
 
+
+    private GradientDrawable documentBottomChromeBackground(int color) {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(color);
+        float r = dpToPx(12);
+        bg.setCornerRadii(new float[]{
+                r, r,   // top-left
+                r, r,   // top-right
+                0, 0,   // bottom-right
+                0, 0    // bottom-left
+        });
+        return bg;
+    }
+
     void applyDocumentThemeToViews() {
         resolveReaderThemeColors();
         View root = findViewById(R.id.document_root);
@@ -382,9 +460,14 @@ public class DocumentPageActivity extends AppCompatActivity {
         if (root != null) root.setBackgroundColor(readerBg);
         if (viewport != null) viewport.setBackgroundColor(readerBg);
         if (documentSearchPanelContainer != null) documentSearchPanelContainer.setBackgroundColor(readerBg);
+        applyDocumentChromeFillColors();
+        if (documentNavBarSpacer != null) {
+            documentNavBarSpacer.setBackgroundColor(readerBg);
+            androidx.core.view.ViewCompat.requestApplyInsets(documentNavBarSpacer);
+        }
         if (documentSearchOverlayContainer != null) documentSearchOverlayContainer.setBackgroundColor(Color.TRANSPARENT);
-        if (appbar != null) appbar.setBackgroundColor(readerToolbarBg);
-        if (bottom != null) bottom.setBackgroundColor(readerPanel);
+        if (appbar != null) appbar.setBackgroundColor(documentChromeVisible ? readerToolbarBg : readerBg);
+        if (bottom != null) bottom.setBackground(documentBottomChromeBackground(readerPanel));
         if (toolbar != null) {
             toolbar.setBackgroundColor(readerToolbarBg);
             toolbar.setTitleTextColor(readerFg);
@@ -397,6 +480,11 @@ public class DocumentPageActivity extends AppCompatActivity {
         }
         if (webView != null) webView.setBackgroundColor(readerBg);
         if (pageStatus != null) pageStatus.setTextColor(readerFg);
+        if (topPageStatus != null) {
+            topPageStatus.setTextColor(readerFg);
+            topPageStatus.setBackgroundColor(readerBg);
+        }
+        if (documentPageSeekBar != null) tintSeekBar(documentPageSeekBar);
         updateLoadingIndicatorTheme();
         TextView[] buttons = {prevButton, nextButton, searchButton, pageButton, bookmarkButton, moreButton};
         for (TextView b : buttons) {
@@ -441,22 +529,147 @@ public class DocumentPageActivity extends AppCompatActivity {
         return handled && action != MotionEvent.ACTION_DOWN;
     }
 
+    private boolean handleFastDocumentTapPaging(@NonNull MotionEvent e) {
+        int eventAction = e.getActionMasked();
+        if (eventAction == MotionEvent.ACTION_CANCEL) {
+            documentTapPagingSequence = false;
+            return false;
+        }
+        if (!isPagedWebDocument() || webView == null || prefs == null
+                || !prefs.getDocumentTapPagingEnabled(docType)
+                || documentPageCount() <= 1 || pageTurnInFlight) {
+            documentTapPagingSequence = false;
+            return false;
+        }
+
+        if (eventAction == MotionEvent.ACTION_DOWN) {
+            documentTapPagingSequence = getDocumentTapPagingAction(e) != TapZoneMath.ACTION_MENU;
+            return false;
+        }
+
+        if (!documentTapPagingSequence) return false;
+
+        if (eventAction == MotionEvent.ACTION_MOVE) {
+            if (Math.abs(e.getX() - wordSwipeStartX) > wordSwipeTouchSlop
+                    || Math.abs(e.getY() - wordSwipeStartY) > wordSwipeTouchSlop) {
+                documentTapPagingSequence = false;
+            }
+            return false;
+        }
+
+        if (eventAction != MotionEvent.ACTION_UP) return false;
+        boolean stillTap = !wordSelectionActive && !wordSwipeTriggered
+                && Math.abs(e.getX() - wordSwipeStartX) <= wordSwipeTouchSlop
+                && Math.abs(e.getY() - wordSwipeStartY) <= wordSwipeTouchSlop;
+        int action = stillTap ? getDocumentTapPagingAction(e) : TapZoneMath.ACTION_MENU;
+        documentTapPagingSequence = false;
+        if (action == TapZoneMath.ACTION_PREVIOUS) {
+            turnDocumentPageByTap(-1);
+            return true;
+        }
+        if (action == TapZoneMath.ACTION_NEXT) {
+            turnDocumentPageByTap(1);
+            return true;
+        }
+        return false;
+    }
+
+    private int getDocumentTapPagingAction(@NonNull MotionEvent e) {
+        if (!isPagedWebDocument() || webView == null || prefs == null) return TapZoneMath.ACTION_MENU;
+        if (!prefs.getDocumentTapPagingEnabled(docType)) return TapZoneMath.ACTION_MENU;
+        if (documentPageCount() <= 1 || pageTurnInFlight) return TapZoneMath.ACTION_MENU;
+        return TapZoneMath.actionForTap(
+                e.getX(),
+                e.getY(),
+                webView.getWidth(),
+                webView.getHeight(),
+                true,
+                true,
+                prefs.getTapZoneMode(),
+                prefs.getTapLeadingZonePercent(),
+                prefs.getTapTrailingZonePercent());
+    }
+
+    private boolean handleDocumentTapPaging(@NonNull MotionEvent e) {
+        int action = getDocumentTapPagingAction(e);
+        if (action == TapZoneMath.ACTION_PREVIOUS) {
+            turnDocumentPageByTap(-1);
+            return true;
+        }
+        if (action == TapZoneMath.ACTION_NEXT) {
+            turnDocumentPageByTap(1);
+            return true;
+        }
+        return false;
+    }
+
+    private void turnDocumentPageByTap(int direction) {
+        if (direction == 0 || documentPageCount() <= 1) return;
+        if (isMarkdownDocument()) {
+            pageMarkdownBy(direction);
+            return;
+        }
+        int target = currentPage + direction;
+        if (target >= 0 && target < pages.size()) {
+            showPage(target, direction);
+        }
+    }
+
     private void toggleDocumentChrome() {
         setDocumentChromeVisible(!documentChromeVisible);
     }
 
     private void setDocumentChromeVisible(boolean visible) {
+        if (documentChromeVisible == visible
+                && documentAppBar != null
+                && documentBottomChrome != null
+                && topPageStatus != null
+                && ((visible && documentAppBar.getVisibility() == View.VISIBLE
+                && documentBottomChrome.getVisibility() == View.VISIBLE
+                && topPageStatus.getVisibility() == View.INVISIBLE)
+                || (!visible && documentAppBar.getVisibility() == View.GONE
+                && documentBottomChrome.getVisibility() == View.GONE
+                && topPageStatus.getVisibility() == View.VISIBLE))) {
+            return;
+        }
+
         documentChromeVisible = visible;
-        int visibility = visible ? View.VISIBLE : View.GONE;
-        if (documentAppBar != null && documentAppBar.getVisibility() != visibility) {
-            documentAppBar.setVisibility(visibility);
+        applyDocumentChromeFillColors();
+        if (visible) {
+            // Document chrome is an overlay, like the TXT reader. Showing the
+            // toolbar/bottom controls must never resize or translate the WebView.
+            if (documentAppBar != null && documentAppBar.getVisibility() != View.VISIBLE) {
+                documentAppBar.setVisibility(View.VISIBLE);
+            }
+            if (toolbar != null && toolbar.getVisibility() != View.VISIBLE) {
+                toolbar.setVisibility(View.VISIBLE);
+            }
+            if (topPageStatus != null && topPageStatus.getVisibility() != View.INVISIBLE) {
+                topPageStatus.setVisibility(View.INVISIBLE);
+            }
+            if (pageStatus != null && pageStatus.getVisibility() != View.VISIBLE) {
+                pageStatus.setVisibility(View.VISIBLE);
+            }
+            if (documentBottomChrome != null && documentBottomChrome.getVisibility() != View.VISIBLE) {
+                documentBottomChrome.setVisibility(View.VISIBLE);
+            }
+        } else {
+            // Collapsed state hides only the toolbar/bottom overlay. The compact
+            // page indicator is a separate overlay, not part of the toolbar mask,
+            // and the WebView remains fixed underneath both states.
+            if (documentAppBar != null && documentAppBar.getVisibility() != View.GONE) {
+                documentAppBar.setVisibility(View.GONE);
+            }
+            if (topPageStatus != null && topPageStatus.getVisibility() != View.VISIBLE) {
+                topPageStatus.setVisibility(View.VISIBLE);
+            }
+            if (documentBottomChrome != null && documentBottomChrome.getVisibility() != View.GONE) {
+                documentBottomChrome.setVisibility(View.GONE);
+            }
         }
-        if (documentBottomChrome != null && documentBottomChrome.getVisibility() != visibility) {
-            documentBottomChrome.setVisibility(visibility);
-        }
-        View viewport = findViewById(R.id.document_viewport);
+        applyDocumentSystemBarColors();
         androidx.core.view.ViewCompat.requestApplyInsets(findViewById(R.id.document_root));
-        if (viewport != null) viewport.requestLayout();
+        androidx.core.view.ViewCompat.requestApplyInsets(topPageStatus);
         applyEpubBoundaryMarginsIfNeeded();
     }
 
@@ -516,11 +729,14 @@ public class DocumentPageActivity extends AppCompatActivity {
     }
 
     void setupButtons() {
+        setupDocumentPageSeekBar();
         prevButton.setOnClickListener(v -> {
-            if (currentPage > 0) showPage(currentPage - 1, -1);
+            if (isMarkdownDocument()) pageMarkdownBy(-1);
+            else if (currentPage > 0) showPage(currentPage - 1, -1);
         });
         nextButton.setOnClickListener(v -> {
-            if (currentPage < pages.size() - 1) showPage(currentPage + 1, 1);
+            if (isMarkdownDocument()) pageMarkdownBy(1);
+            else if (currentPage < pages.size() - 1) showPage(currentPage + 1, 1);
         });
         if (searchButton != null) searchButton.setOnClickListener(v -> showDocumentSearchDialog());
         if (pageButton != null) pageButton.setOnClickListener(v -> showGoToPageDialog());
@@ -528,6 +744,45 @@ public class DocumentPageActivity extends AppCompatActivity {
         if (moreButton != null) {
             moreButton.setOnClickListener(v -> showMoreDialog());
         }
+    }
+
+    private void setupDocumentPageSeekBar() {
+        if (documentPageSeekBar == null) return;
+        tintSeekBar(documentPageSeekBar);
+        documentPageSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (!fromUser) return;
+                int total = Math.max(1, documentPageCount());
+                int safe = Math.max(0, Math.min(total - 1, progress));
+                if (isMarkdownDocument()) {
+                    markdownVisualCurrentPage = safe;
+                } else {
+                    currentPage = Math.max(0, Math.min(Math.max(0, pages.size() - 1), safe));
+                }
+                updateDocumentPageStatusViews(false);
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                documentPageSeekBarUserTracking = true;
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                int total = Math.max(1, documentPageCount());
+                int target = Math.max(0, Math.min(total - 1, seekBar.getProgress()));
+                documentPageSeekBarUserTracking = false;
+                if (isMarkdownDocument()) {
+                    scrollMarkdownToVisualPage(target, false);
+                } else if (!pages.isEmpty()) {
+                    showPage(target, Integer.compare(target, currentPage));
+                } else {
+                    updateDocumentPageStatusViews();
+                }
+            }
+        });
+        updateDocumentPageStatusViews();
     }
 
     // --- Hardware page-turn keys ---
@@ -557,6 +812,9 @@ public class DocumentPageActivity extends AppCompatActivity {
 
             @Override
             public boolean onSingleTapConfirmed(@NonNull MotionEvent e) {
+                if (handleDocumentTapPaging(e)) {
+                    return true;
+                }
                 toggleDocumentChrome();
                 return true;
             }
@@ -576,11 +834,16 @@ public class DocumentPageActivity extends AppCompatActivity {
         });
 
         webView.setOnTouchListener((v, event) -> {
-            if (handleDocumentTapGesture(event)) {
+            if (handleFastDocumentTapPaging(event)) {
+                resetWordSwipeTracking();
+                clearDocumentEdgeArm();
+                return true;
+            }
+            if (!documentTapPagingSequence && handleDocumentTapGesture(event)) {
                 return true;
             }
 
-            if (!isPagedWebDocument() || pages.size() <= 1 || pageTurnInFlight) return false;
+            if (!isPagedWebDocument() || documentPageCount() <= 1 || pageTurnInFlight) return false;
 
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
@@ -641,6 +904,7 @@ public class DocumentPageActivity extends AppCompatActivity {
     private void resetWordSwipeTracking() {
         wordSwipeTriggered = false;
         wordSwipeMovedEnoughForParentDisallow = false;
+        documentTapPagingSequence = false;
         wordGestureStartedAtLeftEdge = true;
         wordGestureStartedAtRightEdge = true;
         if (webView != null && webView.getParent() != null) {
@@ -649,7 +913,7 @@ public class DocumentPageActivity extends AppCompatActivity {
     }
 
     private boolean isPagedWebDocument() {
-        return "Word".equals(docType) || "EPUB".equals(docType);
+        return "Word".equals(docType) || "HWP".equals(docType) || "EPUB".equals(docType) || "Markdown".equals(docType);
     }
 
     void clearDocumentEdgeArm() {
@@ -658,7 +922,7 @@ public class DocumentPageActivity extends AppCompatActivity {
     }
 
     private boolean shouldTurnDocumentPageBySwipe(@NonNull MotionEvent event) {
-        if (activityDestroyed || wordSelectionActive || webView == null || pages.size() <= 1 || pageTurnInFlight) return false;
+        if (activityDestroyed || wordSelectionActive || webView == null || documentPageCount() <= 1 || pageTurnInFlight) return false;
 
         float dx = event.getX() - wordSwipeStartX;
         float dy = event.getY() - wordSwipeStartY;
@@ -750,6 +1014,10 @@ public class DocumentPageActivity extends AppCompatActivity {
 
     private void turnDocumentPageBySwipe(int direction) {
         if (webView == null || pageTurnInFlight) return;
+        if (isMarkdownDocument()) {
+            pageMarkdownBy(direction);
+            return;
+        }
         if (direction > 0 && currentPage < pages.size() - 1) {
             showPage(currentPage + 1, 1);
         } else if (direction < 0 && currentPage > 0) {
@@ -897,10 +1165,7 @@ public class DocumentPageActivity extends AppCompatActivity {
 
     private int getEffectiveEpubBottomMarginPx(int requestedBottomBoundaryPx, int bottomToolbarHeightPx) {
         if (!"EPUB".equals(docType) || requestedBottomBoundaryPx <= 0) return 0;
-        if (isDocumentBottomToolbarHeightPending()) {
-            return 0;
-        }
-        return Math.max(0, requestedBottomBoundaryPx - Math.max(0, bottomToolbarHeightPx));
+        return Math.max(0, requestedBottomBoundaryPx);
     }
 
     void applyEpubBoundaryMarginsIfNeeded() {
@@ -926,7 +1191,7 @@ public class DocumentPageActivity extends AppCompatActivity {
         int right = "EPUB".equals(docType) ? clampEpubBoundaryPx(getEpubRightPaddingDp()) : 0;
         int top = "EPUB".equals(docType) ? clampEpubBoundaryPx(getEpubTopPaddingDp()) : 0;
         int bottom = "EPUB".equals(docType) ? clampEpubBoundaryPx(getEpubBottomPaddingDp()) : 0;
-        int bottomToolbarHeightPx = "EPUB".equals(docType) ? getVisibleDocumentBottomToolbarHeightPx() : 0;
+        int bottomToolbarHeightPx = 0;
         int effectiveBottomMarginPx = getEffectiveEpubBottomMarginPx(bottom, bottomToolbarHeightPx);
         if (left == lastAppliedEpubLeftPaddingDp
                 && right == lastAppliedEpubRightPaddingDp
@@ -993,7 +1258,7 @@ public class DocumentPageActivity extends AppCompatActivity {
 
     int documentTextZoomPercent() {
         if ("EPUB".equals(docType) && epubFixedLayoutLike) return 100;
-        if (!"EPUB".equals(docType) || prefs == null) return 100;
+        if (!("EPUB".equals(docType) || "Markdown".equals(docType)) || prefs == null) return 100;
         float size = Math.max(8f, Math.min(48f, prefs.getFontSize()));
         return Math.max(50, Math.min(267, Math.round(size / PrefsManager.DEFAULT_FONT_SIZE * 100f)));
     }
@@ -1022,6 +1287,10 @@ public class DocumentPageActivity extends AppCompatActivity {
             return;
         }
         applyDocumentTextZoom();
+        if (isMarkdownDocument()) {
+            lastStableMarkdownContentHeightPx = 0;
+            lastStableMarkdownViewportHeightPx = 0;
+        }
         clearDocumentEdgeArm();
         if (!pages.isEmpty() && currentPage >= 0 && currentPage < pages.size()) {
             showPage(currentPage, 0);
@@ -1091,12 +1360,15 @@ public class DocumentPageActivity extends AppCompatActivity {
             addInfoRow(box, getString(R.string.file_info_size), FileUtils.formatFileSize(localFile.length()));
             addInfoRow(box, getString(R.string.file_info_modified), DateFormat.getDateTimeInstance().format(new Date(localFile.lastModified())));
         }
-        addInfoRow(box, getString(R.string.bottom_page), String.format(Locale.getDefault(), "%d / %d", currentPage + 1, pages.size()));
+        addInfoRow(box, getString(R.string.bottom_page), String.format(Locale.getDefault(), "%d / %d", currentDisplayDocumentPageNumber(), documentPageCount()));
         showFileInfoDialogWithCenteredClose(box);
     }
 
     private void showGoToPageDialog() {
         if (pages.isEmpty()) return;
+        if (isMarkdownDocument()) updateMarkdownVisualPageModel(false);
+        final int totalPagesForDialog = Math.max(1, documentPageCount());
+        final int currentPageForDialog = Math.max(0, Math.min(totalPagesForDialog - 1, currentDisplayDocumentPageIndex()));
 
         LinearLayout box = makeDialogBox();
         box.addView(makeDialogTitle(getString(R.string.page_move)));
@@ -1106,45 +1378,48 @@ public class DocumentPageActivity extends AppCompatActivity {
         label.setTextSize(17f);
         label.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         label.setGravity(android.view.Gravity.CENTER);
-        label.setText(formatPageMoveLabel(currentPage + 1, pages.size()));
+        label.setText(formatPageMoveLabel(currentPageForDialog + 1, totalPagesForDialog));
         label.setPadding(0, dpToPx(4), 0, dpToPx(8));
         box.addView(label, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         SeekBar slider = new SeekBar(this);
-        slider.setMax(Math.max(0, pages.size() - 1));
-        slider.setProgress(currentPage);
+        slider.setMax(Math.max(0, totalPagesForDialog - 1));
+        slider.setProgress(currentPageForDialog);
         tintSeekBar(slider);
         box.addView(slider, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(44)));
 
         TextView hint = new TextView(this);
-        hint.setText(getString(R.string.exact_page_number));
+        hint.setText(isMarkdownDocument()
+                ? localizedText("Rendered page based on the current layout.", "현재 표시 레이아웃 기준 페이지입니다.")
+                : getString(R.string.exact_page_number));
         hint.setTextColor(blendColors(dialogBg(), dialogFg(), 0.78f));
         hint.setTextSize(13f);
         hint.setGravity(android.view.Gravity.CENTER);
         hint.setPadding(0, dpToPx(4), 0, dpToPx(6));
         box.addView(hint);
 
-        EditText input = makeDialogInput("1 - " + pages.size());
+        EditText input = makeDialogInput("1 - " + totalPagesForDialog);
         input.setInputType(InputType.TYPE_CLASS_NUMBER);
         input.setGravity(android.view.Gravity.CENTER);
-        input.setText(String.valueOf(currentPage + 1));
+        input.setText(String.valueOf(currentPageForDialog + 1));
         input.setSelectAllOnFocus(true);
         LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(dpToPx(132), dpToPx(52));
         inputLp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
         box.addView(input, inputLp);
 
-        final int[] pending = new int[]{currentPage};
+        final int[] pending = new int[]{currentPageForDialog};
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
                 if (!fromUser) return;
                 pending[0] = progress;
-                label.setText(formatPageMoveLabel(progress + 1, pages.size()));
+                label.setText(formatPageMoveLabel(progress + 1, totalPagesForDialog));
                 input.setText(String.valueOf(progress + 1));
                 input.setSelection(input.getText().length());
             }
             @Override public void onStartTrackingTouch(SeekBar sb) {}
             @Override public void onStopTrackingTouch(SeekBar sb) {
-                showPage(pending[0], Integer.compare(pending[0], currentPage));
+                if (isMarkdownDocument()) scrollMarkdownToVisualPage(pending[0], false);
+                else showPage(pending[0], Integer.compare(pending[0], currentPage));
             }
         });
 
@@ -1152,11 +1427,12 @@ public class DocumentPageActivity extends AppCompatActivity {
         addCenteredDialogBottomAction(box, getString(R.string.go), () -> {
             try {
                 int target = Integer.parseInt(input.getText().toString().trim());
-                if (target < 1 || target > pages.size()) {
-                    ShortToast.show(this, getString(R.string.page_range_error, pages.size()));
+                if (target < 1 || target > totalPagesForDialog) {
+                    ShortToast.show(this, getString(R.string.page_range_error, totalPagesForDialog));
                     return;
                 }
-                showPage(target - 1, Integer.compare(target - 1, currentPage));
+                if (isMarkdownDocument()) scrollMarkdownToVisualPage(target - 1, false);
+                else showPage(target - 1, Integer.compare(target - 1, currentPage));
                 if (dialogRef[0] != null) dialogRef[0].dismiss();
             } catch (Exception ignored) {
                 ShortToast.show(this, getString(R.string.invalid_page_number));
@@ -1273,9 +1549,30 @@ public class DocumentPageActivity extends AppCompatActivity {
     private void tintSeekBar(SeekBar seekBar) {
         int accent = readerFg;
         int track = readerLine;
+        seekBar.setThumb(makeStaticSeekBarThumb(accent, seekBar));
         seekBar.setThumbTintList(android.content.res.ColorStateList.valueOf(accent));
         seekBar.setProgressTintList(android.content.res.ColorStateList.valueOf(accent));
         seekBar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(track));
+        seekBar.setBackgroundColor(Color.TRANSPARENT);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            seekBar.setStateListAnimator(null);
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            seekBar.setForeground(null);
+        }
+    }
+
+    private Drawable makeStaticSeekBarThumb(int color, SeekBar seekBar) {
+        int fallback = dpToPx(18);
+        Drawable current = seekBar.getThumb();
+        int width = current != null ? current.getIntrinsicWidth() : fallback;
+        int height = current != null ? current.getIntrinsicHeight() : fallback;
+        int size = Math.max(dpToPx(14), Math.min(dpToPx(20), Math.max(width, height)));
+        GradientDrawable thumb = new GradientDrawable();
+        thumb.setShape(GradientDrawable.OVAL);
+        thumb.setColor(color);
+        thumb.setSize(size, size);
+        return thumb;
     }
 
     private void addInfoRow(LinearLayout box, String label, String value) {
@@ -1399,6 +1696,26 @@ public class DocumentPageActivity extends AppCompatActivity {
         // Keep CSS minimal.  Do not force user-select/caret/handle behavior here:
         // WebView must own selection geometry or selection handles drift while the
         // document scrolls.
+        boolean forceEpubThemeColors = "EPUB".equals(docType)
+                && prefs != null
+                && prefs.getEpubForceReaderThemeColors();
+        String epubThemeColorCss = forceEpubThemeColors
+                ? "body,body *:not(img):not(svg):not(video):not(canvas){color:" + cssColor(readerFg) + " !important;}"
+                + "body *:not(pre):not(code):not(th):not(td):not(table):not(img):not(svg):not(video):not(canvas){background-color:transparent !important;}"
+                + "body a,body a *{color:" + cssColor(linkColor) + " !important;}"
+                + "body table,body th,body td{border-color:" + cssColor(readerLine) + " !important;color:" + cssColor(readerFg) + " !important;}"
+                + "body th{background-color:" + cssColor(readerPanel) + " !important;}"
+                + "body pre,body code{color:" + cssColor(readerFg) + " !important;background-color:" + cssColor(readerPanel) + " !important;}"
+                + "body blockquote{color:" + cssColor(readerFg) + " !important;border-color:" + cssColor(readerLine) + " !important;}"
+                + "body *{text-decoration-color:" + cssColor(readerFg) + " !important;}"
+                : "";
+        String markdownThemeCss = isMarkdownDocument()
+                ? ".markdown-doc code,.markdown-doc pre{background:" + cssColor(readerPanel) + " !important;}"
+                + ".markdown-doc blockquote{border-left-color:" + cssColor(readerLine) + " !important;color:" + cssColor(readerFg) + " !important;}"
+                + ".markdown-doc th{background:" + cssColor(readerPanel) + " !important;}"
+                + ".markdown-doc tr:nth-child(even) td{background:" + cssColor(blendColors(readerBg, readerFg, isDarkColor(readerBg) ? 0.045f : 0.035f)) + " !important;}"
+                + ".markdown-doc .md-diagram{background:" + cssColor(readerPanel) + " !important;border-color:" + cssColor(readerLine) + " !important;}"
+                : "";
         String css = "<style id=\"textview-reader-theme\">" +
                 "html,body{background:" + cssColor(readerBg) + " !important;color:" + cssColor(readerFg) +
                 " !important;}" +
@@ -1409,6 +1726,8 @@ public class DocumentPageActivity extends AppCompatActivity {
                 "body,.page,p,div,span,td,th,li{max-width:100%;overflow-wrap:anywhere;word-break:break-word;}" +
                 "img,svg,video,.word-img,.textbox,table{max-width:100%;}" +
                 "pre{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}" +
+                epubThemeColorCss +
+                markdownThemeCss +
                 buildDocumentFontCss() +
                 "</style>";
         if (html == null) return css;
@@ -1428,8 +1747,473 @@ public class DocumentPageActivity extends AppCompatActivity {
         return text.replace("\\", "\\\\").replace("'", "\\'");
     }
 
+
+    boolean isRenderedContentAnchorDocument() {
+        return ("EPUB".equals(docType) && !epubFixedLayoutLike)
+                || "Word".equals(docType)
+                || "HWP".equals(docType);
+    }
+
+    boolean isDocumentContentAnchorSignature(String signature) {
+        return signature != null && signature.startsWith(docType + "_CONTENT_ANCHOR_v1");
+    }
+
+    String buildDocumentContentAnchorJson(int pageIndex, int blockIndex, int scrollY, int maxScrollY, String text) {
+        try {
+            JSONObject obj = new JSONObject();
+            obj.put("kind", docType + "_CONTENT_ANCHOR_v1");
+            obj.put("docType", docType);
+            obj.put("pageIndex", Math.max(0, pageIndex));
+            obj.put("blockIndex", Math.max(0, blockIndex));
+            obj.put("scrollY", Math.max(0, scrollY));
+            obj.put("scrollRatio", maxScrollY > 0 ? Math.max(0.0d, Math.min(1.0d, scrollY / (double) maxScrollY)) : 0.0d);
+            obj.put("text", text != null ? text : "");
+            return obj.toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    void installDocumentContentAnchorScript() {
+        if (!isRenderedContentAnchorDocument() || webView == null) return;
+        evaluateDocumentAnchorJavascript(
+                "(function(){try{"
+                        + "window.__rwDocBlocks=function(){var raw=Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,td,th,table'));return raw.filter(function(e){var t=(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim();var r=e.getBoundingClientRect();return t.length>0&&r.height>0&&r.width>0;});};"
+                        + "window.__rwDocAnchorAtTop=function(){var blocks=window.__rwDocBlocks();var max=Math.max(0,document.documentElement.scrollHeight-window.innerHeight);if(!blocks.length)return {blockIndex:0,scrollY:window.scrollY||0,maxScrollY:max,text:''};var best=blocks[0],bestIndex=0,threshold=8;for(var i=0;i<blocks.length;i++){var r=blocks[i].getBoundingClientRect();if(r.bottom>=threshold){best=blocks[i];bestIndex=i;break;}if(r.top<=threshold){best=blocks[i];bestIndex=i;}}var text=(best.innerText||best.textContent||'').replace(/\\s+/g,' ').trim();if(text.length>180)text=text.substring(0,180);return {blockIndex:bestIndex,scrollY:window.scrollY||0,maxScrollY:max,text:text};};"
+                        + "window.__rwDocScrollToAnchor=function(anchor){var blocks=window.__rwDocBlocks();if(!blocks.length){if(anchor&&typeof anchor.scrollY==='number')window.scrollTo(0,anchor.scrollY);return false;}anchor=anchor||{};var text=(anchor.text||'').replace(/\\s+/g,' ').trim();var idx=parseInt(anchor.blockIndex||0,10)||0;var target=null;if(text.length>=12){var needle=text.length>80?text.substring(0,80):text;for(var i=0;i<blocks.length;i++){var bt=(blocks[i].innerText||blocks[i].textContent||'').replace(/\\s+/g,' ').trim();if(bt.indexOf(needle)>=0){target=blocks[i];break;}}}if(!target){idx=Math.max(0,Math.min(blocks.length-1,idx));target=blocks[idx];}if(target){target.scrollIntoView(true);return true;}return false;};"
+                        + "return true;}catch(e){return false;}})()",
+                value -> updateDocumentContentAnchorFromWebView());
+    }
+
+    void evaluateDocumentAnchorJavascript(String js, android.webkit.ValueCallback<String> callback) {
+        if (webView == null || js == null || js.isEmpty()) return;
+        WebSettings settings = webView.getSettings();
+        boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
+        if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
+        webView.evaluateJavascript(js, value -> {
+            if (!activityDestroyed && webView != null && restoreJavascriptOff && isRenderedContentAnchorDocument()) {
+                webView.getSettings().setJavaScriptEnabled(false);
+            }
+            if (callback != null) callback.onReceiveValue(value);
+        });
+    }
+
+    void updateDocumentContentAnchorFromWebView() {
+        updateDocumentContentAnchorFromWebView(null);
+    }
+
+    void updateDocumentContentAnchorFromWebView(Runnable afterUpdate) {
+        if (!isRenderedContentAnchorDocument() || webView == null) {
+            if (afterUpdate != null) afterUpdate.run();
+            return;
+        }
+        evaluateDocumentAnchorJavascript(
+                "(function(){try{return window.__rwDocAnchorAtTop?window.__rwDocAnchorAtTop():{blockIndex:0,scrollY:window.scrollY||0,maxScrollY:Math.max(0,document.documentElement.scrollHeight-window.innerHeight),text:''};}catch(e){return {blockIndex:0,scrollY:window.scrollY||0,maxScrollY:0,text:''};}})()",
+                value -> {
+                    try {
+                        if (value != null && !value.trim().isEmpty() && !"null".equals(value)) {
+                            JSONObject obj = new JSONObject(value);
+                            lastDocumentContentAnchorJson = buildDocumentContentAnchorJson(
+                                    currentPage,
+                                    obj.optInt("blockIndex", 0),
+                                    obj.optInt("scrollY", webView != null ? webView.getScrollY() : 0),
+                                    obj.optInt("maxScrollY", 0),
+                                    obj.optString("text", ""));
+                        }
+                    } catch (Exception ignored) {
+                    } finally {
+                        if (afterUpdate != null) afterUpdate.run();
+                    }
+                });
+    }
+
+    void scheduleDocumentContentAnchorUpdate() {
+        if (!isRenderedContentAnchorDocument() || webView == null) return;
+        webView.postDelayed(this::updateDocumentContentAnchorFromWebView, 40);
+    }
+
+    void restoreDocumentContentAnchorAfterLoadIfNeeded(@NonNull WebView view) {
+        if (!isRenderedContentAnchorDocument()) return;
+        final String anchorJson = pendingDocumentRestoreAnchorJson;
+        pendingDocumentRestoreAnchorJson = "";
+        view.postDelayed(() -> {
+            if (activityDestroyed || webView == null || !isRenderedContentAnchorDocument()) return;
+            installDocumentContentAnchorScript();
+            if (anchorJson != null && !anchorJson.trim().isEmpty()) {
+                String escaped = cssQuote(anchorJson);
+                evaluateDocumentAnchorJavascript(
+                        "(function(){try{var a=JSON.parse('" + escaped + "');if(window.__rwDocScrollToAnchor){return !!window.__rwDocScrollToAnchor(a);}return false;}catch(e){return false;}})()",
+                        value -> {
+                            boolean ok = "true".equals(value);
+                            if (!ok) restoreDocumentContentAnchorFallback(anchorJson);
+                            webView.postDelayed(this::updateDocumentContentAnchorFromWebView, 80);
+                        });
+            } else {
+                updateDocumentContentAnchorFromWebView();
+            }
+        }, 90);
+    }
+
+    void restoreDocumentContentAnchorFallback(String anchorJson) {
+        if (webView == null || anchorJson == null || anchorJson.trim().isEmpty()) return;
+        try {
+            JSONObject obj = new JSONObject(anchorJson);
+            int scrollY = obj.optInt("scrollY", -1);
+            if (scrollY >= 0) {
+                webView.scrollTo(0, Math.max(0, scrollY));
+                return;
+            }
+            double ratio = obj.optDouble("scrollRatio", -1.0d);
+            if (ratio >= 0.0d) {
+                int maxY = Math.max(0, webView.getContentHeight() * Math.max(1, Math.round(webView.getScale())) - webView.getHeight());
+                webView.scrollTo(0, Math.max(0, Math.min(maxY, (int) Math.round(maxY * ratio))));
+            }
+        } catch (Exception ignored) {}
+    }
+
+    boolean isMarkdownDocument() {
+        return "Markdown".equals(docType);
+    }
+
+
+    boolean isMarkdownSourceAnchorSignature(String signature) {
+        return signature != null && signature.startsWith("Markdown_SOURCE_ANCHOR_v1");
+    }
+
+    boolean isMarkdownSourceBookmark(@NonNull Bookmark bookmark) {
+        return FileUtils.isMarkdownFile(bookmark.getFileName())
+                && isMarkdownSourceAnchorSignature(bookmark.getPageLayoutSignature());
+    }
+
+    int clampMarkdownSourceOffset(int offset) {
+        if (markdownSourceText == null || markdownSourceText.isEmpty()) return Math.max(0, offset);
+        return Math.max(0, Math.min(offset, markdownSourceText.length()));
+    }
+
+    int markdownSourceLineForOffset(int offset) {
+        if (markdownSourceText == null || markdownSourceText.isEmpty()) return 1;
+        int safe = clampMarkdownSourceOffset(offset);
+        int line = 1;
+        for (int i = 0; i < safe && i < markdownSourceText.length(); i++) {
+            if (markdownSourceText.charAt(i) == '\n') line++;
+        }
+        return line;
+    }
+
+    String markdownAnchorTextAround(int offset, boolean before) {
+        if (markdownSourceText == null || markdownSourceText.isEmpty()) return "";
+        int safe = clampMarkdownSourceOffset(offset);
+        if (before) {
+            int start = Math.max(0, safe - 96);
+            return markdownSourceText.substring(start, safe);
+        }
+        int end = Math.min(markdownSourceText.length(), safe + 128);
+        return markdownSourceText.substring(safe, end);
+    }
+
+    String markdownBookmarkExcerpt(int sourceOffset, int visualPage, int totalPages) {
+        String after = markdownAnchorTextAround(sourceOffset, false).replace('\n', ' ').trim();
+        if (after.length() > 90) after = after.substring(0, 90).trim();
+        if (after.isEmpty()) after = String.format(Locale.getDefault(), "Line %d", markdownSourceLineForOffset(sourceOffset));
+        return after;
+    }
+
+    void installMarkdownSourceAnchorScript() {
+        if (!isMarkdownDocument() || webView == null) return;
+        evaluateMarkdownAnchorJavascript(
+                "(function(){try{"
+                        + "window.__rwMdBlocks=function(){return Array.prototype.slice.call(document.querySelectorAll('[data-rw-src-offset]'));};"
+                        + "window.__rwMdAnchorAtTop=function(){"
+                        + "var blocks=window.__rwMdBlocks();if(!blocks.length)return {offset:0,line:1,text:''};"
+                        + "var threshold=10,best=blocks[0];"
+                        + "for(var i=0;i<blocks.length;i++){var r=blocks[i].getBoundingClientRect();if(r.bottom>=threshold){best=blocks[i];break;}if(r.top<=threshold){best=blocks[i];}}"
+                        + "var text=(best.innerText||best.textContent||'').replace(/\\s+/g,' ').trim();if(text.length>160)text=text.substring(0,160);"
+                        + "return {offset:parseInt(best.getAttribute('data-rw-src-offset')||'0',10)||0,line:parseInt(best.getAttribute('data-rw-src-line')||'1',10)||1,text:text};};"
+                        + "window.__rwMdScrollToOffset=function(target){"
+                        + "var blocks=window.__rwMdBlocks();if(!blocks.length){window.scrollTo(0,0);return false;}"
+                        + "target=parseInt(target||0,10)||0;var chosen=blocks[0],chosenOffset=parseInt(chosen.getAttribute('data-rw-src-offset')||'0',10)||0;"
+                        + "for(var i=0;i<blocks.length;i++){var off=parseInt(blocks[i].getAttribute('data-rw-src-offset')||'0',10)||0;if(off<=target){chosen=blocks[i];chosenOffset=off;}else{break;}}"
+                        + "chosen.scrollIntoView(true);return true;};"
+                        + "return true;}catch(e){return false;}})()",
+                value -> updateMarkdownSourceAnchorFromWebView());
+    }
+
+    void evaluateMarkdownAnchorJavascript(String js, android.webkit.ValueCallback<String> callback) {
+        if (webView == null || js == null || js.isEmpty()) {
+            if (callback != null) callback.onReceiveValue(null);
+            return;
+        }
+        WebSettings settings = webView.getSettings();
+        boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
+        if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
+        webView.evaluateJavascript(js, value -> {
+            if (!activityDestroyed && webView != null && restoreJavascriptOff && isMarkdownDocument()) {
+                webView.getSettings().setJavaScriptEnabled(false);
+            }
+            if (callback != null) callback.onReceiveValue(value);
+        });
+    }
+
+    void updateMarkdownSourceAnchorFromWebView() {
+        updateMarkdownSourceAnchorFromWebView(null);
+    }
+
+    void updateMarkdownSourceAnchorFromWebView(Runnable afterUpdate) {
+        if (!isMarkdownDocument() || webView == null) {
+            if (afterUpdate != null) afterUpdate.run();
+            return;
+        }
+        evaluateMarkdownAnchorJavascript(
+                "(function(){try{return window.__rwMdAnchorAtTop?window.__rwMdAnchorAtTop():{offset:0,line:1,text:''};}catch(e){return {offset:0,line:1,text:''};}})()",
+                value -> {
+                    try {
+                        if (value != null && !value.trim().isEmpty() && !"null".equals(value)) {
+                            JSONObject obj = new JSONObject(value);
+                            lastMarkdownSourceOffset = clampMarkdownSourceOffset(obj.optInt("offset", 0));
+                            lastMarkdownSourceLine = Math.max(1, obj.optInt("line", markdownSourceLineForOffset(lastMarkdownSourceOffset)));
+                            lastMarkdownAnchorText = obj.optString("text", "");
+                        }
+                    } catch (Exception ignored) {
+                    } finally {
+                        if (afterUpdate != null) afterUpdate.run();
+                    }
+                });
+    }
+
+    void scheduleMarkdownSourceAnchorUpdate() {
+        if (!isMarkdownDocument() || webView == null) return;
+        webView.postDelayed(this::updateMarkdownSourceAnchorFromWebView, 40);
+    }
+
+    void scrollMarkdownToSourceOffset(int sourceOffset, boolean fallbackToVisualPage, int fallbackVisualPage) {
+        if (!isMarkdownDocument() || webView == null) return;
+        final int safeOffset = clampMarkdownSourceOffset(sourceOffset);
+        evaluateMarkdownAnchorJavascript(
+                "(function(){try{if(window.__rwMdScrollToOffset){return !!window.__rwMdScrollToOffset(" + safeOffset + ");}return false;}catch(e){return false;}})()",
+                value -> {
+                    boolean ok = "true".equals(value);
+                    if (!ok && fallbackToVisualPage) {
+                        scrollMarkdownToVisualPage(fallbackVisualPage, false);
+                        return;
+                    }
+                    webView.postDelayed(() -> {
+                        updateMarkdownVisualPageModel(false);
+                        updateMarkdownSourceAnchorFromWebView();
+                    }, 80);
+                });
+    }
+
+    int currentDisplayDocumentPageIndex() {
+        return isMarkdownDocument() ? markdownVisualCurrentPage : currentPage;
+    }
+
+    int currentDisplayDocumentPageNumber() {
+        return currentDisplayDocumentPageIndex() + 1;
+    }
+
+    String documentPageStatusLabel(int page, int total) {
+        return String.format(Locale.getDefault(), "%d / %d", page, total);
+    }
+
+    void updateDocumentPageStatusViews() {
+        updateDocumentPageStatusViews(true);
+    }
+
+    void updateDocumentPageStatusViews(boolean updateSlider) {
+        int total = Math.max(1, documentPageCount());
+        int page = Math.max(1, Math.min(total, currentDisplayDocumentPageNumber()));
+        String label = documentPageStatusLabel(page, total);
+        if (pageStatus != null) {
+            pageStatus.setText(label);
+        }
+        if (topPageStatus != null) {
+            topPageStatus.setText(label);
+        }
+        if (documentPageSeekBar != null && updateSlider && !documentPageSeekBarUserTracking) {
+            int max = Math.max(0, total - 1);
+            if (documentPageSeekBar.getMax() != max) documentPageSeekBar.setMax(max);
+            int progress = Math.max(0, Math.min(max, page - 1));
+            if (documentPageSeekBar.getProgress() != progress) {
+                documentPageSeekBar.setProgress(progress);
+            }
+            // Keep the document seekbar visually enabled even for a single-page
+            // document. Some Android skins render a disabled SeekBar with a tiny
+            // hollow thumb, which made HWP/HWPX look different from the existing
+            // DOCX/EPUB viewer controls. With max=0 it remains non-draggable, but
+            // it keeps the same normal thumb/track appearance.
+            documentPageSeekBar.setEnabled(true);
+            documentPageSeekBar.setAlpha(1f);
+        }
+        if (prevButton != null) prevButton.setEnabled(page > 1);
+        if (nextButton != null) nextButton.setEnabled(page < total);
+    }
+
     void showPage(int page, int direction) {
         pageDisplay().showPage(page, direction);
+    }
+
+    void snapDocumentWebViewToPageTopIfNeeded(@NonNull WebView view) {
+        if (!snapDocumentPageTopAfterLoad || isMarkdownDocument()) return;
+        snapDocumentPageTopAfterLoad = false;
+        view.post(() -> {
+            if (activityDestroyed || webView == null || webView != view) return;
+            webView.scrollTo(0, 0);
+            updateDocumentPageStatusViews(false);
+            if (isRenderedContentAnchorDocument()) {
+                webView.postDelayed(this::updateDocumentContentAnchorFromWebView, 80);
+            }
+        });
+    }
+
+    void pageMarkdownBy(int direction) {
+        if (!isMarkdownDocument() || webView == null || direction == 0) return;
+        updateMarkdownVisualPageModel(false);
+        int target = Math.max(0, Math.min(markdownVisualTotalPages - 1, markdownVisualCurrentPage + direction));
+        scrollMarkdownToVisualPage(target, false);
+    }
+
+    void scrollMarkdownToVisualPage(int page, boolean smooth) {
+        if (!isMarkdownDocument() || webView == null) return;
+        updateMarkdownVisualPageModel(false);
+        int safePage = Math.max(0, Math.min(Math.max(0, markdownVisualTotalPages - 1), page));
+        int targetY = MarkdownVisualPageMath.targetScrollYForPage(safePage, markdownViewportHeightPx(), markdownMaxScrollY());
+        scrollMarkdownWebViewTo(targetY, smooth);
+        markdownVisualCurrentPage = safePage;
+        updateDocumentPageStatusViews();
+        webView.postDelayed(() -> updateMarkdownVisualPageModel(true), 180);
+        webView.postDelayed(this::updateMarkdownSourceAnchorFromWebView, 190);
+    }
+
+    void scrollMarkdownWebViewTo(int targetY, boolean smooth) {
+        if (webView == null) return;
+        int safeTargetY = Math.max(0, Math.min(targetY, markdownMaxScrollY()));
+        // Markdown pages are visual viewport buckets, not continuous TXT anchors.
+        // Animated scrolling causes intermediate onScroll updates, which makes the
+        // toolbar page counter flicker through transient pages. Snap directly to
+        // the target bucket so previous/next/page-jump behaves like a page turn.
+        webView.scrollTo(0, safeTargetY);
+    }
+
+    int markdownViewportHeightPx() {
+        if (webView == null) return 1;
+        int stable = stableMarkdownViewportHeightPx();
+        if (stable > 0) return stable;
+        int h = webView.getHeight() - webView.getPaddingTop() - webView.getPaddingBottom();
+        return Math.max(1, h);
+    }
+
+    private int stableMarkdownViewportHeightPx() {
+        View root = findViewById(R.id.document_root);
+        int rootHeight = root != null ? root.getHeight() : 0;
+        if (rootHeight <= 0 && webView != null) rootHeight = webView.getRootView() != null ? webView.getRootView().getHeight() : 0;
+        if (rootHeight <= 0) return Math.max(1, lastStableMarkdownViewportHeightPx);
+
+        int topChromeHeight = measuredHeightEvenWhenHidden(documentAppBar);
+        int bottomChromeHeight = measuredHeightEvenWhenHidden(documentBottomChrome);
+        // Markdown visual pages should not change simply because the toolbar row or
+        // bottom controls are hidden. Keep the largest expanded chrome heights seen
+        // in this session as the stable pagination frame, while the actual WebView
+        // can still grow visually when controls are hidden.
+        if (documentChromeVisible) {
+            if (topChromeHeight > lastExpandedDocumentTopChromeHeightPx) {
+                lastExpandedDocumentTopChromeHeightPx = topChromeHeight;
+            }
+            if (bottomChromeHeight > lastExpandedDocumentBottomChromeHeightPx) {
+                lastExpandedDocumentBottomChromeHeightPx = bottomChromeHeight;
+            }
+        }
+        int stableTop = Math.max(topChromeHeight, lastExpandedDocumentTopChromeHeightPx);
+        int stableBottom = Math.max(bottomChromeHeight, lastExpandedDocumentBottomChromeHeightPx);
+        int chromeHeight = stableTop + stableBottom;
+        int candidate = rootHeight - chromeHeight;
+        if (candidate <= 0 && webView != null) candidate = webView.getHeight() - webView.getPaddingTop() - webView.getPaddingBottom();
+        if (candidate > 0 && (lastStableMarkdownViewportHeightPx <= 0 || documentChromeVisible)) {
+            lastStableMarkdownViewportHeightPx = candidate;
+        }
+        return Math.max(1, lastStableMarkdownViewportHeightPx > 0 ? lastStableMarkdownViewportHeightPx : candidate);
+    }
+
+    private int measuredHeightEvenWhenHidden(View view) {
+        if (view == null) return 0;
+        int h = view.getHeight();
+        if (h <= 0) h = view.getMeasuredHeight();
+        return Math.max(0, h);
+    }
+
+    int markdownContentHeightPx() {
+        if (webView == null) return markdownViewportHeightPx();
+        float scale = webView.getScale();
+        if (scale <= 0f || Float.isNaN(scale) || Float.isInfinite(scale)) scale = 1f;
+        int viewport = markdownViewportHeightPx();
+        int measured = Math.max(viewport, Math.round(webView.getContentHeight() * scale));
+        // WebView can report a few transient height variants while bars are shown/hidden
+        // or while CSS/layout settles.  Keep the larger measured content height during
+        // the session so the final visual page count does not oscillate after it has
+        // already expanded to the rendered document height.
+        if (measured > lastStableMarkdownContentHeightPx) {
+            lastStableMarkdownContentHeightPx = measured;
+        }
+        return Math.max(viewport, lastStableMarkdownContentHeightPx > 0 ? lastStableMarkdownContentHeightPx : measured);
+    }
+
+    int markdownMaxScrollY() {
+        return Math.max(0, markdownContentHeightPx() - markdownViewportHeightPx());
+    }
+
+    void scheduleMarkdownVisualPageModelUpdate() {
+        if (!isMarkdownDocument() || webView == null) return;
+        webView.post(() -> updateMarkdownVisualPageModel(false));
+        webView.postDelayed(() -> updateMarkdownVisualPageModel(false), 80);
+        webView.postDelayed(() -> updateMarkdownVisualPageModel(false), 260);
+        webView.postDelayed(() -> updateMarkdownVisualPageModel(true), 620);
+    }
+
+    void updateMarkdownVisualPageModel(boolean saveState) {
+        if (!isMarkdownDocument() || webView == null) return;
+        int viewport = markdownViewportHeightPx();
+        int content = markdownContentHeightPx();
+        int total = MarkdownVisualPageMath.totalPages(content, viewport);
+        int stableMaxScroll = Math.max(0, content - viewport);
+        int actualViewport = Math.max(1, webView.getHeight() - webView.getPaddingTop() - webView.getPaddingBottom());
+        int actualMaxScroll = Math.max(0, content - actualViewport);
+        int bottomDetectionMaxScroll = Math.min(stableMaxScroll, actualMaxScroll);
+        lastMarkdownMaxScrollYPx = stableMaxScroll;
+        lastMarkdownCurrentRawScrollYPx = Math.max(0, webView.getScrollY());
+        int page = MarkdownVisualPageMath.currentPageIndex(webView.getScrollY(), viewport, total, bottomDetectionMaxScroll);
+        boolean changed = page != markdownVisualCurrentPage || total != markdownVisualTotalPages;
+        markdownVisualCurrentPage = page;
+        markdownVisualTotalPages = total;
+        if (changed || pageStatus != null) updateDocumentPageStatusViews();
+        if (saveState) saveReadingState();
+    }
+
+    void restoreMarkdownVisualPositionAfterLoadIfNeeded(@NonNull WebView view) {
+        if (!isMarkdownDocument()) return;
+        final int restoreSourceOffset = pendingMarkdownRestoreSourceOffset;
+        final int restorePage = pendingMarkdownRestorePage;
+        final int restoreY = pendingMarkdownRestoreScrollY;
+        pendingMarkdownRestoreSourceOffset = -1;
+        pendingMarkdownRestorePage = -1;
+        pendingMarkdownRestoreScrollY = -1;
+        view.postDelayed(() -> {
+            if (activityDestroyed || webView == null || !isMarkdownDocument()) return;
+            installMarkdownSourceAnchorScript();
+            updateMarkdownVisualPageModel(false);
+            if (restoreSourceOffset >= 0) {
+                scrollMarkdownToSourceOffset(restoreSourceOffset, restorePage >= 0, restorePage);
+            } else if (restorePage >= 0) {
+                scrollMarkdownToVisualPage(restorePage, false);
+            } else if (restoreY >= 0) {
+                webView.scrollTo(0, Math.max(0, Math.min(markdownMaxScrollY(), restoreY)));
+                updateMarkdownVisualPageModel(false);
+                updateMarkdownSourceAnchorFromWebView();
+            } else {
+                updateMarkdownVisualPageModel(false);
+                updateMarkdownSourceAnchorFromWebView();
+            }
+        }, 90);
+        view.postDelayed(() -> updateMarkdownVisualPageModel(false), 360);
+        view.postDelayed(this::updateMarkdownSourceAnchorFromWebView, 420);
     }
 
     void runDocumentSlideInAnimation() {
@@ -1437,28 +2221,158 @@ public class DocumentPageActivity extends AppCompatActivity {
     }
 
     void addBookmarkForCurrentPage() {
-        if (filePath == null || pages.isEmpty()) return;
+        addBookmarkForCurrentPage(null);
+    }
 
-        String excerpt = String.format(Locale.getDefault(), "%s %d / %d", docType, currentPage + 1, pages.size());
+    void addBookmarkForCurrentPage(Runnable afterSave) {
+        if (filePath == null || pages.isEmpty()) {
+            if (afterSave != null) afterSave.run();
+            return;
+        }
+        if (isMarkdownDocument()) {
+            updateMarkdownVisualPageModel(false);
+            updateMarkdownSourceAnchorFromWebView(() -> {
+                addMarkdownBookmarkFromCachedAnchor();
+                if (afterSave != null) afterSave.run();
+            });
+            return;
+        }
+
+        if (isRenderedContentAnchorDocument()) {
+            updateDocumentContentAnchorFromWebView(() -> {
+                addRenderedDocumentBookmarkFromCurrentAnchor();
+                if (afterSave != null) afterSave.run();
+            });
+            return;
+        }
+        addRenderedDocumentBookmarkFromCurrentAnchor();
+        if (afterSave != null) afterSave.run();
+    }
+
+
+    String buildMarkdownContentAnchorJson(int sourceOffset, int sourceLine, int visualPage, int totalPages) {
+        try {
+            JSONObject obj = new JSONObject();
+            obj.put("kind", "Markdown_SOURCE_ANCHOR_v1");
+            obj.put("docType", "Markdown");
+            obj.put("sourceOffset", Math.max(0, sourceOffset));
+            obj.put("sourceLine", Math.max(1, sourceLine));
+            obj.put("visualPage", Math.max(1, visualPage));
+            obj.put("visualTotalPages", Math.max(1, totalPages));
+            obj.put("textBefore", markdownAnchorTextAround(sourceOffset, true));
+            obj.put("textAfter", markdownAnchorTextAround(sourceOffset, false));
+            return obj.toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private String documentBookmarkPageExcerpt(int page, int total) {
+        return String.format(Locale.getDefault(), "Page %d / %d", Math.max(1, page), Math.max(1, total));
+    }
+
+    void addRenderedDocumentBookmarkFromCurrentAnchor() {
+        int bookmarkPosition = currentDisplayDocumentPageIndex();
+        int bookmarkPageNumber = bookmarkPosition + 1;
+        int total = documentPageCount();
+        String anchorJson = isRenderedContentAnchorDocument() ? lastDocumentContentAnchorJson : "";
+        String excerpt = documentBookmarkPageExcerpt(bookmarkPageNumber, total);
         for (Bookmark b : bookmarkManager.getBookmarksForFile(filePath)) {
-            if (b.getCharPosition() == currentPage) {
-                b.setLineNumber(currentPage + 1);
-                b.setPageNumber(currentPage + 1);
-                b.setTotalPages(pages.size());
+            if (b.getCharPosition() == bookmarkPosition
+                    && (!isRenderedContentAnchorDocument() || sameDocumentContentAnchorSpot(b, anchorJson, bookmarkPosition))) {
+                b.setLineNumber(bookmarkPageNumber);
+                b.setPageNumber(bookmarkPageNumber);
+                b.setTotalPages(total);
                 b.setExcerpt(excerpt);
-                b.setEndPosition(currentPage);
+                b.setEndPosition(bookmarkPosition);
+                if (isRenderedContentAnchorDocument()) {
+                    b.setContentAnchorJson(anchorJson);
+                    b.setPageLayoutSignature(docType + "_CONTENT_ANCHOR_v1");
+                }
                 bookmarkManager.updateBookmark(b);
                 ShortToast.show(this, getString(R.string.bookmark_updated));
                 return;
             }
         }
 
-        Bookmark bookmark = new Bookmark(filePath, fileName, currentPage, currentPage + 1, excerpt);
-        bookmark.setPageNumber(currentPage + 1);
-        bookmark.setTotalPages(pages.size());
-        bookmark.setEndPosition(currentPage);
+        Bookmark bookmark = new Bookmark(filePath, fileName, bookmarkPosition, bookmarkPageNumber, excerpt);
+        bookmark.setPageNumber(bookmarkPageNumber);
+        bookmark.setTotalPages(total);
+        bookmark.setEndPosition(bookmarkPosition);
+        if (isRenderedContentAnchorDocument()) {
+            bookmark.setContentAnchorJson(anchorJson);
+            bookmark.setPageLayoutSignature(docType + "_CONTENT_ANCHOR_v1");
+        }
         bookmarkManager.addBookmark(bookmark);
         ShortToast.show(this, getString(R.string.bookmark_saved));
+    }
+
+    void addMarkdownBookmarkFromCachedAnchor() {
+        if (filePath == null || pages.isEmpty() || !isMarkdownDocument()) return;
+        updateMarkdownVisualPageModel(false);
+        int sourceOffset = clampMarkdownSourceOffset(lastMarkdownSourceOffset);
+        int sourceLine = Math.max(1, lastMarkdownSourceLine > 0 ? lastMarkdownSourceLine : markdownSourceLineForOffset(sourceOffset));
+        int visualPage = currentDisplayDocumentPageNumber();
+        int total = documentPageCount();
+        String excerpt = markdownBookmarkExcerpt(sourceOffset, visualPage, total);
+        for (Bookmark b : bookmarkManager.getBookmarksForFile(filePath)) {
+            if (isMarkdownSourceAnchorSignature(b.getPageLayoutSignature()) && Math.abs(b.getCharPosition() - sourceOffset) <= 2) {
+                b.setLineNumber(sourceLine);
+                b.setPageNumber(visualPage);
+                b.setTotalPages(total);
+                b.setExcerpt(excerpt);
+                b.setEndPosition(sourceOffset);
+                b.setAnchorTextBefore(markdownAnchorTextAround(sourceOffset, true));
+                b.setAnchorTextAfter(markdownAnchorTextAround(sourceOffset, false));
+                b.setContentAnchorJson(buildMarkdownContentAnchorJson(sourceOffset, sourceLine, visualPage, total));
+                b.setPageLayoutSignature("Markdown_SOURCE_ANCHOR_v1");
+                bookmarkManager.updateBookmark(b);
+                ShortToast.show(this, getString(R.string.bookmark_updated));
+                return;
+            }
+        }
+        Bookmark bookmark = new Bookmark(filePath, fileName, sourceOffset, sourceLine, excerpt);
+        bookmark.setPageNumber(visualPage);
+        bookmark.setTotalPages(total);
+        bookmark.setEndPosition(sourceOffset);
+        bookmark.setAnchorTextBefore(markdownAnchorTextAround(sourceOffset, true));
+        bookmark.setAnchorTextAfter(markdownAnchorTextAround(sourceOffset, false));
+        bookmark.setContentAnchorJson(buildMarkdownContentAnchorJson(sourceOffset, sourceLine, visualPage, total));
+        bookmark.setPageLayoutSignature("Markdown_SOURCE_ANCHOR_v1");
+        bookmarkManager.addBookmark(bookmark);
+        ShortToast.show(this, getString(R.string.bookmark_saved));
+    }
+
+
+    boolean sameDocumentContentAnchorPage(@NonNull Bookmark bookmark, int pageIndex) {
+        if (bookmark.getContentAnchorJson() == null || bookmark.getContentAnchorJson().trim().isEmpty()) return true;
+        try {
+            JSONObject obj = new JSONObject(bookmark.getContentAnchorJson());
+            return obj.optInt("pageIndex", pageIndex) == pageIndex;
+        } catch (Exception ignored) {
+            return true;
+        }
+    }
+
+    boolean sameDocumentContentAnchorSpot(@NonNull Bookmark bookmark, String newAnchorJson, int pageIndex) {
+        if (newAnchorJson == null || newAnchorJson.trim().isEmpty()) {
+            return sameDocumentContentAnchorPage(bookmark, pageIndex);
+        }
+        String oldAnchorJson = bookmark.getContentAnchorJson();
+        if (oldAnchorJson == null || oldAnchorJson.trim().isEmpty()) return false;
+        try {
+            JSONObject oldObj = new JSONObject(oldAnchorJson);
+            JSONObject newObj = new JSONObject(newAnchorJson);
+            if (oldObj.optInt("pageIndex", pageIndex) != newObj.optInt("pageIndex", pageIndex)) return false;
+            int oldBlock = oldObj.optInt("blockIndex", -100000);
+            int newBlock = newObj.optInt("blockIndex", 100000);
+            if (oldBlock >= 0 && newBlock >= 0 && Math.abs(oldBlock - newBlock) <= 1) return true;
+            String oldText = oldObj.optString("text", "").trim();
+            String newText = newObj.optString("text", "").trim();
+            return oldText.length() >= 16 && oldText.equals(newText);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private void showBookmarksDialog() {
@@ -1466,7 +2380,7 @@ public class DocumentPageActivity extends AppCompatActivity {
     }
 
     int documentPageCount() {
-        return pages.size();
+        return isMarkdownDocument() ? Math.max(1, markdownVisualTotalPages) : pages.size();
     }
 
     boolean hasValidCurrentDocumentPage() {
@@ -1481,12 +2395,35 @@ public class DocumentPageActivity extends AppCompatActivity {
     void saveReadingState() {
         if (filePath == null || prefs == null || !prefs.getAutoSavePosition()) return;
         ReaderState state = new ReaderState(filePath);
-        state.setCharPosition(currentPage);
-        state.setScrollY(0);
-        state.setPageNumber(currentPage + 1);
-        state.setTotalPages(pages.size());
+        if (isMarkdownDocument()) {
+            if (webView != null) {
+                updateMarkdownVisualPageModel(false);
+                updateMarkdownSourceAnchorFromWebView();
+            }
+            state.setCharPosition(clampMarkdownSourceOffset(lastMarkdownSourceOffset));
+            state.setScrollY(webView != null ? webView.getScrollY() : 0);
+            state.setPageNumber(currentDisplayDocumentPageNumber());
+            state.setTotalPages(documentPageCount());
+            state.setContentAnchorJson(buildMarkdownContentAnchorJson(
+                    clampMarkdownSourceOffset(lastMarkdownSourceOffset),
+                    Math.max(1, lastMarkdownSourceLine > 0 ? lastMarkdownSourceLine : markdownSourceLineForOffset(lastMarkdownSourceOffset)),
+                    currentDisplayDocumentPageNumber(),
+                    documentPageCount()));
+            state.setEncoding("Markdown_SOURCE_ANCHOR_v1");
+        } else {
+            if (isRenderedContentAnchorDocument()) updateDocumentContentAnchorFromWebView();
+            state.setCharPosition(currentPage);
+            state.setScrollY(0);
+            state.setPageNumber(currentPage + 1);
+            state.setTotalPages(pages.size());
+            if (isRenderedContentAnchorDocument() && lastDocumentContentAnchorJson != null && !lastDocumentContentAnchorJson.isEmpty()) {
+                state.setContentAnchorJson(lastDocumentContentAnchorJson);
+                state.setEncoding(docType + "_CONTENT_ANCHOR_v1");
+            } else {
+                state.setEncoding(docType + "_PAGE");
+            }
+        }
         state.setFileLength(fileSizeBytes(filePath));
-        state.setEncoding(docType + "_PAGE");
         bookmarkManager.saveReadingState(state);
     }
 
@@ -1514,7 +2451,10 @@ public class DocumentPageActivity extends AppCompatActivity {
             String html = readZipEntryString(resourceZip, entry);
             String title = titleFromHtml(html);
             if (title.isEmpty()) title = fileNameFromPath(path);
-            pages.add(new Page(title, epubFixedLayoutLike ? html : prepareEpubHtml(html), path));
+            int spinePageIndex = pages.size();
+            boolean centerAsCover = !epubFixedLayoutLike
+                    && isEpubCoverLikePage(html, title, path, spinePageIndex);
+            pages.add(new Page(title, epubFixedLayoutLike ? html : prepareEpubHtml(html, centerAsCover), path));
         }
     }
 
@@ -1531,8 +2471,25 @@ public class DocumentPageActivity extends AppCompatActivity {
         return DocumentWordUtils.detectDefaultFontFamily(zip);
     }
 
+    void loadMarkdownPage(File file) throws Exception {
+        closeResourceZip();
+        String markdown = FileUtils.readTextFile(file);
+        markdownSourceText = (markdown != null ? markdown : "").replace("\r\n", "\n").replace('\r', '\n');
+        lastStableMarkdownViewportHeightPx = 0;
+        lastStableMarkdownContentHeightPx = 0;
+        lastMarkdownSourceOffset = 0;
+        lastMarkdownSourceLine = 1;
+        lastMarkdownAnchorText = "";
+        String title = file != null ? file.getName() : "Markdown";
+        pages.add(new Page(title, MarkdownDocumentRenderer.render(markdownSourceText, title), null));
+    }
+
     void loadWordPages(File file) throws Exception {
         closeResourceZip();
+        if (file != null && file.getName() != null
+                && file.getName().toLowerCase(Locale.ROOT).endsWith(".doc")) {
+            throw new IOException("Legacy binary Word (.doc) files are grouped under Word, but rendering is not supported yet. Use .docx/.docm/.dotx/.dotm, HWP, or HWPX for the current Word viewer.");
+        }
         resourceZip = new ZipFile(file);
         wordRelationships.clear();
         loadWordRelationships(resourceZip);
@@ -1583,6 +2540,41 @@ public class DocumentPageActivity extends AppCompatActivity {
             pages.add(new Page("Word page " + (i + 1), wrapWordPage(pageBodies.get(i), i + 1), null));
         }
     }
+
+
+
+    void loadHwpPages(File file) throws Exception {
+        closeResourceZip();
+        String text = HwpTextExtractor.read(file);
+        List<String> pageBodies = splitPlainTextDocumentIntoPages(text, HWP_PARAGRAPHS_PER_PAGE, HWP_TARGET_CHARS_PER_PAGE);
+        for (int i = 0; i < pageBodies.size(); i++) {
+            pages.add(new Page("Page " + (i + 1), wrapHwpPage(pageBodies.get(i), i + 1), null));
+        }
+    }
+
+    private List<String> splitPlainTextDocumentIntoPages(String text, int paragraphLimit, int targetChars) {
+        ArrayList<String> result = new ArrayList<>();
+        String normalized = (text != null ? text : "").replace("\r\n", "\n").replace('\r', '\n');
+        String[] paragraphs = normalized.split("\n{2,}");
+        StringBuilder current = new StringBuilder();
+        int paragraphCount = 0;
+        for (String paragraph : paragraphs) {
+            String p = paragraph != null ? paragraph.trim() : "";
+            if (p.isEmpty()) continue;
+            if (current.length() > 0
+                    && (paragraphCount >= paragraphLimit || current.length() + p.length() > targetChars)) {
+                result.add(current.toString());
+                current.setLength(0);
+                paragraphCount = 0;
+            }
+            if (current.length() > 0) current.append("\n\n");
+            current.append(p);
+            paragraphCount++;
+        }
+        if (current.length() > 0 || result.isEmpty()) result.add(current.toString());
+        return result;
+    }
+
 
     int dpToPx(float dp) {
         return Math.round(dp * getResources().getDisplayMetrics().density);
@@ -1828,15 +2820,25 @@ public class DocumentPageActivity extends AppCompatActivity {
     }
 
     private String prepareEpubHtml(String html) {
+        return prepareEpubHtml(html, false);
+    }
+
+    private String prepareEpubHtml(String html, boolean centerAsCover) {
         if (html == null) html = "";
         if (epubFixedLayoutLike) {
             // Preserve the fixed-layout page geometry, but center the fixed page in
             // the available WebView area instead of leaving it pinned to the top.
             return prepareFixedLayoutEpubHtml(html);
         }
+        if (centerAsCover) {
+            html = addClassToHtmlBody(html, "textview-reader-epub-cover-page");
+        }
         String css = "<style>" +
                 "html,body{margin:0;padding:0;background:#121212;color:#e8eaed;}" +
                 "body{line-height:1.55;padding:22px;box-sizing:border-box;}" +
+                "body.textview-reader-epub-cover-page{min-height:100vh !important;display:flex !important;" +
+                "flex-direction:column !important;align-items:center !important;justify-content:center !important;}" +
+                "body.textview-reader-epub-cover-page>*{max-width:100% !important;}" +
                 "img,svg,video{max-width:100%;height:auto;}" +
                 "a{color:#8ab4f8;}" +
                 "pre{white-space:pre-wrap;}" +
@@ -1845,8 +2847,136 @@ public class DocumentPageActivity extends AppCompatActivity {
         if (html.toLowerCase(Locale.ROOT).contains("<head")) {
             return html.replaceFirst("(?i)<head[^>]*>", "$0" + viewport + css);
         }
-        return "<!doctype html><html><head>" + viewport + css + "</head><body>" + html + "</body></html>";
+        return "<!doctype html><html><head>" + viewport + css + "</head><body"
+                + (centerAsCover ? " class=\"textview-reader-epub-cover-page\"" : "")
+                + ">" + html + "</body></html>";
     }
+
+    private boolean isEpubCoverLikePage(String html, String title, String path, int spinePageIndex) {
+        // Only the first spine item is auto-centered. Later image-heavy EPUB
+        // pages must keep the ordinary reflow layout so illustrations and text do
+        // not jump to the middle of the viewport.
+        if (spinePageIndex != 0 || html == null) return false;
+
+        String lowerPath = path != null ? path.toLowerCase(Locale.ROOT) : "";
+        String lowerTitle = title != null ? title.toLowerCase(Locale.ROOT) : "";
+        boolean nameLooksLikeCover = lowerPath.contains("cover")
+                || lowerPath.contains("title")
+                || lowerTitle.contains("cover")
+                || lowerTitle.contains("title");
+
+        int imageLikeCount = countHtmlTag(html, "img") + countHtmlTag(html, "svg");
+        int paragraphCount = countHtmlTag(html, "p");
+        int headingCount = countHtmlTag(html, "h1")
+                + countHtmlTag(html, "h2")
+                + countHtmlTag(html, "h3");
+        int bodyTextLength = strippedHtmlTextLength(html);
+
+        if (nameLooksLikeCover && paragraphCount <= 3 && bodyTextLength <= 1400) return true;
+        if (imageLikeCount > 0 && paragraphCount <= 1 && bodyTextLength <= 1200) return true;
+        return headingCount > 0 && paragraphCount <= 3 && bodyTextLength <= 900;
+    }
+
+    private int countHtmlTag(String html, String tag) {
+        if (html == null || tag == null || tag.isEmpty()) return 0;
+        String lower = html.toLowerCase(Locale.ROOT);
+        String needle = "<" + tag.toLowerCase(Locale.ROOT);
+        int count = 0;
+        int from = 0;
+        while ((from = lower.indexOf(needle, from)) >= 0) {
+            int next = from + needle.length();
+            if (next >= lower.length()) {
+                count++;
+            } else {
+                char c = lower.charAt(next);
+                if (Character.isWhitespace(c) || c == '>' || c == '/') count++;
+            }
+            from = Math.max(next, from + 1);
+        }
+        return count;
+    }
+
+    private int strippedHtmlTextLength(String html) {
+        if (html == null || html.isEmpty()) return 0;
+        String text = html
+                .replaceAll("(?is)<script[^>]*>.*?</script>", " ")
+                .replaceAll("(?is)<style[^>]*>.*?</style>", " ")
+                .replaceAll("(?is)<[^>]+>", " ")
+                .replace("&nbsp;", " ")
+                .replace("&#160;", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        return text.length();
+    }
+
+    private String addClassToHtmlBody(String html, String className) {
+        if (html == null || html.isEmpty() || className == null || className.isEmpty()) return html != null ? html : "";
+        java.util.regex.Matcher body = java.util.regex.Pattern.compile("(?i)<body([^>]*)>").matcher(html);
+        if (!body.find()) return html;
+        String attrs = body.group(1) != null ? body.group(1) : "";
+        String replacementAttrs;
+        java.util.regex.Matcher klass = java.util.regex.Pattern
+                .compile("(?i)(\\sclass\\s*=\\s*)(['\"])(.*?)\\2")
+                .matcher(attrs);
+        if (klass.find()) {
+            String existing = klass.group(3) != null ? klass.group(3) : "";
+            if (existing.contains(className)) return html;
+            String newClassValue = existing.trim().isEmpty() ? className : existing + " " + className;
+            replacementAttrs = klass.replaceFirst(java.util.regex.Matcher.quoteReplacement(
+                    klass.group(1) + klass.group(2) + newClassValue + klass.group(2)));
+        } else {
+            replacementAttrs = attrs + " class=\"" + className + "\"";
+        }
+        return html.substring(0, body.start()) + "<body" + replacementAttrs + ">" + html.substring(body.end());
+    }
+
+
+
+    private String wrapHwpPage(String text, int pageNumber) {
+        return "<!doctype html><html><head>" +
+                "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=yes\">" +
+                "<style>" +
+                "html,body{margin:0;padding:0;background:#202124;overflow-x:hidden;-webkit-text-size-adjust:100%;max-width:100%;}" +
+                "body{font-family:Arial,Helvetica,sans-serif;}" +
+                "*{box-sizing:border-box;max-width:100%;}" +
+                ".page{background:#fff;color:#111;margin:12px auto;padding:26px 24px;width:calc(100% - 24px);max-width:816px;" +
+                "min-height:92vh;box-shadow:0 2px 14px rgba(0,0,0,.35);overflow-x:hidden;box-sizing:border-box;}" +
+                ".pageNo{color:#777;text-align:right;font-size:12px;margin-bottom:14px;}" +
+                "p{margin:0 0 10px 0;line-height:1.45;font-size:16px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}" +
+                "</style></head><body><div class=\"page\"><div class=\"pageNo\">Page " + pageNumber +
+                "</div>" + plainTextToParagraphHtml(text) + "</div></body></html>";
+    }
+
+    private String plainTextToParagraphHtml(String text) {
+        String normalized = (text != null ? text : "").replace("\r\n", "\n").replace('\r', '\n');
+        String[] paragraphs = normalized.split("\n{2,}");
+        StringBuilder out = new StringBuilder();
+        for (String paragraph : paragraphs) {
+            String p = paragraph != null ? paragraph.trim() : "";
+            if (p.isEmpty()) continue;
+            out.append("<p>").append(escapeHtml(p)).append("</p>");
+        }
+        if (out.length() == 0) out.append("<p></p>");
+        return out.toString();
+    }
+
+    private String escapeHtml(String text) {
+        if (text == null || text.isEmpty()) return "";
+        StringBuilder out = new StringBuilder(text.length() + 16);
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            switch (ch) {
+                case '&': out.append("&amp;"); break;
+                case '<': out.append("&lt;"); break;
+                case '>': out.append("&gt;"); break;
+                case '"': out.append("&quot;"); break;
+                case '\'': out.append("&#39;"); break;
+                default: out.append(ch); break;
+            }
+        }
+        return out.toString();
+    }
+
 
     private String wrapWordPage(String body, int pageNumber) {
         return "<!doctype html><html><head>" +

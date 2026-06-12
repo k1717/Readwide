@@ -1,84 +1,89 @@
-# FOSS status for Readwide 1.0.1
+# FOSS status for Readwide 1.0.2
 
-This note summarizes the default source package and default release APK status for communities that require Free and Open Source Software (FOSS), such as r/FOSSdroid.
+This is the project-level FOSS status note for the default Readwide 1.0.2 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
 
 ## Current assessment
 
-The default Readwide 1.0.1 source package is intended to fit the usual FOSS definition:
+The default Readwide 1.0.2 source package is intended to remain FOSS-friendly:
 
-- the first-party source is licensed under Apache License 2.0;
-- the source code is included in the repository/source package;
-- the app can be run, copied, distributed, studied, changed, and improved under the applicable licenses;
-- the default build does not include a proprietary app EULA;
-- the default build no longer includes Junrar or other UnRAR-license fallback code;
-- the source package does not include private signing files, keystores, build outputs, or bundled proprietary binary dependencies;
-- the app manifest disables Android app-data Auto Backup with `android:allowBackup="false"` for local-data privacy consistency.
+- First-party source is licensed under Apache License 2.0.
+- Source code needed for the default build is included in the repository/source package.
+- No proprietary app EULA is added by the project.
+- The default build does not bundle Junrar or RARLAB UnRAR-license code.
+- The default manifest does not request `INTERNET`.
+- The app contains no ads, analytics, telemetry SDK, Firebase, Google Play Services dependency, account system, cloud sync, or in-app network update checker.
+- Android Auto Backup is disabled with `android:allowBackup="false"`.
+- Private signing files, build outputs, and optional proprietary binary dependencies are not part of the default source package.
 
-This is not a legal opinion, but it is the current project-level compliance position for the default Readwide 1.0.1 source/APK line.
+## Runtime dependency summary
 
-## Default runtime dependency status
-
-The default runtime dependency graph uses FOSS-compatible licenses:
-
-| Component | Use | License status |
-|---|---|---|
-| Readwide first-party source | app code | Apache License 2.0 |
-| AndroidX / Material Components | Android UI/runtime support | Apache License 2.0 |
-| Apache Commons Compress | primary TAR/7z/stream archive support and ZIP method fallback | Apache License 2.0 |
-| Zip4j | primary ZIP/CBZ handling plus password/AES-specialist handling | Apache License 2.0 |
-| libarchive-android | default RAR read/extract backend plus ZIP/TAR/7z compatibility fallback | Android library artifact under Apache License 2.0; bundled native libarchive is BSD-style |
-| zstd-jni | Zstandard codec used by Commons Compress | JNI binding under BSD 2-Clause; native Zstandard under the permissive BSD licensing path |
+| Component | Use | License position recorded for this release |
+| --- | --- | --- |
+| Readwide first-party source | App code | Apache-2.0 |
+| AndroidX / Material Components | Android UI/runtime support | Apache-2.0 |
+| JUniversalChardet | Text encoding detection | MPL-1.1 option used by this project |
+| Apache Commons Compress | TAR/7z/stream archive support and ZIP method fallback | Apache-2.0 |
+| libarchive-android | RAR/backend archive support through Android libarchive bindings | Android library artifact under Apache-2.0; bundled native libarchive under permissive BSD-style notices |
 | XZ for Java | XZ/LZMA support | 0BSD |
-| JUniversalChardet | text encoding detection | MPL-1.1 option used by this project |
-| xunazo-derived AZO decoder port | EGG AZO extraction | zlib license notice retained in source |
+| zstd-jni | Zstandard codec used by Commons Compress | BSD-family licensing path recorded in `THIRD_PARTY_NOTICES.md` |
+| Zip4j | ZIP/CBZ listing/extraction/encryption/split support | Apache-2.0 |
+| hwplib | HWP 5.x read/text extraction backend | Apache-2.0 |
+| hwpxlib | HWPX read/text extraction backend | Apache-2.0 |
+| xunazo-derived AZO port | EGG AZO extraction | zlib license notice retained in source |
 
-## RAR/CBR licensing boundary
+See `docs/LICENSE_REPORT_READWIDE_1_0_2.md` and `THIRD_PARTY_NOTICES.md` for detail.
 
-RAR/CBR support is deliberately extraction-only.
+## RAR / CBR boundary
 
-Readwide 1.0.1 does **not** bundle Junrar or RARLAB UnRAR-license code in the default build. The old Junrar fallback was removed because UnRAR-style license restrictions can conflict with FOSS-focused distribution expectations.
+Readwide is extraction/read-only for RAR/CBR. It does not create RAR archives and does not implement password recovery.
 
-The default RAR path is now:
+Default RAR handling is deliberately conservative:
 
-1. bundled libarchive-android as the default RAR read/extract backend;
-2. first-party Java metadata/stored-entry handling where covered;
-3. first-party RAR5 stored-entry handling where covered;
-4. dedicated Java ZIP/TAR/7z readers as their primary paths, with libarchive retained as fallback;
-5. no optional local RAR5 decoder bridge in the default source tree; unsupported cases fail cleanly.
+1. libarchive-android is the primary backend for common compressed RAR read/extract attempts.
+2. First-party Java handles covered metadata, safe paths, stored entries, stored split paths, and selected validation/cleanup paths.
+3. Scoped first-party decode-only fallbacks exist for eligible unencrypted single-volume RAR3/RAR4 PPMd solid sets and eligible unencrypted single-volume RAR5 v5.0 compressed/solid runs, with CRC verification.
+4. Encrypted RAR, broad split/multi-volume RAR, compressed split RAR, SFX, VM-filtered RAR3/RAR4, broad RAR5-era variants, and complete RAR compatibility are not claimed.
 
-`junrar/commons-vfs-rar` was reviewed and rejected because it depends on `com.github.junrar:junrar`, which would reintroduce the same Junrar/UnRAR-license concern.
+No Junrar or RARLAB UnRAR-license source code is bundled in the default build.
+
+## HWP / HWPX boundary
+
+HWP/HWPX support is read-only and text-first:
+
+- `.hwp` uses `kr.dogfoot:hwplib:1.1.10`.
+- `.hwpx` uses `kr.dogfoot:hwpxlib:1.0.9`.
+- Both are recorded as Apache-2.0 dependencies.
+- Readwide does not bundle Hancom proprietary SDKs, LibreOffice, a server conversion service, or non-FOSS HWP code.
+- Hancom-compatible layout rendering, editing/writing, original page-count parity, and password/encrypted HWP support are not claimed.
 
 ## Optional local jars
 
-The default source package contains no optional decoder jar under `app/libs`, and no optional RAR decoder bridge is wired into the default archive stack. In a clean source package the `app/libs` folder may be absent.
-
-The default Gradle dependency graph does not include a local `app/libs/*.jar` dependency hook. If a developer adds one in a private fork, that custom build must be treated as a separate build and its license must be rechecked before calling the resulting APK FOSS.
-
-The default GitHub source package and default release APK should be evaluated without optional local jars unless the release notes explicitly say otherwise.
+The default source package does not require optional local jars under `app/libs`. If a developer adds local jars in a private fork, that is a separate custom build and must be re-audited before calling the resulting APK FOSS.
 
 ## Release signing boundary
 
-Release signing is conditional in the public Gradle build. When the four `TEXTVIEW_*` signing values are not provided, `assembleRelease` can build an unsigned release artifact for F-Droid-style source builders instead of requiring a developer keystore. Local public release APKs should still be signed with the developer release key outside the committed source tree.
+Release signing is conditional. If `TEXTVIEW_KEYSTORE_PATH`, `TEXTVIEW_KEYSTORE_PASSWORD`, `TEXTVIEW_KEY_ALIAS`, and `TEXTVIEW_KEY_PASSWORD` are absent, `assembleRelease` should build an unsigned release artifact instead of requiring a developer keystore. Local GitHub APK releases should be signed outside the source tree.
 
-The GitHub source keeps the standard Gradle wrapper files for developer convenience. The F-Droid metadata draft at `fdroid/metadata/com.textview.reader.yml` removes `gradle/wrapper/gradle-wrapper.jar` before build scanning so F-Droid can build with its own Gradle environment.
+## GitHub vs F-Droid source handling
 
-## Binary release notes
+The GitHub source package keeps the Gradle wrapper for developer convenience. The draft F-Droid metadata removes `gradle/wrapper/gradle-wrapper.jar` before build scanning so the F-Droid build environment can use its own trusted tooling.
 
-When distributing APK/AAB files, keep these files available alongside the binary release materials:
+## Binary release notice checklist
+
+When distributing APK/AAB files, keep these alongside the binary release assets:
 
 - `LICENSE`
 - `NOTICE`
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_1.md`
-- `docs/SBOM_READWIDE_1_0_1.spdx.json`
-- this `docs/FOSS_STATUS.md` note
+- `docs/FOSS_STATUS.md`
+- `docs/LICENSE_REPORT_READWIDE_1_0_2.md`
+- `docs/SBOM_READWIDE_1_0_2.spdx.json`
 
-The Gradle packaging block excludes duplicate dependency `META-INF/LICENSE*` / `META-INF/NOTICE*` resources to avoid Android packaging conflicts. That does not remove the release obligation to provide the project-level license and third-party notices with the source and binary release materials.
+The Android packaging block excludes duplicate dependency `META-INF/LICENSE*` / `META-INF/NOTICE*` resources to avoid resource merge conflicts. That does not remove the obligation to provide project-level and third-party notices with source and binary release materials.
 
-## Current caveats
+## Caveats
 
-- RAR support is not complete. Common compressed RAR entries are attempted through libarchive-android by default, with first-party Java used for stored-entry fallback and metadata/safety handling. Split/multi-volume RAR and encrypted RAR are not guaranteed in the current GitHub-ready package because they have not been re-tested for this release. Broad compressed-solid/header-encrypted/SFX/unusual RAR variants are not guaranteed. ZIP/TAR/7z keep dedicated Java readers first, with libarchive retained for fallback and special cases.
-- Optional local jars are outside the default FOSS assessment unless explicitly audited and documented. No optional RAR decoder jar is wired into the default archive stack.
-- Android Gradle Plugin, Android SDK, and Gradle tooling are build-time tools resolved from their normal upstream channels; they are not vendored into the app source package.
-- This package includes a direct-dependency license report (`docs/LICENSE_REPORT_READWIDE_1_0_1.md`) and a source-declared direct-dependency SPDX draft (`docs/SBOM_READWIDE_1_0_1.spdx.json`). They are not a Gradle-resolved transitive SBOM. For stricter distribution channels, regenerate a full resolved dependency report/SBOM from a network-enabled build environment before submission.
+- `docs/LICENSE_REPORT_READWIDE_1_0_2.md` and `docs/SBOM_READWIDE_1_0_2.spdx.json` are direct-dependency/source-declared drafts, not a fully resolved transitive Gradle SBOM.
+- A strict repository submission should regenerate a resolved dependency report/SBOM from a clean, network-enabled build environment.
+- Archive compatibility claims must follow `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`.

@@ -16,6 +16,7 @@ public class ReaderState {
     private long fileLength;     // file size when state was saved, used to validate large-file cache
     private long lastReadAt;
     private String encoding;    // detected encoding
+    private String contentAnchorJson; // optional portable content anchor for rendered document/PDF restore
 
     public ReaderState() {}
 
@@ -35,6 +36,7 @@ public class ReaderState {
         obj.put("fileLength", fileLength);
         obj.put("lastReadAt", lastReadAt);
         obj.put("encoding", encoding != null ? encoding : "UTF-8");
+        obj.put("contentAnchorJson", contentAnchorJson != null ? contentAnchorJson : "");
         return obj;
     }
 
@@ -48,6 +50,7 @@ public class ReaderState {
         s.fileLength = obj.optLong("fileLength", 0L);
         s.lastReadAt = obj.optLong("lastReadAt", 0);
         s.encoding = obj.optString("encoding", "UTF-8");
+        s.contentAnchorJson = obj.optString("contentAnchorJson", "");
         return s;
     }
 
@@ -75,4 +78,7 @@ public class ReaderState {
 
     public String getEncoding() { return encoding; }
     public void setEncoding(String encoding) { this.encoding = encoding; }
+
+    public String getContentAnchorJson() { return contentAnchorJson; }
+    public void setContentAnchorJson(String contentAnchorJson) { this.contentAnchorJson = contentAnchorJson; }
 }

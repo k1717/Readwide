@@ -5,6 +5,7 @@ import android.text.TextPaint;
 import androidx.annotation.NonNull;
 
 import com.textview.reader.view.CustomReaderView;
+import com.textview.reader.view.MarkdownSyntaxHighlighter;
 
 import java.util.ArrayList;
 
@@ -30,6 +31,9 @@ public final class LargeTextExactAnchorBuilder {
             int marginVertical,
             int overlap,
             float lineSpacing,
+            boolean markdownHighlightingEnabled,
+            int readerTextColor,
+            int readerBackgroundColor,
             int minAllowedGlobalCharPosition) {
         if (windowLines.isEmpty() || windowStarts.isEmpty() || bodyLineCount <= 0) {
             return Math.max(0, minAllowedGlobalCharPosition);
@@ -53,7 +57,12 @@ public final class LargeTextExactAnchorBuilder {
         }
         bodyCharCount = Math.max(0, Math.min(partitionContent.length(), bodyCharCount));
 
+        CharSequence partitionLayoutContent = markdownHighlightingEnabled
+                ? MarkdownSyntaxHighlighter.apply(partitionContent, readerTextColor, readerBackgroundColor)
+                : partitionContent;
+
         ArrayList<CustomReaderView.PageTextAnchor> localAnchors = CustomReaderView.buildPageTextAnchors(
+                partitionLayoutContent,
                 partitionContent,
                 paintSnapshot,
                 layoutWidth,

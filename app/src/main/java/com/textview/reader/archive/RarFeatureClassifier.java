@@ -57,6 +57,44 @@ final class RarFeatureClassifier {
         return false;
     }
 
+
+    static boolean hasRar5CompressedSplitPayload(@NonNull List<RarArchiveReader.RarEntry> entries) {
+        for (RarArchiveReader.RarEntry entry : entries) {
+            if (entry != null
+                    && entry.rarVersion >= 5
+                    && !entry.directory
+                    && entry.method != 0
+                    && (entry.splitBefore || entry.splitAfter)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @NonNull
+    static RarArchiveReader.UnsupportedRarFeatureException rar5CompressedFallbackFailure(
+            @NonNull List<RarArchiveReader.RarEntry> entries,
+            @Nullable IOException backendFailure) {
+        String message;
+        if (hasRar5CompressedSplitPayload(entries)) {
+            message = "RAR5 compressed split/multi-volume payloads are not supported by the scoped first-party Java decoder yet; "
+                    + "compressed split members are not routed through the stored-entry fallback";
+        } else {
+            message = "RAR5 compressed archive could not be completed by the scoped first-party Java decoder; "
+                    + "compressed members are not routed through the stored-entry fallback";
+        }
+        RarBackendDecision decision = firstPayloadDecision(entries);
+        if (decision != null) {
+            message += " (route: " + decision.diagnostic() + ")";
+        }
+        if (backendFailure != null && backendFailure.getMessage() != null && !backendFailure.getMessage().isEmpty()) {
+            message += " (libarchive: " + backendFailure.getMessage() + ")";
+        } else if (!RarLibarchiveFallback.isAvailable()) {
+            message += " (libarchive backend unavailable: " + LibarchiveNativeBridge.backendStatus() + ")";
+        }
+        return new RarArchiveReader.UnsupportedRarFeatureException(message);
+    }
+
     @NonNull
     static RarArchiveReader.UnsupportedRarFeatureException firstPartyRar3Or4Gap(
             @NonNull RarArchiveReader.RarEntry entry,
@@ -74,18 +112,19 @@ final class RarFeatureClassifier {
         if (hasRar3Or4HeaderEncryptedOnly(entries)) {
             message = "RAR3/RAR4 header-encrypted (-hp) archives are detected before entry parsing and delegated to libarchive; "
                     + "the first-party header decryptor is not implemented yet";
+        } else if (hasRar3Or4SolidPpmdPayload(entries)) {
+            message = "RAR3/RAR4 solid PPMd extraction has a scoped first-party decoder for eligible non-encrypted single-volume solid sets; "
+                    + "other compressed-solid variants remain limited or backend-dependent. Stored solid entries do not need dictionary continuation and are handled by the stored-entry path";
         } else if (hasRar3Or4SolidPayload(entries)) {
-            message = "RAR3/RAR4 compressed solid extraction is reserved for the first-party solid-state decoder; "
-                    + "the archive-wide classic-LZ sequencing path is still experimental and real compressed-solid fixtures are not broadly supported yet. Stored solid entries do not need dictionary continuation and are handled by the stored-entry path";
+            message = "RAR3/RAR4 compressed solid extraction is routed through scoped first-party special-case decoders where eligible; "
+                    + "classic-LZ solid, split, encrypted, and VM-filtered variants remain limited or backend-dependent. Stored solid entries do not need dictionary continuation and are handled by the stored-entry path";
         } else if (hasRar3Or4EncryptedPayload(entries)) {
             message = "RAR3/RAR4 encrypted extraction is reserved for the first-party password/encryption decoder; "
                     + "that decoder is not implemented yet";
         } else if (hasRar3Or4CompressedSplitPayload(entries)) {
             message = "RAR3/RAR4 compressed split extraction is not implemented in the first-party decoder yet";
         } else if (hasRar3Or4PpmdPayload(entries)) {
-            message = "RAR3/RAR4 PPMd compressed payload is detected and remains libarchive-owned; "
-                    + "the first-party PPMd statistical model remains a separate, non-live "
-                    + "diagnostic track";
+            message = "RAR3/RAR4 PPMd compressed payload is detected; eligible non-encrypted single-volume PPMd entries may use the first-party decode-only PPMd path, while unsupported variants remain backend-dependent";
         } else if (hasRar3Or4LimitedClassicLzFallbackPayload(entries)) {
             message = "RAR3/RAR4 non-solid classic-LZ has a narrow first-party fallback gate after libarchive failure; "
                     + "the gate is limited to non-encrypted, non-split, non-solid entries with CRC verification";
@@ -127,15 +166,11 @@ final class RarFeatureClassifier {
             @Nullable IOException backendFailure) {
         String message = "RAR extraction is libarchive-primary; the bundled libarchive backend was attempted first";
         if (hasRar3Or4SolidPpmdPayload(entries)) {
-            message += ", but it failed on a RAR3/RAR4 solid PPMd payload. "
-                    + "This is the known old-format RAR3/RAR4 solid gap: libarchive reached extraction "
-                    + "but reported solid archive support unavailable, while first-party solid and PPMd decoding are still non-live tracks";
+            message += ", and the scoped first-party RAR3/RAR4 solid PPMd decoder also could not complete this archive";
         } else if (hasRar3Or4SolidPayload(entries)) {
-            message += ", but it failed on a RAR3/RAR4 solid payload. "
-                    + "First-party solid extraction is still diagnostic/scaffold only";
+            message += ", but it failed on a RAR3/RAR4 solid payload outside the verified first-party solid subset";
         } else if (hasRar3Or4PpmdPayload(entries)) {
-            message += ", but it failed on a RAR3/RAR4 PPMd payload. "
-                    + "First-party PPMd decoding is still a separate non-live track";
+            message += ", and the scoped first-party RAR3/RAR4 PPMd decoder also could not complete this archive";
         } else if (hasRar3Or4EncryptedPayload(entries)) {
             message += ", but it failed on an encrypted RAR3/RAR4 payload. First-party encrypted compressed decoding is not live";
         } else if (hasRar3Or4CompressedSplitPayload(entries)) {

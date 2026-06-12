@@ -113,7 +113,7 @@ public class ImageReaderActivity extends AppCompatActivity {
     private ImageSequenceHandoffStore.Sequence pendingDeferredSequence;
     private int currentIndex = 0;
     private boolean allowFileOps;
-    private boolean destroyed;
+    private volatile boolean destroyed;
     private boolean chromeVisible = true;
     private int systemLeftInset;
     private int systemTopInset;
@@ -121,9 +121,12 @@ public class ImageReaderActivity extends AppCompatActivity {
     private int systemBottomInset;
     private Bitmap currentBitmap;
     private Drawable currentDrawable;
-    private int imageLoadGeneration;
+    private volatile int imageLoadGeneration;
     private boolean currentImageDetailLoaded = true;
     private int detailRequestGeneration = -1;
+    private int displayedImageIndex = -1;
+    private String displayedImagePath;
+    private String displayedImageEntryPath;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -183,13 +186,8 @@ public class ImageReaderActivity extends AppCompatActivity {
         if (currentDrawable instanceof AnimatedImageDrawable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             ((AnimatedImageDrawable) currentDrawable).stop();
         }
-        if (imageView != null) imageView.setImageDrawable(null);
-        currentDrawable = null;
+        clearCurrentImageSurface(true);
         persistArchiveImageProgress();
-        if (currentBitmap != null && !currentBitmap.isRecycled()) {
-            currentBitmap.recycle();
-            currentBitmap = null;
-        }
         ViewerRegistry.unregister(this);
         super.onDestroy();
     }
@@ -416,9 +414,10 @@ public class ImageReaderActivity extends AppCompatActivity {
         imageView = new ZoomImageView(this);
         imageView.setBackgroundColor(Color.BLACK);
         imageView.setCallbacks(new ZoomImageView.Callbacks() {
-            @Override public void onSingleTap() { toggleChrome(); }
-            @Override public void onSwipeLeft() { showAdjacentImage(1); }
-            @Override public void onSwipeRight() { showAdjacentImage(-1); }
+            @Override public void onSingleTap(float normalizedX) { handleImageSingleTap(normalizedX); }
+            @Override public boolean shouldHandleTapImmediately(float normalizedX) { return isImageSideTapPageTurn(normalizedX); }
+            @Override public void onSwipeLeft() { showAdjacentImage(imageSwipeDelta(true)); }
+            @Override public void onSwipeRight() { showAdjacentImage(imageSwipeDelta(false)); }
             @Override public void onZoomRequested() { requestDetailImageForCurrent(); }
         });
         root.addView(imageView, new FrameLayout.LayoutParams(
@@ -467,6 +466,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         tintToolbarMenuIcon(toolbar);
 
         sliderController = new ImageReaderSliderController(this, this::showImageAtIndex);
+        sliderController.setSliderDirection(currentImageSliderDirection());
         root.addView(sliderController.createView(imagePaths.size()), new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -609,6 +609,29 @@ public class ImageReaderActivity extends AppCompatActivity {
         return action == KeyEvent.ACTION_UP;
     }
 
+    private void handleImageSingleTap(float normalizedX) {
+        if (!isImageTapPagingEnabled() || imagePaths.size() <= 1) {
+            toggleChrome();
+            return;
+        }
+        int delta = imageTapPageDelta(normalizedX);
+        if (delta == 0) {
+            toggleChrome();
+        } else {
+            showAdjacentImage(delta);
+        }
+    }
+
+    private boolean isImageSideTapPageTurn(float normalizedX) {
+        return isImageTapPagingEnabled()
+                && imagePaths.size() > 1
+                && imageTapPageDelta(normalizedX) != 0;
+    }
+
+    private int imageTapPageDelta(float normalizedX) {
+        return ImageSequenceNavigationMath.visualTapZoneDelta(normalizedX, isImageMirrorMode());
+    }
+
     private void toggleChrome() {
         chromeVisible = !chromeVisible;
         if (toolbar != null) toolbar.setVisibility(chromeVisible ? View.VISIBLE : View.GONE);
@@ -676,6 +699,15 @@ public class ImageReaderActivity extends AppCompatActivity {
         return getString(R.string.image_viewer_title);
     }
 
+    private int imageSwipeDelta(boolean swipeLeft) {
+        int ltrVisualDelta = swipeLeft ? 1 : -1;
+        return ImageSequenceNavigationMath.mirroredVisualDelta(ltrVisualDelta, isImageMirrorMode());
+    }
+
+    private boolean isImageMirrorMode() {
+        return currentImageSliderDirection() == PrefsManager.IMAGE_SLIDER_DIRECTION_RTL;
+    }
+
     private void showAdjacentImage(int direction) {
         if (imagePaths.size() <= 1) return;
         showImageAtIndex(ImageSequenceNavigationMath.nextIndex(currentIndex, direction, imagePaths.size()));
@@ -704,31 +736,42 @@ public class ImageReaderActivity extends AppCompatActivity {
         final String path = filePath;
         final String uri = fileUri;
         final String displayName = getDisplayName();
+        final String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, index);
         final Context appContext = getApplicationContext();
         setLoading(true, null);
         updateToolbarTitle();
         executor.execute(() -> {
+            if (!isCurrentImageLoadGeneration(generation)) return;
             LoadedImage loaded = null;
             try {
-                if (ensureArchiveImageExtracted(index, path)) {
+                if (ensureArchiveImageExtracted(index, path)
+                        && isCurrentImageLoadGeneration(generation)) {
                     loaded = ImageDecodeHelper.decodePreview(appContext, path, uri, displayName);
                 }
             } catch (Exception ignored) {
                 loaded = null;
             }
+            if (!isCurrentImageLoadGeneration(generation)) {
+                recycleLoadedImage(loaded);
+                return;
+            }
             LoadedImage result = loaded;
             mainHandler.post(() -> {
-                if (destroyed || generation != imageLoadGeneration) {
+                if (!isActiveImageRequest(generation, index, path, entryPath)) {
                     recycleLoadedImage(result);
                     return;
                 }
                 if (result != null && (result.bitmap != null || result.drawable != null)) {
-                    applyLoadedImage(result, false);
+                    applyLoadedImage(result, false, index, path, entryPath);
                     currentImageDetailLoaded = result.originalQuality;
                     persistArchiveImageProgress();
                     prefetchAdjacentArchiveImages(index);
                     setLoading(false, null);
                 } else {
+                    discardArchiveImageCacheAfterDecodeFailure(index, path);
+                    if (currentBitmap == null && currentDrawable == null) {
+                        clearCurrentImageSurface(true);
+                    }
                     setLoading(false, getString(R.string.image_open_failed));
                 }
             });
@@ -744,24 +787,31 @@ public class ImageReaderActivity extends AppCompatActivity {
         final String path = filePath;
         final String uri = fileUri;
         final String displayName = getDisplayName();
+        final String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, index);
         final Context appContext = getApplicationContext();
         detailExecutor.execute(() -> {
+            if (!isCurrentImageLoadGeneration(generation)) return;
             LoadedImage loaded = null;
             try {
-                if (ensureArchiveImageExtracted(index, path)) {
+                if (ensureArchiveImageExtracted(index, path)
+                        && isCurrentImageLoadGeneration(generation)) {
                     loaded = ImageDecodeHelper.decodeDetail(appContext, path, uri, displayName);
                 }
             } catch (Exception ignored) {
                 loaded = null;
             }
+            if (!isCurrentImageLoadGeneration(generation)) {
+                recycleLoadedImage(loaded);
+                return;
+            }
             LoadedImage result = loaded;
             mainHandler.post(() -> {
-                if (destroyed || generation != imageLoadGeneration) {
+                if (!isActiveImageRequest(generation, index, path, entryPath)) {
                     recycleLoadedImage(result);
                     return;
                 }
                 if (result != null && (result.bitmap != null || result.drawable != null)) {
-                    applyLoadedImage(result, true);
+                    applyLoadedImage(result, true, index, path, entryPath);
                     // Once the detail decode succeeds, keep that bitmap/drawable as the
                     // active image even after the user returns to the adaptive-fit view.
                     // Very large sources may still be capped below true original size, but
@@ -773,7 +823,25 @@ public class ImageReaderActivity extends AppCompatActivity {
         });
     }
 
-    private void applyLoadedImage(@NonNull LoadedImage result, boolean preserveViewport) {
+    private boolean isActiveImageRequest(int generation,
+                                         int requestIndex,
+                                         @Nullable String requestPath,
+                                         @Nullable String requestEntryPath) {
+        if (destroyed || generation != imageLoadGeneration) return false;
+        if (requestIndex != currentIndex) return false;
+        if (!TextUtils.equals(requestPath, filePath)) return false;
+        return TextUtils.equals(requestEntryPath, ImageSequenceState.entryPathAt(sourceEntryPaths, currentIndex));
+    }
+
+    private boolean isCurrentImageLoadGeneration(int generation) {
+        return !destroyed && generation == imageLoadGeneration;
+    }
+
+    private void applyLoadedImage(@NonNull LoadedImage result,
+                                  boolean preserveViewport,
+                                  int requestIndex,
+                                  @Nullable String requestPath,
+                                  @Nullable String requestEntryPath) {
         Bitmap oldBitmap = currentBitmap;
         Drawable oldDrawable = currentDrawable;
         if (oldDrawable instanceof AnimatedImageDrawable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -788,7 +856,25 @@ public class ImageReaderActivity extends AppCompatActivity {
             currentBitmap = result.bitmap;
             imageView.setImageBitmapReady(result.bitmap, preserveViewport);
         }
+        displayedImageIndex = requestIndex;
+        displayedImagePath = requestPath;
+        displayedImageEntryPath = requestEntryPath;
         if (oldBitmap != null && oldBitmap != currentBitmap && !oldBitmap.isRecycled()) oldBitmap.recycle();
+    }
+
+    private void clearCurrentImageSurface(boolean recycleBitmap) {
+        Drawable oldDrawable = currentDrawable;
+        Bitmap oldBitmap = currentBitmap;
+        if (oldDrawable instanceof AnimatedImageDrawable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            ((AnimatedImageDrawable) oldDrawable).stop();
+        }
+        currentDrawable = null;
+        currentBitmap = null;
+        displayedImageIndex = -1;
+        displayedImagePath = null;
+        displayedImageEntryPath = null;
+        if (imageView != null) imageView.clearImageReady();
+        if (recycleBitmap && oldBitmap != null && !oldBitmap.isRecycled()) oldBitmap.recycle();
     }
 
     private void recycleLoadedImage(@Nullable LoadedImage result) {
@@ -807,21 +893,32 @@ public class ImageReaderActivity extends AppCompatActivity {
         if (entryPath == null || entryPath.trim().isEmpty()) return false;
         File archive = new File(sourceArchivePath);
         if (!archive.exists() || !archive.isFile()) return false;
+        char[] passwordSnapshot;
         synchronized (archiveExtractLock) {
-            char[] passwordSnapshot = PasswordChars.cloneOf(sourceArchivePassword);
-            try {
-                boolean sensitiveCache = PasswordChars.hasPassword(passwordSnapshot);
-                return ArchiveImageEntryCache.ensureReady(
-                        archive,
-                        entryPath,
-                        outFile,
-                        passwordSnapshot,
-                        sensitiveCache,
-                        verifiedSensitiveArchiveCachePaths).success;
-            } finally {
-                PasswordChars.clear(passwordSnapshot);
-            }
+            passwordSnapshot = PasswordChars.cloneOf(sourceArchivePassword);
         }
+        try {
+            boolean sensitiveCache = PasswordChars.hasPassword(passwordSnapshot);
+            return ArchiveImageEntryCache.ensureReady(
+                    archive,
+                    entryPath,
+                    outFile,
+                    passwordSnapshot,
+                    sensitiveCache,
+                    verifiedSensitiveArchiveCachePaths).success;
+        } finally {
+            PasswordChars.clear(passwordSnapshot);
+        }
+    }
+
+    private void discardArchiveImageCacheAfterDecodeFailure(int index, @Nullable String expectedPath) {
+        if (sourceArchivePath == null || sourceArchivePath.trim().isEmpty()) return;
+        if (expectedPath == null || expectedPath.trim().isEmpty()) return;
+        if (index < 0 || index >= sourceEntryPaths.size()) return;
+        String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, index);
+        if (entryPath == null || entryPath.trim().isEmpty()) return;
+        ArchiveImageEntryCache.discardReady(new File(expectedPath));
+        verifiedSensitiveArchiveCachePaths.remove(new File(expectedPath).getAbsolutePath());
     }
 
     private void prefetchAdjacentArchiveImages(int centerIndex) {
@@ -914,6 +1011,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         }
 
         addPopupRow(box, getString(R.string.file_info), fg, () -> { popup.dismiss(); showImageInfoDialog(); });
+        addPopupRow(box, getString(R.string.image_view_options), fg, () -> { popup.dismiss(); showImageViewOptionsDialog(); });
         if (canShareCurrentImage()) {
             addPopupRow(box, getString(R.string.share), fg, () -> {
                 popup.dismiss();
@@ -937,6 +1035,79 @@ public class ImageReaderActivity extends AppCompatActivity {
 
         int xoff = -(dpToPx(210) - anchor.getWidth());
         popup.showAsDropDown(anchor, xoff, 0, Gravity.NO_GRAVITY);
+    }
+
+    private void showImageViewOptionsDialog() {
+        Dialog dialog = dialogStyle.makeDialog();
+        LinearLayout box = dialogStyle.makeBox();
+        box.addView(dialogStyle.makeTitle(getString(R.string.image_view_options)));
+        int fg = dialogStyle.textColor();
+        int sub = dialogStyle.subTextColor();
+        int currentDirection = currentImageSliderDirection();
+        TextView ltr = dialogStyle.makeButton(
+                optionLabel(R.string.image_slider_direction_ltr,
+                        currentDirection == PrefsManager.IMAGE_SLIDER_DIRECTION_LTR),
+                currentDirection == PrefsManager.IMAGE_SLIDER_DIRECTION_LTR ? fg : sub);
+        TextView rtl = dialogStyle.makeButton(
+                optionLabel(R.string.image_slider_direction_rtl,
+                        currentDirection == PrefsManager.IMAGE_SLIDER_DIRECTION_RTL),
+                currentDirection == PrefsManager.IMAGE_SLIDER_DIRECTION_RTL ? fg : sub);
+        boolean tapPagingEnabled = isImageTapPagingEnabled();
+        TextView tapPaging = dialogStyle.makeButton(
+                getString(tapPagingEnabled
+                        ? R.string.image_tap_paging_on
+                        : R.string.image_tap_paging_off),
+                tapPagingEnabled ? fg : sub);
+        TextView cancel = dialogStyle.makeButton(getString(R.string.cancel), sub);
+        box.addView(ltr, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
+        box.addView(rtl, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
+        box.addView(tapPaging, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
+        box.addView(cancel, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
+        ltr.setOnClickListener(v -> {
+            setImageSliderDirection(PrefsManager.IMAGE_SLIDER_DIRECTION_LTR);
+            dialog.dismiss();
+        });
+        rtl.setOnClickListener(v -> {
+            setImageSliderDirection(PrefsManager.IMAGE_SLIDER_DIRECTION_RTL);
+            dialog.dismiss();
+        });
+        tapPaging.setOnClickListener(v -> {
+            boolean enabled = !isImageTapPagingEnabled();
+            setImageTapPagingEnabled(enabled);
+            tapPaging.setText(getString(enabled
+                    ? R.string.image_tap_paging_on
+                    : R.string.image_tap_paging_off));
+            tapPaging.setTextColor(enabled ? fg : sub);
+        });
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        dialog.setContentView(box);
+        dialog.show();
+        dialogStyle.setDialogWidth(dialog);
+    }
+
+    @NonNull
+    private String optionLabel(int textRes, boolean selected) {
+        return selected ? "✓ " + getString(textRes) : getString(textRes);
+    }
+
+    private int currentImageSliderDirection() {
+        return prefs != null ? prefs.getImageSliderDirection() : PrefsManager.IMAGE_SLIDER_DIRECTION_LTR;
+    }
+
+    private boolean isImageTapPagingEnabled() {
+        return prefs != null && prefs.getImageTapPagingEnabled();
+    }
+
+    private void setImageTapPagingEnabled(boolean enabled) {
+        if (prefs != null) prefs.setImageTapPagingEnabled(enabled);
+    }
+
+    private void setImageSliderDirection(int direction) {
+        if (prefs != null) prefs.setImageSliderDirection(direction);
+        if (sliderController != null) {
+            sliderController.setSliderDirection(currentImageSliderDirection());
+            sliderController.update(currentIndex, imagePaths.size(), chromeVisible);
+        }
     }
 
     private void addPopupRow(@NonNull LinearLayout box, @NonNull String label, int color, @NonNull Runnable action) {

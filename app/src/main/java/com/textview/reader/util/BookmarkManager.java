@@ -732,7 +732,7 @@ public class BookmarkManager {
                 String targetKey;
                 if ("EPUB".equalsIgnoreCase(type)) {
                     targetKey = "setPageOrSection";
-                } else if ("PDF".equalsIgnoreCase(type) || "WORD".equalsIgnoreCase(type)) {
+                } else if ("PDF".equalsIgnoreCase(type) || "WORD".equalsIgnoreCase(type) || "HWP".equalsIgnoreCase(type)) {
                     targetKey = "setPage";
                 } else {
                     targetKey = "setLine";
@@ -1268,7 +1268,7 @@ public class BookmarkManager {
     }
 
     private boolean isWordBookmark(Bookmark bookmark) {
-        return FileUtils.isWordFile(bookmarkFileName(bookmark));
+        return FileUtils.isWordOrHwpFile(bookmarkFileName(bookmark));
     }
 
     private String bookmarkFileName(Bookmark bookmark) {
@@ -1285,6 +1285,7 @@ public class BookmarkManager {
         String name = bookmarkFileName(bookmark).toLowerCase(Locale.ROOT);
         if (name.endsWith(".pdf")) return "PDF";
         if (name.endsWith(".epub")) return "EPUB";
+        if (name.endsWith(".hwp") || name.endsWith(".hwpx")) return "HWP";
         if (name.endsWith(".doc") || name.endsWith(".docx") || name.endsWith(".rtf")) return "WORD";
         return "TXT";
     }

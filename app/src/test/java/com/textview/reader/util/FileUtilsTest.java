@@ -296,8 +296,8 @@ public class FileUtilsTest {
     }
 
     @Test
-    public void visibleAllFilter_includesExternalOpenableVideoButNotApkInstaller() {
-        assertFalse("APK installer delegation is disabled in the default build",
+    public void visibleAllFilter_includesEveryNamedFileType() {
+        assertTrue("All must display APK files even when installer delegation is disabled",
                 FileUtils.isVisibleInAllFilesFilter("sample.apk"));
         assertFalse(FileUtils.isExternalOpenableFile("sample.apk"));
         assertEquals("APK", FileUtils.getReadableFileType("sample.apk"));
@@ -305,6 +305,11 @@ public class FileUtilsTest {
         assertTrue(FileUtils.isVisibleInAllFilesFilter("movie.mkv"));
         assertTrue(FileUtils.isExternalOpenableFile("movie.mkv"));
         assertEquals("Video", FileUtils.getReadableFileType("movie.mkv"));
+
+        assertTrue("Unknown extensions should still be visible under All",
+                FileUtils.isVisibleInAllFilesFilter("notes.unknownext"));
+        assertFalse("Blank names are never valid visible file entries",
+                FileUtils.isVisibleInAllFilesFilter("   "));
 
         assertFalse("Plain .ts files are treated as MPEG transport streams, not TypeScript text",
                 FileUtils.isTextFile("index.ts"));
@@ -331,4 +336,23 @@ public class FileUtilsTest {
         }
         return sb.toString();
     }
+
+    @Test
+    public void wordFilterIncludesLegacyDocExtension() {
+        assertTrue(FileUtils.isWordFile("legacy.doc"));
+        assertTrue(FileUtils.isWordOrHwpFile("legacy.doc"));
+        assertTrue(FileUtils.isSupportedReadableFile("legacy.doc"));
+        assertEquals("Word", FileUtils.getReadableFileType("legacy.doc"));
+    }
+
+    @Test
+    public void wordFilterStillIncludesOoXmlAndHwpFamily() {
+        assertTrue(FileUtils.isWordOrHwpFile("modern.docx"));
+        assertTrue(FileUtils.isWordOrHwpFile("macro.docm"));
+        assertTrue(FileUtils.isWordOrHwpFile("template.dotx"));
+        assertTrue(FileUtils.isWordOrHwpFile("template.dotm"));
+        assertTrue(FileUtils.isWordOrHwpFile("korean.hwp"));
+        assertTrue(FileUtils.isWordOrHwpFile("korean.hwpx"));
+    }
+
 }

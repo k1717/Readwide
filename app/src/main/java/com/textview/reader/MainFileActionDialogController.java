@@ -209,7 +209,7 @@ final class MainFileActionDialogController {
             File newFile = new File(parent, newName);
             if (file.renameTo(newFile)) {
                 if (ref[0] != null) ref[0].dismiss();
-                activity.loadDirectory(activity.currentDirectory);
+                activity.refreshVisibleFileListAfterFileSystemChange();
                 ShortToast.show(activity, activity.getString(R.string.renamed));
             } else {
                 ShortToast.show(activity, activity.getString(R.string.rename_failed));
@@ -545,7 +545,7 @@ final class MainFileActionDialogController {
             File newDir = new File(activity.currentDirectory, name);
             if (newDir.mkdirs()) {
                 if (ref[0] != null) ref[0].dismiss();
-                activity.loadDirectory(activity.currentDirectory);
+                activity.refreshVisibleFileListAfterFileSystemChange();
                 ShortToast.show(activity, activity.getString(R.string.folder_created));
             } else {
                 ShortToast.show(activity, activity.getString(R.string.folder_create_failed));

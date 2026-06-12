@@ -5,7 +5,7 @@ package com.textview.reader.archive;
  *
  * <p>The labels describe which engine is allowed to try a case first. They are deliberately
  * conservative: libarchive owns broad compressed RAR, while first-party Java paths only cover
- * stored/split and verified narrow development fallbacks.</p>
+ * stored/split and verified scoped decode-only fallbacks.</p>
  */
 final class RarBackendRoute {
     enum Kind {
@@ -16,6 +16,7 @@ final class RarBackendRoute {
         TRY_FIRST_PARTY_RAR4_COMPRESSED_SPLIT_REWRITE,
         TRY_FIRST_PARTY_RAR4_ENCRYPTED_COMPRESSED_SPLIT_REWRITE,
         TRY_FIRST_PARTY_CLASSIC_LZ_NON_SOLID,
+        TRY_FIRST_PARTY_SOLID_SEQUENTIAL,
         CLEAN_UNSUPPORTED_PPMD,
         CLEAN_UNSUPPORTED_VM,
         CLEAN_UNSUPPORTED_SOLID,

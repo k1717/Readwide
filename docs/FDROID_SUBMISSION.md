@@ -1,23 +1,19 @@
-# F-Droid submission notes for Readwide 1.0.1
+# F-Droid submission notes for Readwide 1.0.2
 
-This document records the project-side preparation needed before opening an
-F-Droid Data merge request for Readwide 1.0.1.
+This document records the project-side preparation for an F-Droid Data merge request.
 
 ## App identity
 
 - App name: Readwide
-- Android applicationId: `com.textview.reader`
-- Version name: `1.0.1`
-- Version code: `10001`
-- License: Apache-2.0 for first-party source
+- Android application ID: `com.textview.reader`
+- Version name: `1.0.2`
+- Version code: `10002`
+- First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
-The applicationId intentionally remains `com.textview.reader` for update
-compatibility with the previous TextView Reader 2.2.6 line when the APK is
-signed with the same key. Mention this in the F-Droid merge request so it is
-not mistaken for an incomplete rebrand.
+The Android application ID intentionally remains `com.textview.reader` for update compatibility with the earlier TextView Reader/Readwide lineage when the APK is signed with the same key.
 
-## Draft fdroiddata metadata
+## Draft metadata
 
 A draft metadata file is included at:
 
@@ -25,53 +21,61 @@ A draft metadata file is included at:
 fdroid/metadata/com.textview.reader.yml
 ```
 
-Before submitting to `fdroiddata`, copy it to:
+For submission, copy it into the F-Droid Data repository as:
 
 ```text
 metadata/com.textview.reader.yml
 ```
 
-Then replace:
+Create and push the immutable release tag before opening the merge request:
 
 ```text
-REPLACE_WITH_FINAL_GIT_COMMIT_HASH_FOR_V1_0_1
+v1.0.2
 ```
 
-with the final immutable Git commit hash that corresponds to the published
-`v1.0.1` tag. F-Droid metadata should point at the exact commit used for the
-release, not a moving branch.
+The draft metadata uses `commit: v1.0.2`. Confirm that this tag points to the audited source tree before copying `fdroid/metadata/com.textview.reader.yml` into fdroiddata.
+
+## F-Droid-facing baseline
+
+The default build is intended to be reviewed as a local-first FOSS app:
+
+- First-party source is Apache-2.0.
+- The default manifest does not request `INTERNET`.
+- No ads, analytics, telemetry SDK, Firebase, Google Play Services dependency, account system, cloud sync, developer-operated upload backend, or app-network update checker is included.
+- Android Auto Backup is disabled with `android:allowBackup="false"`.
+- Broad file access is requested because the app is a local reader and file browser that works with user-selected folders, documents, images, and archives.
+- Default builds do not bundle Junrar or RARLAB UnRAR-license code.
+- HWP/HWPX support uses Apache-2.0 Java libraries (`hwplib`, `hwpxlib`) and is text-first/read-only.
+- Release signing is conditional; if private signing environment variables are absent, `assembleRelease` should produce an unsigned release artifact suitable for source-builder workflows.
 
 ## Gradle wrapper jar handling
 
-The GitHub source keeps the normal Gradle wrapper files for local developers.
-The F-Droid metadata draft removes the wrapper jar before build scanning:
+The GitHub source keeps normal Gradle wrapper files for developer convenience. The draft F-Droid metadata removes the wrapper jar before build scanning:
 
 ```yaml
 rm:
   - gradle/wrapper/gradle-wrapper.jar
 ```
 
-This keeps the public repository convenient for Android Studio / local Gradle
-users while letting F-Droid build with its own trusted Gradle environment.
+## Build command
 
-## Executable permissions
+The draft metadata uses the normal Gradle release build:
 
-The source ZIP should preserve executable permission for Linux/macOS tooling:
-
-```bash
-chmod +x gradlew scripts/clean_removed_sources.sh
-git update-index --chmod=+x gradlew
-git update-index --chmod=+x scripts/clean_removed_sources.sh
-git update-index --chmod=+x scripts/generate_rar_fixture_reports.sh
-git update-index --chmod=+x scripts/generate_archive_fixture_reports.sh
+```yaml
+gradle:
+  - 'yes'
 ```
 
-If the source is uploaded through a web UI or extracted from a ZIP that loses
-POSIX metadata, rerun the commands before tagging the release.
+Manual local check for the no-private-keystore path:
 
-## Fastlane / localized metadata
+```bash
+unset TEXTVIEW_KEYSTORE_PATH TEXTVIEW_KEYSTORE_PASSWORD TEXTVIEW_KEY_ALIAS TEXTVIEW_KEY_PASSWORD
+./gradlew clean assembleRelease
+```
 
-The repository includes source-embedded Fastlane metadata under:
+## Fastlane metadata
+
+Source metadata is included under:
 
 ```text
 fastlane/metadata/android/
@@ -82,60 +86,32 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These files provide title, short description, full description, and the
-versionCode `10001` changelog.
+These provide title, short description, full description, and versionCode `10002` changelog text.
 
-## Privacy and anti-feature review points
+## Conservative support wording for review
 
-- Missing bookmark files are kept as local bookmark records and shown with an in-app missing-file label/dialog. No network lookup or upload is used for rebinding; the app uses local file identity data only when the user opens matching local files.
+Use conservative wording in the merge request:
 
-Expected project-side statements for the F-Droid merge request:
+- RAR/CBR support is limited and not complete.
+- Encrypted RAR, broad split RAR, SFX, VM-filtered RAR, and full RAR compatibility are not claimed.
+- HWP/HWPX support is text-first reading only; no Hancom layout parity, editing, writing, cloud/server conversion, or password/encrypted HWP support is claimed.
+- Legacy `.doc` files are recognized under the Word filter but are not rendered yet.
 
-- Default builds do not request `INTERNET`.
-- No ads, analytics, account login, Firebase, Google Play Services, or
-  app-network update check is included.
-- Android Auto Backup is disabled with `android:allowBackup="false"`.
-- Broad file access is requested because the app is a local reader/file browser
-  that works with user-selected folders, documents, images, and archives.
-- Junrar / UnRAR-license fallback code is not bundled in the default build.
-- The only source-tree jar intentionally present for GitHub users is the Gradle
-  wrapper jar, and the F-Droid metadata draft removes it before build scanning.
+## Files reviewers should inspect
 
-## Local verification checklist
+- `README.md`
+- `PRIVACY.md`
+- `THIRD_PARTY_NOTICES.md`
+- `docs/FOSS_STATUS.md`
+- `docs/LICENSE_REPORT_READWIDE_1_0_2.md`
+- `docs/SBOM_READWIDE_1_0_2.spdx.json`
+- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
+- `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
+- `fdroid/metadata/com.textview.reader.yml`
 
-Run from a clean checkout after publishing the tag:
+## Remaining submitter tasks
 
-```bash
-./gradlew clean testDebugUnitTest assembleRelease
-```
-
-Also test the F-Droid-style no-private-keystore path:
-
-```bash
-unset TEXTVIEW_KEYSTORE_PATH TEXTVIEW_KEYSTORE_PASSWORD TEXTVIEW_KEY_ALIAS TEXTVIEW_KEY_PASSWORD
-./gradlew clean assembleRelease
-```
-
-Expected behavior: the release task should not require a local developer
-keystore when the signing environment variables are absent.
-
-## Known boundary to keep conservative
-
-Do not advertise complete RAR support. The default build attempts common RAR
-read/extract paths through libarchive-android plus first-party metadata/stored
-entry handling, but split/multi-volume RAR, encrypted RAR, broad solid RAR,
-PPMd, VM-filtered, broad SFX, and RAR5 compressed/solid/encrypted-header
-variants are not guaranteed.
-
-
-## ALZ/EGG extraction memory notes
-
-Readwide 1.0.1 streams supported ALZ Store/Deflate/BZip2 payloads and EGG Store/Deflate/BZip2/LZMA blocks to output where possible, with CRC verification. The EGG AZO path remains block-buffered because the current xunazo-derived decoder is block-based. This does not add a new dependency or non-free decoder.
-
-## Archive preview cache privacy note
-
-Archive image/document preview creates temporary app-private cache files so Android viewers can open archive entries as files. Password-protected archive previews use a separate `archive_preview_sensitive` cache root with shorter/smaller pruning limits. These files are generated cache data, not bundled assets or network transfers.
-
-## Support-boundary UI note
-
-The app now surfaces family-specific archive support boundaries for RAR, ZIPX, 7z, ALZ, and EGG and separates bad-password, unsupported-feature, and corrupt/incomplete archive failures. This is UI clarification only; it does not broaden RAR or proprietary archive compatibility claims.
+- Confirm a clean network-enabled Gradle build from the tagged source.
+- Confirm the draft metadata points to the immutable `v1.0.2` tag or to an equivalent exact commit hash requested by the reviewer.
+- Confirm no optional local jars are present in `app/libs`.
+- Confirm native dependency notices for `libarchive-android` / libarchive and `zstd-jni` / Zstandard are included with binary release materials if APK assets are published outside F-Droid.

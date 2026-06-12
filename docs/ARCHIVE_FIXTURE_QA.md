@@ -26,6 +26,8 @@ The generated `archive_fixture_matrix.md` records:
 
 The report is diagnostic only. A successful fixture row confirms that exact fixture under the current backend set; it is not a blanket compatibility claim for the whole archive family.
 
+For 7z/CB7, keep separate fixtures for ordinary, password-protected, split, and split+password archives. Missing-volume fixtures should be recorded as corrupt/incomplete rather than password-required.
+
 ## RAR matrix
 
 RAR remains documented in `docs/RAR_FIXTURE_QA.md` and should be verified with `generate_rar_fixture_reports.*`. Do not merge generic report results into RAR compatibility claims.

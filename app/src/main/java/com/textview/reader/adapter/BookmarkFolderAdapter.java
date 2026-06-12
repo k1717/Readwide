@@ -29,6 +29,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.Date;
 
+import org.json.JSONObject;
+
 /**
  * Bookmark list:
  * file folder header -> expandable bookmarks inside each text file.
@@ -225,11 +227,12 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
 
     private static int typeRank(Bookmark b) {
         String name = safeFileName(b);
+        if (FileUtils.isMarkdownFile(name)) return 3;
         if (FileUtils.isTextFile(name)) return 0;
         if (FileUtils.isPdfFile(name)) return 1;
         if (FileUtils.isEpubFile(name)) return 2;
-        if (FileUtils.isWordFile(name)) return 3;
-        return 4;
+        if (FileUtils.isWordOrHwpFile(name)) return 4;
+        return 5;
     }
 
     private static String typeTitle(int rank) {
@@ -237,7 +240,8 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             case 0: return "TXT";
             case 1: return "PDF";
             case 2: return "EPUB";
-            case 3: return "Word";
+            case 3: return "Markdown";
+            case 4: return "Word";
             default: return "Other";
         }
     }
@@ -490,7 +494,7 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             int rowStroke = blendColors(dialogBgColor, textColor, lightDialog ? 0.100f : 0.160f);
             itemView.setBackground(rowBackground(rowFill, rowStroke, 9f, 1.0f, itemView));
 
-            String display = bookmark.getDisplayText();
+            String display = displayTitleForBookmark(bookmark);
             title.setText(display != null && !display.isEmpty()
                     ? display
                     : "Position " + bookmark.getCharPosition());
@@ -498,7 +502,8 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
 
             String excerptText = bookmark.getExcerpt();
             if (excerptText != null && !excerptText.isEmpty()
-                    && !excerptText.equals(display)) {
+                    && !excerptText.equals(display)
+                    && !isRedundantPageExcerptForAnchorTitle(bookmark, display, excerptText)) {
                 excerpt.setText(excerptText);
                 excerpt.setTextColor(subTextColor);
                 excerpt.setVisibility(View.VISIBLE);
@@ -530,6 +535,77 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             btnDelete.setBackgroundColor(Color.TRANSPARENT);
         }
 
+
+        private String displayTitleForBookmark(Bookmark bookmark) {
+            if (bookmark == null) return "";
+            String label = bookmark.getLabel();
+            if (label != null && !label.trim().isEmpty()) {
+                return label.trim();
+            }
+
+            // For all WebView-backed documents, including Markdown, prefer a
+            // portable text-anchor preview as the main title. Page and position
+            // metadata belongs in the smaller metadata row below, not in the title.
+            String anchorPreview = anchorPreviewForBookmark(bookmark);
+            if (anchorPreview != null && !anchorPreview.isEmpty()) {
+                return anchorPreview;
+            }
+
+            String display = bookmark.getDisplayText();
+            return display != null ? display : "";
+        }
+
+        private String anchorPreviewForBookmark(Bookmark bookmark) {
+            if (bookmark == null) return "";
+            String json = bookmark.getContentAnchorJson();
+            if (json == null || json.trim().isEmpty()) return "";
+            try {
+                JSONObject obj = new JSONObject(json);
+                String text = firstNonEmpty(
+                        obj.optString("text", ""),
+                        obj.optString("anchorText", ""),
+                        obj.optString("textAfter", ""),
+                        obj.optString("quote", ""),
+                        obj.optString("nearbyText", ""));
+                return compactAnchorPreview(text, 42);
+            } catch (Exception ignored) {
+                return "";
+            }
+        }
+
+        private String firstNonEmpty(String... values) {
+            if (values == null) return "";
+            for (String value : values) {
+                if (value != null) {
+                    String trimmed = value.replaceAll("\\s+", " ").trim();
+                    if (!trimmed.isEmpty()) return trimmed;
+                }
+            }
+            return "";
+        }
+
+        private String compactAnchorPreview(String text, int maxChars) {
+            if (text == null) return "";
+            String compact = text.replaceAll("\\s+", " ").trim();
+            if (compact.isEmpty()) return "";
+            if (compact.length() <= maxChars) return compact;
+            return compact.substring(0, Math.max(1, maxChars - 1)).trim() + "…";
+        }
+
+        private boolean isRedundantPageExcerptForAnchorTitle(Bookmark bookmark, String display, String excerptText) {
+            if (bookmark == null || display == null || display.trim().isEmpty() || excerptText == null) {
+                return false;
+            }
+            String anchorPreview = anchorPreviewForBookmark(bookmark);
+            if (anchorPreview == null || anchorPreview.isEmpty() || !anchorPreview.equals(display)) return false;
+            String normalized = excerptText.replaceAll("\\s+", " ").trim();
+            if (normalized.isEmpty()) return true;
+            if (normalized.equals(display)) return true;
+            return normalized.matches("(?i)^(Page\\s+\\d+(\\s*/\\s*\\d+)?|PDF\\s+\\d+\\s*/\\s*\\d+|EPUB\\s+\\d+\\s*/\\s*\\d+|Word\\s+\\d+\\s*/\\s*\\d+|DOCX?\\s+\\d+\\s*/\\s*\\d+|HWPX?\\s+\\d+\\s*/\\s*\\d+)$")
+                    || (normalized.matches("(?i)^Markdown\\s+\\d+\\s*/\\s*\\d+(\\s*[·•-].*)?$")
+                    && normalized.toLowerCase(Locale.ROOT).contains(display.toLowerCase(Locale.ROOT)));
+        }
+
         private boolean shouldShowPageMetadata(Bookmark bookmark) {
             if (bookmark == null || bookmark.getPageNumber() <= 0 || bookmark.getTotalPages() <= 0) {
                 return false;
@@ -538,6 +614,9 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             String name = bookmark.getFileName();
             if (name == null || name.trim().isEmpty()) {
                 name = bookmark.getFilePath();
+            }
+            if (name != null && FileUtils.isMarkdownFile(name)) {
+                return true;
             }
             boolean txtBookmark = name != null && FileUtils.isTextFile(name);
             if (!txtBookmark) {

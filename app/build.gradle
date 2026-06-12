@@ -29,8 +29,8 @@ android {
         applicationId "com.textview.reader"
         minSdk 24
         targetSdk 35
-        versionCode 10001
-        versionName "1.0.1"
+        versionCode 10002
+        versionName "1.0.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         // Release APKs keep Android ARM ABIs only.
@@ -141,6 +141,9 @@ dependencies {
     // Enables Apache Commons Compress Zstandard streams and ZIP method 93 fallback.
     implementation 'com.github.luben:zstd-jni:1.5.7-9'
     implementation 'net.lingala.zip4j:zip4j:2.11.6'
+    // Apache-2.0 Hancom document libraries for scoped HWP/HWPX text extraction.
+    implementation 'kr.dogfoot:hwplib:1.1.10'
+    implementation 'kr.dogfoot:hwpxlib:1.0.9'
     // RAR fallback intentionally avoids Junrar/UnRAR-licensed code for FOSS compatibility.
     // RAR3/RAR4 compressed extraction is routed through libarchive-android in the default build.
     testImplementation 'junit:junit:4.13.2'

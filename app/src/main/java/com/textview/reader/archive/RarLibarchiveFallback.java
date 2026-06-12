@@ -91,7 +91,7 @@ final class RarLibarchiveFallback {
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
             throw new IOException("Cannot create output directory");
         }
-        return LibarchiveNativeBridge.extractEntry(
+        return LibarchiveNativeBridge.extractEntryWithSequentialPriming(
                 archivePaths(archiveFile),
                 entryPath,
                 outFile.getAbsolutePath(),

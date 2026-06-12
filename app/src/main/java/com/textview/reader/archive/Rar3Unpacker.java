@@ -9,8 +9,6 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.util.zip.CRC32;
-import java.util.zip.CheckedOutputStream;
 
 /**
  * First-party RAR3/RAR4 compressed unpacker entry point.
@@ -39,46 +37,31 @@ final class Rar3Unpacker {
     }
 
     @NonNull
+    static Rar3UnpackFileResult unpackSolidPrimerToDiscard(@NonNull Rar3UnpackContext context,
+                                                           @Nullable FileOperationProgress progress) throws IOException {
+        if (!context.solid) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException(
+                    "RAR3/RAR4 discard primer requires a solid-sequence context");
+        }
+        return unpackToDecodedOutput(context, RarCrcDecodedOutput.discarding(), progress, true);
+    }
+
+    @NonNull
     private static Rar3UnpackFileResult unpackToFile(@NonNull Rar3UnpackContext context,
                                                      @NonNull File outFile,
                                                      @Nullable FileOperationProgress progress,
                                                      boolean failOnCrcMismatch) throws IOException {
         if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
-        context.resetWindow();
-        if (context.windowSize() <= 0 || (!context.solid && context.writePosition() != 0)) {
-            throw new RarArchiveReader.UnsupportedRarFeatureException("Invalid RAR3/RAR4 unpacker state");
-        }
-        byte[] packed = context.readPackedPayload();
-        if (packed.length != context.packedSize) {
-            throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3/RAR4 compressed payload read length mismatch");
-        }
         File parent = outFile.getParentFile();
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
             throw new IOException("Could not create RAR output directory");
         }
 
         boolean success = false;
-        CRC32 crc32 = new CRC32();
-        try (OutputStream raw = new FileOutputStream(outFile);
-             CheckedOutputStream checked = new CheckedOutputStream(raw, crc32)) {
-            Rar3DecodeResult result = unpackPayload(context, packed, checked, progress, !failOnCrcMismatch);
-            if (result.written != context.unpackedSize) {
-                throw new RarArchiveReader.UnsupportedRarFeatureException(
-                        "RAR3/RAR4 first-party unpacker did not reach the declared unpacked size");
-            }
-            long actual = crc32.getValue() & 0xffffffffL;
-            Rar3UnpackFileResult fileResult = new Rar3UnpackFileResult(
-                    result.written,
-                    result.bitsRead,
-                    result.blocks,
-                    outFile.length(),
-                    actual,
-                    context.hasExpectedCrc(),
-                    context.hasExpectedCrc() ? context.expectedCrc() : -1L,
-                    result.classicLzTrace);
-            if (failOnCrcMismatch && !fileResult.crcMatches()) {
-                throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3/RAR4 first-party unpacker decoded the payload but CRC did not match; real compressed fixture support remains incomplete");
-            }
+        try (OutputStream raw = new FileOutputStream(outFile)) {
+            RarCrcDecodedOutput checked = new RarCrcDecodedOutput(RarOutputStreamDecodedOutput.wrapOrMemory(raw));
+            Rar3UnpackFileResult fileResult = unpackToDecodedOutput(
+                    context, checked, progress, failOnCrcMismatch);
             success = true;
             return fileResult;
         } finally {
@@ -90,20 +73,59 @@ final class Rar3Unpacker {
     }
 
     @NonNull
+    private static Rar3UnpackFileResult unpackToDecodedOutput(@NonNull Rar3UnpackContext context,
+                                                              @NonNull RarCrcDecodedOutput checked,
+                                                              @Nullable FileOperationProgress progress,
+                                                              boolean failOnCrcMismatch) throws IOException {
+        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        context.resetWindow();
+        if (context.windowSize() <= 0 || (!context.solid && context.writePosition() != 0)) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException("Invalid RAR3/RAR4 unpacker state");
+        }
+        byte[] packed = context.readPackedPayload();
+        if (packed.length != context.packedSize) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3/RAR4 compressed payload read length mismatch");
+        }
+        Rar3DecodeResult result = unpackPayload(context, packed, checked, progress, !failOnCrcMismatch);
+        if (result.written != context.unpackedSize || checked.written() != context.unpackedSize) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException(
+                    "RAR3/RAR4 first-party unpacker did not reach the declared unpacked size");
+        }
+        Rar3UnpackFileResult fileResult = new Rar3UnpackFileResult(
+                result.written,
+                result.bitsRead,
+                result.blocks,
+                checked.written(),
+                checked.crcValue(),
+                context.hasExpectedCrc(),
+                context.hasExpectedCrc() ? context.expectedCrc() : -1L,
+                result.classicLzTrace);
+        if (failOnCrcMismatch && !fileResult.crcMatches()) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3/RAR4 first-party unpacker decoded the payload but CRC did not match; real compressed fixture support remains incomplete");
+        }
+        return fileResult;
+    }
+
+    @NonNull
     static Rar3DecodeResult unpackPayloadForTest(@NonNull Rar3UnpackContext context,
                                                  @NonNull byte[] packed,
                                                  @NonNull OutputStream out) throws IOException {
         context.resetWindow();
-        return unpackPayload(context, packed, out, null, false);
+        return unpackPayload(context, packed, RarOutputStreamDecodedOutput.wrapOrMemory(out), null, false);
     }
 
     @NonNull
     private static Rar3DecodeResult unpackPayload(@NonNull Rar3UnpackContext context,
                                                   @NonNull byte[] packed,
-                                                  @NonNull OutputStream out,
+                                                  @NonNull RarDecodedOutput out,
                                                   @Nullable FileOperationProgress progress,
                                                   boolean collectClassicLzTrace) throws IOException {
         if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        Rar3PpmdBlockHeader ppmdHeader = Rar3PpmdBlockHeader.fromPackedPayload(packed);
+        if (ppmdHeader.isPpmd()) {
+            return unpackPpmdPayload(context, packed, out, progress, ppmdHeader);
+        }
+
         RarBitInput input = new RarBitInput(packed);
         long limit = Math.max(0L, context.unpackedSize);
 
@@ -127,10 +149,45 @@ final class Rar3Unpacker {
         if (engine.hasFilters()) {
             output = applyFilters(output, engine.filters());
         }
-        out.write(output);
+        out.writeDecodedBytes(output, 0, output.length);
 
         return new Rar3DecodeResult(output.length, input.bitsRead(), 1,
                 collectClassicLzTrace ? new Rar3ClassicLzStateTrace().snapshot() : null);
+    }
+
+
+    @NonNull
+    private static Rar3DecodeResult unpackPpmdPayload(@NonNull Rar3UnpackContext context,
+                                                       @NonNull byte[] packed,
+                                                       @NonNull RarDecodedOutput out,
+                                                       @Nullable FileOperationProgress progress,
+                                                       @NonNull Rar3PpmdBlockHeader ppmdHeader) throws IOException {
+        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        long limit = Math.max(0L, context.unpackedSize);
+        java.io.ByteArrayOutputStream collected = new java.io.ByteArrayOutputStream(
+                (int) Math.min(Math.max(limit, 0L), 1 << 24));
+        RarLzWindow window = context.openWindow(collected);
+        try {
+            RarPpmdByteInput.ArrayInput ppmdInput = new RarPpmdByteInput.ArrayInput(
+                    packed,
+                    ppmdHeader.payloadOffset(),
+                    Math.max(0, packed.length - ppmdHeader.payloadOffset()));
+            Rar3PpmdModelSymbolSource source = new Rar3PpmdModelSymbolSource(
+                    ppmdInput,
+                    context.ppmdState(),
+                    ppmdHeader);
+            Rar3PpmdBlockDecoder.decodeUntilControlOrLimit(
+                    source,
+                    window,
+                    context.state(),
+                    context.ppmdState(),
+                    limit);
+            byte[] partial = collected.toByteArray();
+            out.writeDecodedBytes(partial, 0, partial.length);
+            return new Rar3DecodeResult(partial.length, 0, 1, null);
+        } finally {
+            context.saveWindow(window);
+        }
     }
 
     /** Applies pending standard VM filters to the decoded output region(s), in decode order. */

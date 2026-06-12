@@ -1658,7 +1658,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         } else if (FileUtils.isPdfFile(file.getName())) {
             intent = new Intent(this, PdfReaderActivity.class);
             intent.putExtra(PdfReaderActivity.EXTRA_FILE_PATH, file.getAbsolutePath());
-        } else if (FileUtils.isEpubFile(file.getName()) || FileUtils.isWordFile(file.getName())) {
+        } else if (FileUtils.isEpubFile(file.getName()) || FileUtils.isMarkdownFile(file.getName()) || FileUtils.isWordOrHwpFile(file.getName())) {
             intent = new Intent(this, DocumentPageActivity.class);
             intent.putExtra(DocumentPageActivity.EXTRA_FILE_PATH, file.getAbsolutePath());
         } else if (FileUtils.isImageFile(file.getName())) {
@@ -1730,7 +1730,14 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         String mime = getContentResolver().getType(uri);
         boolean pdf = FileUtils.isPdfFile(displayName) || "application/pdf".equalsIgnoreCase(mime);
         boolean epub = FileUtils.isEpubFile(displayName) || "application/epub+zip".equalsIgnoreCase(mime);
-        boolean word = FileUtils.isWordFile(displayName)
+        boolean markdown = FileUtils.isMarkdownFile(displayName)
+                || "text/markdown".equalsIgnoreCase(mime)
+                || "text/x-markdown".equalsIgnoreCase(mime);
+        boolean word = FileUtils.isWordOrHwpFile(displayName)
+                || "application/x-hwp".equalsIgnoreCase(mime)
+                || "application/haansofthwp".equalsIgnoreCase(mime)
+                || "application/vnd.hancom.hwp".equalsIgnoreCase(mime)
+                || "application/vnd.hancom.hwpx".equalsIgnoreCase(mime)
                 || "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equalsIgnoreCase(mime)
                 || "application/vnd.ms-word.document.macroEnabled.12".equalsIgnoreCase(mime)
                 || "application/vnd.openxmlformats-officedocument.wordprocessingml.template".equalsIgnoreCase(mime)
@@ -1742,7 +1749,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         if (pdf) {
             intent = new Intent(this, PdfReaderActivity.class);
             intent.putExtra(PdfReaderActivity.EXTRA_FILE_URI, uri.toString());
-        } else if (epub || word) {
+        } else if (epub || markdown || word) {
             intent = new Intent(this, DocumentPageActivity.class);
             intent.putExtra(DocumentPageActivity.EXTRA_FILE_URI, uri.toString());
         } else if (image) {
@@ -1897,6 +1904,10 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     void refreshVisibleFileListAfterDelete() {
+        refreshVisibleFileListAfterFileSystemChange();
+    }
+
+    void refreshVisibleFileListAfterFileSystemChange() {
         if (homeMode) {
             loadRecentFiles();
         } else if (searchMode) {

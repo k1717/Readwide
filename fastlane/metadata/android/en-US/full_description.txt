@@ -1,7 +1,9 @@
-Readwide is a local-first Android reader and file browser for TXT, PDF, EPUB, Word documents, images, comic archives, and common archive workflows.
+Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF, EPUB, Word-family documents, images, comic archives, and common archive workflows.
 
-It supports TXT/PDF/EPUB/Word reading, image viewing, archive image sequences, recent files, folder/search controls, multi-select file operations, copy/move/delete/extract/compress queues, and progress UI.
+It supports local reading, recent files, bookmarks, folder shortcuts, search/filtering, archive browsing, archive-backed image viewing, multi-select file operations, and local copy/move/delete/extract/compress queues.
 
-The default build does not request the INTERNET permission and does not include ads, analytics, an account system, cloud sync, telemetry, or a developer-operated upload backend. Android Auto Backup is disabled. Broad file access is used for local file browsing and management of user-selected folders and files.
+TXT keeps an exact source-page reader model. Markdown uses a rendered WebView visual-page model. HWP/HWPX is text-first and read-only through Apache-2.0 Java libraries; it is not Hancom-compatible layout rendering or editing. RAR/CBR support is limited and conservatively documented rather than advertised as complete compatibility.
 
-Readwide 1.0.1 is the current public package. The Android applicationId remains com.textview.reader for update compatibility with earlier compatible builds when signed with the same key.
+The default build does not request INTERNET permission and does not include ads, analytics, telemetry SDKs, Firebase, Google Play Services, an account system, cloud sync, or a developer-operated upload backend. Android Auto Backup is disabled. Broad file access is used for local file browsing and management of user-selected folders and files.
+
+Readwide 1.0.2 is the current public package. The Android applicationId remains com.textview.reader for update compatibility with earlier compatible builds when signed with the same key.

@@ -35,3 +35,12 @@
 # own consumer ProGuard rule and keeps release APK behavior aligned with debug builds.
 -keep class me.zhanghai.android.libarchive.** { *; }
 -dontwarn me.zhanghai.android.libarchive.**
+
+# dogfoot HWP/HWPX libraries are the scoped text extraction backend for .hwp/.hwpx.
+# Keep them stable because the libraries contain object graphs and reader helpers that
+# may be traversed indirectly during document parsing.
+-keep class kr.dogfoot.hwplib.** { *; }
+-keep class kr.dogfoot.hwpxlib.** { *; }
+-dontwarn kr.dogfoot.hwplib.**
+-dontwarn kr.dogfoot.hwpxlib.**
+-dontwarn javax.xml.bind.**

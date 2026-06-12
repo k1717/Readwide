@@ -652,9 +652,18 @@
                 android:id="@+id/spinner_epub_page_effect"
                 android:layout_width="match_parent"
                 android:layout_height="44dp"
-                android:layout_marginBottom="18dp"
+                android:layout_marginBottom="8dp"
                 android:background="@android:color/transparent"
                 android:popupBackground="?attr/colorSurface" />
+
+            <Switch
+                android:id="@+id/switch_epub_force_reader_theme_colors"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:layout_marginBottom="14dp"
+                android:text="@string/epub_force_reader_theme_colors"
+                android:textColor="?attr/colorOnSurface"
+                android:textSize="16sp" />
 
             <TextView
                 android:id="@+id/epub_left_spacing_label"
@@ -823,7 +832,11 @@
                 android:popupBackground="?attr/colorSurface" />
 
             <Switch android:id="@+id/switch_volume_scroll" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/volume_keys_page" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
-            <Switch android:id="@+id/switch_tap_paging" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/tap_top_bottom_page" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
+            <Switch android:id="@+id/switch_tap_paging" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/tap_paging_txt" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
+            <Switch android:id="@+id/switch_tap_paging_markdown" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/tap_paging_markdown" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
+            <Switch android:id="@+id/switch_tap_paging_pdf" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/tap_paging_pdf" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
+            <Switch android:id="@+id/switch_tap_paging_epub" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/tap_paging_epub" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
+            <Switch android:id="@+id/switch_tap_paging_word" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/tap_paging_word" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
 
             <TextView
                 android:layout_width="match_parent"
@@ -856,7 +869,7 @@
                 android:layout_marginTop="6dp"
                 android:text="@string/tap_zone_leading_default"
                 android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="13sp" />
+                android:textSize="14sp" />
 
             <SeekBar
                 android:id="@+id/tap_zone_leading_seekbar"
@@ -871,7 +884,7 @@
                 android:layout_marginTop="4dp"
                 android:text="@string/tap_zone_trailing_default"
                 android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="13sp" />
+                android:textSize="14sp" />
 
             <SeekBar
                 android:id="@+id/tap_zone_trailing_seekbar"

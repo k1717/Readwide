@@ -10,6 +10,8 @@ import net.lingala.zip4j.model.FileHeader;
 import org.apache.commons.compress.archivers.ArchiveEntry;
 import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry;
 import org.apache.commons.compress.archivers.sevenz.SevenZFile;
+import org.apache.commons.compress.archivers.sevenz.SevenZMethod;
+import org.apache.commons.compress.archivers.sevenz.SevenZMethodConfiguration;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
@@ -197,14 +199,7 @@ public final class ArchiveSupport {
                 case ZIP:
                     return isZipFileEncrypted(prepared.file);
                 case SEVEN_Z:
-                    try {
-                        listSevenZEntries(prepared.file, null);
-                        return false;
-                    } catch (PasswordRequiredException e) {
-                        return true;
-                    } catch (IOException e) {
-                        return false;
-                    }
+                    return requiresSevenZPasswordForExtraction(prepared.file);
                 case RAR:
                     return RarArchiveReader.requiresPasswordForExtraction(prepared.file);
                 case ALZ:
@@ -407,7 +402,8 @@ public final class ArchiveSupport {
                 byte[] rawNameBytes = copyOfRange(central, nameStart, nameLength);
                 String decoded = ArchiveFilenameDecoder.decodeZipName(rawNameBytes, (flags & 0x0800) != 0);
                 boolean directory = decoded.replace('\\', '/').endsWith("/");
-                result.add(new ZipRawName(decoded, directory));
+                long size = readUInt32LE(central, i + 24);
+                result.add(new ZipRawName(decoded, directory, size));
                 long next = (long) nameEnd + extraLength + commentLength;
                 if (next <= i || next > central.length) return Collections.emptyList();
                 i = (int) next - 1;
@@ -439,6 +435,16 @@ public final class ArchiveSupport {
                                                      @Nullable char[] password) throws IOException {
         if (hasZipEncryptedHeaderSignature(archive) && (password == null || password.length == 0)) {
             throw new PasswordRequiredException();
+        }
+        List<ZipRawName> centralNames = getZipRawNames(archive);
+        if (!centralNames.isEmpty()) {
+            ArrayList<EntryInfo> result = new ArrayList<>();
+            for (ZipRawName rawName : centralNames) {
+                if (rawName == null) continue;
+                String path = sanitizeEntryPathForList(rawName.decodedName);
+                if (path != null) result.add(new EntryInfo(path, rawName.directory, rawName.size, 0L));
+            }
+            if (!result.isEmpty()) return withSyntheticDirectories(result);
         }
         long length = archive.length();
         int readSize = (int) Math.min(length, 4L * 1024L * 1024L);
@@ -485,9 +491,139 @@ public final class ArchiveSupport {
             }
             return withSyntheticDirectories(result);
         } catch (IOException e) {
-            if (password == null || password.length == 0) throw new PasswordRequiredException();
+            if ((password == null || password.length == 0) && isSevenZPasswordRequired(e)) {
+                throw new PasswordRequiredException();
+            }
             throw e;
         }
+    }
+
+    private static boolean isSevenZPasswordRequired(@NonNull Exception e) {
+        String className = e.getClass().getName().toLowerCase(Locale.ROOT);
+        if (className.contains("passwordrequired")) return true;
+        String message = e.getMessage();
+        String lower = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        return lower.contains("password required")
+                || lower.contains("password is required")
+                || lower.contains("requires password")
+                || lower.contains("no password supplied")
+                || lower.contains("password has not been set")
+                || lower.contains("cannot read encrypted")
+                || lower.contains("encrypted content")
+                || lower.contains("encrypted header")
+                || lower.contains("encrypted archive");
+    }
+
+    /**
+     * Detects both header-encrypted and data-encrypted 7z archives for the UI
+     * password prompt. Commons Compress can list visible headers of a data-
+     * encrypted 7z without building the decoder chain, so entry listing alone is
+     * not enough. To keep solid-archive cost bounded, probe only the first
+     * stream-bearing entry and read at most one byte. Mixed archives with a later
+     * encrypted stream after an unencrypted first stream remain extraction-time
+     * failures rather than expensive up-front scans.
+     */
+    private static boolean requiresSevenZPasswordForExtraction(@NonNull File archive) {
+        byte[] probe = new byte[1];
+        try (SevenZFile sevenZ = openSevenZFile(archive, null)) {
+            SevenZArchiveEntry entry;
+            while ((entry = sevenZ.getNextEntry()) != null) {
+                if (!entry.hasStream()) continue;
+                if (sevenZEntryUsesAes(entry)) return true;
+                try {
+                    int read = sevenZ.read(probe);
+                    if (sevenZEntryUsesAes(entry)) return true;
+                    return false;
+                } catch (IOException e) {
+                    return isSevenZPasswordRequired(e) || sevenZEntryUsesAes(entry);
+                }
+            }
+            return false;
+        } catch (PasswordRequiredException e) {
+            return true;
+        } catch (IOException | SecurityException e) {
+            return isSevenZPasswordRequired(e);
+        }
+    }
+
+    private static boolean sevenZEntryUsesAes(@NonNull SevenZArchiveEntry entry) {
+        Iterable<? extends SevenZMethodConfiguration> methods = entry.getContentMethods();
+        if (methods == null) return false;
+        for (SevenZMethodConfiguration methodConfig : methods) {
+            if (methodConfig != null && methodConfig.getMethod() == SevenZMethod.AES256SHA256) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean sevenZArchiveHasAesContext(@NonNull File archive, @Nullable char[] password) {
+        try (SevenZFile sevenZ = openSevenZFile(archive, password)) {
+            byte[] probe = new byte[1];
+            SevenZArchiveEntry entry;
+            while ((entry = sevenZ.getNextEntry()) != null) {
+                if (sevenZEntryUsesAes(entry)) return true;
+                if (!entry.hasStream()) continue;
+                try {
+                    sevenZ.read(probe);
+                } catch (IOException e) {
+                    if (sevenZEntryUsesAes(entry)) return true;
+                    break;
+                }
+                if (sevenZEntryUsesAes(entry)) return true;
+                // Bound the probe to the first stream-bearing entry to avoid
+                // solid-draining attacker-controlled data during classification.
+                break;
+            }
+        } catch (IOException | SecurityException ignored) {
+            // Fall through to the raw coder-id scan below. Header-encrypted 7z
+            // usually fails before content methods are available.
+        }
+        return rawSevenZHeaderContainsAesCoder(archive);
+    }
+
+    private static boolean rawSevenZHeaderContainsAesCoder(@NonNull File archive) {
+        try {
+            SevenZSplitVolumeResolver.VolumeSet splitVolumes = SevenZSplitVolumeResolver.resolve(archive);
+            if (splitVolumes != null) {
+                for (File part : splitVolumes.parts) {
+                    if (rawFileContainsSevenZAesCoder(part)) return true;
+                }
+                return false;
+            }
+        } catch (IOException | SecurityException ignored) {
+            // The classifier must never turn a split-chain resolution problem into
+            // a crash. If the split chain is broken, normal extraction already
+            // reports CORRUPT_ARCHIVE through the primary path.
+        }
+        return rawFileContainsSevenZAesCoder(archive);
+    }
+
+    private static boolean rawFileContainsSevenZAesCoder(@NonNull File file) {
+        final byte[] aesCoder = new byte[] { 0x06, (byte) 0xf1, 0x07, 0x01 };
+        byte[] buffer = new byte[1024 * 64];
+        int matched = 0;
+        long remaining = Math.min(file.length(), 16L * 1024L * 1024L);
+        try (InputStream in = new BufferedInputStream(new FileInputStream(file))) {
+            while (remaining > 0L) {
+                int want = (int) Math.min(buffer.length, remaining);
+                int read = in.read(buffer, 0, want);
+                if (read < 0) break;
+                remaining -= read;
+                for (int i = 0; i < read; i++) {
+                    byte b = buffer[i];
+                    if (b == aesCoder[matched]) {
+                        matched++;
+                        if (matched == aesCoder.length) return true;
+                    } else {
+                        matched = (b == aesCoder[0]) ? 1 : 0;
+                    }
+                }
+            }
+        } catch (IOException | SecurityException ignored) {
+            return false;
+        }
+        return false;
     }
 
     @NonNull
@@ -639,7 +775,7 @@ public final class ArchiveSupport {
             return ExtractionResult.failed(ExtractionFailure.UNSUPPORTED_FEATURE, e.getMessage());
         } catch (IOException | SecurityException e) {
             deleteFileSystemItem(workDir);
-            return ExtractionResult.failed(classifyExtractionFailure(e), e.getMessage());
+            return ExtractionResult.failed(classifyExtractionFailure(archive, password, e), e.getMessage());
         }
     }
 
@@ -704,9 +840,9 @@ public final class ArchiveSupport {
                 default:
                     ok = false;
             }
-            return ok
-                    ? ExtractionResult.success()
-                    : ExtractionResult.failed(ExtractionFailure.FAILED, null);
+            if (ok) return ExtractionResult.success();
+            cleanupPartialSingleEntryOutput(outFile);
+            return ExtractionResult.failed(ExtractionFailure.FAILED, null);
         } catch (PasswordRequiredException e) {
             try { outFile.delete(); } catch (SecurityException ignored) {}
             return ExtractionResult.failed(ExtractionFailure.PASSWORD_REQUIRED, e.getMessage());
@@ -715,8 +851,12 @@ public final class ArchiveSupport {
             return ExtractionResult.failed(ExtractionFailure.UNSUPPORTED_FEATURE, e.getMessage());
         } catch (IOException | SecurityException e) {
             try { outFile.delete(); } catch (SecurityException ignored2) {}
-            return ExtractionResult.failed(classifyExtractionFailure(e), e.getMessage());
+            return ExtractionResult.failed(classifyExtractionFailure(archive, password, e), e.getMessage());
         }
+    }
+
+    private static void cleanupPartialSingleEntryOutput(@NonNull File outFile) {
+        try { deleteFileSystemItem(outFile); } catch (SecurityException ignored) {}
     }
 
     public static boolean createZipArchive(@NonNull List<File> sources,
@@ -1046,6 +1186,39 @@ public final class ArchiveSupport {
         return ArchiveFailureClassifier.classify(e);
     }
 
+    @NonNull
+    private static ExtractionFailure classifyExtractionFailure(@NonNull File archive,
+                                                              @Nullable char[] password,
+                                                              @NonNull Exception e) {
+        ExtractionFailure base = ArchiveFailureClassifier.classify(e);
+        if (base != ExtractionFailure.CORRUPT_ARCHIVE
+                || password == null
+                || password.length == 0) {
+            return base;
+        }
+        try (PreparedArchive prepared = prepareArchiveForRead(archive)) {
+            return classifyExtractionFailure(prepared.type, prepared.file, password, e);
+        } catch (IOException | SecurityException ignored) {
+            return base;
+        }
+    }
+
+    @NonNull
+    private static ExtractionFailure classifyExtractionFailure(@NonNull Type type,
+                                                              @NonNull File preparedArchive,
+                                                              @Nullable char[] password,
+                                                              @NonNull Exception e) {
+        ExtractionFailure base = ArchiveFailureClassifier.classify(e);
+        if (base == ExtractionFailure.CORRUPT_ARCHIVE
+                && type == Type.SEVEN_Z
+                && password != null
+                && password.length > 0
+                && sevenZArchiveHasAesContext(preparedArchive, password)) {
+            return ExtractionFailure.BAD_PASSWORD;
+        }
+        return base;
+    }
+
     private static boolean isUnknownZipCompression(@NonNull Exception e) {
         String message = e.getMessage();
         return message != null && message.toLowerCase(Locale.ROOT).contains("unknown compression method");
@@ -1206,16 +1379,32 @@ public final class ArchiveSupport {
         if (parent == null) throw new IOException("Split archive has no parent directory");
         String stem = name.substring(0, name.length() - 4);
         List<File> result = new ArrayList<>();
+        int firstMissing = -1;
         for (int index = 1; index <= 999; index++) {
             String suffix = String.format(Locale.ROOT, ".%03d", index);
             File part = new File(parent, stem + suffix);
             if (!part.exists() || !part.isFile()) {
-                if (index == 1) throw new IOException("First split archive part is missing");
+                firstMissing = index;
+                if (index == 1) throw new IOException("First numeric split archive part is missing: " + stem + suffix);
                 break;
             }
             result.add(part);
         }
+        if (firstMissing > 0 && hasLaterNumericSplitPart(parent, stem, firstMissing + 1)) {
+            throw new IOException("Missing numeric split archive part: "
+                    + stem + String.format(Locale.ROOT, ".%03d", firstMissing));
+        }
         return result;
+    }
+
+    private static boolean hasLaterNumericSplitPart(@NonNull File parent,
+                                                    @NonNull String stem,
+                                                    int startIndex) {
+        for (int index = startIndex; index <= 999; index++) {
+            File part = new File(parent, stem + String.format(Locale.ROOT, ".%03d", index));
+            if (part.exists() && part.isFile()) return true;
+        }
+        return false;
     }
 
     private static boolean isFirstRarSplitName(@NonNull String lowerName) {
@@ -1635,11 +1824,13 @@ public final class ArchiveSupport {
                 File outParent = out.getParentFile();
                 if (outParent == null) return false;
                 if (!outParent.exists() && !outParent.mkdirs()) return false;
+                long decodedBytes = 0L;
                 try (OutputStream outStream = new BufferedOutputStream(new FileOutputStream(out))) {
                     if (entry.hasStream()) {
                         int read;
                         while ((read = sevenZ.read(buffer)) > 0) {
                             if (progress != null && !progress.checkpoint()) return false;
+                            decodedBytes = checkedAddDecodedStreamBytes(decodedBytes, read);
                             outStream.write(buffer, 0, read);
                             if (progress != null) progress.addDoneBytes(read);
                         }
@@ -1665,10 +1856,12 @@ public final class ArchiveSupport {
                     drainSevenZEntry(sevenZ, entry, buffer);
                     continue;
                 }
+                long decodedBytes = 0L;
                 try (OutputStream outStream = new BufferedOutputStream(new FileOutputStream(outFile))) {
                     if (entry.hasStream()) {
                         int read;
                         while ((read = sevenZ.read(buffer)) > 0) {
+                            decodedBytes = checkedAddDecodedStreamBytes(decodedBytes, read);
                             outStream.write(buffer, 0, read);
                         }
                     }
@@ -1699,8 +1892,14 @@ public final class ArchiveSupport {
                                          @NonNull SevenZArchiveEntry entry,
                                          @NonNull byte[] buffer) throws IOException {
         if (!entry.hasStream()) return;
-        while (sevenZ.read(buffer) > 0) {
+        long decodedBytes = 0L;
+        int read;
+        while ((read = sevenZ.read(buffer)) > 0) {
+            decodedBytes = checkedAddDecodedStreamBytes(decodedBytes, read);
             // Drain unread payload before moving to the next entry in solid archives.
+            // The stream-time safety limit still applies here because draining a
+            // previous solid member can decode attacker-controlled bytes even when
+            // the caller only requested a later single entry.
         }
     }
 
@@ -1797,16 +1996,27 @@ public final class ArchiveSupport {
         if (outParent == null) return false;
         if (!outParent.exists() && !outParent.mkdirs()) return false;
         byte[] buffer = new byte[1024 * 64];
+        long decodedBytes = 0L;
         try (OutputStream outStream = new BufferedOutputStream(new FileOutputStream(out))) {
             int read;
             while ((read = in.read(buffer)) != -1) {
                 if (progress != null && !progress.checkpoint()) return false;
+                decodedBytes = checkedAddDecodedStreamBytes(decodedBytes, read);
                 outStream.write(buffer, 0, read);
                 if (progress != null) progress.addDoneBytes(read);
             }
             outStream.flush();
             return true;
         }
+    }
+
+    private static long checkedAddDecodedStreamBytes(long current, int justRead) throws IOException {
+        if (justRead <= 0) return current;
+        if (current > MAX_EXTRACTION_TOTAL_BYTES - justRead) {
+            throw new UnsupportedArchiveFeatureException(
+                    "Decoded archive stream exceeds the extraction safety limit");
+        }
+        return current + justRead;
     }
 
     private static long sumZipPayloadBytes(@NonNull List<FileHeader> headers) {
@@ -1847,10 +2057,12 @@ public final class ArchiveSupport {
     private static final class ZipRawName {
         final String decodedName;
         final boolean directory;
+        final long size;
 
-        ZipRawName(@NonNull String decodedName, boolean directory) {
+        ZipRawName(@NonNull String decodedName, boolean directory, long size) {
             this.decodedName = decodedName;
             this.directory = directory;
+            this.size = size;
         }
     }
 

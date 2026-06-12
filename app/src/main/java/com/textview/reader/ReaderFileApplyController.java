@@ -4,6 +4,7 @@ import androidx.annotation.NonNull;
 
 import com.textview.reader.model.LargeTextLinePartitionResult;
 import com.textview.reader.model.ReaderState;
+import com.textview.reader.util.FileUtils;
 import com.textview.reader.util.TextDisplayRuleManager;
 
 final class ReaderFileApplyController {
@@ -185,6 +186,10 @@ final class ReaderFileApplyController {
     private void renderLoadedContent(boolean largeTextPartitionMode) {
         activity.readerView.setLargeTextPartitionMode(largeTextPartitionMode);
         activity.readerView.setOverlapLines(activity.prefs.getPagingOverlapLines());
+        String markdownName = activity.filePath != null && !activity.filePath.isEmpty()
+                ? activity.filePath
+                : activity.fileName;
+        activity.readerView.setMarkdownHighlightingEnabled(FileUtils.isMarkdownFile(markdownName));
         activity.readerView.setTextContent(activity.fileContent);
         activity.applySearchHighlight();
     }

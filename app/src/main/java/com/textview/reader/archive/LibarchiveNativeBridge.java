@@ -251,6 +251,23 @@ final class LibarchiveNativeBridge {
                                 @NonNull String outPath,
                                 @Nullable char[] password,
                                 @Nullable FileOperationProgress progress) throws IOException {
+        return extractEntryInternal(archivePaths, entryPath, outPath, password, progress, false);
+    }
+
+    static boolean extractEntryWithSequentialPriming(@NonNull String[] archivePaths,
+                                                    @NonNull String entryPath,
+                                                    @NonNull String outPath,
+                                                    @Nullable char[] password,
+                                                    @Nullable FileOperationProgress progress) throws IOException {
+        return extractEntryInternal(archivePaths, entryPath, outPath, password, progress, true);
+    }
+
+    private static boolean extractEntryInternal(@NonNull String[] archivePaths,
+                                                @NonNull String entryPath,
+                                                @NonNull String outPath,
+                                                @Nullable char[] password,
+                                                @Nullable FileOperationProgress progress,
+                                                boolean primeSkippedRegularFiles) throws IOException {
         ensureAvailable();
         String wanted = normalizeForCompare(entryPath);
         if (wanted == null) throw new IOException("Invalid archive entry path");
@@ -267,12 +284,13 @@ final class LibarchiveNativeBridge {
             while ((entry = nextHeaderEntry(reader.archive)) != 0L) {
                 if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
                 String path = normalizedEntryPath(entry);
-                if (path == null) {
-                    Archive.readDataSkip(reader.archive);
-                    continue;
-                }
-                if (!wanted.equals(normalizeForCompare(path))) {
-                    Archive.readDataSkip(reader.archive);
+                String comparePath = path == null ? null : normalizeForCompare(path);
+                if (comparePath == null || !wanted.equals(comparePath)) {
+                    if (primeSkippedRegularFiles && isRegularFile(entry)) {
+                        drainCurrentRegularEntryForSequentialDecoder(reader.archive, entry, parent, progress);
+                    } else {
+                        Archive.readDataSkip(reader.archive);
+                    }
                     continue;
                 }
                 if (isDirectory(entry)) throw new IOException("Archive entry is a directory");
@@ -426,6 +444,31 @@ final class LibarchiveNativeBridge {
             Archive.readDataIntoFd(archive, pfd.getFd());
         }
         if (progress != null && size > 0L) progress.addDoneBytes(size);
+    }
+
+    private static void drainCurrentRegularEntryForSequentialDecoder(long archive,
+                                                                     long entry,
+                                                                     @Nullable File tempParent,
+                                                                     @Nullable FileOperationProgress progress)
+            throws IOException, ArchiveException {
+        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        File dir = tempParent != null ? tempParent : new File(System.getProperty("java.io.tmpdir", "."));
+        if (!dir.exists() && !dir.mkdirs()) throw new IOException("Cannot create temporary extraction directory");
+        File temp = File.createTempFile("libarchive-solid-primer-", ".tmp", dir);
+        try {
+            try (ParcelFileDescriptor pfd = ParcelFileDescriptor.open(temp,
+                    ParcelFileDescriptor.MODE_CREATE
+                            | ParcelFileDescriptor.MODE_TRUNCATE
+                            | ParcelFileDescriptor.MODE_WRITE_ONLY)) {
+                Archive.readDataIntoFd(archive, pfd.getFd());
+            }
+        } finally {
+            try {
+                //noinspection ResultOfMethodCallIgnored
+                temp.delete();
+            } catch (SecurityException ignored) {
+            }
+        }
     }
 
     @Nullable

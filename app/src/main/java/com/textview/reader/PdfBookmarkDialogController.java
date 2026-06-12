@@ -34,35 +34,75 @@ final class PdfBookmarkDialogController {
     }
 
 private void addBookmarkForCurrentPage() {
+    addBookmarkForCurrentPage(null);
+}
+
+private void addBookmarkForCurrentPage(Runnable afterSave) {
     if (activity.filePath == null || activity.pageCount <= 0) {
         ShortToast.show(activity, activity.getString(R.string.file_not_loaded));
+        if (afterSave != null) afterSave.run();
         return;
     }
 
+    String anchorJson = activity.currentPdfContentAnchorJson();
+    int anchorPage = activity.pdfAnchorPageFromJson(anchorJson, activity.currentPage);
     List<Bookmark> existing = activity.bookmarkManager.getBookmarksForFile(activity.filePath);
     for (Bookmark b : existing) {
-        if (b.getCharPosition() == activity.currentPage) {
-            b.setLineNumber(activity.currentPage + 1);
-            b.setPageNumber(activity.currentPage + 1);
+        if (pdfBookmarkMatchesCurrentSpot(b, anchorJson)) {
+            b.setLineNumber(anchorPage + 1);
+            b.setPageNumber(anchorPage + 1);
             b.setTotalPages(activity.pageCount);
-            b.setExcerpt(pageLabel(activity.currentPage));
-            b.setEndPosition(activity.currentPage);
+            b.setExcerpt(pageLabel(anchorPage));
+            b.setEndPosition(anchorPage);
+            b.setContentAnchorJson(anchorJson);
+            b.setPageLayoutSignature("PDF_PAGE_COORD_v2");
             activity.bookmarkManager.updateBookmark(b);
             ShortToast.show(activity, activity.getString(R.string.bookmark_updated));
+            if (afterSave != null) afterSave.run();
             return;
         }
     }
 
-    Bookmark bookmark = new Bookmark(activity.filePath, activity.fileName, activity.currentPage, activity.currentPage + 1, pageLabel(activity.currentPage));
-    bookmark.setPageNumber(activity.currentPage + 1);
+    Bookmark bookmark = new Bookmark(activity.filePath, activity.fileName, anchorPage, anchorPage + 1, pageLabel(anchorPage));
+    bookmark.setPageNumber(anchorPage + 1);
     bookmark.setTotalPages(activity.pageCount);
-    bookmark.setEndPosition(activity.currentPage);
+    bookmark.setEndPosition(anchorPage);
+    bookmark.setContentAnchorJson(anchorJson);
+    bookmark.setPageLayoutSignature("PDF_PAGE_COORD_v2");
     activity.bookmarkManager.addBookmark(bookmark);
     ShortToast.show(activity, activity.getString(R.string.bookmark_saved));
+    if (afterSave != null) afterSave.run();
+}
+
+private boolean pdfBookmarkMatchesCurrentSpot(@NonNull Bookmark bookmark, String currentAnchorJson) {
+    int currentAnchorPage = activity.pdfAnchorPageFromJson(currentAnchorJson, activity.currentPage);
+    if (bookmark.getCharPosition() != currentAnchorPage) return false;
+    String oldAnchorJson = bookmark.getContentAnchorJson();
+    if (oldAnchorJson == null || oldAnchorJson.trim().isEmpty()
+            || currentAnchorJson == null || currentAnchorJson.trim().isEmpty()) {
+        return false;
+    }
+    try {
+        org.json.JSONObject oldObj = new org.json.JSONObject(oldAnchorJson);
+        org.json.JSONObject newObj = new org.json.JSONObject(currentAnchorJson);
+        int oldPage = oldObj.optInt("page", bookmark.getCharPosition());
+        int newPage = newObj.optInt("page", activity.currentPage);
+        if (oldPage != newPage) return false;
+        double dx = Math.abs(oldObj.optDouble("xRatio", 0.0d) - newObj.optDouble("xRatio", 0.0d));
+        double dy = Math.abs(oldObj.optDouble("yRatio", 0.0d) - newObj.optDouble("yRatio", 0.0d));
+        return dx <= 0.035d && dy <= 0.018d;
+    } catch (Exception ignored) {
+        return false;
+    }
 }
 
 private String pageLabel(int zeroBasedPage) {
     return String.format(Locale.getDefault(), "Page %d", zeroBasedPage + 1);
+}
+
+private boolean isMarkdownSourceBookmark(@NonNull Bookmark bookmark) {
+    String signature = bookmark.getPageLayoutSignature();
+    return signature != null && signature.startsWith("Markdown_SOURCE_ANCHOR");
 }
 
 void showBookmarksDialog() {
@@ -198,9 +238,12 @@ void showBookmarksDialog() {
     };
 
     saveButton.setOnClickListener(v -> {
-        addBookmarkForCurrentPage();
-        expandedFolders.add(activity.filePath);
-        refreshRef[0].run();
+        saveButton.setEnabled(false);
+        addBookmarkForCurrentPage(() -> {
+            expandedFolders.add(activity.filePath);
+            refreshRef[0].run();
+            saveButton.setEnabled(true);
+        });
     });
     closeButton.setOnClickListener(v -> dialog.dismiss());
 
@@ -308,7 +351,11 @@ private void navigateToBookmark(@NonNull Bookmark b) {
         return;
     }
     if (path.equals(activity.filePath) || target.getAbsolutePath().equals(activity.filePath)) {
-        activity.goToPage(b.getCharPosition(), Integer.compare(b.getCharPosition(), activity.currentPage));
+        if (b.getContentAnchorJson() != null && !b.getContentAnchorJson().trim().isEmpty()) {
+            activity.restorePdfContentAnchor(b.getContentAnchorJson());
+        } else {
+            activity.goToPage(b.getCharPosition(), Integer.compare(b.getCharPosition(), activity.currentPage));
+        }
         return;
     }
     android.content.Intent intent;
@@ -317,10 +364,21 @@ private void navigateToBookmark(@NonNull Bookmark b) {
         intent = new android.content.Intent(activity, PdfReaderActivity.class);
         intent.putExtra(PdfReaderActivity.EXTRA_FILE_PATH, targetPath);
         intent.putExtra(PdfReaderActivity.EXTRA_JUMP_TO_PAGE, b.getCharPosition());
-    } else if (FileUtils.isEpubFile(target.getName()) || FileUtils.isWordFile(target.getName())) {
+        if (b.getContentAnchorJson() != null && !b.getContentAnchorJson().trim().isEmpty()) {
+            intent.putExtra(PdfReaderActivity.EXTRA_CONTENT_ANCHOR_JSON, b.getContentAnchorJson());
+        }
+    } else if (FileUtils.isEpubFile(target.getName()) || FileUtils.isMarkdownFile(target.getName()) || FileUtils.isWordOrHwpFile(target.getName())) {
         intent = new android.content.Intent(activity, DocumentPageActivity.class);
         intent.putExtra(DocumentPageActivity.EXTRA_FILE_PATH, targetPath);
-        intent.putExtra(DocumentPageActivity.EXTRA_JUMP_TO_PAGE, b.getCharPosition());
+        if (FileUtils.isMarkdownFile(target.getName()) && isMarkdownSourceBookmark(b)) {
+            intent.putExtra(DocumentPageActivity.EXTRA_MARKDOWN_SOURCE_OFFSET, b.getCharPosition());
+            intent.putExtra(DocumentPageActivity.EXTRA_JUMP_TO_PAGE, Math.max(0, b.getPageNumber() - 1));
+        } else {
+            intent.putExtra(DocumentPageActivity.EXTRA_JUMP_TO_PAGE, b.getCharPosition());
+        }
+        if (b.getContentAnchorJson() != null && !b.getContentAnchorJson().trim().isEmpty()) {
+            intent.putExtra(DocumentPageActivity.EXTRA_CONTENT_ANCHOR_JSON, b.getContentAnchorJson());
+        }
     } else {
         intent = new android.content.Intent(activity, ReaderActivity.class);
         intent.putExtra(ReaderActivity.EXTRA_FILE_PATH, targetPath);

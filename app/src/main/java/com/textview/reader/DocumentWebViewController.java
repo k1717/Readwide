@@ -60,6 +60,13 @@ final class DocumentWebViewController {
             activity.scheduleDocumentSearchReveal();
         });
         activity.webView.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
+            if (activity.isMarkdownDocument() && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
+                activity.updateMarkdownVisualPageModel(false);
+                activity.scheduleMarkdownSourceAnchorUpdate();
+            }
+            if (activity.isRenderedContentAnchorDocument() && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
+                activity.scheduleDocumentContentAnchorUpdate();
+            }
             if ("Word".equals(activity.docType)
                     && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
                 activity.webView.removeCallbacks(activity.checkWordSelectionAfterScrollRunnable);
@@ -84,7 +91,17 @@ final class DocumentWebViewController {
                 activity.applyFixedLayoutFindOffsetCssIfNeeded();
                 activity.applyDocumentSearchHighlightAfterPageLoad();
                 activity.runDocumentSlideInAnimation();
+                activity.snapDocumentWebViewToPageTopIfNeeded(view);
                 activity.restoreDocumentScrollAfterThemeRefreshIfNeeded(view);
+                activity.installMarkdownSourceAnchorScript();
+                activity.restoreMarkdownVisualPositionAfterLoadIfNeeded(view);
+                activity.scheduleMarkdownVisualPageModelUpdate();
+                activity.scheduleMarkdownSourceAnchorUpdate();
+                activity.installDocumentContentAnchorScript();
+                activity.restoreDocumentContentAnchorAfterLoadIfNeeded(view);
+                if (activity.isRenderedContentAnchorDocument()) {
+                    activity.webView.postDelayed(() -> activity.updateDocumentContentAnchorFromWebView(activity::saveReadingState), 180);
+                }
             }
         });
     }

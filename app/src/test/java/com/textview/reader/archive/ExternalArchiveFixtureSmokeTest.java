@@ -161,19 +161,8 @@ public class ExternalArchiveFixtureSmokeTest {
         }
 
         File rar3SolidCbr = new File(build, "testfile.rar3.solid.cbr");
-        File rar3SolidPng = tempFolder.newFile("rar3-solid-cbr.png");
-        ArchiveSupport.ExtractionResult rar3SolidCbrResult = ArchiveSupport.extractSingleEntryDetailed(
-                rar3SolidCbr,
-                "testfile.png",
-                rar3SolidPng,
-                null);
-        if (rar3SolidCbrResult.success) {
-            assertTrue(rar3SolidPng.isFile());
-            assertTrue(Files.size(rar3SolidPng.toPath()) > 0L);
-        } else {
-            assertEquals(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, rar3SolidCbrResult.failure);
-            assertFalse(rar3SolidPng.exists());
-        }
+        assertRar3SolidCbrImageExtractionIsStrict(rar3SolidCbr, "testfile.png", "rar3-solid-cbr.png");
+        assertRar3SolidCbrImageExtractionIsStrict(rar3SolidCbr, "testfile.jpg", "rar3-solid-cbr.jpg");
     }
 
     @Test
@@ -432,6 +421,27 @@ public class ExternalArchiveFixtureSmokeTest {
         assumeTrue("Missing rar-test-files-master fixture bundle in " + root.getAbsolutePath(),
                 matches != null && matches.length > 0 && matches[0].isFile());
         return matches[0];
+    }
+
+
+    private void assertRar3SolidCbrImageExtractionIsStrict(File archive,
+                                                          String entryName,
+                                                          String outputName) throws Exception {
+        File out = tempFolder.newFile(outputName);
+        assertTrue(out.delete());
+        ArchiveSupport.ExtractionResult result = ArchiveSupport.extractSingleEntryDetailed(
+                archive,
+                entryName,
+                out,
+                null);
+        if (result.success) {
+            assertTrue(out.isFile());
+            assertTrue(Files.size(out.toPath()) > 0L);
+        } else {
+            assertEquals(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, result.failure);
+            assertFalse("failed RAR3 solid CBR extraction must not leave a partial/fallback image for "
+                    + entryName, out.exists());
+        }
     }
 
     private void assertRarEntryCount(File archive, int expectedCount, String firstPath) throws Exception {

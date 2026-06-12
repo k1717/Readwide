@@ -25,6 +25,9 @@ final class ArchiveFailureClassifier {
                 "invalid alz password",
                 "password check failed",
                 "incorrect password",
+                "password verification failed",
+                "password verify failed",
+                "wrong passphrase",
                 "decryption failed",
                 "authentication failed",
                 "mac check failed")) {
@@ -51,7 +54,11 @@ final class ArchiveFailureClassifier {
                 "encrypted archive requires password",
                 "passphrase required",
                 "no password supplied",
-                "password has not been set")) {
+                "password has not been set",
+                "cannot read encrypted",
+                "encrypted content",
+                "encrypted header",
+                "encrypted archive")) {
             return ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED;
         }
 
@@ -72,6 +79,12 @@ final class ArchiveFailureClassifier {
                 "truncated",
                 "corrupt",
                 "unexpected end",
+                "missing 7z split volume",
+                "missing numeric split archive part",
+                "first numeric split archive part is missing",
+                "missing split archive part",
+                "missing split volume",
+                "missing volume",
                 "invalid signature",
                 "invalid header",
                 "malformed",

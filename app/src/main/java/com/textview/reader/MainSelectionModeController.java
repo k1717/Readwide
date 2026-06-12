@@ -297,12 +297,7 @@ final class MainSelectionModeController {
                     ShortToast.show(activity, R.string.file_operation_cancelled);
                     return;
                 }
-                if (activity.currentDirectory != null && activity.currentDirectory.exists() && activity.currentDirectory.isDirectory() && !activity.homeMode) {
-                    activity.loadDirectory(activity.currentDirectory);
-                } else {
-                    activity.loadRecentFiles();
-                }
-                activity.rebuildDrawerStorageEntries();
+                activity.refreshVisibleFileListAfterFileSystemChange();
                 ShortToast.show(activity, finalDeletedCount > 0
                                 ? activity.getString(R.string.selected_files_deleted, finalDeletedCount)
                                 : activity.getString(R.string.selected_files_delete_failed));

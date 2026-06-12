@@ -81,9 +81,9 @@ public class RarFixtureReportTest {
         File archive = new File(tempFolder.getRoot(), "ppmd.rar");
         writeRar4Volume(archive,
                 "ppmd.txt",
-                new byte[] {(byte) 0x80, 0x00, 0x11, 0x22},
+                new byte[] {(byte) 0xa0, 0x00, 0x11, 0x22},
                 0,
-                crc32(new byte[] {(byte) 0x80, 0x00, 0x11, 0x22}),
+                crc32(new byte[] {(byte) 0xa0, 0x00, 0x11, 0x22}),
                 4L,
                 0x33);
 
@@ -93,7 +93,7 @@ public class RarFixtureReportTest {
         assertEquals(1, report.rows().size());
         assertTrue(markdown.contains("PPMd block probe"));
         assertTrue(markdown.contains("ppmd=1"));
-        assertTrue(markdown.contains("rawFlags=0x8000"));
+        assertTrue(markdown.contains("rawFlags=0xa000"));
     }
 
     @Test

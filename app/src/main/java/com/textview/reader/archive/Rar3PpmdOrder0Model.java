@@ -1,12 +1,13 @@
 package com.textview.reader.archive;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.Arrays;
 
 /**
- * Minimal order-0 PPMd frequency model primitive used by the non-live diagnostic path.
+ * Minimal order-0 PPMd frequency model primitive used by the legacy diagnostic/probe path.
  *
  * <p>This is not the real RAR3/RAR4 PPMd statistical model. It is a tested arithmetic-model
  * primitive that can map {@link RarPpmdRangeDecoder} counts to literal symbols and rescale
@@ -48,14 +49,21 @@ final class Rar3PpmdOrder0Model {
     }
 
     int decodeSymbol(@NonNull RarPpmdRangeDecoder rangeDecoder) throws IOException {
-        int count = rangeDecoder.currentCount(scale);
+        return decodeSymbol(rangeDecoder, null);
+    }
+
+    int decodeSymbol(@NonNull RarPpmdRangeDecoder rangeDecoder,
+                     @Nullable RarPpmdEscapeMask mask) throws IOException {
+        int activeScale = scale(mask);
+        int count = rangeDecoder.currentCount(activeScale);
         int low = 0;
         for (int symbol = 0; symbol < frequencies.length; symbol++) {
+            if (mask != null && mask.isMasked(symbol)) continue;
             int frequency = frequencies[symbol];
             if (frequency == 0) continue;
             int high = low + frequency;
             if (count < high) {
-                rangeDecoder.removeSubrange(low, high, scale);
+                rangeDecoder.removeSubrange(low, high, activeScale);
                 increment(symbol);
                 return symbol;
             }
@@ -63,7 +71,7 @@ final class Rar3PpmdOrder0Model {
         }
         throw new RarArchiveReader.UnsupportedRarFeatureException(
                 "RAR3/RAR4 PPMd order-0 model count did not map to a symbol: " + count
-                        + " / " + scale);
+                        + " / " + activeScale + "; masked=" + (mask == null ? 0 : mask.maskedCount()));
     }
 
     int frequency(int symbol) {
@@ -72,6 +80,19 @@ final class Rar3PpmdOrder0Model {
 
     int scale() {
         return scale;
+    }
+
+    int scale(@Nullable RarPpmdEscapeMask mask) throws IOException {
+        if (mask == null || mask.maskedCount() == 0) return scale;
+        int activeScale = 0;
+        for (int symbol = 0; symbol < frequencies.length; symbol++) {
+            if (!mask.isMasked(symbol)) activeScale += frequencies[symbol];
+        }
+        if (activeScale <= 0) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException(
+                    "RAR3/RAR4 PPMd order-0 model has no unmasked symbols left");
+        }
+        return activeScale;
     }
 
     private void increment(int symbol) {

@@ -7,8 +7,8 @@ import androidx.annotation.NonNull;
  *
  * <p>This class is intentionally metadata-only. It does not extract anything and does not make
  * support claims. It exists so the reader, diagnostics, and docs can share the same conservative
- * boundary: libarchive remains the normal compressed RAR backend; first-party Java handles stored
- * and the verified non-solid classic-LZ fallback only.</p>
+ * boundary: libarchive remains the primary broad RAR backend; first-party Java handles stored
+ * entries plus the verified scoped RAR3/RAR4 and RAR5 decode-only fallback paths.</p>
  */
 final class RarBackendRouter {
     private RarBackendRouter() {}
@@ -32,7 +32,7 @@ final class RarBackendRouter {
                         "RAR5 stored payload has a limited first-party path");
             }
             return RarBackendDecision.libarchive(
-                    "RAR5 compressed payload is libarchive-primary; first-party Java has no RAR5 compressed decoder");
+                    "RAR5 compressed payload is libarchive-primary, with a scoped first-party Java fallback for eligible unencrypted single-volume RAR5 v5.0 entries");
         }
 
         if (RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) {
@@ -79,9 +79,14 @@ final class RarBackendRouter {
         }
 
         if (entry.solid) {
+            if (Rar3PpmdBlockProbe.isPpmdPayload(entry)) {
+                return RarBackendDecision.firstParty(
+                        RarBackendRoute.Kind.TRY_FIRST_PARTY_SOLID_SEQUENTIAL,
+                        "RAR3/RAR4 solid PPMd payload has a scoped first-party sequential decoder for eligible non-encrypted single-volume solid sets");
+            }
             return RarBackendDecision.unsupported(
                     RarBackendRoute.Kind.CLEAN_UNSUPPORTED_SOLID,
-                    "RAR3/RAR4 compressed solid payload remains diagnostic/scaffold-only without a real eligible classic-LZ fixture matrix");
+                    "RAR3/RAR4 compressed solid payload is outside the verified first-party PPMd solid subset unless another scoped special-case decoder accepts it");
         }
 
         if (Rar3FirstPartyArchiveExtractor.isLimitedNonSolidClassicLzFallbackCandidate(entry)) {

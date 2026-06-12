@@ -340,6 +340,11 @@
     <string name="sort_size_small">크기 (작은 순)</string>
     <string name="sort_type">파일 형식</string>
     <string name="storage_root">/storage</string>
+    <string name="tap_paging_txt">탭 영역 페이지 이동: TXT</string>
+    <string name="tap_paging_markdown">탭 영역 페이지 이동: Markdown</string>
+    <string name="tap_paging_pdf">탭 영역 페이지 이동: PDF</string>
+    <string name="tap_paging_epub">탭 영역 페이지 이동: EPUB</string>
+    <string name="tap_paging_word">탭 영역 페이지 이동: Word</string>
     <string name="tap_top_bottom_page">탭 영역으로 페이지 이동</string>
     <string name="tap_zone_mode">탭 영역 배치</string>
     <string name="tap_zone_vertical">세로 (위 / 가운데 / 아래)</string>
@@ -699,4 +704,10 @@
     <string name="bookmark_file_missing_title">북마크 파일 없음</string>
     <string name="bookmark_file_missing_message">북마크는 가져왔거나 저장되어 있지만, 저장된 경로에서 원본 파일을 찾을 수 없습니다.</string>
     <string name="bookmark_file_missing_rebind_note">북마크는 삭제되지 않습니다. 같은 파일을 이 기기에 복사해서 열면 파일명, 크기, fingerprint 기준으로 다시 연결을 시도할 수 있습니다.</string>
+    <string name="image_view_options">보기 옵션</string>
+    <string name="image_slider_direction_ltr">이미지 흐름: 좌에서 우</string>
+    <string name="image_tap_paging_on">터치 페이지 이동: 켜짐</string>
+    <string name="image_tap_paging_off">터치 페이지 이동: 꺼짐</string>
+    <string name="image_slider_direction_rtl">이미지 흐름: 우에서 좌</string>
+    <string name="epub_force_reader_theme_colors">EPUB에서 읽기 테마 색상 우선</string>
 </resources>

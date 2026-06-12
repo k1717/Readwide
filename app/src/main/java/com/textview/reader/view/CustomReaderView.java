@@ -108,8 +108,25 @@ public class CustomReaderView extends View {
                                                                   int marginVerticalPx,
                                                                   int overlapLines,
                                                                   float lineSpacingMultiplier) {
+        String fullText = value != null ? value : "";
+        return buildPageTextAnchors(fullText, fullText, sourcePaint, layoutWidth, viewportHeight,
+                marginVerticalPx, overlapLines, lineSpacingMultiplier);
+    }
+
+    public static ArrayList<PageTextAnchor> buildPageTextAnchors(CharSequence layoutValue,
+                                                                  String value,
+                                                                  TextPaint sourcePaint,
+                                                                  int layoutWidth,
+                                                                  int viewportHeight,
+                                                                  int marginVerticalPx,
+                                                                  int overlapLines,
+                                                                  float lineSpacingMultiplier) {
         ArrayList<PageTextAnchor> result = new ArrayList<>();
         String fullText = value != null ? value : "";
+        CharSequence fullLayoutText = layoutValue != null ? layoutValue : fullText;
+        if (fullLayoutText.length() != fullText.length()) {
+            fullLayoutText = fullText;
+        }
         if (fullText.isEmpty()) {
             result.add(new PageTextAnchor(0, "", ""));
             return result;
@@ -121,7 +138,7 @@ public class CustomReaderView extends View {
         }
 
         StaticLayout localLayout = StaticLayout.Builder
-                .obtain(fullText, 0, fullText.length(), localPaint, Math.max(1, layoutWidth))
+                .obtain(fullLayoutText, 0, fullLayoutText.length(), localPaint, Math.max(1, layoutWidth))
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setLineSpacing(0f, Math.max(0.8f, lineSpacingMultiplier))
                 .setIncludePad(true)
@@ -213,6 +230,7 @@ public class CustomReaderView extends View {
     private ReaderListener listener;
 
     private String text = "";
+    private CharSequence layoutText = "";
     private StaticLayout layout;
     private int textColor = Color.rgb(224, 224, 224);
     private int backgroundColor = Color.BLACK;
@@ -230,6 +248,7 @@ public class CustomReaderView extends View {
     private int activeSearchIndex = -1;
     private int ttsHighlightStart = -1;
     private int ttsHighlightEnd = -1;
+    private boolean markdownHighlightingEnabled = false;
 
     private int readerScrollY = 0;
     private int maxScrollY = 0;
@@ -277,6 +296,7 @@ public class CustomReaderView extends View {
 
         listener = null;
         text = "";
+        layoutText = "";
         layout = null;
         pageAnchors.clear();
         searchHighlightPath.reset();
@@ -314,6 +334,26 @@ public class CustomReaderView extends View {
         return text;
     }
 
+    public void setMarkdownHighlightingEnabled(boolean enabled) {
+        if (markdownHighlightingEnabled == enabled) return;
+        markdownHighlightingEnabled = enabled;
+        rebuildLayout();
+        invalidate();
+        notifyScrollChanged();
+    }
+
+    public boolean isMarkdownHighlightingEnabledForIndex() {
+        return markdownHighlightingEnabled;
+    }
+
+    public int getReaderTextColorForIndex() {
+        return textColor;
+    }
+
+    public int getReaderBackgroundColorForIndex() {
+        return backgroundColor;
+    }
+
     public void setReaderStyle(float fontSizeSp,
                                float lineSpacingMultiplier,
                                int textColor,
@@ -348,12 +388,13 @@ public class CustomReaderView extends View {
         updateSearchHighlightColors();
         updateTtsHighlightColor();
 
-        if (layoutAffectingChange) {
+        boolean markdownColorChange = markdownHighlightingEnabled && colorChange;
+        if (layoutAffectingChange || markdownColorChange) {
             rebuildLayout();
             notifyScrollChanged();
         }
 
-        if (layoutAffectingChange || colorChange) {
+        if (layoutAffectingChange || colorChange || markdownColorChange) {
             invalidate();
         }
     }
@@ -487,8 +528,12 @@ public class CustomReaderView extends View {
                 - marginHorizontalPx * 2 - leftTextInsetPx - rightTextInsetPx;
         if (width <= 0) return;
 
+        layoutText = markdownHighlightingEnabled
+                ? MarkdownSyntaxHighlighter.apply(text, textColor, backgroundColor)
+                : text;
+
         layout = StaticLayout.Builder
-                .obtain(text, 0, text.length(), paint, width)
+                .obtain(layoutText, 0, layoutText.length(), paint, width)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setLineSpacing(0f, lineSpacingMultiplier)
                 .setIncludePad(true)

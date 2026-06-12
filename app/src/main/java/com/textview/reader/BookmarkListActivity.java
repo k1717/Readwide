@@ -669,10 +669,21 @@ public class BookmarkListActivity extends AppCompatActivity
             intent = new Intent(this, PdfReaderActivity.class);
             intent.putExtra(PdfReaderActivity.EXTRA_FILE_PATH, targetPath);
             intent.putExtra(PdfReaderActivity.EXTRA_JUMP_TO_PAGE, bookmark.getCharPosition());
-        } else if (FileUtils.isEpubFile(name) || FileUtils.isWordFile(name)) {
+            if (bookmark.getContentAnchorJson() != null && !bookmark.getContentAnchorJson().trim().isEmpty()) {
+                intent.putExtra(PdfReaderActivity.EXTRA_CONTENT_ANCHOR_JSON, bookmark.getContentAnchorJson());
+            }
+        } else if (FileUtils.isEpubFile(name) || FileUtils.isMarkdownFile(name) || FileUtils.isWordOrHwpFile(name)) {
             intent = new Intent(this, DocumentPageActivity.class);
             intent.putExtra(DocumentPageActivity.EXTRA_FILE_PATH, targetPath);
-            intent.putExtra(DocumentPageActivity.EXTRA_JUMP_TO_PAGE, bookmark.getCharPosition());
+            if (FileUtils.isMarkdownFile(name) && isMarkdownSourceBookmark(bookmark)) {
+                intent.putExtra(DocumentPageActivity.EXTRA_MARKDOWN_SOURCE_OFFSET, bookmark.getCharPosition());
+                intent.putExtra(DocumentPageActivity.EXTRA_JUMP_TO_PAGE, Math.max(0, bookmark.getPageNumber() - 1));
+            } else {
+                intent.putExtra(DocumentPageActivity.EXTRA_JUMP_TO_PAGE, bookmark.getCharPosition());
+            }
+            if (bookmark.getContentAnchorJson() != null && !bookmark.getContentAnchorJson().trim().isEmpty()) {
+                intent.putExtra(DocumentPageActivity.EXTRA_CONTENT_ANCHOR_JSON, bookmark.getContentAnchorJson());
+            }
         } else {
             intent = new Intent(this, ReaderActivity.class);
             intent.putExtra(ReaderActivity.EXTRA_FILE_PATH, targetPath);
@@ -685,6 +696,11 @@ public class BookmarkListActivity extends AppCompatActivity
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         startActivity(intent);
     }
+    private boolean isMarkdownSourceBookmark(@NonNull Bookmark bookmark) {
+        String signature = bookmark.getPageLayoutSignature();
+        return signature != null && signature.startsWith("Markdown_SOURCE_ANCHOR");
+    }
+
     private void showMissingBookmarkFileDialog(@NonNull Bookmark bookmark, @NonNull String missingPath) {
         int bg = bookmarkDialogBgColor();
         int fg = bookmarkTextColor();

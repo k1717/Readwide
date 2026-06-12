@@ -310,6 +310,11 @@ final class SettingsReaderControlsController {
         bindPageStatusAlignmentSpinner();
         bindSwitch(R.id.switch_volume_scroll, prefs.getVolumeKeyScroll(), prefs::setVolumeKeyScroll);
         bindSwitch(R.id.switch_tap_paging, prefs.getTapPagingEnabled(), prefs::setTapPagingEnabled);
+        bindSwitch(R.id.switch_tap_paging_markdown, prefs.getMarkdownTapPagingEnabled(), prefs::setMarkdownTapPagingEnabled);
+        bindSwitch(R.id.switch_tap_paging_pdf, prefs.getPdfTapPagingEnabled(), prefs::setPdfTapPagingEnabled);
+        bindSwitch(R.id.switch_tap_paging_epub, prefs.getEpubTapPagingEnabled(), prefs::setEpubTapPagingEnabled);
+        bindSwitch(R.id.switch_tap_paging_word, prefs.getWordTapPagingEnabled(), prefs::setWordTapPagingEnabled);
+        bindSwitch(R.id.switch_epub_force_reader_theme_colors, prefs.getEpubForceReaderThemeColors(), prefs::setEpubForceReaderThemeColors);
         bindTapZoneModeSpinner();
         setupTapZoneRatioControl();
         bindPagingOverlapSpinner();

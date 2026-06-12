@@ -98,7 +98,7 @@ final class ArchiveEntryListController {
             case FILTER_EPUB:
                 return FileUtils.isEpubFile(name);
             case FILTER_WORD:
-                return FileUtils.isWordFile(name);
+                return FileUtils.isWordOrHwpFile(name);
             case FILTER_IMAGE:
                 return FileUtils.isImageFile(name);
             case FILTER_ALL:

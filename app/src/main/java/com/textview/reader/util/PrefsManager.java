@@ -92,6 +92,8 @@ public class PrefsManager {
     public static final int LARGE_TEXT_PARTITION_BUFFER_LINES_HIGH_BUFFER = 600;
     public static final int ARCHIVE_OPEN_MODE_NORMAL = 0;
     public static final int ARCHIVE_OPEN_MODE_COMIC = 1;
+    public static final int IMAGE_SLIDER_DIRECTION_LTR = 0;
+    public static final int IMAGE_SLIDER_DIRECTION_RTL = 1;
 
     private static final String KEY_LOCK_PIN = "lock_pin";
     private static final String KEY_LOCK_ENABLED = "lock_enabled";
@@ -336,6 +338,7 @@ public class PrefsManager {
                 "epub_bottom_padding_dp",
                 "epub_page_direction",
                 "epub_page_effect",
+                "epub_force_reader_theme_colors",
                 "dark_mode",
                 "language_mode",
                 "keep_screen_on",
@@ -358,6 +361,10 @@ public class PrefsManager {
                 "brightness_value",
                 "volume_key_scroll",
                 "tap_paging_enabled",
+                "markdown_tap_paging_enabled",
+                "pdf_tap_paging_enabled",
+                "epub_tap_paging_enabled",
+                "word_tap_paging_enabled",
                 "tap_zone_mode",
                 "tap_leading_zone_percent",
                 "tap_trailing_zone_percent",
@@ -458,6 +465,14 @@ public class PrefsManager {
     public void setEpubPageEffect(int effect) {
         prefs.edit().putInt("epub_page_effect",
                 effect == EPUB_PAGE_EFFECT_NONE ? EPUB_PAGE_EFFECT_NONE : EPUB_PAGE_EFFECT_SLIDE).apply();
+    }
+
+    public boolean getEpubForceReaderThemeColors() {
+        return prefs.getBoolean("epub_force_reader_theme_colors", true);
+    }
+
+    public void setEpubForceReaderThemeColors(boolean enabled) {
+        prefs.edit().putBoolean("epub_force_reader_theme_colors", enabled).apply();
     }
 
     public int getDarkMode() { return prefs.getInt("dark_mode", DARK_MODE_FOLLOW_SYSTEM); }
@@ -1343,6 +1358,20 @@ public class PrefsManager {
     public void setRecentSortMode(int m) { prefs.edit().putInt("recent_sort_mode", m).apply(); }
     public int getArchiveSortMode() { return prefs.getInt("archive_sort_mode", SORT_NAME_ASC); }
     public void setArchiveSortMode(int m) { prefs.edit().putInt("archive_sort_mode", m).apply(); }
+    public int getImageSliderDirection() {
+        int value = prefs.getInt("image_slider_direction", IMAGE_SLIDER_DIRECTION_LTR);
+        return value == IMAGE_SLIDER_DIRECTION_RTL ? IMAGE_SLIDER_DIRECTION_RTL : IMAGE_SLIDER_DIRECTION_LTR;
+    }
+    public void setImageSliderDirection(int direction) {
+        prefs.edit().putInt("image_slider_direction",
+                direction == IMAGE_SLIDER_DIRECTION_RTL ? IMAGE_SLIDER_DIRECTION_RTL : IMAGE_SLIDER_DIRECTION_LTR).apply();
+    }
+    public boolean getImageTapPagingEnabled() {
+        return prefs.getBoolean("image_tap_paging_enabled", false);
+    }
+    public void setImageTapPagingEnabled(boolean enabled) {
+        prefs.edit().putBoolean("image_tap_paging_enabled", enabled).apply();
+    }
     public String getArchiveLastImageEntryPath(String archivePath) {
         if (archivePath == null || archivePath.trim().isEmpty()) return "";
         return prefs.getString("archive_last_image_" + Integer.toHexString(archivePath.hashCode()), "");
@@ -1368,6 +1397,20 @@ public class PrefsManager {
     // Tap paging
     public boolean getTapPagingEnabled() { return prefs.getBoolean("tap_paging_enabled", true); }
     public void setTapPagingEnabled(boolean v) { prefs.edit().putBoolean("tap_paging_enabled", v).apply(); }
+    public boolean getMarkdownTapPagingEnabled() { return prefs.getBoolean("markdown_tap_paging_enabled", getTapPagingEnabled()); }
+    public void setMarkdownTapPagingEnabled(boolean v) { prefs.edit().putBoolean("markdown_tap_paging_enabled", v).apply(); }
+    public boolean getPdfTapPagingEnabled() { return prefs.getBoolean("pdf_tap_paging_enabled", getTapPagingEnabled()); }
+    public void setPdfTapPagingEnabled(boolean v) { prefs.edit().putBoolean("pdf_tap_paging_enabled", v).apply(); }
+    public boolean getEpubTapPagingEnabled() { return prefs.getBoolean("epub_tap_paging_enabled", getTapPagingEnabled()); }
+    public void setEpubTapPagingEnabled(boolean v) { prefs.edit().putBoolean("epub_tap_paging_enabled", v).apply(); }
+    public boolean getWordTapPagingEnabled() { return prefs.getBoolean("word_tap_paging_enabled", getTapPagingEnabled()); }
+    public void setWordTapPagingEnabled(boolean v) { prefs.edit().putBoolean("word_tap_paging_enabled", v).apply(); }
+    public boolean getDocumentTapPagingEnabled(String docType) {
+        if ("Markdown".equals(docType)) return getMarkdownTapPagingEnabled();
+        if ("EPUB".equals(docType)) return getEpubTapPagingEnabled();
+        if ("Word".equals(docType) || "HWP".equals(docType)) return getWordTapPagingEnabled();
+        return getTapPagingEnabled();
+    }
     public int getTapZoneMode() { return prefs.getInt("tap_zone_mode", TAP_ZONE_HORIZONTAL); }
     public void setTapZoneMode(int mode) {
         int clamped = (mode == TAP_ZONE_HORIZONTAL) ? TAP_ZONE_HORIZONTAL : TAP_ZONE_VERTICAL;

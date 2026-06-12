@@ -217,6 +217,9 @@ final class RarArchiveReader {
             if (Rar3FirstPartyArchiveExtractor.tryExtractArchiveLimitedFallback(entries, targetDir, password, progress, entryProgress)) {
                 return true;
             }
+            if (Rar3PpmdSolidArchiveExtractor.tryExtractArchivePpmdSolid(entries, targetDir, password, progress, entryProgress)) {
+                return true;
+            }
             if (libarchiveFailure != null || !RarLibarchiveFallback.isAvailable()) {
                 throw RarFeatureClassifier.libarchivePrimaryRarFailure(entries, libarchiveFailure);
             }
@@ -224,7 +227,11 @@ final class RarArchiveReader {
         }
         if (RarFeatureClassifier.shouldUseRar5FallbackForWholeArchive(entries)) {
             requirePasswordIfNeeded(entries, password);
-            return extractRar5ArchiveEntryByEntry(entries, targetDir, password, progress, entryProgress);
+            if (Rar5CompressedArchiveExtractor.tryExtractArchive(
+                    entries, targetDir, password, progress, entryProgress)) {
+                return true;
+            }
+            throw RarFeatureClassifier.rar5CompressedFallbackFailure(entries, libarchiveFailure);
         }
         if (progress != null) progress.setTotalBytes(sumUnpackedBytes(entries));
         boolean sawEntry = false;
@@ -323,6 +330,9 @@ final class RarArchiveReader {
                     return true;
                 }
                 if (Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entry, entries, outFile, null)) {
+                    return true;
+                }
+                if (Rar3PpmdSolidArchiveExtractor.tryExtractSolidPpmdEntry(entry, entries, outFile, null)) {
                     return true;
                 }
                 if (libarchiveFailure != null || !RarLibarchiveFallback.isAvailable()) {
@@ -565,7 +575,8 @@ final class RarArchiveReader {
                 splitAfter,
                 extra.encryption,
                 dataCrc,
-                timeMillis);
+                timeMillis,
+                compressionInfo);
     }
 
     @NonNull
@@ -651,10 +662,13 @@ final class RarArchiveReader {
             if (Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entry, allEntries, outFile, progress)) {
                 return;
             }
+            if (Rar3PpmdSolidArchiveExtractor.tryExtractSolidPpmdEntry(entry, allEntries, outFile, progress)) {
+                return;
+            }
             throw RarFeatureClassifier.libarchivePrimaryRarFailure(entry, null);
         }
         if (entry.rarVersion >= 5 && RarFeatureClassifier.shouldUseRar5CompressedFallback(entry)) {
-            extractWithRar5CompressedFallback(entry, outFile, password, progress);
+            extractWithRar5CompressedFallback(entry, outFile, password, allEntries, progress);
             return;
         }
         if (entry.splitBefore) throw new UnsupportedRarFeatureException("RAR split continuation cannot be extracted directly");
@@ -755,6 +769,9 @@ final class RarArchiveReader {
         }
         requirePasswordIfNeeded(entries, password);
         if (RarFeatureClassifier.hasUnsupportedRar3Or4Payload(entries)) {
+            if (Rar3PpmdSolidArchiveExtractor.tryExtractArchivePpmdSolid(entries, targetDir, password, progress, entryProgress)) {
+                return true;
+            }
             throw RarFeatureClassifier.libarchivePrimaryRarFailure(entries, libarchiveFailure);
         }
         return extractRar3Or4StoredArchiveFirstParty(entries, targetDir, password, progress, entryProgress);
@@ -847,17 +864,33 @@ final class RarArchiveReader {
     private static void extractWithRar5CompressedFallback(@NonNull RarEntry entry,
                                                           @NonNull File outFile,
                                                           @Nullable char[] password,
+                                                          @NonNull List<RarEntry> allEntries,
                                                           @Nullable FileOperationProgress progress) throws IOException {
         if (entry.sourceArchive == null) throw new IOException("RAR5 entry source volume is missing");
-        boolean extracted = extractRar5SingleEntryWithFallback(
-                entry.sourceArchive,
-                entry.path,
-                outFile,
-                password,
-                progress);
-        if (!extracted) {
-            throw new UnsupportedRarFeatureException("RAR5 fallback could not extract entry");
+        boolean extracted = false;
+        IOException backendFailure = null;
+        try {
+            extracted = extractRar5SingleEntryWithFallback(
+                    entry.sourceArchive,
+                    entry.path,
+                    outFile,
+                    password,
+                    progress);
+        } catch (ArchiveSupport.PasswordRequiredException e) {
+            throw e;
+        } catch (IOException e) {
+            backendFailure = e;
         }
+        if (extracted) {
+            return;
+        }
+        if (Rar5CompressedArchiveExtractor.tryExtractEntry(entry, allEntries, outFile, progress)) {
+            return;
+        }
+        if (backendFailure != null) {
+            throw backendFailure;
+        }
+        throw new UnsupportedRarFeatureException("RAR5 fallback could not extract entry");
     }
 
     @NonNull
@@ -1350,6 +1383,8 @@ final class RarArchiveReader {
         @Nullable final EncryptionInfo encryption;
         final long dataCrc;
         final long timeMillis;
+        /** Raw RAR5 compression-info vint (algo version, solid, method, dict bits); -1 when unknown. */
+        final long rar5CompressionInfo;
         @Nullable File sourceArchive;
 
         RarEntry(@NonNull String path,
@@ -1365,6 +1400,24 @@ final class RarArchiveReader {
                  @Nullable EncryptionInfo encryption,
                  long dataCrc,
                  long timeMillis) {
+            this(path, directory, unpackedSize, packedSize, dataOffset, rarVersion, method,
+                    solid, splitBefore, splitAfter, encryption, dataCrc, timeMillis, -1L);
+        }
+
+        RarEntry(@NonNull String path,
+                 boolean directory,
+                 long unpackedSize,
+                 long packedSize,
+                 long dataOffset,
+                 int rarVersion,
+                 int method,
+                 boolean solid,
+                 boolean splitBefore,
+                 boolean splitAfter,
+                 @Nullable EncryptionInfo encryption,
+                 long dataCrc,
+                 long timeMillis,
+                 long rar5CompressionInfo) {
             this.path = directory && !path.endsWith("/") ? path + "/" : path;
             this.directory = directory;
             this.unpackedSize = unpackedSize;
@@ -1378,6 +1431,7 @@ final class RarArchiveReader {
             this.encryption = encryption;
             this.dataCrc = dataCrc;
             this.timeMillis = timeMillis;
+            this.rar5CompressionInfo = rar5CompressionInfo;
         }
 
         boolean encrypted() {

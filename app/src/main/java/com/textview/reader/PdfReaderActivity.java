@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.pdf.PdfRenderer;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -48,6 +49,7 @@ import com.textview.reader.model.Theme;
 import com.textview.reader.util.BookmarkManager;
 import com.textview.reader.util.FileUtils;
 import com.textview.reader.util.PrefsManager;
+import com.textview.reader.util.TapZoneMath;
 import com.textview.reader.util.ThemeManager;
 
 import java.io.File;
@@ -61,6 +63,8 @@ import java.util.Set;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import org.json.JSONObject;
 
 /**
  * Native PDF page viewer.
@@ -76,6 +80,7 @@ public class PdfReaderActivity extends AppCompatActivity {
     public static final String EXTRA_FILE_PATH = ReaderActivity.EXTRA_FILE_PATH;
     public static final String EXTRA_FILE_URI = ReaderActivity.EXTRA_FILE_URI;
     public static final String EXTRA_JUMP_TO_PAGE = ReaderActivity.EXTRA_JUMP_TO_POSITION;
+    public static final String EXTRA_CONTENT_ANCHOR_JSON = "pdf_content_anchor_json";
 
     // Match toolbar-triggered PDF popups to the Go to Page bottom offset.
     static final int PDF_TOOLBAR_POPUP_Y_DP = 74;
@@ -92,7 +97,10 @@ public class PdfReaderActivity extends AppCompatActivity {
 
     View root;
     View pdfAppBar;
+    View pdfToolbar;
+    TextView pdfTopPageStatus;
     View pdfBottomBar;
+    View pdfNavBarSpacer;
     boolean pdfChromeVisible = true;
     ImageView pageImage;
     RecyclerView pdfContinuousList;
@@ -101,6 +109,8 @@ public class PdfReaderActivity extends AppCompatActivity {
     private boolean suppressContinuousScrollSync = false;
     ProgressBar progressBar;
     TextView pageStatus;
+    SeekBar pdfPageSeekBar;
+    boolean pdfPageSeekBarUserTracking = false;
     TextView prevButton;
     TextView nextButton;
     TextView slideModeButton;
@@ -135,6 +145,7 @@ public class PdfReaderActivity extends AppCompatActivity {
     private boolean gestureStartedAtTopEdge = true;
     private boolean gestureStartedAtBottomEdge = true;
     boolean verticalPageSlideMode = false;
+    private boolean pdfTapPagingSequence = false;
 
     private boolean pendingZoomFocus = false;
     private float pendingZoomFocusXRatio = 0.5f;
@@ -165,6 +176,7 @@ public class PdfReaderActivity extends AppCompatActivity {
     String filePath;
     String fileName;
     int pageCount = 0;
+    String pendingPdfContentAnchorJson = "";
     int currentPage = 0;
     private float zoom = 1.0f;
     private float renderedZoom = 1.0f;
@@ -298,7 +310,11 @@ public class PdfReaderActivity extends AppCompatActivity {
         if (!ensureContinuousPagesConfigured()) return;
         progressBar.setVisibility(View.GONE);
         updatePageStatus();
-        scrollContinuousListToCurrentPage(false);
+        if (pendingPdfContentAnchorJson != null && !pendingPdfContentAnchorJson.trim().isEmpty()) {
+            restorePendingPdfContentAnchorIfNeeded();
+        } else {
+            scrollContinuousListToCurrentPage(false);
+        }
         prefetchContinuousPagesAround(currentPage);
     }
 
@@ -384,7 +400,11 @@ public class PdfReaderActivity extends AppCompatActivity {
                 return true;
             }
         }
-        if (handlePdfTapGesture(event, insideViewport)) {
+        if (handleFastPdfTapPaging(event, insideViewport)) {
+            resetViewportGesture();
+            return true;
+        }
+        if (!pdfTapPagingSequence && handlePdfTapGesture(event, insideViewport)) {
             resetViewportGesture();
             return true;
         }
@@ -433,7 +453,11 @@ public class PdfReaderActivity extends AppCompatActivity {
     }
 
     private boolean handleSinglePagePdfViewportGesture(@NonNull MotionEvent event, boolean insideViewport) {
-        if (handlePdfTapGesture(event, insideViewport)) {
+        if (handleFastPdfTapPaging(event, insideViewport)) {
+            resetViewportGesture();
+            return true;
+        }
+        if (!pdfTapPagingSequence && handlePdfTapGesture(event, insideViewport)) {
             resetViewportGesture();
             return true;
         }
@@ -541,6 +565,7 @@ public class PdfReaderActivity extends AppCompatActivity {
         gestureStartedInViewport = false;
         gestureSawMultiTouch = false;
         viewportPanConsumed = false;
+        pdfTapPagingSequence = false;
         gestureStartedWithHorizontalScrollable = false;
         gestureStartedWithVerticalScrollable = false;
         gestureStartedAtLeftEdge = true;
@@ -667,19 +692,109 @@ public class PdfReaderActivity extends AppCompatActivity {
         return handled && event.getActionMasked() != MotionEvent.ACTION_DOWN;
     }
 
+    private boolean handleFastPdfTapPaging(@NonNull MotionEvent event, boolean insideViewport) {
+        int eventAction = event.getActionMasked();
+        if (eventAction == MotionEvent.ACTION_CANCEL) {
+            pdfTapPagingSequence = false;
+            return false;
+        }
+        if (!insideViewport || prefs == null || !prefs.getPdfTapPagingEnabled()
+                || pdfViewport == null || pageCount <= 1) {
+            pdfTapPagingSequence = false;
+            return false;
+        }
+
+        if (eventAction == MotionEvent.ACTION_DOWN) {
+            pdfTapPagingSequence = getPdfTapPagingAction(event) != TapZoneMath.ACTION_MENU;
+            return false;
+        }
+
+        if (!pdfTapPagingSequence) return false;
+
+        if (eventAction == MotionEvent.ACTION_MOVE) {
+            if (Math.abs(event.getRawX() - gestureStartRawX) > touchSlop
+                    || Math.abs(event.getRawY() - gestureStartRawY) > touchSlop) {
+                pdfTapPagingSequence = false;
+            }
+            return false;
+        }
+
+        if (eventAction != MotionEvent.ACTION_UP) return false;
+        boolean stillTap = !gestureSawMultiTouch && !viewportPanConsumed
+                && Math.abs(event.getRawX() - gestureStartRawX) <= touchSlop
+                && Math.abs(event.getRawY() - gestureStartRawY) <= touchSlop;
+        int action = stillTap ? getPdfTapPagingAction(event) : TapZoneMath.ACTION_MENU;
+        pdfTapPagingSequence = false;
+        if (action == TapZoneMath.ACTION_PREVIOUS) {
+            goToPage(currentPage - 1, -1);
+            return true;
+        }
+        if (action == TapZoneMath.ACTION_NEXT) {
+            goToPage(currentPage + 1, 1);
+            return true;
+        }
+        return false;
+    }
+
+    private int getPdfTapPagingAction(@NonNull MotionEvent event) {
+        if (prefs == null || !prefs.getPdfTapPagingEnabled()) return TapZoneMath.ACTION_MENU;
+        if (pdfViewport == null || pageCount <= 1) return TapZoneMath.ACTION_MENU;
+        int[] loc = new int[2];
+        pdfViewport.getLocationOnScreen(loc);
+        float x = event.getRawX() - loc[0];
+        float y = event.getRawY() - loc[1];
+        return TapZoneMath.actionForTap(
+                x,
+                y,
+                pdfViewport.getWidth(),
+                pdfViewport.getHeight(),
+                true,
+                true,
+                prefs.getTapZoneMode(),
+                prefs.getTapLeadingZonePercent(),
+                prefs.getTapTrailingZonePercent());
+    }
+
+    private boolean handlePdfTapPaging(@NonNull MotionEvent event) {
+        int action = getPdfTapPagingAction(event);
+        if (action == TapZoneMath.ACTION_PREVIOUS) {
+            goToPage(currentPage - 1, -1);
+            return true;
+        }
+        if (action == TapZoneMath.ACTION_NEXT) {
+            goToPage(currentPage + 1, 1);
+            return true;
+        }
+        return false;
+    }
+
     private void togglePdfChrome() {
         setPdfChromeVisible(!pdfChromeVisible);
     }
 
     private void setPdfChromeVisible(boolean visible) {
         pdfChromeVisible = visible;
-        int visibility = visible ? View.VISIBLE : View.GONE;
-        if (pdfAppBar != null && pdfAppBar.getVisibility() != visibility) {
-            pdfAppBar.setVisibility(visibility);
+        applyPdfChromeFillColors();
+        int toolbarVisibility = visible ? View.VISIBLE : View.GONE;
+        int bottomVisibility = visible ? View.VISIBLE : View.GONE;
+        int topStatusVisibility = visible ? View.GONE : View.VISIBLE;
+
+        if (pdfAppBar != null && pdfAppBar.getVisibility() != View.VISIBLE) {
+            pdfAppBar.setVisibility(View.VISIBLE);
         }
-        if (pdfBottomBar != null && pdfBottomBar.getVisibility() != visibility) {
-            pdfBottomBar.setVisibility(visibility);
+        if (pdfToolbar == null) pdfToolbar = findViewById(R.id.toolbar);
+        if (pdfToolbar != null && pdfToolbar.getVisibility() != toolbarVisibility) {
+            pdfToolbar.setVisibility(toolbarVisibility);
         }
+        if (pdfTopPageStatus == null) pdfTopPageStatus = findViewById(R.id.pdf_top_page_status);
+        if (pdfTopPageStatus != null && pdfTopPageStatus.getVisibility() != topStatusVisibility) {
+            pdfTopPageStatus.setVisibility(topStatusVisibility);
+        }
+        if (pdfBottomBar != null && pdfBottomBar.getVisibility() != bottomVisibility) {
+            pdfBottomBar.setVisibility(bottomVisibility);
+        }
+        applyDocumentSystemBarColors();
+        updatePageStatus();
         androidx.core.view.ViewCompat.requestApplyInsets(root);
         if (pdfViewport != null) pdfViewport.requestLayout();
     }
@@ -818,12 +933,12 @@ public class PdfReaderActivity extends AppCompatActivity {
 
     void applyDocumentSystemBarColors() {
         resolveReaderThemeColors();
-        int bg = readerBg;
-        int toolbarBg = readerToolbarBg;
-        getWindow().setStatusBarColor(toolbarBg);
-        getWindow().setNavigationBarColor(bg);
+        int statusBg = pdfChromeVisible ? readerToolbarBg : readerBg;
+        int navBg = pdfChromeVisible ? readerPanel : readerBg;
+        getWindow().setStatusBarColor(statusBg);
+        getWindow().setNavigationBarColor(navBg);
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            getWindow().setNavigationBarDividerColor(bg);
+            getWindow().setNavigationBarDividerColor(navBg);
         }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             getWindow().setNavigationBarContrastEnforced(false);
@@ -832,14 +947,41 @@ public class PdfReaderActivity extends AppCompatActivity {
         androidx.core.view.WindowInsetsControllerCompat controller =
                 androidx.core.view.WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
         if (controller != null) {
-            controller.setAppearanceLightStatusBars(!isDarkColor(toolbarBg));
-            controller.setAppearanceLightNavigationBars(!isDarkColor(bg));
+            controller.setAppearanceLightStatusBars(!isDarkColor(statusBg));
+            controller.setAppearanceLightNavigationBars(!isDarkColor(navBg));
         }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             int flags = getWindow().getDecorView().getSystemUiVisibility();
-            if (!isDarkColor(bg)) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            if (!isDarkColor(navBg)) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
             else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                if (!isDarkColor(statusBg)) flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
             getWindow().getDecorView().setSystemUiVisibility(flags);
+        }
+        applyPdfChromeFillColors();
+    }
+
+    void applyPdfChromeFillColors() {
+        int appbarBg = pdfChromeVisible ? readerToolbarBg : readerBg;
+        if (pdfAppBar != null) {
+            pdfAppBar.setBackgroundColor(appbarBg);
+        }
+        if (pdfToolbar != null) {
+            pdfToolbar.setBackgroundColor(readerToolbarBg);
+        }
+        if (pdfTopPageStatus != null) {
+            pdfTopPageStatus.setBackgroundColor(readerBg);
+        }
+        if (pdfBottomBar != null) {
+            pdfBottomBar.setBackgroundColor(readerPanel);
+        }
+        if (pdfNavBarSpacer != null) {
+            pdfNavBarSpacer.setBackgroundColor(readerBg);
+        }
+        if (root != null) {
+            root.setBackgroundColor(readerBg);
         }
     }
 
@@ -870,17 +1012,27 @@ public class PdfReaderActivity extends AppCompatActivity {
         resolveReaderThemeColors();
         if (root != null) root.setBackgroundColor(readerBg);
         if (pdfAppBar == null) pdfAppBar = findViewById(R.id.pdf_appbar);
-        if (pdfAppBar != null) pdfAppBar.setBackgroundColor(readerToolbarBg);
+        if (pdfAppBar != null) pdfAppBar.setBackgroundColor(pdfChromeVisible ? readerToolbarBg : readerBg);
         Toolbar toolbar = findViewById(R.id.toolbar);
         if (toolbar != null) {
+            pdfToolbar = toolbar;
             toolbar.setBackgroundColor(readerToolbarBg);
             toolbar.setTitleTextColor(readerFg);
             toolbar.setNavigationIcon(tintedBackIcon());
         }
+        if (pdfTopPageStatus == null) pdfTopPageStatus = findViewById(R.id.pdf_top_page_status);
+        if (pdfTopPageStatus != null) {
+            pdfTopPageStatus.setTextColor(readerFg);
+            pdfTopPageStatus.setBackgroundColor(readerBg);
+        }
         if (pdfBottomBar == null) pdfBottomBar = findViewById(R.id.pdf_bottom_bar);
         if (pdfBottomBar != null) pdfBottomBar.setBackgroundColor(readerPanel);
+        if (pdfNavBarSpacer == null) pdfNavBarSpacer = findViewById(R.id.pdf_nav_bar_spacer);
+        if (pdfNavBarSpacer != null) pdfNavBarSpacer.setBackgroundColor(readerBg);
         if (pdfViewport != null) pdfViewport.setBackgroundColor(readerPanel);
         if (pageStatus != null) pageStatus.setTextColor(readerFg);
+        if (pdfPageSeekBar != null) tintSeekBar(pdfPageSeekBar);
+        applyPdfChromeFillColors();
         updateLoadingIndicatorTheme();
 
         TextView[] buttons = {prevButton, nextButton, slideModeButton, pageButton, bookmarkButton, zoomMoreButton};
@@ -908,6 +1060,36 @@ public class PdfReaderActivity extends AppCompatActivity {
         if (pageButton != null) pageButton.setOnClickListener(v -> showGoToPageDialog());
         bookmarkButton.setOnClickListener(v -> showBookmarksDialog());
         if (zoomMoreButton != null) zoomMoreButton.setOnClickListener(v -> showMoreDialog());
+        setupPdfPageSeekBar();
+    }
+
+    private void setupPdfPageSeekBar() {
+        if (pdfPageSeekBar == null) return;
+        tintSeekBar(pdfPageSeekBar);
+        pdfPageSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (!fromUser) return;
+                int total = Math.max(1, pageCount);
+                int safe = Math.max(0, Math.min(total - 1, progress));
+                pageStatus.setText(String.format(Locale.getDefault(), "%d / %d", safe + 1, total));
+                if (prevButton != null) prevButton.setEnabled(safe > 0);
+                if (nextButton != null) nextButton.setEnabled(safe < total - 1);
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                pdfPageSeekBarUserTracking = true;
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                int total = Math.max(1, pageCount);
+                int target = Math.max(0, Math.min(total - 1, seekBar.getProgress()));
+                pdfPageSeekBarUserTracking = false;
+                goToPage(target, Integer.compare(target, currentPage));
+            }
+        });
     }
 
     // --- Hardware page-turn keys ---
@@ -972,6 +1154,9 @@ public class PdfReaderActivity extends AppCompatActivity {
 
             @Override
             public boolean onSingleTapConfirmed(MotionEvent e) {
+                if (handlePdfTapPaging(e)) {
+                    return true;
+                }
                 togglePdfChrome();
                 return true;
             }
@@ -1381,9 +1566,30 @@ public class PdfReaderActivity extends AppCompatActivity {
     private void tintSeekBar(SeekBar seekBar) {
         int accent = readerFg;
         int track = readerLine;
+        seekBar.setThumb(makeStaticSeekBarThumb(accent, seekBar));
         seekBar.setThumbTintList(android.content.res.ColorStateList.valueOf(accent));
         seekBar.setProgressTintList(android.content.res.ColorStateList.valueOf(accent));
         seekBar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(track));
+        seekBar.setBackgroundColor(Color.TRANSPARENT);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            seekBar.setStateListAnimator(null);
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            seekBar.setForeground(null);
+        }
+    }
+
+    private Drawable makeStaticSeekBarThumb(int color, SeekBar seekBar) {
+        int fallback = dpToPx(18);
+        Drawable current = seekBar.getThumb();
+        int width = current != null ? current.getIntrinsicWidth() : fallback;
+        int height = current != null ? current.getIntrinsicHeight() : fallback;
+        int size = Math.max(dpToPx(14), Math.min(dpToPx(20), Math.max(width, height)));
+        GradientDrawable thumb = new GradientDrawable();
+        thumb.setShape(GradientDrawable.OVAL);
+        thumb.setColor(color);
+        thumb.setSize(size, size);
+        return thumb;
     }
 
     private void addDialogAction(LinearLayout box, String text, Runnable action) {
@@ -1538,6 +1744,8 @@ public class PdfReaderActivity extends AppCompatActivity {
         String path = getIntent().getStringExtra(EXTRA_FILE_PATH);
         String uriStr = getIntent().getStringExtra(EXTRA_FILE_URI);
         int jumpPage = getIntent().getIntExtra(EXTRA_JUMP_TO_PAGE, -1);
+        pendingPdfContentAnchorJson = getIntent().getStringExtra(EXTRA_CONTENT_ANCHOR_JSON);
+        if (pendingPdfContentAnchorJson == null) pendingPdfContentAnchorJson = "";
 
         executor.execute(() -> {
             try {
@@ -1587,10 +1795,16 @@ public class PdfReaderActivity extends AppCompatActivity {
                 restored = jumpPage;
             } else if (prefs.getAutoSavePosition()) {
                 ReaderState state = bookmarkManager.getReadingState(filePath);
-                if (state != null) restored = state.getCharPosition();
+                if (state != null) {
+                    restored = state.getCharPosition();
+                    String anchor = state.getContentAnchorJson();
+                    if (anchor != null && !anchor.trim().isEmpty()) pendingPdfContentAnchorJson = anchor;
+                }
             }
             currentPage = clampPage(restored);
-            saveReadingState();
+            // Do not save immediately here. If this open is restoring an old
+            // content anchor, saving before the page/view has rendered would
+            // overwrite the precise PDF coordinate with a page-only fallback.
             applyPdfDisplayMode();
         } catch (Exception e) {
             showLoadError(e);
@@ -1736,6 +1950,7 @@ public class PdfReaderActivity extends AppCompatActivity {
                     runPageSlideInAnimation();
                     if (old != null && old != finalBitmap && !old.isRecycled()) old.recycle();
                     progressBar.setVisibility(View.GONE);
+                    restorePendingPdfContentAnchorIfNeeded();
                     updatePageStatus();
                 });
             } catch (Exception e) {
@@ -1807,41 +2022,33 @@ public class PdfReaderActivity extends AppCompatActivity {
     }
 
     private void runPageSlideInAnimation() {
-        if (pageImage == null) return;
-        int direction = pendingPageSlideDirection;
         pendingPageSlideDirection = 0;
-        if (direction == 0) {
-            pageImage.setAlpha(1.0f);
-            pageImage.setTranslationX(0f);
-            pageImage.setTranslationY(0f);
-            return;
-        }
-        float distance = Math.max(dpToPx(56),
-                (verticalPageSlideMode ? pageImage.getHeight() : pageImage.getWidth()) * 0.18f);
+        if (pageImage == null) return;
+        pageImage.animate().cancel();
         pageImage.setTranslationX(0f);
         pageImage.setTranslationY(0f);
-        if (verticalPageSlideMode) {
-            pageImage.setTranslationY(direction > 0 ? distance : -distance);
-        } else {
-            pageImage.setTranslationX(direction > 0 ? distance : -distance);
-        }
-        pageImage.setAlpha(0.72f);
-        pageImage.animate()
-                .translationX(0f)
-                .translationY(0f)
-                .alpha(1.0f)
-                .setDuration(150)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator())
-                .start();
+        pageImage.setAlpha(1.0f);
     }
 
     void updatePageStatus() {
-        if (pageStatus == null) return;
+        if (pageStatus == null && pdfTopPageStatus == null) return;
         if (pageCount <= 0) {
-            pageStatus.setText("");
+            if (pageStatus != null) pageStatus.setText("");
+            if (pdfTopPageStatus != null) pdfTopPageStatus.setText("");
             return;
         }
-        pageStatus.setText(String.format(Locale.getDefault(), "%d / %d", currentPage + 1, pageCount));
+        String statusText = String.format(Locale.getDefault(), "%d / %d", currentPage + 1, pageCount);
+        if (pageStatus != null) pageStatus.setText(statusText);
+        if (pdfTopPageStatus != null) pdfTopPageStatus.setText(statusText);
+        if (pdfPageSeekBar != null && !pdfPageSeekBarUserTracking) {
+            int max = Math.max(0, pageCount - 1);
+            if (pdfPageSeekBar.getMax() != max) pdfPageSeekBar.setMax(max);
+            int progress = Math.max(0, Math.min(max, currentPage));
+            if (pdfPageSeekBar.getProgress() != progress) {
+                pdfPageSeekBar.setProgress(progress);
+            }
+            pdfPageSeekBar.setEnabled(pageCount > 1);
+        }
         updatePdfSlideModeButton();
         prevButton.setEnabled(currentPage > 0);
         nextButton.setEnabled(currentPage < pageCount - 1);
@@ -1860,15 +2067,214 @@ public class PdfReaderActivity extends AppCompatActivity {
         pdfBookmarkDialogs().showBookmarksDialog();
     }
 
+
+    String currentPdfContentAnchorJson() {
+        if (verticalPageSlideMode) {
+            return currentContinuousPdfContentAnchorJson();
+        }
+        try {
+            JSONObject obj = new JSONObject();
+            obj.put("kind", "PDF_PAGE_COORD_v2");
+            obj.put("mode", "single");
+            obj.put("page", currentPage);
+            obj.put("pageNumber", currentPage + 1);
+            float xRatio = 0f;
+            float yRatio = 0f;
+            if (pageImage != null) {
+                int imageWidth = Math.max(1, pageImage.getWidth());
+                int imageHeight = Math.max(1, pageImage.getHeight());
+                int visibleX = pdfHScroll != null ? Math.max(0, pdfHScroll.getScrollX()) : 0;
+                int visibleY = pdfVScroll != null ? Math.max(0, pdfVScroll.getScrollY()) : 0;
+                // Store a coordinate in the rendered PDF page, not a viewport percent.
+                // Do not add arbitrary offsets here: bookmarks should restore to the
+                // same page-internal point at the top/left edge on devices with
+                // different screen sizes.
+                xRatio = Math.max(0f, Math.min(1f, visibleX / (float) imageWidth));
+                yRatio = Math.max(0f, Math.min(1f, visibleY / (float) imageHeight));
+            }
+            obj.put("xRatio", xRatio);
+            obj.put("yRatio", yRatio);
+            obj.put("zoom", zoom);
+            return obj.toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private String currentContinuousPdfContentAnchorJson() {
+        try {
+            JSONObject obj = new JSONObject();
+            obj.put("kind", "PDF_PAGE_COORD_v2");
+            obj.put("mode", "continuous");
+            int anchorPage = clampPage(currentPage);
+            float xRatio = 0f;
+            float yRatio = 0f;
+            if (pdfContinuousList != null) {
+                RecyclerView.LayoutManager manager = pdfContinuousList.getLayoutManager();
+                if (manager instanceof LinearLayoutManager) {
+                    LinearLayoutManager lm = (LinearLayoutManager) manager;
+                    int first = lm.findFirstVisibleItemPosition();
+                    int last = lm.findLastVisibleItemPosition();
+                    if (first != RecyclerView.NO_POSITION && last != RecyclerView.NO_POSITION) {
+                        int bestPage = first;
+                        int bestTopDistance = Integer.MAX_VALUE;
+                        for (int i = first; i <= last; i++) {
+                            View child = lm.findViewByPosition(i);
+                            if (child == null || child.getBottom() <= 0 || child.getTop() >= pdfContinuousList.getHeight()) continue;
+                            int distance = Math.abs(child.getTop());
+                            if (distance < bestTopDistance) {
+                                bestTopDistance = distance;
+                                bestPage = i;
+                            }
+                        }
+                        View child = lm.findViewByPosition(bestPage);
+                        if (child != null) {
+                            anchorPage = clampPage(bestPage);
+                            int pageHeight = Math.max(1, child.getHeight());
+                            int visibleY = Math.max(0, -child.getTop());
+                            yRatio = Math.max(0f, Math.min(1f, visibleY / (float) pageHeight));
+                        }
+                    }
+                }
+            }
+            if (pdfContinuousAdapter != null) {
+                int pageWidth = Math.max(1, pdfContinuousAdapter.getRenderedWidthForPage(anchorPage));
+                int panX = Math.max(0, pdfContinuousAdapter.getPageHorizontalPanOffset(anchorPage));
+                xRatio = Math.max(0f, Math.min(1f, panX / (float) pageWidth));
+            }
+            obj.put("page", anchorPage);
+            obj.put("pageNumber", anchorPage + 1);
+            obj.put("xRatio", xRatio);
+            obj.put("yRatio", yRatio);
+            obj.put("zoom", zoom);
+            return obj.toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    int pdfAnchorPageFromJson(String anchorJson, int fallbackPage) {
+        if (anchorJson == null || anchorJson.trim().isEmpty()) return clampPage(fallbackPage);
+        try {
+            JSONObject obj = new JSONObject(anchorJson);
+            return clampPage(obj.optInt("page", obj.optInt("pageNumber", fallbackPage + 1) - 1));
+        } catch (Exception ignored) {
+            return clampPage(fallbackPage);
+        }
+    }
+
+    void restorePendingPdfContentAnchorIfNeeded() {
+        if (pendingPdfContentAnchorJson == null || pendingPdfContentAnchorJson.trim().isEmpty()) return;
+        final String anchor = pendingPdfContentAnchorJson;
+        pendingPdfContentAnchorJson = "";
+        restorePdfContentAnchor(anchor);
+    }
+
+    void restorePdfContentAnchor(String anchorJson) {
+        if (anchorJson == null || anchorJson.trim().isEmpty()) return;
+        try {
+            JSONObject obj = new JSONObject(anchorJson);
+            int page = clampPage(obj.optInt("page", obj.optInt("pageNumber", currentPage + 1) - 1));
+            final float xRatio = (float) Math.max(0.0d, Math.min(1.0d, obj.optDouble("xRatio", 0.0d)));
+            final float yRatio = (float) Math.max(0.0d, Math.min(1.0d, obj.optDouble("yRatio", 0.0d)));
+            if (verticalPageSlideMode) {
+                restorePdfContinuousContentAnchor(page, xRatio, yRatio);
+                return;
+            }
+            if (pageImage == null) {
+                pendingPdfContentAnchorJson = anchorJson;
+                return;
+            }
+            if (page != currentPage) {
+                pendingPdfContentAnchorJson = anchorJson;
+                goToPage(page, Integer.compare(page, currentPage));
+                return;
+            }
+            pageImage.post(() -> {
+                if (pageImage == null) return;
+                if (pdfHScroll != null) {
+                    int maxX = 0;
+                    if (pdfHScroll.getChildCount() > 0) maxX = Math.max(0, pdfHScroll.getChildAt(0).getWidth() - pdfHScroll.getWidth());
+                    int targetX = Math.max(0, Math.min(maxX, Math.round(pageImage.getWidth() * xRatio)));
+                    pdfHScroll.scrollTo(targetX, pdfHScroll.getScrollY());
+                }
+                if (pdfVScroll != null) {
+                    int maxY = 0;
+                    if (pdfVScroll.getChildCount() > 0) maxY = Math.max(0, pdfVScroll.getChildAt(0).getHeight() - pdfVScroll.getHeight());
+                    int targetY = Math.max(0, Math.min(maxY, Math.round(pageImage.getHeight() * yRatio)));
+                    pdfVScroll.scrollTo(pdfVScroll.getScrollX(), targetY);
+                }
+            });
+        } catch (Exception ignored) {}
+    }
+
+    private void restorePdfContinuousContentAnchor(int page, float xRatio, float yRatio) {
+        if (pageCount <= 0) return;
+        final int targetPage = clampPage(page);
+        currentPage = targetPage;
+        updatePageStatus();
+        if (!ensureContinuousPagesConfigured() || pdfContinuousList == null) {
+            pendingPdfContentAnchorJson = makePdfAnchorJsonForPending(targetPage, xRatio, yRatio, true);
+            return;
+        }
+        final float clampedX = Math.max(0f, Math.min(1f, xRatio));
+        final float clampedY = Math.max(0f, Math.min(1f, yRatio));
+        suppressContinuousScrollSync = true;
+        pdfContinuousList.stopScroll();
+        pdfContinuousList.post(() -> {
+            if (activityDestroyed || pdfContinuousList == null) return;
+            int pageHeight = pdfContinuousAdapter != null
+                    ? Math.max(1, pdfContinuousAdapter.getRenderedHeightForPage(targetPage))
+                    : Math.max(1, pdfContinuousList.getHeight());
+            int offsetY = Math.round(pageHeight * clampedY);
+            RecyclerView.LayoutManager manager = pdfContinuousList.getLayoutManager();
+            if (manager instanceof LinearLayoutManager) {
+                ((LinearLayoutManager) manager).scrollToPositionWithOffset(targetPage, -offsetY);
+            } else {
+                pdfContinuousList.scrollToPosition(targetPage);
+            }
+            pdfContinuousList.post(() -> {
+                if (activityDestroyed || pdfContinuousList == null) return;
+                if (pdfContinuousAdapter != null) {
+                    int pageWidth = Math.max(1, pdfContinuousAdapter.getRenderedWidthForPage(targetPage));
+                    pdfContinuousAdapter.setPageHorizontalPanOffset(targetPage, Math.round(pageWidth * clampedX));
+                }
+                suppressContinuousScrollSync = false;
+                currentPage = targetPage;
+                updatePageStatus();
+                prefetchContinuousPagesAround(targetPage);
+            });
+        });
+    }
+
+    private String makePdfAnchorJsonForPending(int page, float xRatio, float yRatio, boolean continuous) {
+        try {
+            JSONObject obj = new JSONObject();
+            obj.put("kind", "PDF_PAGE_COORD_v2");
+            obj.put("mode", continuous ? "continuous" : "single");
+            obj.put("page", clampPage(page));
+            obj.put("pageNumber", clampPage(page) + 1);
+            obj.put("xRatio", Math.max(0f, Math.min(1f, xRatio)));
+            obj.put("yRatio", Math.max(0f, Math.min(1f, yRatio)));
+            obj.put("zoom", zoom);
+            return obj.toString();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
     void saveReadingState() {
         if (filePath == null || !prefs.getAutoSavePosition()) return;
+        String anchor = currentPdfContentAnchorJson();
+        int anchorPage = pdfAnchorPageFromJson(anchor, currentPage);
         ReaderState state = new ReaderState(filePath);
-        state.setCharPosition(currentPage);
+        state.setCharPosition(anchorPage);
         state.setScrollY(0);
-        state.setPageNumber(currentPage + 1);
+        state.setPageNumber(anchorPage + 1);
         state.setTotalPages(pageCount);
         state.setFileLength(fileSizeBytes(filePath));
-        state.setEncoding("PDF_PAGE");
+        state.setContentAnchorJson(anchor);
+        state.setEncoding(anchor != null && !anchor.isEmpty() ? "PDF_PAGE_COORD_v2" : "PDF_PAGE");
         bookmarkManager.saveReadingState(state);
     }
 

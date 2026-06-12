@@ -32,6 +32,9 @@ final class ReaderLargeTextExactAnchorBuildController {
                                                             int marginVertical,
                                                             int overlap,
                                                             float lineSpacing,
+                                                            boolean markdownHighlightingEnabled,
+                                                            int readerTextColor,
+                                                            int readerBackgroundColor,
                                                             int expectedTotalLines,
                                                             int expectedTotalChars,
                                                             int partitionLines,
@@ -74,6 +77,9 @@ final class ReaderLargeTextExactAnchorBuildController {
                             marginVertical,
                             overlap,
                             lineSpacing,
+                            markdownHighlightingEnabled,
+                            readerTextColor,
+                            readerBackgroundColor,
                             minAllowedExactAnchorChar);
                     int removeCount = Math.min(partitionLines, windowLines.size());
                     windowLines.subList(0, removeCount).clear();
@@ -97,6 +103,9 @@ final class ReaderLargeTextExactAnchorBuildController {
                     marginVertical,
                     overlap,
                     lineSpacing,
+                    markdownHighlightingEnabled,
+                    readerTextColor,
+                    readerBackgroundColor,
                     minAllowedExactAnchorChar);
             int removeCount = Math.min(partitionLines, windowLines.size());
             windowLines.subList(0, removeCount).clear();
@@ -127,6 +136,9 @@ final class ReaderLargeTextExactAnchorBuildController {
                                        int marginVertical,
                                        int overlap,
                                        float lineSpacing,
+                                       boolean markdownHighlightingEnabled,
+                                       int readerTextColor,
+                                       int readerBackgroundColor,
                                        int minAllowedGlobalCharPosition) {
         return LargeTextExactAnchorBuilder.appendPartitionAnchors(
                 result,
@@ -139,6 +151,9 @@ final class ReaderLargeTextExactAnchorBuildController {
                 marginVertical,
                 overlap,
                 lineSpacing,
+                markdownHighlightingEnabled,
+                readerTextColor,
+                readerBackgroundColor,
                 minAllowedGlobalCharPosition);
     }
 }

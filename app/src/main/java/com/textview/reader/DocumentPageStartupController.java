@@ -26,9 +26,11 @@ final class DocumentPageStartupController {
                 activity.findViewById(R.id.document_root),
                 activity.findViewById(R.id.document_appbar),
                 activity.findViewById(R.id.document_bottom_scroller),
-                activity.findViewById(R.id.document_viewport),
+                null,
                 () -> activity.documentChromeVisible);
         activity.applyDocumentSystemBarColors();
+        installStandaloneTopPageStatusInsets();
+        installNavigationBarSpacerInsets();
 
         bindViews();
         ButtonOrderManager.applyOrder(activity, activity.prefs, ButtonOrderManager.GROUP_DOCUMENT_VIEWER);
@@ -71,9 +73,50 @@ final class DocumentPageStartupController {
         }
     }
 
+    private void installStandaloneTopPageStatusInsets() {
+        View topPageStatus = activity.findViewById(R.id.document_top_page_status);
+        if (topPageStatus == null) return;
+        final int baseLeft = topPageStatus.getPaddingLeft();
+        final int baseTop = topPageStatus.getPaddingTop();
+        final int baseRight = topPageStatus.getPaddingRight();
+        final int baseBottom = topPageStatus.getPaddingBottom();
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(topPageStatus, (v, insets) -> {
+            androidx.core.graphics.Insets bars = insets.getInsets(
+                    androidx.core.view.WindowInsetsCompat.Type.systemBars()
+                            | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
+            // This view lives in normal layout flow above the WebView.  Keep its
+            // height stable and let it own the status-bar inset; do not add padding
+            // to the WebView/viewport itself, because WebView padding clips EPUB
+            // pages and fixed-layout scaling.
+            v.setPadding(baseLeft, baseTop + bars.top, baseRight, baseBottom);
+            return insets;
+        });
+        androidx.core.view.ViewCompat.requestApplyInsets(topPageStatus);
+    }
+
+
+    private void installNavigationBarSpacerInsets() {
+        View spacer = activity.findViewById(R.id.document_nav_bar_spacer);
+        if (spacer == null) return;
+        spacer.setBackgroundColor(activity.readerBg);
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(spacer, (v, insets) -> {
+            androidx.core.graphics.Insets bars = insets.getInsets(
+                    androidx.core.view.WindowInsetsCompat.Type.systemBars()
+                            | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
+            android.view.ViewGroup.LayoutParams lp = v.getLayoutParams();
+            if (lp != null && lp.height != bars.bottom) {
+                lp.height = bars.bottom;
+                v.setLayoutParams(lp);
+            }
+            return insets;
+        });
+        androidx.core.view.ViewCompat.requestApplyInsets(spacer);
+    }
+
     private void bindViews() {
         activity.documentAppBar = activity.findViewById(R.id.document_appbar);
         activity.documentBottomChrome = activity.findViewById(R.id.document_bottom_scroller);
+        activity.documentNavBarSpacer = activity.findViewById(R.id.document_nav_bar_spacer);
         if (activity.documentBottomChrome != null) {
             activity.documentBottomChrome.addOnLayoutChangeListener((v, left, top, right, bottom,
                     oldLeft, oldTop, oldRight, oldBottom) -> {
@@ -93,6 +136,8 @@ final class DocumentPageStartupController {
         activity.webView = activity.findViewById(R.id.document_webview);
         activity.progressBar = activity.findViewById(R.id.loading_progress);
         activity.pageStatus = activity.findViewById(R.id.document_page_status);
+        activity.topPageStatus = activity.findViewById(R.id.document_top_page_status);
+        activity.documentPageSeekBar = activity.findViewById(R.id.document_page_seek_bar);
         activity.prevButton = activity.findViewById(R.id.btn_prev_page);
         activity.nextButton = activity.findViewById(R.id.btn_next_page);
         activity.searchButton = activity.findViewById(R.id.btn_document_search);

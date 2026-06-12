@@ -204,6 +204,9 @@ public class FileUtils {
         if (lower.endsWith(".epub")) {
             return readEpubFile(file);
         }
+        if (isHwpFileName(lower)) {
+            return HwpTextExtractor.read(file);
+        }
         if (isWordFileName(lower)) {
             return readWordFile(file);
         }
@@ -217,6 +220,8 @@ public class FileUtils {
         String lower = lowerName(fileName);
         if (lower.endsWith(".pdf")) return "PDF";
         if (lower.endsWith(".epub")) return "EPUB";
+        if (isMarkdownFile(lower)) return "Markdown";
+        if (isHwpFileName(lower)) return "HWP";
         if (isWordFileName(lower)) return "Word";
         if (isArchiveFile(fileName)) return "Archive";
         if (isImageFile(fileName)) return "Image";
@@ -231,12 +236,13 @@ public class FileUtils {
                 || isPdfFile(fileName)
                 || isEpubFile(fileName)
                 || isWordFile(fileName)
+                || isHwpFile(fileName)
                 || isArchiveFile(fileName)
                 || isImageFile(fileName);
     }
 
     public static boolean isVisibleInAllFilesFilter(String fileName) {
-        return isSupportedReadableFile(fileName) || isExternalOpenableFile(fileName);
+        return normalizeDisplayFileName(fileName).length() > 0;
     }
 
     public static boolean isExternalOpenableFile(String fileName) {
@@ -322,14 +328,32 @@ public class FileUtils {
         return isWordFileName(lowerName(fileName));
     }
 
+    public static boolean isHwpFile(String fileName) {
+        return isHwpFileName(lowerName(fileName));
+    }
+
+    public static boolean isWordOrHwpFile(String fileName) {
+        String lower = lowerName(fileName);
+        return isWordFileName(lower) || isHwpFileName(lower);
+    }
+
     private static boolean isWordFileName(String lowerName) {
-        return lowerName.endsWith(".docx")
+        return lowerName.endsWith(".doc")
+                || lowerName.endsWith(".docx")
                 || lowerName.endsWith(".docm")
                 || lowerName.endsWith(".dotx")
                 || lowerName.endsWith(".dotm");
     }
 
+    private static boolean isHwpFileName(String lowerName) {
+        return lowerName.endsWith(".hwp") || lowerName.endsWith(".hwpx");
+    }
+
     private static String readWordFile(File file) throws IOException {
+        String lower = lowerName(file != null ? file.getName() : null);
+        if (lower.endsWith(".doc")) {
+            throw new IOException("Legacy binary Word (.doc) files are recognized in the Word filter, but only OOXML Word files (.docx/.docm/.dotx/.dotm) are currently rendered.");
+        }
         try (ZipFile zip = new ZipFile(file)) {
             ZipEntry documentXml = zip.getEntry("word/document.xml");
             if (documentXml == null) {
@@ -613,6 +637,11 @@ public class FileUtils {
     public static boolean isTxtFile(String fileName) {
         String lower = lowerName(fileName).trim();
         return lower.endsWith(".txt") || lower.endsWith(".text");
+    }
+
+    public static boolean isMarkdownFile(String fileName) {
+        String lower = lowerName(fileName).trim();
+        return lower.endsWith(".md") || lower.endsWith(".markdown");
     }
 
     /**

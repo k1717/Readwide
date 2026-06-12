@@ -161,13 +161,16 @@ final class DocumentBookmarkDialogController {
                 rv.setLayoutParams(rvLp);
             }
             currentInfo.setText(getString(R.string.all_bookmarks_status,
-                    adapter.getFolderCount(), all.size(), activity.currentPage + 1, activity.documentPageCount()));
+                    adapter.getFolderCount(), all.size(), activity.currentDisplayDocumentPageNumber(), activity.documentPageCount()));
         };
 
         saveButton.setOnClickListener(v -> {
-            activity.addBookmarkForCurrentPage();
-            expandedFolders.add(activity.filePath);
-            refreshRef[0].run();
+            saveButton.setEnabled(false);
+            activity.addBookmarkForCurrentPage(() -> {
+                expandedFolders.add(activity.filePath);
+                refreshRef[0].run();
+                saveButton.setEnabled(true);
+            });
         });
         closeButton.setOnClickListener(v -> dialog.dismiss());
 
@@ -274,7 +277,20 @@ final class DocumentBookmarkDialogController {
             return;
         }
         if (path.equals(activity.filePath) || target.getAbsolutePath().equals(activity.filePath)) {
-            activity.showPage(b.getCharPosition(), Integer.compare(b.getCharPosition(), activity.currentPage));
+            if (activity.isMarkdownDocument()) {
+                if (activity.isMarkdownSourceBookmark(b)) {
+                    activity.scrollMarkdownToSourceOffset(b.getCharPosition(), true, Math.max(0, b.getPageNumber() - 1));
+                } else {
+                    activity.scrollMarkdownToVisualPage(b.getCharPosition(), false);
+                }
+            } else {
+                if (activity.isRenderedContentAnchorDocument()
+                        && b.getContentAnchorJson() != null
+                        && !b.getContentAnchorJson().trim().isEmpty()) {
+                    activity.pendingDocumentRestoreAnchorJson = b.getContentAnchorJson();
+                }
+                activity.showPage(b.getCharPosition(), Integer.compare(b.getCharPosition(), activity.currentPage));
+            }
             return;
         }
         Intent intent;
@@ -283,10 +299,18 @@ final class DocumentBookmarkDialogController {
             intent = new Intent(activity, PdfReaderActivity.class);
             intent.putExtra(PdfReaderActivity.EXTRA_FILE_PATH, targetPath);
             intent.putExtra(PdfReaderActivity.EXTRA_JUMP_TO_PAGE, b.getCharPosition());
-        } else if (FileUtils.isEpubFile(target.getName()) || FileUtils.isWordFile(target.getName())) {
+        } else if (FileUtils.isEpubFile(target.getName()) || FileUtils.isMarkdownFile(target.getName()) || FileUtils.isWordOrHwpFile(target.getName())) {
             intent = new Intent(activity, DocumentPageActivity.class);
             intent.putExtra(DocumentPageActivity.EXTRA_FILE_PATH, targetPath);
-            intent.putExtra(DocumentPageActivity.EXTRA_JUMP_TO_PAGE, b.getCharPosition());
+            if (FileUtils.isMarkdownFile(target.getName()) && activity.isMarkdownSourceBookmark(b)) {
+                intent.putExtra(DocumentPageActivity.EXTRA_MARKDOWN_SOURCE_OFFSET, b.getCharPosition());
+                intent.putExtra(DocumentPageActivity.EXTRA_JUMP_TO_PAGE, Math.max(0, b.getPageNumber() - 1));
+            } else {
+                intent.putExtra(DocumentPageActivity.EXTRA_JUMP_TO_PAGE, b.getCharPosition());
+                if (b.getContentAnchorJson() != null && !b.getContentAnchorJson().trim().isEmpty()) {
+                    intent.putExtra(DocumentPageActivity.EXTRA_CONTENT_ANCHOR_JSON, b.getContentAnchorJson());
+                }
+            }
         } else {
             intent = new Intent(activity, ReaderActivity.class);
             intent.putExtra(ReaderActivity.EXTRA_FILE_PATH, targetPath);

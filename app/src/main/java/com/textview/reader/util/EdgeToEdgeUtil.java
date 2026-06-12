@@ -112,10 +112,66 @@ public final class EdgeToEdgeUtil {
                 int bottomInset = keepBottomChromeFixedDuringIme
                         ? bars.bottom
                         : (imeVisible ? 0 : bars.bottom);
-                int foldedTopInset = chromeVisible ? 0 : bars.top + foldedExtraInset;
+                // If a visible top strip is still present while the main chrome is collapsed
+                // (DocumentPageActivity keeps a compact page counter there), that top strip
+                // already owns the status-bar inset.  Do not also push the folded content
+                // down by the same inset, otherwise the hidden-toolbar state leaves a large
+                // blank area before the document body starts.
+                boolean visibleTopStripOwnsInset = !chromeVisible
+                        && topBar != null
+                        && topBar.getVisibility() == View.VISIBLE
+                        && topBar.getHeight() > 0;
+                int foldedTopInset = chromeVisible || visibleTopStripOwnsInset ? 0 : bars.top + foldedExtraInset;
                 int foldedBottomInset = chromeVisible ? 0 : bottomInset + foldedExtraInset;
                 foldedContent.setPadding(foldedPad.left, foldedPad.top + foldedTopInset,
                         foldedPad.right, foldedPad.bottom + foldedBottomInset);
+            }
+            return insets;
+        });
+        ViewCompat.requestApplyInsets(root);
+    }
+
+
+    /**
+     * PDF uses normal-flow chrome rather than an overlay WebView.  When the PDF
+     * bottom toolbar is hidden, reserve the 3-button navigation area with a real
+     * layout spacer instead of tinting/masking over the page.  This keeps the
+     * last line/page content visible and gives the navigation bar the reader body
+     * color while collapsed.
+     */
+    public static void applyPdfReaderInsets(Activity activity,
+                                            View root,
+                                            @Nullable View topBar,
+                                            @Nullable View bottomContent,
+                                            @Nullable View hiddenNavigationSpacer,
+                                            ChromeVisibilityProvider chromeVisibilityProvider) {
+        prepareWindow(activity, root);
+        final Padding topPad = topBar != null ? new Padding(topBar) : null;
+        final Padding bottomPad = bottomContent != null ? new Padding(bottomContent) : null;
+
+        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
+            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()
+                    | WindowInsetsCompat.Type.displayCutout());
+            Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
+            boolean imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
+            boolean chromeVisible = chromeVisibilityProvider == null || chromeVisibilityProvider.isChromeVisible();
+
+            if (topBar != null) {
+                topBar.setPadding(topPad.left, topPad.top + bars.top, topPad.right, topPad.bottom);
+            }
+            if (bottomContent != null) {
+                int bottomInset = imeVisible ? Math.max(bars.bottom, ime.bottom) : bars.bottom;
+                bottomContent.setPadding(bottomPad.left, bottomPad.top, bottomPad.right,
+                        bottomPad.bottom + bottomInset);
+            }
+            if (hiddenNavigationSpacer != null) {
+                int spacerHeight = chromeVisible ? 0 : bars.bottom;
+                android.view.ViewGroup.LayoutParams lp = hiddenNavigationSpacer.getLayoutParams();
+                if (lp != null && lp.height != spacerHeight) {
+                    lp.height = spacerHeight;
+                    hiddenNavigationSpacer.setLayoutParams(lp);
+                }
+                hiddenNavigationSpacer.setVisibility(spacerHeight > 0 ? View.VISIBLE : View.GONE);
             }
             return insets;
         });

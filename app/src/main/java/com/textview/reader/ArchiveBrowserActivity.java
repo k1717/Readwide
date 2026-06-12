@@ -990,7 +990,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         } else if (FileUtils.isPdfFile(file.getName())) {
             intent = new Intent(this, PdfReaderActivity.class);
             intent.putExtra(PdfReaderActivity.EXTRA_FILE_PATH, file.getAbsolutePath());
-        } else if (FileUtils.isEpubFile(file.getName()) || FileUtils.isWordFile(file.getName())) {
+        } else if (FileUtils.isEpubFile(file.getName()) || FileUtils.isMarkdownFile(file.getName()) || FileUtils.isWordOrHwpFile(file.getName())) {
             intent = new Intent(this, DocumentPageActivity.class);
             intent.putExtra(DocumentPageActivity.EXTRA_FILE_PATH, file.getAbsolutePath());
         } else if (FileUtils.isImageFile(file.getName())) {

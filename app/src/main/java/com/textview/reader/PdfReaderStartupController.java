@@ -26,12 +26,12 @@ final class PdfReaderStartupController {
 
         activity.setContentView(R.layout.activity_pdf_reader);
         activity.applyDocumentSystemBarColors();
-        com.textview.reader.util.EdgeToEdgeUtil.applyFoldableChromeInsets(
+        com.textview.reader.util.EdgeToEdgeUtil.applyPdfReaderInsets(
                 activity,
                 activity.findViewById(R.id.pdf_root),
                 activity.findViewById(R.id.pdf_appbar),
                 activity.findViewById(R.id.pdf_bottom_bar),
-                activity.findViewById(R.id.pdf_viewport),
+                activity.findViewById(R.id.pdf_nav_bar_spacer),
                 () -> activity.pdfChromeVisible);
         activity.applyDocumentSystemBarColors();
 
@@ -86,11 +86,15 @@ final class PdfReaderStartupController {
     private void bindViews() {
         activity.root = activity.findViewById(R.id.pdf_root);
         activity.pdfAppBar = activity.findViewById(R.id.pdf_appbar);
+        activity.pdfToolbar = activity.findViewById(R.id.toolbar);
+        activity.pdfTopPageStatus = activity.findViewById(R.id.pdf_top_page_status);
         activity.pdfBottomBar = activity.findViewById(R.id.pdf_bottom_bar);
+        activity.pdfNavBarSpacer = activity.findViewById(R.id.pdf_nav_bar_spacer);
         activity.pageImage = activity.findViewById(R.id.pdf_page_image);
         activity.pdfContinuousList = activity.findViewById(R.id.pdf_continuous_list);
         activity.progressBar = activity.findViewById(R.id.pdf_progress);
         activity.pageStatus = activity.findViewById(R.id.pdf_page_status);
+        activity.pdfPageSeekBar = activity.findViewById(R.id.pdf_page_seek_bar);
         activity.prevButton = activity.findViewById(R.id.pdf_prev);
         activity.nextButton = activity.findViewById(R.id.pdf_next);
         activity.slideModeButton = activity.findViewById(R.id.pdf_slide_toggle);

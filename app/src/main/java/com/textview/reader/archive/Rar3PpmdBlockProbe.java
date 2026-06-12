@@ -12,9 +12,10 @@ import java.util.Locale;
  * Lightweight RAR3/RAR4 compressed-block classifier for PPMd work.
  *
  * <p>RAR3/RAR4 compressed payloads start a new table/control block on a byte boundary. The
- * highest bit of the first 16-bit control field selects PPMd (1) versus classic-LZ table data
- * (0), and the next bit is the keep-old-table flag used by both block families. This class does
- * not decode PPMd symbols; it only gives routing, reports, and future PPMd tests a precise,
+ * highest bit of the first byte selects PPMd (1) versus classic-LZ table data
+ * (0). For classic-LZ the next bit is keep-old-table, while for PPMd it means that
+ * an escape-character byte follows and the reset flag decides whether the old model is reused.
+ * This class does not decode PPMd symbols; it only gives routing, reports, and future PPMd tests a precise,
  * file-backed way to distinguish PPMd fixtures from classic-LZ fixtures before trying the
  * unfinished first-party PPMd statistical model.</p>
  */
@@ -58,14 +59,19 @@ final class Rar3PpmdBlockProbe {
             int first = raf.readUnsignedByte();
             int second = raf.readUnsignedByte();
             int flags = (first << 8) | second;
-            boolean ppmd = (flags & 0x8000) != 0;
-            boolean keepOldTable = (flags & 0x4000) != 0;
+            boolean ppmd = (first & 0x80) != 0;
+            boolean keepOldTable = ppmd ? (first & 0x20) == 0 : (first & 0x40) != 0;
+            boolean resetModel = ppmd && (first & 0x20) != 0;
+            boolean escapeCharPresent = ppmd && (first & 0x40) != 0;
+            String detail = ppmd
+                    ? "RAR3/RAR4 PPMd decode-init header detected; resetModel="
+                            + resetModel + "; escapeCharPresent=" + escapeCharPresent
+                    : "RAR3/RAR4 classic-LZ block flag detected";
             return new Result(ppmd ? KIND_PPMD : KIND_CLASSIC_LZ,
                     keepOldTable,
                     flags,
                     entry.dataOffset,
-                    ppmd ? "RAR3/RAR4 PPMd block flag detected"
-                            : "RAR3/RAR4 classic-LZ block flag detected");
+                    detail);
         } catch (IOException | SecurityException e) {
             return new Result(KIND_UNKNOWN, false, -1, entry.dataOffset,
                     "could not probe RAR3/RAR4 compressed block flags: "

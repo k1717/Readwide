@@ -13,14 +13,14 @@ import java.nio.file.Files;
 public class Rar3PpmdBlockProbeTest {
     @Test
     public void detectsPpmdControlBitFromVisiblePayload() throws Exception {
-        File archive = writePayload((byte) 0x80, (byte) 0x00, (byte) 0x12);
+        File archive = writePayload((byte) 0xa0, (byte) 0x00, (byte) 0x12);
         RarArchiveReader.RarEntry entry = compressedEntry(archive, false, false, false);
 
         Rar3PpmdBlockProbe.Result result = Rar3PpmdBlockProbe.probe(entry);
 
         assertTrue(result.isPpmd());
         assertFalse(result.keepOldTable);
-        assertEquals(0x8000, result.rawFlags);
+        assertEquals(0xa000, result.rawFlags);
         assertTrue(result.diagnostic().contains("ppmd"));
     }
 
@@ -39,7 +39,7 @@ public class Rar3PpmdBlockProbeTest {
 
     @Test
     public void encryptedPayloadIsNotClassifiedBeforeDecrypt() throws Exception {
-        File archive = writePayload((byte) 0x80, (byte) 0x00, (byte) 0x12);
+        File archive = writePayload((byte) 0xa0, (byte) 0x00, (byte) 0x12);
         RarArchiveReader.RarEntry entry = compressedEntry(archive, true, false, false);
 
         Rar3PpmdBlockProbe.Result result = Rar3PpmdBlockProbe.probe(entry);
@@ -50,7 +50,7 @@ public class Rar3PpmdBlockProbeTest {
 
     @Test
     public void featureClassifierIncludesPpmdProbeDiagnostic() throws Exception {
-        File archive = writePayload((byte) 0x80, (byte) 0x00, (byte) 0x12);
+        File archive = writePayload((byte) 0xa0, (byte) 0x00, (byte) 0x12);
         RarArchiveReader.RarEntry entry = compressedEntry(archive, false, false, false);
 
         RarArchiveReader.UnsupportedRarFeatureException ex =
@@ -58,13 +58,13 @@ public class Rar3PpmdBlockProbeTest {
 
         assertTrue(ex.getMessage().contains("PPMd compressed payload is detected"));
         assertTrue(ex.getMessage().contains("ppmd probe:"));
-        assertTrue(ex.getMessage().contains("rawFlags=0x8000"));
+        assertTrue(ex.getMessage().contains("rawFlags=0xa000"));
     }
 
 
     @Test
     public void libarchivePrimaryFailurePrioritizesSolidPpmdBoundary() throws Exception {
-        File archive = writePayload((byte) 0x80, (byte) 0x00, (byte) 0x12);
+        File archive = writePayload((byte) 0xa0, (byte) 0x00, (byte) 0x12);
         RarArchiveReader.RarEntry entry = compressedEntry(archive, false, false, false, true);
 
         RarArchiveReader.UnsupportedRarFeatureException ex =

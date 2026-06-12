@@ -172,9 +172,13 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
         return Math.max(activity.dpToPx(220), estimated);
     }
 
-    private int estimatedHeightForPage(int pageIndex) {
+    int getRenderedHeightForPage(int pageIndex) {
         int cached = pageHeightCache.get(pageIndex, 0);
         return cached > 0 ? cached : estimatePageRowHeight();
+    }
+
+    private int estimatedHeightForPage(int pageIndex) {
+        return getRenderedHeightForPage(pageIndex);
     }
 
     private void rememberPageHeight(int pageIndex, int height) {
@@ -290,6 +294,35 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
         return holder != null && holder.setHorizontalPanOffset(offset);
     }
 
+    private PageViewHolder findHolderForPage(int pageIndex) {
+        if (activity.pdfContinuousList == null) return null;
+        RecyclerView.ViewHolder vh = activity.pdfContinuousList.findViewHolderForAdapterPosition(pageIndex);
+        return vh instanceof PageViewHolder ? (PageViewHolder) vh : null;
+    }
+
+    int getRenderedWidthForPage(int pageIndex) {
+        PageViewHolder holder = findHolderForPage(pageIndex);
+        if (holder != null) return holder.getImageWidth();
+        return Math.max(1, viewportWidth);
+    }
+
+    int getPageHorizontalPanOffset(int pageIndex) {
+        PageViewHolder holder = findHolderForPage(pageIndex);
+        if (holder != null) {
+            int range = holder.getHorizontalPanRange();
+            return range > 0 ? holder.getHorizontalPanOffset(range) : 0;
+        }
+        return Math.max(0, pagePanXCache.get(pageIndex, 0));
+    }
+
+    boolean setPageHorizontalPanOffset(int pageIndex, int offset) {
+        int next = Math.max(0, offset);
+        pagePanXCache.put(pageIndex, next);
+        PageViewHolder holder = findHolderForPage(pageIndex);
+        if (holder != null) return holder.setHorizontalPanOffset(next);
+        return true;
+    }
+
     class PageViewHolder extends RecyclerView.ViewHolder {
         private final ImageView image;
         private Bitmap displayedBitmap;
@@ -353,6 +386,10 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
                 lp.height = nextHeight;
                 image.setLayoutParams(lp);
             }
+        }
+
+        int getImageWidth() {
+            return Math.max(1, imageWidth);
         }
 
         boolean canPanHorizontally() {

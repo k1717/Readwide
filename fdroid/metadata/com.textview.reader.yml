@@ -1,6 +1,6 @@
 # Draft metadata for an F-Droid Data merge request.
-# Copy this file to fdroiddata/metadata/com.textview.reader.yml and replace
-# the commit value with the final immutable Git commit hash for the 1.0.1 tag.
+# Copy this file to fdroiddata/metadata/com.textview.reader.yml after
+# creating and pushing the immutable v1.0.2 Git tag.
 
 Categories:
   - Reading
@@ -12,26 +12,35 @@ IssueTracker: https://github.com/k1717/Readwide/issues
 Changelog: https://github.com/k1717/Readwide/blob/main/CHANGELOG.md
 Summary: Local-first reader and file browser
 Description: |-
-  Readwide is a local-first Android reader and file browser for TXT, PDF,
-  EPUB, Word documents, images, comic archives, and archive workflows.
+  Readwide is a local-first Android reader and file browser for TXT,
+  Markdown, PDF, EPUB, Word-family documents, images, comic archives, and
+  common archive workflows.
+
+  It supports local reading, recent files, bookmarks, folder shortcuts,
+  search/filtering, archive browsing, archive-backed image viewing, and local
+  copy/move/delete/extract/compress queues.
 
   The default build does not request INTERNET permission and does not include
-  ads, analytics, account login, Firebase, Google Play Services, or Junrar /
-  UnRAR-license fallback code. Android Auto Backup is disabled.
+  ads, analytics, telemetry SDKs, Firebase, Google Play Services, an account
+  system, cloud sync, or a developer-operated upload backend. Android Auto
+  Backup is disabled.
 
-  Readwide is designed for local files and therefore requests broad file access
-  on modern Android versions. This is used for user-selected reading, browsing,
-  copy, move, delete, archive extraction, and archive creation workflows.
+  Broad file access is requested because Readwide is a local file browser and
+  reader for user-selected folders, documents, images, and archives.
+
+  HWP/HWPX support is text-first and read-only through Apache-2.0 Java
+  libraries. RAR/CBR support is limited and does not claim complete RAR,
+  encrypted RAR, broad split RAR, or SFX compatibility.
 
   The Android applicationId remains com.textview.reader for update
-  compatibility with the previous TextView Reader 2.2.6 line when signed with
-  the same key.
+  compatibility with the previous TextView Reader/Readwide lineage when signed
+  with the same key.
 RepoType: git
 Repo: https://github.com/k1717/Readwide.git
 Builds:
-  - versionName: '1.0.1'
-    versionCode: 10001
-    commit: REPLACE_WITH_FINAL_GIT_COMMIT_HASH_FOR_V1_0_1
+  - versionName: '1.0.2'
+    versionCode: 10002
+    commit: v1.0.2
     rm:
       - gradle/wrapper/gradle-wrapper.jar
     gradle:
@@ -40,5 +49,5 @@ Builds:
       - chmod +x gradlew scripts/clean_removed_sources.sh scripts/generate_rar_fixture_reports.sh scripts/generate_archive_fixture_reports.sh
 AutoUpdateMode: Version v%v
 UpdateCheckMode: Tags
-CurrentVersion: '1.0.1'
-CurrentVersionCode: 10001
+CurrentVersion: '1.0.2'
+CurrentVersionCode: 10002

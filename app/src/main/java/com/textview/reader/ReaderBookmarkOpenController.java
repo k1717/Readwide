@@ -40,7 +40,7 @@ final class ReaderBookmarkOpenController {
             intent = new Intent(activity, PdfReaderActivity.class);
             intent.putExtra(PdfReaderActivity.EXTRA_FILE_PATH, filePath);
             intent.putExtra(PdfReaderActivity.EXTRA_JUMP_TO_PAGE, bookmark.getCharPosition());
-        } else if (FileUtils.isEpubFile(targetFile.getName()) || FileUtils.isWordFile(targetFile.getName())) {
+        } else if (FileUtils.isEpubFile(targetFile.getName()) || FileUtils.isMarkdownFile(targetFile.getName()) || FileUtils.isWordOrHwpFile(targetFile.getName())) {
             intent = new Intent(activity, DocumentPageActivity.class);
             intent.putExtra(DocumentPageActivity.EXTRA_FILE_PATH, filePath);
             intent.putExtra(DocumentPageActivity.EXTRA_JUMP_TO_PAGE, bookmark.getCharPosition());

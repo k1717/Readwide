@@ -32,6 +32,10 @@ final class DocumentPageTurnController {
     void pageBy(int direction) {
         int pageCount = activity.documentPageCount();
         if (pageCount <= 0) return;
+        if (activity.isMarkdownDocument()) {
+            activity.pageMarkdownBy(direction);
+            return;
+        }
         int target = Math.max(0, Math.min(pageCount - 1, activity.currentPage + direction));
         if (target != activity.currentPage) {
             activity.showPage(target, Integer.compare(target, activity.currentPage));

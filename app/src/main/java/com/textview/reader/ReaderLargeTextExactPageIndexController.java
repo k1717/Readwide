@@ -92,6 +92,9 @@ final class ReaderLargeTextExactPageIndexController {
                 activity.readerView.getOverlapLinesForIndex(),
                 activity.readerView.getLineSpacingMultiplierForIndex(),
                 activity.readerView.copyTextPaintForIndex(),
+                activity.readerView.isMarkdownHighlightingEnabledForIndex(),
+                activity.readerView.getReaderTextColorForIndex(),
+                activity.readerView.getReaderBackgroundColorForIndex(),
                 activity.getLargeTextPartitionLines(),
                 activity.getLargeTextPartitionBufferLines());
     }
@@ -167,6 +170,7 @@ final class ReaderLargeTextExactPageIndexController {
                 + "|h=" + height
                 + "|mv=" + activity.readerView.getMarginVerticalPxForIndex()
                 + "|ol=" + activity.readerView.getOverlapLinesForIndex()
+                + "|markdown=" + (activity.readerView.isMarkdownHighlightingEnabledForIndex() ? "4" : "0")
                 + "|ls=" + quantizeFloatForSignature(activity.readerView.getLineSpacingMultiplierForIndex());
     }
 
@@ -177,6 +181,9 @@ final class ReaderLargeTextExactPageIndexController {
                                   int overlap,
                                   float lineSpacing,
                                   @NonNull TextPaint paintSnapshot,
+                                  boolean markdownHighlightingEnabled,
+                                  int readerTextColor,
+                                  int readerBackgroundColor,
                                   int partitionLines,
                                   int partitionBufferLines) {
         File source = new File(loadedFilePath);
@@ -204,6 +211,7 @@ final class ReaderLargeTextExactPageIndexController {
                 + "|ts=" + quantizeFloatForSignature(paintSnapshot.getTextSize())
                 + "|sx=" + quantizeFloatForSignature(paintSnapshot.getTextScaleX())
                 + "|tf=" + stableTypefaceKey
+                + "|markdown=" + (markdownHighlightingEnabled ? "4" : "0")
                 + "|displayRules=" + TextDisplayRuleManager.getSignature(activity.getApplicationContext(), loadedFilePath);
     }
 
@@ -220,12 +228,16 @@ final class ReaderLargeTextExactPageIndexController {
         final int overlap = activity.readerView.getOverlapLinesForIndex();
         final float lineSpacing = activity.readerView.getLineSpacingMultiplierForIndex();
         final TextPaint paintSnapshot = activity.readerView.copyTextPaintForIndex();
+        final boolean markdownHighlightingEnabled = activity.readerView.isMarkdownHighlightingEnabledForIndex();
+        final int readerTextColor = activity.readerView.getReaderTextColorForIndex();
+        final int readerBackgroundColor = activity.readerView.getReaderBackgroundColorForIndex();
         final int partitionLines = activity.getLargeTextPartitionLines();
         final int partitionBufferLines = activity.getLargeTextPartitionBufferLines();
         final int lookaheadLines = partitionBufferLines;
         final File source = new File(loadedFilePath);
         final String indexSignature = buildSignature(
                 loadedFilePath, layoutWidth, viewportHeight, marginVertical, overlap, lineSpacing, paintSnapshot,
+                markdownHighlightingEnabled, readerTextColor, readerBackgroundColor,
                 partitionLines, partitionBufferLines);
         final int indexGeneration = activity.largeTextExactPageIndexState.beginBuild(indexSignature);
         if (indexGeneration < 0) return;
@@ -247,6 +259,9 @@ final class ReaderLargeTextExactPageIndexController {
                         marginVertical,
                         overlap,
                         lineSpacing,
+                        markdownHighlightingEnabled,
+                        readerTextColor,
+                        readerBackgroundColor,
                         expectedTotalLines,
                         expectedTotalChars,
                         partitionLines,

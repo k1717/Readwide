@@ -47,6 +47,7 @@ public class Bookmark {
     private String label;      // optional user-defined label
     private String anchorTextBefore; // text immediately before charPosition for robust TXT restore
     private String anchorTextAfter;  // text immediately after charPosition for robust TXT restore
+    private String contentAnchorJson; // portable per-viewer anchor for MD/EPUB/Word/PDF restore
     private long fileSizeBytes;      // portable identity: local path can change across devices/folders
     private String quickFingerprint; // portable identity: cheap first/middle/last sample hash
     private int pendingPcEditLine;      // delayed TXT PC edit base line when the file is not locally available during import
@@ -103,6 +104,7 @@ public class Bookmark {
         obj.put("excerpt", excerpt != null ? excerpt : "");
         obj.put("anchorTextBefore", anchorTextBefore != null ? anchorTextBefore : "");
         obj.put("anchorTextAfter", anchorTextAfter != null ? anchorTextAfter : "");
+        obj.put("contentAnchorJson", contentAnchorJson != null ? contentAnchorJson : "");
         obj.put("fileSizeBytes", fileSizeBytes);
         obj.put("quickFingerprint", quickFingerprint != null ? quickFingerprint : "");
 
@@ -268,6 +270,7 @@ public class Bookmark {
         JSONObject anchors = new JSONObject();
         anchors.put("anchorTextBefore", anchorTextBefore != null ? anchorTextBefore : "");
         anchors.put("anchorTextAfter", anchorTextAfter != null ? anchorTextAfter : "");
+        anchors.put("contentAnchorJson", contentAnchorJson != null ? contentAnchorJson : "");
         obj.put("anchors", anchors);
 
         JSONObject internal = new JSONObject();
@@ -301,6 +304,13 @@ public class Bookmark {
         b.excerpt = obj.optString("excerpt", "");
         b.anchorTextBefore = obj.optString("anchorTextBefore", "");
         b.anchorTextAfter = obj.optString("anchorTextAfter", "");
+        b.contentAnchorJson = obj.optString("contentAnchorJson", "");
+        JSONObject anchors = obj.optJSONObject("anchors");
+        if (anchors != null) {
+            if ((b.anchorTextBefore == null || b.anchorTextBefore.isEmpty())) b.anchorTextBefore = anchors.optString("anchorTextBefore", b.anchorTextBefore);
+            if ((b.anchorTextAfter == null || b.anchorTextAfter.isEmpty())) b.anchorTextAfter = anchors.optString("anchorTextAfter", b.anchorTextAfter);
+            if ((b.contentAnchorJson == null || b.contentAnchorJson.isEmpty())) b.contentAnchorJson = anchors.optString("contentAnchorJson", b.contentAnchorJson);
+        }
         b.fileSizeBytes = obj.optLong("fileSizeBytes", 0L);
         b.quickFingerprint = obj.optString("quickFingerprint", "");
         JSONObject identity = obj.optJSONObject("fileIdentity");
@@ -334,6 +344,8 @@ public class Bookmark {
         String lower = name.toLowerCase();
         if (lower.endsWith(".pdf")) return "PDF";
         if (lower.endsWith(".epub")) return "EPUB";
+        if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "MARKDOWN";
+        if (lower.endsWith(".hwp") || lower.endsWith(".hwpx")) return "HWP";
         if (lower.endsWith(".doc") || lower.endsWith(".docx") || lower.endsWith(".rtf")) return "WORD";
         return "TXT";
     }
@@ -353,6 +365,7 @@ public class Bookmark {
         String lower = name.toLowerCase();
         if (lower.endsWith(".pdf")) return "PDF page (1-based)";
         if (lower.endsWith(".epub")) return "EPUB section/page (1-based)";
+        if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "Markdown source line (1-based); rendered page is cached display metadata";
         if (lower.endsWith(".doc") || lower.endsWith(".docx") || lower.endsWith(".rtf")) {
             return "Word page (1-based)";
         }
@@ -363,12 +376,18 @@ public class Bookmark {
         if ("TXT".equals(type)) {
             return "TXT pageNumber/totalPages are cached display metadata from the selected large-TXT partition page model. They may differ between Standard 4000/400 and High-buffer 12000/600 modes. For backup editing, use setLine, moveByLines, or findText as the stable target.";
         }
+        if ("MARKDOWN".equals(type)) {
+            return "Markdown bookmarks use source line/offset as the stable target. Rendered Page X/Y is display-only and may differ by device, font size, or viewport.";
+        }
         return "For PDF, EPUB, and Word bookmarks, the page/section value is the app document-page target.";
     }
 
     private String getPageModelNoteKo(String type) {
         if ("TXT".equals(type)) {
             return "TXT pageNumber/totalPages는 선택된 대용량 TXT 파티션 페이지 모델에서 나온 표시용 캐시입니다. 기본 4000/400과 고버퍼 12000/600 모드 사이에서 달라질 수 있습니다. 백업에서 위치를 수정할 때는 setLine, moveByLines, findText를 안정적인 기준으로 사용하세요.";
+        }
+        if ("MARKDOWN".equals(type)) {
+            return "Markdown 북마크는 원문 줄/offset을 안정 기준으로 사용합니다. 렌더링된 Page X/Y는 표시용이며 기기, 글꼴 크기, 화면 크기에 따라 달라질 수 있습니다.";
         }
         return "PDF, EPUB, Word 북마크의 페이지/섹션 값은 앱 문서 페이지 기준의 이동 대상입니다.";
     }
@@ -395,6 +414,9 @@ public class Bookmark {
         if ("EPUB".equals(type)) {
             return "memo, setPageOrSection, moveByPages";
         }
+        if ("MARKDOWN".equals(type)) {
+            return "memo, lineOrPage, moveBy";
+        }
         return "memo, setPage, moveByPages";
     }
 
@@ -406,6 +428,9 @@ public class Bookmark {
         if ("EPUB".equals(type)) {
             return "EPUB: change setPageOrSection if you know the app page/section. Use moveByPages for a small correction. memo is free text.";
         }
+        if ("MARKDOWN".equals(type)) {
+            return "Markdown: lineOrPage is the source line anchor. Rendered page is only a display hint and can change by device.";
+        }
         return "PDF/Word: change setPage if you know the exact page. Use moveByPages for a small correction. memo is free text.";
     }
 
@@ -415,6 +440,9 @@ public class Bookmark {
         }
         if ("EPUB".equals(type)) {
             return "EPUB: 정확한 앱 페이지/섹션을 알면 setPageOrSection을 바꾸세요. 조금 보정하려면 moveByPages를 쓰면 됩니다. memo는 자유 메모입니다.";
+        }
+        if ("MARKDOWN".equals(type)) {
+            return "Markdown: lineOrPage는 원문 줄 anchor입니다. 렌더링 페이지는 기기마다 달라질 수 있는 표시용 참고값입니다.";
         }
         return "PDF/Word: 정확한 페이지를 알면 setPage를 바꾸세요. 조금 보정하려면 moveByPages를 쓰면 됩니다. memo는 자유 메모입니다.";
     }
@@ -475,6 +503,9 @@ public class Bookmark {
 
     public String getAnchorTextAfter() { return anchorTextAfter; }
     public void setAnchorTextAfter(String anchorTextAfter) { this.anchorTextAfter = anchorTextAfter; }
+
+    public String getContentAnchorJson() { return contentAnchorJson; }
+    public void setContentAnchorJson(String contentAnchorJson) { this.contentAnchorJson = contentAnchorJson; }
 
     public long getFileSizeBytes() { return fileSizeBytes; }
     public void setFileSizeBytes(long fileSizeBytes) { this.fileSizeBytes = fileSizeBytes; }

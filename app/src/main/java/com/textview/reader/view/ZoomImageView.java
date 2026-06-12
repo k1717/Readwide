@@ -12,6 +12,8 @@ import android.view.ScaleGestureDetector;
 import android.view.ViewConfiguration;
 import android.widget.OverScroller;
 
+import com.textview.reader.util.ImageZoomScaleMath;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.widget.AppCompatImageView;
@@ -19,9 +21,11 @@ import androidx.appcompat.widget.AppCompatImageView;
 /** Lightweight pan/zoom/fling image surface for ImageReaderActivity. */
 public class ZoomImageView extends AppCompatImageView {
     private static final float DOUBLE_TAP_BASE_EPSILON = 0.005f;
+    private static final float DOUBLE_TAP_ZOOM_FACTOR = 2f;
 
     public interface Callbacks {
-        void onSingleTap();
+        void onSingleTap(float normalizedX);
+        boolean shouldHandleTapImmediately(float normalizedX);
         void onSwipeLeft();
         void onSwipeRight();
         void onZoomRequested();
@@ -38,13 +42,13 @@ public class ZoomImageView extends AppCompatImageView {
     private float fitScale = 1f;
     private float defaultScale = 1f;
     private float maxScale = 5f;
-    private boolean adaptiveFitDefaultDiffersFromOriginal;
     private float lastX;
     private float lastY;
     private int lastScrollerX;
     private int lastScrollerY;
     private boolean dragging;
     private boolean panGestureStarted;
+    private long immediateTapHandledDownTime = Long.MIN_VALUE;
     private int imageWidth;
     private int imageHeight;
     private Callbacks callbacks;
@@ -85,13 +89,23 @@ public class ZoomImageView extends AppCompatImageView {
         });
         gestureDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
             @Override
+            public boolean onSingleTapUp(@NonNull MotionEvent e) {
+                return handleImmediatePageTap(e);
+            }
+
+            @Override
             public boolean onSingleTapConfirmed(@NonNull MotionEvent e) {
-                if (callbacks != null) callbacks.onSingleTap();
+                if (e.getDownTime() == immediateTapHandledDownTime) return true;
+                if (callbacks != null) callbacks.onSingleTap(normalizedTapX(e));
                 return true;
             }
 
             @Override
             public boolean onDoubleTap(@NonNull MotionEvent e) {
+                if (shouldHandleTapImmediately(e)) {
+                    handleImmediatePageTap(e);
+                    return true;
+                }
                 stopImageFling();
                 if (willDoubleTapZoomIn() && callbacks != null) callbacks.onZoomRequested();
                 toggleZoom(e.getX(), e.getY());
@@ -125,6 +139,21 @@ public class ZoomImageView extends AppCompatImageView {
         this.callbacks = callbacks;
     }
 
+    private boolean handleImmediatePageTap(@NonNull MotionEvent e) {
+        if (e.getDownTime() == immediateTapHandledDownTime) return true;
+        if (!shouldHandleTapImmediately(e)) return false;
+        immediateTapHandledDownTime = e.getDownTime();
+        if (callbacks != null) callbacks.onSingleTap(normalizedTapX(e));
+        return true;
+    }
+
+    private boolean shouldHandleTapImmediately(@NonNull MotionEvent e) {
+        return callbacks != null
+                && !scaleDetector.isInProgress()
+                && e.getPointerCount() == 1
+                && callbacks.shouldHandleTapImmediately(normalizedTapX(e));
+    }
+
     public void setImageBitmapReady(@NonNull Bitmap nextBitmap) {
         setImageBitmapReady(nextBitmap, false);
     }
@@ -150,6 +179,16 @@ public class ZoomImageView extends AppCompatImageView {
             ((AnimatedImageDrawable) nextDrawable).start();
         }
         configureBaseMatrixWhenReady();
+    }
+
+    public void clearImageReady() {
+        stopImageFling();
+        imageWidth = 0;
+        imageHeight = 0;
+        matrix.reset();
+        setImageMatrix(matrix);
+        setImageDrawable(null);
+        invalidate();
     }
 
     private void configureBaseMatrixWhenReady() {
@@ -232,21 +271,31 @@ public class ZoomImageView extends AppCompatImageView {
         fitScale = Math.min(fitWidthScale, fitHeightScale);
         if (fitScale <= 0f) fitScale = 1f;
 
-        // Use an adaptive reading fit instead of a fixed width-fill default:
-        // pages wider than the viewport open fitted to width, while pages taller
-        // than the viewport open fitted to height. The full-image contain scale
-        // remains available as the minimum zoom, and double tap toggles between
-        // the adaptive fit and true 1:1 whenever those two states differ.
+        // The initial visible state is the viewer baseline.  Double tap always
+        // toggles between this first state and 2x of that state; it must not
+        // switch to original 1:1 as a separate double-tap state.
         defaultScale = chooseAdaptiveFitScale(bw, bh, contentW, contentH, fitWidthScale, fitHeightScale);
         if (defaultScale <= 0f) defaultScale = fitScale;
-        minScale = Math.min(1f, fitScale);
-        adaptiveFitDefaultDiffersFromOriginal = Math.abs(defaultScale - 1f) > getDoubleTapBaseEpsilon();
+
+        // Pinch-zoom out normally stops at the first visible state.  The only
+        // exception is an upscaled small image: in that case allow shrinking down
+        // to original 1:1, but not below it.
+        minScale = ImageZoomScaleMath.minimumPinchScale(defaultScale);
         maxScale = Math.max(Math.max(Math.max(minScale, fitScale), Math.max(defaultScale, 1f)) * 5f, 5f);
         float dx = getPaddingLeft() + (contentW - bw * defaultScale) * 0.5f;
         float dy = getPaddingTop() + (contentH - bh * defaultScale) * 0.5f;
         matrix.postScale(defaultScale, defaultScale);
         matrix.postTranslate(dx, dy);
         setImageMatrix(matrix);
+    }
+
+    private float normalizedTapX(@NonNull MotionEvent event) {
+        int width = getWidth();
+        if (width <= 0) return 0.5f;
+        float normalized = event.getX() / (float) width;
+        if (normalized < 0f) return 0f;
+        if (normalized > 1f) return 1f;
+        return normalized;
     }
 
     private void handleMove(@NonNull MotionEvent event) {
@@ -297,31 +346,11 @@ public class ZoomImageView extends AppCompatImageView {
     }
 
     private float getDoubleTapTargetScale(float current) {
-        float epsilon = getDoubleTapBaseEpsilon();
-        if (adaptiveFitDefaultDiffersFromOriginal && 1f >= minScale - epsilon && 1f <= maxScale + epsilon) {
-            if (Math.abs(current - 1f) <= epsilon) {
-                return defaultScale;
-            }
-            if (Math.abs(current - defaultScale) <= epsilon) {
-                return 1f;
-            }
-            float lower = Math.min(defaultScale, 1f);
-            float upper = Math.max(defaultScale, 1f);
-            if (current > lower + epsilon && current < upper - epsilon) {
-                return 1f;
-            }
-            return defaultScale;
-        }
-        return current <= defaultScale + epsilon ? getDoubleTapZoomScale() : defaultScale;
-    }
-
-    private float getDoubleTapZoomScale() {
-        if (fitScale > minScale + getDoubleTapBaseEpsilon()) {
-            return fitScale;
-        }
-        int contentW = getContentWidth();
-        float fitWidthScale = contentW > 0 ? contentW / (float) imageWidth : minScale;
-        return Math.max(minScale * 2.5f, fitWidthScale);
+        return ImageZoomScaleMath.doubleTapTargetScale(
+                current,
+                defaultScale,
+                Math.min(maxScale, defaultScale * DOUBLE_TAP_ZOOM_FACTOR),
+                getDoubleTapBaseEpsilon());
     }
 
     private float chooseAdaptiveFitScale(float bitmapWidth, float bitmapHeight, int contentWidth, int contentHeight, float fitWidthScale, float fitHeightScale) {

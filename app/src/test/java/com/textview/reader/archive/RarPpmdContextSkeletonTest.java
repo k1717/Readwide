@@ -41,8 +41,8 @@ public class RarPpmdContextSkeletonTest {
 
         assertEquals(0, pointer);
         assertEquals(pointer, context.stateArrayPointer());
-        assertEquals(2, context.stateArrayUnits());
-        assertEquals(2 * RarPpmdSubAllocator.UNIT_SIZE_BYTES, allocator.usedBytes());
+        assertEquals(1, context.stateArrayUnits());
+        assertEquals(RarPpmdSubAllocator.UNIT_SIZE_BYTES, allocator.usedBytes());
     }
 
     @Test
@@ -90,7 +90,7 @@ public class RarPpmdContextSkeletonTest {
                 new RarPpmdByteInput.ArrayInput(new byte[] {1, 2, 3, 4}),
                 true);
 
-        assertEquals(1, source.rootContextForTest().stateCount());
+        assertEquals(0, source.rootContextForTest().stateCount());
         assertEquals(1, source.rootContextForTest().stateArrayUnits());
         assertEquals(12, source.subAllocatorForTest().usedBytes());
         assertEquals(0, source.escapeMaskForTest().maskedCount());

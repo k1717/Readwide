@@ -115,23 +115,15 @@ final class Rar3FirstPartyArchiveExtractor {
         Rar3SolidSequencePlan plan = Rar3SolidSequencePlan.forTarget(entries, target);
         if (plan == null) return false;
         Rar3SolidState solidState = new Rar3SolidState();
-        File tempDir = null;
-        try {
-            tempDir = createTempDir(outFile);
-            for (RarArchiveReader.RarEntry entry : plan.sequenceEntries()) {
-                File out = entry == target ? outFile : File.createTempFile("rar3-solid-primer-", ".bin", tempDir);
-                if (!entry.solid) solidState.reset();
-                extractCompressedSolidSequence(entry, out, solidState, progress);
-                if (entry != target && out.exists()) {
-                    //noinspection ResultOfMethodCallIgnored
-                    out.delete();
-                }
-                if (entry == target) return true;
+        for (RarArchiveReader.RarEntry entry : plan.sequenceEntries()) {
+            if (!entry.solid) solidState.reset();
+            if (entry == target) {
+                extractCompressedSolidSequence(entry, outFile, solidState, progress);
+                return true;
             }
-            return false;
-        } finally {
-            deleteTree(tempDir);
+            primeCompressedSolidSequence(entry, solidState, progress);
         }
+        return false;
     }
 
     static boolean isFirstPartyCompressedCandidate(@NonNull RarArchiveReader.RarEntry entry) {
@@ -240,8 +232,25 @@ final class Rar3FirstPartyArchiveExtractor {
                                                        @NonNull File outFile,
                                                        @NonNull Rar3SolidState solidState,
                                                        @Nullable FileOperationProgress progress) throws IOException {
+        Rar3UnpackContext context = solidSequenceContext(entry, solidState);
+        try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
+            Rar3Unpacker.unpack(context, outFile, progress);
+            guard.commit();
+        }
+    }
+
+    private static void primeCompressedSolidSequence(@NonNull RarArchiveReader.RarEntry entry,
+                                                     @NonNull Rar3SolidState solidState,
+                                                     @Nullable FileOperationProgress progress) throws IOException {
+        Rar3UnpackContext context = solidSequenceContext(entry, solidState);
+        Rar3Unpacker.unpackSolidPrimerToDiscard(context, progress);
+    }
+
+    @NonNull
+    private static Rar3UnpackContext solidSequenceContext(@NonNull RarArchiveReader.RarEntry entry,
+                                                          @NonNull Rar3SolidState solidState) throws IOException {
         if (entry.sourceArchive == null) throw new IOException("RAR entry source volume is missing");
-        Rar3UnpackContext context = Rar3UnpackContext.forSolidSequenceEntry(
+        return Rar3UnpackContext.forSolidSequenceEntry(
                 entry.sourceArchive,
                 entry.dataOffset,
                 entry.packedSize,
@@ -252,31 +261,5 @@ final class Rar3FirstPartyArchiveExtractor {
                 false,
                 entry.dataCrc,
                 solidState);
-        try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
-            Rar3Unpacker.unpack(context, outFile, progress);
-            guard.commit();
-        }
-    }
-
-    @NonNull
-    private static File createTempDir(@NonNull File outFile) throws IOException {
-        File base = outFile.getParentFile();
-        if (base == null) base = new File(System.getProperty("java.io.tmpdir"));
-        File dir = File.createTempFile("rar3-solid-primer-", ".tmp", base);
-        if (!dir.delete() || !dir.mkdirs()) throw new IOException("Could not create RAR solid temp directory");
-        return dir;
-    }
-
-    private static void deleteTree(@Nullable File file) {
-        if (file == null || !file.exists()) return;
-        File[] children = file.listFiles();
-        if (children != null) {
-            for (File child : children) deleteTree(child);
-        }
-        try {
-            //noinspection ResultOfMethodCallIgnored
-            file.delete();
-        } catch (SecurityException ignored) {
-        }
     }
 }
