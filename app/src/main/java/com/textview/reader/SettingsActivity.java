@@ -797,8 +797,7 @@ public class SettingsActivity extends AppCompatActivity {
         Spinner tapZoneSpinner = findViewById(R.id.spinner_tap_zone_mode);
         Spinner largeTxtModeSpinner = findViewById(R.id.spinner_large_txt_partition_mode);
         Spinner epubDirectionSpinner = findViewById(R.id.spinner_epub_page_direction);
-        Spinner epubEffectSpinner = findViewById(R.id.spinner_epub_page_effect);
-        Spinner[] spinners = new Spinner[]{overlapSpinner, tapZoneSpinner, largeTxtModeSpinner, epubDirectionSpinner, epubEffectSpinner};
+        Spinner[] spinners = new Spinner[]{overlapSpinner, tapZoneSpinner, largeTxtModeSpinner, epubDirectionSpinner};
         for (Spinner spinner : spinners) {
             if (spinner == null) continue;
             spinner.setBackgroundColor(bg);

@@ -3,6 +3,7 @@ package com.textview.reader;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.View;
+import android.view.ViewGroup;
 
 import androidx.annotation.NonNull;
 import com.textview.reader.util.BookmarkManager;
@@ -80,6 +81,7 @@ final class DocumentPageStartupController {
         final int baseTop = topPageStatus.getPaddingTop();
         final int baseRight = topPageStatus.getPaddingRight();
         final int baseBottom = topPageStatus.getPaddingBottom();
+        final int baseHeight = activity.dpToPx(32f);
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(topPageStatus, (v, insets) -> {
             androidx.core.graphics.Insets bars = insets.getInsets(
                     androidx.core.view.WindowInsetsCompat.Type.systemBars()
@@ -88,6 +90,13 @@ final class DocumentPageStartupController {
             // height stable and let it own the status-bar inset; do not add padding
             // to the WebView/viewport itself, because WebView padding clips EPUB
             // pages and fixed-layout scaling.
+            ViewGroup.LayoutParams lp = v.getLayoutParams();
+            int targetHeight = baseHeight + bars.top;
+            if (lp != null && lp.height != targetHeight) {
+                lp.height = targetHeight;
+                v.setLayoutParams(lp);
+            }
+            v.setMinimumHeight(targetHeight);
             v.setPadding(baseLeft, baseTop + bars.top, baseRight, baseBottom);
             return insets;
         });
@@ -134,7 +143,9 @@ final class DocumentPageStartupController {
         activity.toolbar.setBackgroundColor(Color.BLACK);
 
         activity.webView = activity.findViewById(R.id.document_webview);
+        activity.loadingBox = activity.findViewById(R.id.loading_box);
         activity.progressBar = activity.findViewById(R.id.loading_progress);
+        activity.progressText = activity.findViewById(R.id.loading_text);
         activity.pageStatus = activity.findViewById(R.id.document_page_status);
         activity.topPageStatus = activity.findViewById(R.id.document_top_page_status);
         activity.documentPageSeekBar = activity.findViewById(R.id.document_page_seek_bar);

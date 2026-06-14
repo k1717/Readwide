@@ -2,7 +2,9 @@ package com.textview.reader;
 
 import android.graphics.Color;
 import android.os.Bundle;
+import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 
 import androidx.activity.OnBackPressedCallback;
@@ -88,6 +90,7 @@ final class PdfReaderStartupController {
         activity.pdfAppBar = activity.findViewById(R.id.pdf_appbar);
         activity.pdfToolbar = activity.findViewById(R.id.toolbar);
         activity.pdfTopPageStatus = activity.findViewById(R.id.pdf_top_page_status);
+        installStandaloneTopPageStatusInsets();
         activity.pdfBottomBar = activity.findViewById(R.id.pdf_bottom_bar);
         activity.pdfNavBarSpacer = activity.findViewById(R.id.pdf_nav_bar_spacer);
         activity.pageImage = activity.findViewById(R.id.pdf_page_image);
@@ -104,5 +107,31 @@ final class PdfReaderStartupController {
         activity.pdfViewport = activity.findViewById(R.id.pdf_viewport);
         activity.pdfHScroll = activity.findViewById(R.id.pdf_h_scroll);
         activity.pdfVScroll = activity.findViewById(R.id.pdf_v_scroll);
+    }
+
+    private void installStandaloneTopPageStatusInsets() {
+        View topPageStatus = activity.findViewById(R.id.pdf_top_page_status);
+        if (topPageStatus == null) return;
+        final int baseLeft = topPageStatus.getPaddingLeft();
+        final int baseTop = topPageStatus.getPaddingTop();
+        final int baseRight = topPageStatus.getPaddingRight();
+        final int baseBottom = topPageStatus.getPaddingBottom();
+        final int baseHeight = activity.dpToPx(32f);
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(topPageStatus, (v, insets) -> {
+            // pdf_appbar already owns the status-bar/cutout top inset through
+            // EdgeToEdgeUtil.applyPdfReaderInsets().  The collapsed PDF page
+            // counter must therefore reserve only its compact content height;
+            // adding bars.top again made the PDF strip taller than the Word/EPUB/HWP strip.
+            ViewGroup.LayoutParams lp = v.getLayoutParams();
+            int targetHeight = baseHeight;
+            if (lp != null && lp.height != targetHeight) {
+                lp.height = targetHeight;
+                v.setLayoutParams(lp);
+            }
+            v.setMinimumHeight(targetHeight);
+            v.setPadding(baseLeft, baseTop, baseRight, baseBottom);
+            return insets;
+        });
+        androidx.core.view.ViewCompat.requestApplyInsets(topPageStatus);
     }
 }

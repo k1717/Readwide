@@ -8,7 +8,6 @@ import android.graphics.ColorFilter;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.RectF;
-import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
@@ -55,6 +54,9 @@ import com.textview.reader.util.PrefsManager;
 import com.textview.reader.util.TapZoneMath;
 import com.textview.reader.util.MarkdownVisualPageMath;
 import com.textview.reader.util.ThemeManager;
+import com.textview.reader.document.render.FixedHtmlRenderer;
+import com.textview.reader.document.render.RenderedDocument;
+import com.textview.reader.document.render.RenderedPage;
 
 import org.json.JSONObject;
 
@@ -129,7 +131,9 @@ public class DocumentPageActivity extends AppCompatActivity {
     View documentNavBarSpacer;
     boolean documentChromeVisible = true;
     WebView webView;
+    LinearLayout loadingBox;
     ProgressBar progressBar;
+    TextView progressText;
     TextView pageStatus;
     TextView topPageStatus;
     TextView prevButton;
@@ -187,6 +191,8 @@ public class DocumentPageActivity extends AppCompatActivity {
     boolean snapDocumentPageTopAfterLoad = false;
     int pendingSlideDirection = 0;
     private int wordSwipeTouchSlop = 0;
+    private int markdownSelectionCancelSlopPx = 0;
+    private boolean markdownNativeLongPressCanceledForGesture = false;
     private float wordSwipeStartX = 0f;
     private float wordSwipeStartY = 0f;
     private boolean wordSwipeTriggered = false;
@@ -302,10 +308,39 @@ public class DocumentPageActivity extends AppCompatActivity {
     }
 
 
+    private GradientDrawable loadingBoxBackground() {
+        return LoadingWindowTheme.boxDrawable(this, LoadingWindowTheme.reader(readerBg, readerFg));
+    }
+
     void updateLoadingIndicatorTheme() {
-        if (progressBar == null) return;
-        progressBar.setBackgroundColor(Color.TRANSPARENT);
-        progressBar.setIndeterminateTintList(ColorStateList.valueOf(readerFg));
+        if (loadingBox != null) loadingBox.setBackground(loadingBoxBackground());
+        if (progressBar != null) {
+            progressBar.setBackgroundColor(Color.TRANSPARENT);
+            progressBar.setIndeterminateTintList(ColorStateList.valueOf(readerFg));
+        }
+        if (progressText != null) {
+            progressText.setTextColor(readerFg);
+            progressText.setBackgroundColor(Color.TRANSPARENT);
+        }
+    }
+
+    void showLoadingWindow() {
+        updateLoadingIndicatorTheme();
+        if (loadingBox != null) {
+            loadingBox.setVisibility(View.VISIBLE);
+            loadingBox.bringToFront();
+        }
+        if (progressBar != null) progressBar.setVisibility(View.VISIBLE);
+        if (progressText != null) {
+            progressText.setText(getString(R.string.loading));
+            progressText.setVisibility(View.VISIBLE);
+        }
+    }
+
+    void hideLoadingWindow() {
+        if (progressBar != null) progressBar.setVisibility(View.GONE);
+        if (progressText != null) progressText.setVisibility(View.GONE);
+        if (loadingBox != null) loadingBox.setVisibility(View.GONE);
     }
 
     @Override
@@ -414,7 +449,7 @@ public class DocumentPageActivity extends AppCompatActivity {
     }
 
     void applyDocumentChromeFillColors() {
-        int topFillerBg = documentChromeVisible ? readerToolbarBg : readerBg;
+        int topFillerBg = readerToolbarBg;
         if (documentAppBar != null) {
             documentAppBar.setBackgroundColor(topFillerBg);
         }
@@ -422,7 +457,7 @@ public class DocumentPageActivity extends AppCompatActivity {
             toolbar.setBackgroundColor(readerToolbarBg);
         }
         if (topPageStatus != null) {
-            topPageStatus.setBackgroundColor(readerBg);
+            topPageStatus.setBackgroundColor(readerToolbarBg);
         }
         if (documentNavBarSpacer != null) {
             documentNavBarSpacer.setBackgroundColor(readerBg);
@@ -466,7 +501,7 @@ public class DocumentPageActivity extends AppCompatActivity {
             androidx.core.view.ViewCompat.requestApplyInsets(documentNavBarSpacer);
         }
         if (documentSearchOverlayContainer != null) documentSearchOverlayContainer.setBackgroundColor(Color.TRANSPARENT);
-        if (appbar != null) appbar.setBackgroundColor(documentChromeVisible ? readerToolbarBg : readerBg);
+        if (appbar != null) appbar.setBackgroundColor(readerToolbarBg);
         if (bottom != null) bottom.setBackground(documentBottomChromeBackground(readerPanel));
         if (toolbar != null) {
             toolbar.setBackgroundColor(readerToolbarBg);
@@ -482,7 +517,7 @@ public class DocumentPageActivity extends AppCompatActivity {
         if (pageStatus != null) pageStatus.setTextColor(readerFg);
         if (topPageStatus != null) {
             topPageStatus.setTextColor(readerFg);
-            topPageStatus.setBackgroundColor(readerBg);
+            topPageStatus.setBackgroundColor(readerToolbarBg);
         }
         if (documentPageSeekBar != null) tintSeekBar(documentPageSeekBar);
         updateLoadingIndicatorTheme();
@@ -507,6 +542,27 @@ public class DocumentPageActivity extends AppCompatActivity {
         wordRelationships.clear();
         executor.shutdownNow();
         super.onDestroy();
+    }
+
+    private void cancelMarkdownPendingWebTouch(@NonNull MotionEvent source) {
+        if (webView == null || !isMarkdownDocument()) return;
+        webView.cancelLongPress();
+        MotionEvent cancel = MotionEvent.obtain(
+                source.getDownTime(),
+                source.getEventTime(),
+                MotionEvent.ACTION_CANCEL,
+                source.getX(),
+                source.getY(),
+                source.getMetaState());
+        try {
+            webView.onTouchEvent(cancel);
+        } catch (Throwable ignored) {
+            // Native WebView selection state differs by Android System WebView
+            // version. Failing to deliver this synthetic cancel should not break
+            // the page turn; the DOM selection clear below is still attempted.
+        } finally {
+            cancel.recycle();
+        }
     }
 
     private boolean handleDocumentTapGesture(@NonNull MotionEvent event) {
@@ -543,7 +599,17 @@ public class DocumentPageActivity extends AppCompatActivity {
         }
 
         if (eventAction == MotionEvent.ACTION_DOWN) {
+            wordSwipeStartX = e.getX();
+            wordSwipeStartY = e.getY();
             documentTapPagingSequence = getDocumentTapPagingAction(e) != TapZoneMath.ACTION_MENU;
+            if (isMarkdownDocument() && documentTapPagingSequence) {
+                // Do not consume DOWN: Markdown still needs normal WebView touch
+                // delivery for selection and vertical scroll if this gesture is
+                // later cancelled as a page tap.  The stale-selection bug is
+                // caused by consuming UP for the page turn, so we send WebView a
+                // synthetic CANCEL immediately before turning the page instead.
+                webView.cancelLongPress();
+            }
             return false;
         }
 
@@ -564,10 +630,18 @@ public class DocumentPageActivity extends AppCompatActivity {
         int action = stillTap ? getDocumentTapPagingAction(e) : TapZoneMath.ACTION_MENU;
         documentTapPagingSequence = false;
         if (action == TapZoneMath.ACTION_PREVIOUS) {
+            if (isMarkdownDocument()) {
+                cancelMarkdownPendingWebTouch(e);
+                clearMarkdownWebSelection();
+            }
             turnDocumentPageByTap(-1);
             return true;
         }
         if (action == TapZoneMath.ACTION_NEXT) {
+            if (isMarkdownDocument()) {
+                cancelMarkdownPendingWebTouch(e);
+                clearMarkdownWebSelection();
+            }
             turnDocumentPageByTap(1);
             return true;
         }
@@ -593,10 +667,18 @@ public class DocumentPageActivity extends AppCompatActivity {
     private boolean handleDocumentTapPaging(@NonNull MotionEvent e) {
         int action = getDocumentTapPagingAction(e);
         if (action == TapZoneMath.ACTION_PREVIOUS) {
+            if (isMarkdownDocument()) {
+                cancelMarkdownPendingWebTouch(e);
+                clearMarkdownWebSelection();
+            }
             turnDocumentPageByTap(-1);
             return true;
         }
         if (action == TapZoneMath.ACTION_NEXT) {
+            if (isMarkdownDocument()) {
+                cancelMarkdownPendingWebTouch(e);
+                clearMarkdownWebSelection();
+            }
             turnDocumentPageByTap(1);
             return true;
         }
@@ -804,6 +886,7 @@ public class DocumentPageActivity extends AppCompatActivity {
     @SuppressLint("ClickableViewAccessibility")
     void installSwipePaging() {
         wordSwipeTouchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+        markdownSelectionCancelSlopPx = Math.max(1, dpToPx(2));
         documentGestureDetector = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onDown(@NonNull MotionEvent e) {
@@ -851,6 +934,7 @@ public class DocumentPageActivity extends AppCompatActivity {
                     wordSwipeStartY = event.getY();
                     wordSwipeTriggered = false;
                     wordSwipeMovedEnoughForParentDisallow = false;
+                    markdownNativeLongPressCanceledForGesture = false;
                     wordGestureStartedAtLeftEdge = !webView.canScrollHorizontally(-1);
                     wordGestureStartedAtRightEdge = !webView.canScrollHorizontally(1);
                     webView.removeCallbacks(checkWordSelectionAfterScrollRunnable);
@@ -861,6 +945,21 @@ public class DocumentPageActivity extends AppCompatActivity {
                     if (wordSelectionActive) return false;
                     float dx = event.getX() - wordSwipeStartX;
                     float dy = event.getY() - wordSwipeStartY;
+                    // Markdown uses WebView's native selection.  Do not replace
+                    // that long-click pipeline, because synthetic replay breaks
+                    // handles and page anchors on some WebView builds.  Instead,
+                    // cancel the pending native long-press as soon as the finger
+                    // becomes a scroll/page gesture.  This threshold is deliberately
+                    // much smaller than the normal scroll slop: slow Markdown
+                    // scrolling was still producing stray word selections before
+                    // it crossed Android's default long-press boundary.
+                    if (isMarkdownDocument()
+                            && !markdownNativeLongPressCanceledForGesture
+                            && (Math.abs(dx) > markdownSelectionCancelSlopPx
+                            || Math.abs(dy) > markdownSelectionCancelSlopPx)) {
+                        webView.cancelLongPress();
+                        markdownNativeLongPressCanceledForGesture = true;
+                    }
                     if (!wordSwipeMovedEnoughForParentDisallow
                             && Math.abs(dx) > wordSwipeTouchSlop
                             && Math.abs(dx) > Math.abs(dy) * 1.35f) {
@@ -869,6 +968,7 @@ public class DocumentPageActivity extends AppCompatActivity {
                     }
                     if (!wordSwipeTriggered && shouldTurnDocumentPageBySwipe(event)) {
                         wordSwipeTriggered = true;
+                        if (isMarkdownDocument()) webView.cancelLongPress();
                         turnDocumentPageBySwipe(pageDeltaForHorizontalSwipe(event.getX() - wordSwipeStartX));
                         clearDocumentEdgeArm();
                         return true;
@@ -882,6 +982,7 @@ public class DocumentPageActivity extends AppCompatActivity {
                     }
                     if (!wordSwipeTriggered && shouldTurnDocumentPageBySwipe(event)) {
                         wordSwipeTriggered = true;
+                        if (isMarkdownDocument()) webView.cancelLongPress();
                         turnDocumentPageBySwipe(pageDeltaForHorizontalSwipe(event.getX() - wordSwipeStartX));
                         clearDocumentEdgeArm();
                         return true;
@@ -904,6 +1005,7 @@ public class DocumentPageActivity extends AppCompatActivity {
     private void resetWordSwipeTracking() {
         wordSwipeTriggered = false;
         wordSwipeMovedEnoughForParentDisallow = false;
+        markdownNativeLongPressCanceledForGesture = false;
         documentTapPagingSequence = false;
         wordGestureStartedAtLeftEdge = true;
         wordGestureStartedAtRightEdge = true;
@@ -998,18 +1100,11 @@ public class DocumentPageActivity extends AppCompatActivity {
     }
 
     int visualSlideDirectionForPageDelta(int pageDelta) {
-        if (pageDelta == 0) return 0;
-        if ("EPUB".equals(docType)
-                && prefs != null
-                && prefs.getEpubPageEffect() == PrefsManager.EPUB_PAGE_EFFECT_NONE) {
-            return 0;
-        }
-        if ("EPUB".equals(docType)
-                && prefs != null
-                && prefs.getEpubPageDirection() == PrefsManager.EPUB_PAGE_DIRECTION_RTL) {
-            return -pageDelta;
-        }
-        return pageDelta;
+        // WebView-backed document pages now snap immediately. The old EPUB
+        // transition-effect setting was removed because slide/fade animation is
+        // no longer part of the document-page model. Keep this method as the
+        // single gate used by older call sites, but always report no visual slide.
+        return 0;
     }
 
     private void turnDocumentPageBySwipe(int direction) {
@@ -1549,7 +1644,8 @@ public class DocumentPageActivity extends AppCompatActivity {
     private void tintSeekBar(SeekBar seekBar) {
         int accent = readerFg;
         int track = readerLine;
-        seekBar.setThumb(makeStaticSeekBarThumb(accent, seekBar));
+        // Match the TXT reader slider: keep the platform/default thumb size and only tint it.
+        // A previously forced 14–20dp oval thumb made PDF/document viewers look larger.
         seekBar.setThumbTintList(android.content.res.ColorStateList.valueOf(accent));
         seekBar.setProgressTintList(android.content.res.ColorStateList.valueOf(accent));
         seekBar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(track));
@@ -1562,18 +1658,6 @@ public class DocumentPageActivity extends AppCompatActivity {
         }
     }
 
-    private Drawable makeStaticSeekBarThumb(int color, SeekBar seekBar) {
-        int fallback = dpToPx(18);
-        Drawable current = seekBar.getThumb();
-        int width = current != null ? current.getIntrinsicWidth() : fallback;
-        int height = current != null ? current.getIntrinsicHeight() : fallback;
-        int size = Math.max(dpToPx(14), Math.min(dpToPx(20), Math.max(width, height)));
-        GradientDrawable thumb = new GradientDrawable();
-        thumb.setShape(GradientDrawable.OVAL);
-        thumb.setColor(color);
-        thumb.setSize(size, size);
-        return thumb;
-    }
 
     private void addInfoRow(LinearLayout box, String label, String value) {
         TextView row = new TextView(this);
@@ -1716,16 +1800,29 @@ public class DocumentPageActivity extends AppCompatActivity {
                 + ".markdown-doc tr:nth-child(even) td{background:" + cssColor(blendColors(readerBg, readerFg, isDarkColor(readerBg) ? 0.045f : 0.035f)) + " !important;}"
                 + ".markdown-doc .md-diagram{background:" + cssColor(readerPanel) + " !important;border-color:" + cssColor(readerLine) + " !important;}"
                 : "";
+        String renderedPaperCss = isRenderedContentAnchorDocument()
+                ? "body.rw-rendered-doc{background:" + cssColor(readerBg) + " !important;color:#111 !important;}"
+                + "body.rw-rendered-doc .rw-page{background:#fff !important;color:#111 !important;}"
+                + "body.rw-rendered-doc .rw-page-inner{background:#fff !important;color:#111 !important;}"
+                + "body.rw-rendered-doc .rw-table,body.rw-rendered-doc .rw-table td{border-color:#777;}"
+                + "body.rw-rendered-doc,body.rw-rendered-doc *{word-break:normal !important;overflow-wrap:normal !important;}"
+                + "body.rw-rendered-doc .rw-p,body.rw-rendered-doc .rw-list-content{overflow-wrap:break-word !important;}"
+                + "body.rw-rendered-doc .rw-table td{min-width:0 !important;overflow:visible !important;overflow-wrap:break-word !important;word-break:normal !important;}"
+                + "body.rw-rendered-doc .rw-table td *{max-width:100% !important;overflow-wrap:break-word !important;word-break:normal !important;}"
+                + "body.rw-rendered-doc .rw-table .rw-p{max-width:100% !important;white-space:normal !important;overflow-wrap:break-word !important;word-break:normal !important;}"
+                + "body.rw-rendered-doc a{color:#0645ad !important;}"
+                : "";
         String css = "<style id=\"textview-reader-theme\">" +
                 "html,body{background:" + cssColor(readerBg) + " !important;color:" + cssColor(readerFg) +
                 " !important;}" +
                 "a{color:" + cssColor(linkColor) + " !important;}" +
-                "table,td,th{border-color:" + cssColor(readerLine) + " !important;}" +
+                "body:not(.rw-rendered-doc) table,body:not(.rw-rendered-doc) td,body:not(.rw-rendered-doc) th{border-color:" + cssColor(readerLine) + " !important;}" +
                 "html,body{max-width:100%;overflow-x:hidden;}" +
                 "*{box-sizing:border-box;}" +
                 "body,.page,p,div,span,td,th,li{max-width:100%;overflow-wrap:anywhere;word-break:break-word;}" +
                 "img,svg,video,.word-img,.textbox,table{max-width:100%;}" +
                 "pre{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}" +
+                renderedPaperCss +
                 epubThemeColorCss +
                 markdownThemeCss +
                 buildDocumentFontCss() +
@@ -2072,16 +2169,48 @@ public class DocumentPageActivity extends AppCompatActivity {
         scrollMarkdownToVisualPage(target, false);
     }
 
+    /**
+     * Clears any active WebView text selection in the Markdown reader. Markdown
+     * paging is a scroll within the same WebView, so a page-turn swipe can leave
+     * a stray word selected (and its selection bubble) after the turn. Markdown
+     * runs with JavaScript disabled, so this briefly enables JS, drops the
+     * selection via the DOM Selection API, finishes any floating selection
+     * ActionMode, and restores JS to off.
+     */
+    void clearMarkdownWebSelection() {
+        if (webView == null || !isMarkdownDocument()) return;
+        webView.clearFocus();
+        WebSettings settings = webView.getSettings();
+        boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
+        if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
+        webView.evaluateJavascript(
+                "(function(){try{var s=window.getSelection&&window.getSelection();"
+                        + "if(s){s.removeAllRanges();}}catch(e){}return true;})()",
+                value -> {
+                    if (!activityDestroyed && webView != null && restoreJavascriptOff) {
+                        webView.getSettings().setJavaScriptEnabled(false);
+                    }
+                });
+        wordSelectionActive = false;
+    }
+
     void scrollMarkdownToVisualPage(int page, boolean smooth) {
         if (!isMarkdownDocument() || webView == null) return;
+        clearMarkdownWebSelection();
         updateMarkdownVisualPageModel(false);
         int safePage = Math.max(0, Math.min(Math.max(0, markdownVisualTotalPages - 1), page));
-        int targetY = MarkdownVisualPageMath.targetScrollYForPage(safePage, markdownViewportHeightPx(), markdownMaxScrollY());
+        int targetY = MarkdownVisualPageMath.targetScrollYForPage(
+                safePage, markdownViewportHeightPx(), markdownMaxScrollY(), markdownVisualTotalPages,
+                markdownPageTopOverlapPx());
         scrollMarkdownWebViewTo(targetY, smooth);
         markdownVisualCurrentPage = safePage;
         updateDocumentPageStatusViews();
         webView.postDelayed(() -> updateMarkdownVisualPageModel(true), 180);
         webView.postDelayed(this::updateMarkdownSourceAnchorFromWebView, 190);
+        // A selection sometimes finalizes a beat after the swipe that turned the
+        // page. Clear once more after the turn settles so no stray word stays
+        // selected on the new page.
+        webView.postDelayed(this::clearMarkdownWebSelection, 220);
     }
 
     void scrollMarkdownWebViewTo(int targetY, boolean smooth) {
@@ -2096,9 +2225,10 @@ public class DocumentPageActivity extends AppCompatActivity {
 
     int markdownViewportHeightPx() {
         if (webView == null) return 1;
+        int h = webView.getHeight() - webView.getPaddingTop() - webView.getPaddingBottom();
+        if (h > 0) return h;
         int stable = stableMarkdownViewportHeightPx();
         if (stable > 0) return stable;
-        int h = webView.getHeight() - webView.getPaddingTop() - webView.getPaddingBottom();
         return Math.max(1, h);
     }
 
@@ -2146,18 +2276,28 @@ public class DocumentPageActivity extends AppCompatActivity {
         if (scale <= 0f || Float.isNaN(scale) || Float.isInfinite(scale)) scale = 1f;
         int viewport = markdownViewportHeightPx();
         int measured = Math.max(viewport, Math.round(webView.getContentHeight() * scale));
-        // WebView can report a few transient height variants while bars are shown/hidden
-        // or while CSS/layout settles.  Keep the larger measured content height during
-        // the session so the final visual page count does not oscillate after it has
-        // already expanded to the rendered document height.
-        if (measured > lastStableMarkdownContentHeightPx) {
+        // Use the current measured rendered height. Holding the largest value seen
+        // caused stale/phantom Markdown final pages after layout or toolbar changes.
+        // Keep the field only as a fallback for the rare zero-height WebView report.
+        if (measured > viewport) {
             lastStableMarkdownContentHeightPx = measured;
+            return measured;
         }
         return Math.max(viewport, lastStableMarkdownContentHeightPx > 0 ? lastStableMarkdownContentHeightPx : measured);
     }
 
     int markdownMaxScrollY() {
         return Math.max(0, markdownContentHeightPx() - markdownViewportHeightPx());
+    }
+
+    private int markdownPageTopOverlapPx() {
+        int viewport = Math.max(1, markdownViewportHeightPx());
+        // Markdown is a flowing WebView, so page boundaries can fall through the
+        // middle of a rendered line, list item, or code block.  Use a real page
+        // stride overlap large enough to repeat several lines on the next page.
+        int preferred = dpToPx(96f);
+        int viewportCap = Math.max(dpToPx(48f), viewport / 5);
+        return Math.max(0, Math.min(preferred, viewportCap));
     }
 
     void scheduleMarkdownVisualPageModelUpdate() {
@@ -2172,14 +2312,17 @@ public class DocumentPageActivity extends AppCompatActivity {
         if (!isMarkdownDocument() || webView == null) return;
         int viewport = markdownViewportHeightPx();
         int content = markdownContentHeightPx();
-        int total = MarkdownVisualPageMath.totalPages(content, viewport);
+        int overlap = markdownPageTopOverlapPx();
+        int total = MarkdownVisualPageMath.totalPages(content, viewport, overlap);
         int stableMaxScroll = Math.max(0, content - viewport);
-        int actualViewport = Math.max(1, webView.getHeight() - webView.getPaddingTop() - webView.getPaddingBottom());
-        int actualMaxScroll = Math.max(0, content - actualViewport);
-        int bottomDetectionMaxScroll = Math.min(stableMaxScroll, actualMaxScroll);
         lastMarkdownMaxScrollYPx = stableMaxScroll;
         lastMarkdownCurrentRawScrollYPx = Math.max(0, webView.getScrollY());
-        int page = MarkdownVisualPageMath.currentPageIndex(webView.getScrollY(), viewport, total, bottomDetectionMaxScroll);
+        // Detect the page against the same stable scroll range that
+        // targetScrollYForPage uses, so the slider position and page-jump
+        // targets round-trip instead of disagreeing near the document end when
+        // chrome show/hide changes the live viewport.
+        int page = MarkdownVisualPageMath.currentPageIndex(
+                webView.getScrollY(), viewport, total, stableMaxScroll, overlap);
         boolean changed = page != markdownVisualCurrentPage || total != markdownVisualTotalPages;
         markdownVisualCurrentPage = page;
         markdownVisualTotalPages = total;
@@ -2498,6 +2641,10 @@ public class DocumentPageActivity extends AppCompatActivity {
         ZipEntry documentXml = resourceZip.getEntry("word/document.xml");
         if (documentXml == null) throw new IOException("Unsupported Word file");
 
+        if (tryLoadWordRenderedPages(file)) {
+            return;
+        }
+
         Document doc;
         try (InputStream is = resourceZip.getInputStream(documentXml)) {
             doc = secureDocumentBuilder().parse(is);
@@ -2542,13 +2689,55 @@ public class DocumentPageActivity extends AppCompatActivity {
     }
 
 
+    private boolean tryLoadWordRenderedPages(File file) {
+        try {
+            RenderedDocument rendered = DocumentDocxLayoutExtractor.extract(
+                    resourceZip, file != null ? file.getName() : fileName, LOCAL_HOST, WORD_PARAGRAPHS_PER_PAGE);
+            if (rendered == null || rendered.pages.isEmpty()) return false;
+            for (RenderedPage page : rendered.pages) {
+                RenderedDocument singlePage = RenderedDocument.builder("docx")
+                        .title(rendered.title)
+                        .addPage(page)
+                        .build();
+                String html = FixedHtmlRenderer.render(singlePage);
+                pages.add(new Page("Page " + (page.pageIndex + 1), html, null));
+            }
+            return !pages.isEmpty();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+
 
     void loadHwpPages(File file) throws Exception {
         closeResourceZip();
+        if (tryLoadHwpRenderedPages(file)) {
+            return;
+        }
         String text = HwpTextExtractor.read(file);
         List<String> pageBodies = splitPlainTextDocumentIntoPages(text, HWP_PARAGRAPHS_PER_PAGE, HWP_TARGET_CHARS_PER_PAGE);
         for (int i = 0; i < pageBodies.size(); i++) {
             pages.add(new Page("Page " + (i + 1), wrapHwpPage(pageBodies.get(i), i + 1), null));
+        }
+    }
+
+    private boolean tryLoadHwpRenderedPages(File file) {
+        try {
+            RenderedDocument rendered = DocumentHwpLayoutExtractor.extract(
+                    file, file != null ? file.getName() : fileName, HWP_PARAGRAPHS_PER_PAGE, HWP_TARGET_CHARS_PER_PAGE);
+            if (rendered == null || rendered.pages.isEmpty()) return false;
+            for (RenderedPage page : rendered.pages) {
+                RenderedDocument singlePage = RenderedDocument.builder(rendered.sourceFormat)
+                        .title(rendered.title)
+                        .addPage(page)
+                        .build();
+                String html = FixedHtmlRenderer.render(singlePage);
+                pages.add(new Page("Page " + (page.pageIndex + 1), html, null));
+            }
+            return !pages.isEmpty();
+        } catch (Throwable ignored) {
+            return false;
         }
     }
 
@@ -2939,8 +3128,8 @@ public class DocumentPageActivity extends AppCompatActivity {
                 "html,body{margin:0;padding:0;background:#202124;overflow-x:hidden;-webkit-text-size-adjust:100%;max-width:100%;}" +
                 "body{font-family:Arial,Helvetica,sans-serif;}" +
                 "*{box-sizing:border-box;max-width:100%;}" +
-                ".page{background:#fff;color:#111;margin:12px auto;padding:26px 24px;width:calc(100% - 24px);max-width:816px;" +
-                "min-height:92vh;box-shadow:0 2px 14px rgba(0,0,0,.35);overflow-x:hidden;box-sizing:border-box;}" +
+                ".page{background:#fff;color:#111;margin:0 auto;padding:18px 16px;width:100%;max-width:none;" +
+                "min-height:100vh;box-shadow:none;overflow-x:hidden;box-sizing:border-box;}" +
                 ".pageNo{color:#777;text-align:right;font-size:12px;margin-bottom:14px;}" +
                 "p{margin:0 0 10px 0;line-height:1.45;font-size:16px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}" +
                 "</style></head><body><div class=\"page\"><div class=\"pageNo\">Page " + pageNumber +
@@ -2985,8 +3174,8 @@ public class DocumentPageActivity extends AppCompatActivity {
                 "html,body{margin:0;padding:0;background:#202124;overflow-x:hidden;-webkit-text-size-adjust:100%;max-width:100%;}" +
                 "body{font-family:Arial,Helvetica,sans-serif;}" +
                 "*{box-sizing:border-box;max-width:100%;}" +
-                ".page{background:#fff;color:#111;margin:12px auto;padding:26px 24px;width:calc(100% - 24px);max-width:816px;" +
-                "min-height:92vh;box-shadow:0 2px 14px rgba(0,0,0,.35);overflow-x:hidden;box-sizing:border-box;}" +
+                ".page{background:#fff;color:#111;margin:0 auto;padding:18px 16px;width:100%;max-width:none;" +
+                "min-height:100vh;box-shadow:none;overflow-x:hidden;box-sizing:border-box;}" +
                 ".pageNo{color:#777;text-align:right;font-size:12px;margin-bottom:14px;}" +
                 "p{margin:0 0 8px 0;line-height:1.28;font-size:15.5px;white-space:normal;overflow-wrap:anywhere;word-break:break-word;}" +
                 "div,span,li,td,th{overflow-wrap:anywhere;word-break:break-word;}" +

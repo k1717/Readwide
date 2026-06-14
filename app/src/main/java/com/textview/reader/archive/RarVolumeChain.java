@@ -104,9 +104,9 @@ final class RarVolumeChain {
         return actual != null
                 && actual.isRar5Aes256()
                 && expected.version == actual.version
-                && expected.flags == actual.flags
                 && expected.kdfCount == actual.kdfCount
                 && Arrays.equals(expected.salt, actual.salt)
-                && Arrays.equals(expected.iv, actual.iv);
+                && Arrays.equals(expected.iv, actual.iv)
+                && Arrays.equals(expected.check, actual.check);
     }
 }

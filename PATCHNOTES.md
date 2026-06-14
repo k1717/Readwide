@@ -1,3 +1,33 @@
+# Patch Notes
+
+## Readwide 1.0.3 - 2026-06-14
+
+### Release scope
+
+- Readwide 1.0.3 keeps the same Android package identity for update compatibility with earlier compatible builds when signed with the same key.
+- Android metadata is `versionCode 10003` and `versionName "1.0.3"`.
+- This release starts the document viewer fidelity cycle for DOCX, HWPX, and HWP, targeting L3 content-fidelity HTML preview: document structure, inline styling, tables, and images where verified.
+- Exact MS Word/Hancom pagination, exact font metrics, editing/saving, and complete floating-object placement are explicit non-goals.
+
+### Final changes included in this release
+
+- A shared rendered-document model (page containers, paragraph/run styles, tables, images, text anchors, unsupported placeholders) now backs the document viewer, with fallback to the previous semantic HTML path when conversion fails.
+- DOCX now bridges paragraphs, run/character styles with `styles.xml` inheritance, `numbering.xml` ordered/bullet lists, basic tables (width, column proportions, vertical merges, border colors, shading), inline images with extent hints, footnotes/endnotes, and headers/footers into the rendered model.
+- DOCX Symbol/Wingdings bullets are normalized to standard Unicode markers, and list paragraphs no longer double-apply Word hanging indents.
+- DOCX rendered tables clamp cell overflow and wrap by word so narrow phone-width columns no longer draw text over neighboring cells, while long first-column labels stay readable without introducing horizontal scrolling.
+- DOCX/Word lecture-note math now renders inline and conservative `$$...$$` display fragments to HTML+CSS without WebView JavaScript, including fractions, square roots, superscripts/subscripts, Greek letters, and symbols, and including expressions split across runs by spell/grammar markers. Lone currency amounts such as `$200` stay as plain text.
+- HWP binary documents now convert section/paragraph/control structure into the rendered model, preserving partially-ruled table borders per edge, column spans and proportional widths, authored cell heights for empty layout cells, character size/bold/italic/color/underline, paragraph alignment, paragraph-head bullet markers, and control-line horizontal rules. HWPX carries header/run styles, page metrics, and table color where directly present.
+- RAR5 AES visible-header multi-volume handling and password-protected archive image preview caching were tightened so stale or wrong-password preview images are regenerated instead of reused.
+- EPUB/Markdown/document/PDF pages now snap without slide/fade animation, and the compact hidden-toolbar top page counter height was refined.
+- The selectable UI languages reached full coverage for the 1.0.3 string set: newly added archive support-boundary messages, bookmark "file missing" notices, and tap/image paging labels are now translated across all 20 non-default bundled locales, with English kept as the fallback for any future untranslated string.
+- Public GitHub/F-Droid documents, Fastlane changelogs, the document viewer fidelity matrix and notes, and the F-Droid metadata draft were updated for the Readwide 1.0.3 package.
+
+### Archive and FOSS boundary
+
+- The 1.0.3 package keeps the no-network/local-first privacy baseline from earlier releases: no default `INTERNET` permission, no ads, no analytics, no account system, no cloud sync, no Firebase/Google Play Services dependency, and Android Auto Backup disabled.
+- HWP/HWPX support is text-first and read-only through Apache-2.0 dogfoot libraries; cell vertical alignment, cell background fill, non-line GSO shapes, embedded images, and encrypted/password HWP are not claimed.
+- RAR/CBR support remains limited and backend/scoped-path dependent; complete, encrypted, broad split, SFX, or VM-filtered RAR compatibility is not claimed.
+
 ## Readwide 1.0.2
 
 ### Release scope

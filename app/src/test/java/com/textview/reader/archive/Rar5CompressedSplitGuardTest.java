@@ -15,7 +15,7 @@ public class Rar5CompressedSplitGuardTest {
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
     @Test
-    public void firstPartyRar5CompressedExtractorDoesNotClaimSplitEntry() throws Exception {
+    public void firstPartyRar5CompressedExtractorDeletesOutputWhenSplitPayloadIsMalformed() throws Exception {
         RarArchiveReader.RarEntry first = rar5CompressedSplit(false, true);
         RarArchiveReader.RarEntry last = rar5CompressedSplit(true, false);
         first.sourceArchive = tempFolder.newFile("sample.part1.rar");
@@ -23,12 +23,18 @@ public class Rar5CompressedSplitGuardTest {
 
         File out = new File(tempFolder.getRoot(), "out.bin");
 
-        assertFalse(Rar5CompressedArchiveExtractor.tryExtractEntry(
-                first,
-                Arrays.asList(first, last),
-                out,
-                null));
-        assertFalse("Split compressed fallback must not create partial output", out.exists());
+        try {
+            Rar5CompressedArchiveExtractor.tryExtractEntry(
+                    first,
+                    Arrays.asList(first, last),
+                    out,
+                    null,
+                    null);
+        } catch (java.io.IOException expected) {
+            assertFalse("Split compressed fallback must not create partial output", out.exists());
+            return;
+        }
+        throw new AssertionError("Malformed compressed split payload must fail");
     }
 
     @Test
@@ -41,7 +47,8 @@ public class Rar5CompressedSplitGuardTest {
                         Arrays.asList(first, last), null);
 
         assertTrue(failure.getMessage().contains("RAR5 compressed split/multi-volume"));
-        assertTrue(failure.getMessage().contains("not routed through the stored-entry fallback"));
+        assertTrue(failure.getMessage().contains("could not be completed"));
+        assertTrue(failure.getMessage().contains("never routed through the stored-entry fallback"));
     }
 
     private static RarArchiveReader.RarEntry rar5CompressedSplit(boolean splitBefore, boolean splitAfter) {

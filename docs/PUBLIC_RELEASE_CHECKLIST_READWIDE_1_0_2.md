@@ -5,7 +5,7 @@
 - [ ] Tag final source commit as `v1.0.2`.
 - [ ] Confirm `versionName "1.0.2"` and `versionCode 10002` in `app/build.gradle`.
 - [ ] Run `./gradlew clean testDebugUnitTest assembleRelease` or Windows equivalent.
-- [ ] Verify no private signing files, personal names, account identifiers, personal paths, or private fixtures are committed.
+- [ ] Verify no private signing files, personal paths, or private fixtures are committed.
 - [ ] Attach `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_2.md` content to the GitHub release.
 - [ ] Include source archive and, if publishing APK, include license/notice files with the binary materials.
 

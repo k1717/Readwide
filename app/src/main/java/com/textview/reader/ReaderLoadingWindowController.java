@@ -20,15 +20,7 @@ final class ReaderLoadingWindowController {
     }
 
     private GradientDrawable loadingBoxBackground(int backgroundColor, int fgColor) {
-        GradientDrawable drawable = new GradientDrawable();
-        int panelColor = activity.dialogStyler().blendColors(backgroundColor, fgColor,
-                activity.isDarkColor(backgroundColor) ? 0.08f : 0.05f);
-        int borderColor = activity.dialogStyler().blendColors(backgroundColor, fgColor,
-                activity.isDarkColor(backgroundColor) ? 0.24f : 0.18f);
-        drawable.setColor(panelColor);
-        drawable.setCornerRadius(activity.dpToPx(24));
-        drawable.setStroke(activity.dpToPx(1), borderColor);
-        return drawable;
+        return LoadingWindowTheme.boxDrawable(activity, LoadingWindowTheme.reader(backgroundColor, fgColor));
     }
 
     void updateLoadingIndicatorColors(int backgroundColor) {

@@ -176,6 +176,38 @@ public final class ArchiveSupport {
         return ArchiveTypeDetector.outputBaseName(archive, fallback);
     }
 
+    /**
+     * Returns the single archive file that should own an extraction queue item.
+     *
+     * <p>Split archives expose several readable file names in the browser
+     * (for example {@code book.part1.rar}, {@code book.part2.rar}, or
+     * {@code book.7z.001}, {@code book.7z.002}). Selecting every visible part
+     * must still enqueue exactly one extraction job, because the extractor reads
+     * the chain from the first volume. This method mirrors the read-path first
+     * volume resolution without concatenating numeric split payloads or creating
+     * temporary files.</p>
+     */
+    @NonNull
+    public static File normalizeExtractionQueueArchive(@NonNull File archive) {
+        Type type = getSupportedArchiveType(archive);
+        if (type == null) return archive;
+        try {
+            if (type == Type.RAR && isRarSplitPart(archive)) {
+                List<File> parts = collectRarSplitParts(archive);
+                return parts.isEmpty() ? archive : parts.get(0);
+            }
+            if ((type == Type.ALZ || type == Type.EGG) && isAlzipSplitPart(archive)) {
+                return resolveFirstAlzipPart(archive, type);
+            }
+            if (type == Type.SEVEN_Z && SevenZSplitVolumeResolver.isSevenZSplitPart(archive)) {
+                return SevenZSplitVolumeResolver.resolveFirstPart(archive);
+            }
+        } catch (IOException | SecurityException ignored) {
+            return archive;
+        }
+        return archive;
+    }
+
     public static boolean canUsePassword(@NonNull File archive) {
         Type type = getSupportedArchiveType(archive);
         return type == Type.ZIP || type == Type.SEVEN_Z || type == Type.RAR

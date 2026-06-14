@@ -373,9 +373,6 @@
     <string name="epub_page_direction">EPUB 페이지 넘김 방향</string>
     <string name="epub_page_direction_ltr">왼쪽에서 오른쪽 / 국내·서양 서적</string>
     <string name="epub_page_direction_rtl">오른쪽에서 왼쪽 / 일본식 읽기 방식</string>
-    <string name="epub_page_effect">EPUB 페이지 넘김 효과</string>
-    <string name="epub_page_effect_slide">슬라이드</string>
-    <string name="epub_page_effect_none">없음</string>
     <string name="settings_section_epub_layout">EPUB 레이아웃</string>
     <string name="epub_left_spacing_default">EPUB 좌측 경계: 30px</string>
     <string name="epub_left_spacing_format">EPUB 좌측 경계: %1$dpx</string>

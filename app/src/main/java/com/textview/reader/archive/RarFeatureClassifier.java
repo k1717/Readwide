@@ -77,8 +77,8 @@ final class RarFeatureClassifier {
             @Nullable IOException backendFailure) {
         String message;
         if (hasRar5CompressedSplitPayload(entries)) {
-            message = "RAR5 compressed split/multi-volume payloads are not supported by the scoped first-party Java decoder yet; "
-                    + "compressed split members are not routed through the stored-entry fallback";
+            message = "RAR5 compressed split/multi-volume payload could not be completed by the scoped first-party Java decoder; "
+                    + "compressed split members are never routed through the stored-entry fallback";
         } else {
             message = "RAR5 compressed archive could not be completed by the scoped first-party Java decoder; "
                     + "compressed members are not routed through the stored-entry fallback";

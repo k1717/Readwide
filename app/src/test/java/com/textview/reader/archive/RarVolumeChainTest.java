@@ -57,6 +57,15 @@ public class RarVolumeChainTest {
         assertFalse(RarVolumeChain.sameRar4Encryption(a, c));
     }
 
+    @Test
+    public void sameEncryption_allowsRar5ContinuationFlagsToDiffer() {
+        RarArchiveReader.EncryptionInfo first = rar5Encryption(1L, new byte[] {10, 11, 12});
+        RarArchiveReader.EncryptionInfo continuation = rar5Encryption(3L, new byte[] {10, 11, 12});
+        RarArchiveReader.EncryptionInfo differentIv = rar5Encryption(3L, new byte[] {12, 11, 10});
+
+        assertTrue(RarVolumeChain.sameRar5Encryption(first, continuation));
+        assertFalse(RarVolumeChain.sameRar5Encryption(first, differentIv));
+    }
 
     @Test
     public void validateStoredPart_acceptsRar4Method30StoredEntry() throws Exception {
@@ -96,5 +105,15 @@ public class RarVolumeChainTest {
                 encryption,
                 0x12345678L,
                 0L);
+    }
+
+    private static RarArchiveReader.EncryptionInfo rar5Encryption(long flags, byte[] ivSeed) {
+        byte[] salt = new byte[16];
+        byte[] iv = new byte[16];
+        byte[] check = new byte[12];
+        for (int i = 0; i < salt.length; i++) salt[i] = (byte) i;
+        for (int i = 0; i < iv.length; i++) iv[i] = ivSeed[i % ivSeed.length];
+        for (int i = 0; i < check.length; i++) check[i] = (byte) (20 + i);
+        return new RarArchiveReader.EncryptionInfo(0L, flags, 15, salt, iv, check);
     }
 }

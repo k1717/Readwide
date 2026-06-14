@@ -54,7 +54,7 @@ It is a **direct-dependency/source-declared report**, not a fully resolved trans
 | --- | --- | --- |
 | Readwide first-party source | App code | Apache-2.0 |
 | RAR3/RAR4 PPMd decoder code | Scoped decode-only fallback | First-party Java implementation of public-domain algorithm behavior; no UnRAR/libarchive source copied |
-| RAR5 compressed decoder code | Scoped decode-only fallback | First-party Java implementation; no RAR compression/creation/password recovery; no UnRAR/libarchive source copied |
+| RAR5 compressed decoder code | Scoped decode-only fallback for covered v5.0 compressed and visible-header AES multi-volume cases | First-party Java implementation; no RAR compression/creation/password recovery; no UnRAR/libarchive source copied |
 | xunazo-derived AZO Java port | EGG AZO extraction | zlib license notice retained in source; modified extraction-only port |
 | `javax.xml.bind.DatatypeConverter` shim | hwplib Java 17/Android compatibility | Project-local shim covered by Readwide Apache-2.0 license |
 | Launcher artwork | App icon | Project-owned generated artwork; see `docs/ASSET_PROVENANCE.md` |

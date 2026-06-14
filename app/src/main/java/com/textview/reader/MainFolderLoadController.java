@@ -162,6 +162,7 @@ final class MainFolderLoadController {
 
     private void prepareBrowseTarget(@NonNull File targetDir, int sortMode, boolean clearList) {
         activity.currentDirectory = targetDir;
+        activity.syncVisibleFolderChangeObserver();
         activity.markCurrentBrowseFolderLoadStarted(targetDir);
         if (activity.prefs != null) {
             activity.prefs.setLastDirectory(targetDir.getAbsolutePath());
@@ -249,6 +250,7 @@ final class MainFolderLoadController {
         }
         updateEmptyState(fileList.isEmpty());
         activity.markCurrentBrowseFolderLoadComplete(targetDir, fileList, sortMode);
+        activity.syncVisibleFolderChangeObserver();
         if (activity.fileSearchProgress != null) activity.fileSearchProgress.setVisibility(View.GONE);
         activity.rebuildDrawerStorageEntries();
     }
@@ -280,6 +282,7 @@ final class MainFolderLoadController {
         }
         updateEmptyState(fileList.isEmpty());
         activity.markCurrentBrowseFolderLoadComplete(targetDir, fileList, sortMode);
+        activity.syncVisibleFolderChangeObserver();
         if (activity.fileSearchProgress != null) activity.fileSearchProgress.setVisibility(View.GONE);
     }
 

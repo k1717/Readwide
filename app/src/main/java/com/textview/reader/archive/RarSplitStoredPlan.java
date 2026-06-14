@@ -110,7 +110,7 @@ final class RarSplitStoredPlan {
         if (part.directory) {
             throw new RarArchiveReader.UnsupportedRarFeatureException("Directory entry cannot be a RAR split payload part");
         }
-        if (part.solid) {
+        if (part.solid && !(part.rarVersion >= 5 && isStoredMethod(part))) {
             throw new RarArchiveReader.UnsupportedRarFeatureException("Solid RAR split payload is not supported in the stored split path");
         }
         if (!isStoredMethod(part)) {

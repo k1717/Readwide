@@ -15,7 +15,9 @@ public class Rar3Or4SpecialCaseExtractorTest {
         entries.add(entry("stored.txt", 0x30, false, false, false, false, null, 4));
         entries.add(entry("split.bin", 0x33, false, false, false, true, null, 4));
         entries.add(entry("split.bin", 0x33, false, false, true, false, null, 4));
-        entries.add(entry("classic.txt", 0x33, false, false, false, false, null, 4));
+        RarArchiveReader.RarEntry classic = entry("classic.txt", 0x33, false, false, false, false, null, 4);
+        classic.sourceArchive = classicLzProbePayload();
+        entries.add(classic);
 
         assertTrue(Rar3Or4SpecialCaseExtractor.isArchiveWideNonSolidSpecialCaseAllowed(entries, null));
     }
@@ -78,5 +80,18 @@ public class Rar3Or4SpecialCaseExtractorTest {
                 encryption,
                 0,
                 0);
+    }
+
+    private static java.io.File classicLzProbePayload() {
+        try {
+            java.io.File payload = java.io.File.createTempFile("classiclz-probe", ".rar");
+            payload.deleteOnExit();
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(payload)) {
+                out.write(new byte[]{0x00, 0x00, 0x00, 0x00}); // first bit clear = classic LZ block
+            }
+            return payload;
+        } catch (java.io.IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

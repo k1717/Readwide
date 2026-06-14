@@ -57,7 +57,9 @@ public class RarSolidFixtureReportTest {
     @Test
     public void nonSolidArchiveIsNotGap() {
         List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
-        entries.add(entry("normal.txt", 4, 0x33, false, 12L, 20L));
+        RarArchiveReader.RarEntry normal = entry("normal.txt", 4, 0x33, false, 12L, 20L);
+        normal.sourceArchive = classicLzProbePayload();
+        entries.add(normal);
 
         RarSolidFixtureReport report = RarSolidFixtureReport.fromEntriesForTest(
                 "testfile.rar3.rar",
@@ -113,5 +115,18 @@ public class RarSolidFixtureReportTest {
                 null,
                 0L,
                 0L);
+    }
+
+    private static java.io.File classicLzProbePayload() {
+        try {
+            java.io.File payload = java.io.File.createTempFile("classiclz-probe", ".rar");
+            payload.deleteOnExit();
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(payload)) {
+                out.write(new byte[]{0x00, 0x00, 0x00, 0x00}); // first bit clear = classic LZ block
+            }
+            return payload;
+        } catch (java.io.IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

@@ -12,6 +12,7 @@ public class RarNonSolidCompatibilityReportTest {
     public void reportsStoredSplitAndClassicLzFallbackAsNonSolidCompatiblePaths() {
         RarArchiveReader.RarEntry storedSplit = entry("stored.bin", 4, 0x30, false, false, true, null);
         RarArchiveReader.RarEntry classicLz = entry("classic.txt", 4, 0x33, false, false, false, null);
+        classicLz.sourceArchive = classicLzProbePayload();
 
         RarNonSolidCompatibilityReport report = RarNonSolidCompatibilityReport.fromEntries(
                 Arrays.asList(storedSplit, classicLz));
@@ -116,5 +117,18 @@ public class RarNonSolidCompatibilityReportTest {
                 encryption,
                 0x12345678L,
                 0L);
+    }
+
+    private static java.io.File classicLzProbePayload() {
+        try {
+            java.io.File payload = java.io.File.createTempFile("classiclz-probe", ".rar");
+            payload.deleteOnExit();
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(payload)) {
+                out.write(new byte[]{0x00, 0x00, 0x00, 0x00}); // first bit clear = classic LZ block
+            }
+            return payload;
+        } catch (java.io.IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

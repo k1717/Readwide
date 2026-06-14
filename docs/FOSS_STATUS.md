@@ -41,8 +41,8 @@ Default RAR handling is deliberately conservative:
 
 1. libarchive-android is the primary backend for common compressed RAR read/extract attempts.
 2. First-party Java handles covered metadata, safe paths, stored entries, stored split paths, and selected validation/cleanup paths.
-3. Scoped first-party decode-only fallbacks exist for eligible unencrypted single-volume RAR3/RAR4 PPMd solid sets and eligible unencrypted single-volume RAR5 v5.0 compressed/solid runs, with CRC verification.
-4. Encrypted RAR, broad split/multi-volume RAR, compressed split RAR, SFX, VM-filtered RAR3/RAR4, broad RAR5-era variants, and complete RAR compatibility are not claimed.
+3. Scoped first-party decode-only fallbacks exist for eligible RAR3/RAR4 PPMd solid sets, covered RAR5 v5.0 compressed/solid runs, and fixture-tested RAR5 AES visible-header multi-volume chains, with CRC/password-check safeguards.
+4. Broad encrypted RAR, broad split/multi-volume RAR, SFX, VM-filtered RAR3/RAR4, broad RAR5-era variants, and complete RAR compatibility are not claimed.
 
 No Junrar or RARLAB UnRAR-license source code is bundled in the default build.
 

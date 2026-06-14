@@ -6,6 +6,8 @@ import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.View;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
@@ -104,6 +106,16 @@ final class ReaderBottomControlsController {
         dialogSeek.setProgressTintList(ColorStateList.valueOf(progressColor));
         dialogSeek.setProgressBackgroundTintList(ColorStateList.valueOf(trackColor));
         dialogSeek.setPadding(activity.dpToPx(18), 0, activity.dpToPx(18), 0);
+        dialogSeek.setOnTouchListener((view, event) -> {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN
+                    || action == MotionEvent.ACTION_MOVE
+                    || action == MotionEvent.ACTION_UP
+                    || action == MotionEvent.ACTION_CANCEL) {
+                view.post(() -> suppressSeekBarPressedEffect(view));
+            }
+            return false;
+        });
         box.addView(dialogSeek, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 activity.dpToPx(42)));
@@ -224,6 +236,12 @@ final class ReaderBottomControlsController {
         });
 
         dialog.show();
+    }
+
+    private void suppressSeekBarPressedEffect(View view) {
+        if (view == null) return;
+        view.setPressed(false);
+        view.jumpDrawablesToCurrentState();
     }
 
     String formatPageMoveLabel(int page, int totalPages, int lineNumber) {

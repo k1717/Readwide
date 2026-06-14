@@ -133,11 +133,10 @@ public final class EdgeToEdgeUtil {
 
 
     /**
-     * PDF uses normal-flow chrome rather than an overlay WebView.  When the PDF
-     * bottom toolbar is hidden, reserve the 3-button navigation area with a real
-     * layout spacer instead of tinting/masking over the page.  This keeps the
-     * last line/page content visible and gives the navigation bar the reader body
-     * color while collapsed.
+     * PDF keeps the bottom toolbar as an overlay like the other readers.  When that
+     * chrome is hidden, reserve the 3-button navigation area with a real layout
+     * spacer instead of tinting/masking over the page.  This gives the navigation
+     * bar the reader body color while collapsed.
      */
     public static void applyPdfReaderInsets(Activity activity,
                                             View root,

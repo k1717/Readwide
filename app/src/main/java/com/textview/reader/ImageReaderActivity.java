@@ -323,12 +323,13 @@ public class ImageReaderActivity extends AppCompatActivity {
             sourceDisplayNames.addAll(sequence.displayNames);
             sourceEntryPaths.clear();
             sourceEntryPaths.addAll(sequence.entryPaths);
+            ImageSequenceState.normalizeMetadataLists(imagePaths, sourceDisplayNames, sourceEntryPaths);
             synchronized (archiveExtractLock) {
                 PasswordChars.clear(sourceArchivePassword);
                 sourceArchivePassword = PasswordChars.cloneOf(sequence.archivePassword);
                 verifiedSensitiveArchiveCachePaths.clear();
+                seedVerifiedSensitiveArchiveCachePathsLocked();
             }
-            ImageSequenceState.normalizeMetadataLists(imagePaths, sourceDisplayNames, sourceEntryPaths);
             currentIndex = ImageSequenceNavigationMath.clampIndex(found, imagePaths.size());
             filePath = imagePaths.get(currentIndex);
             fileUri = null;
@@ -372,6 +373,23 @@ public class ImageReaderActivity extends AppCompatActivity {
         }
         updateToolbarTitle();
         loadImageAsync();
+    }
+
+    private void seedVerifiedSensitiveArchiveCachePathsLocked() {
+        if (!PasswordChars.hasPassword(sourceArchivePassword)) return;
+        if (sourceArchivePath == null || sourceArchivePath.trim().isEmpty()) return;
+        for (int i = 0; i < imagePaths.size(); i++) {
+            String path = imagePaths.get(i);
+            String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, i);
+            if (path == null || path.trim().isEmpty()
+                    || entryPath == null || entryPath.trim().isEmpty()) {
+                continue;
+            }
+            File cacheFile = new File(path);
+            if (ArchiveImageEntryCache.isReadyImageFileForHandoff(entryPath, cacheFile)) {
+                verifiedSensitiveArchiveCachePaths.add(cacheFile.getAbsolutePath());
+            }
+        }
     }
 
     @NonNull

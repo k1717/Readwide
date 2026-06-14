@@ -381,9 +381,6 @@
     <string name="epub_page_direction">EPUB page direction</string>
     <string name="epub_page_direction_ltr">Left-to-right / Korean-Western books</string>
     <string name="epub_page_direction_rtl">Right-to-left / Japanese-style books</string>
-    <string name="epub_page_effect">EPUB page transition effect</string>
-    <string name="epub_page_effect_slide">Slide</string>
-    <string name="epub_page_effect_none">None</string>
     <string name="settings_section_epub_layout">EPUB layout</string>
     <string name="epub_left_spacing_default">EPUB left boundary: 30px</string>
     <string name="epub_left_spacing_format">EPUB left boundary: %1$dpx</string>

@@ -17,10 +17,10 @@ import java.util.regex.Pattern;
 /**
  * Resolves RAR multi-volume file-name chains without touching payload bytes.
  *
- * <p>The Java RAR split path is intentionally narrow: stored split payloads and a few
- * encrypted stored variants. This resolver does not broaden compressed split support. It only
- * makes the volume discovery boundary deterministic and testable, especially when the user opens
- * a later volume such as {@code .part02.rar} or {@code .r01}.</p>
+ * <p>The Java RAR split path is intentionally narrow: stored split payloads and covered
+ * RAR5 compressed split variants. This resolver does not claim broad split compatibility.
+ * It only makes the volume discovery boundary deterministic and testable, especially when
+ * the user opens a later volume such as {@code .part02.rar} or {@code .r01}.</p>
  */
 final class RarVolumeNameResolver {
     private static final Pattern NEW_STYLE_PART = Pattern.compile(

@@ -23,8 +23,7 @@ final class DocumentPageLoadController {
 
     void loadFromIntent(Intent intent) {
         final int generation = ++activity.loadGeneration;
-        activity.updateLoadingIndicatorTheme();
-        activity.progressBar.setVisibility(View.VISIBLE);
+        activity.showLoadingWindow();
         activity.webView.setVisibility(View.INVISIBLE);
         activity.closeResourceZip();
         activity.pages.clear();
@@ -81,7 +80,7 @@ final class DocumentPageLoadController {
                     if (activity.getSupportActionBar() != null) {
                         activity.getSupportActionBar().setTitle(activity.fileName);
                     }
-                    if (activity.progressBar != null) activity.progressBar.setVisibility(View.GONE);
+                    activity.hideLoadingWindow();
                     if (activity.webView != null) activity.webView.setVisibility(View.VISIBLE);
                     activity.showPage(activity.currentPage, 0);
                 });
@@ -179,7 +178,7 @@ final class DocumentPageLoadController {
 
     private void showLoadError(Exception e) {
         if (activity.activityDestroyed) return;
-        if (activity.progressBar != null) activity.progressBar.setVisibility(View.GONE);
+        activity.hideLoadingWindow();
         ShortToast.show(activity, activity.getString(R.string.error_prefix) + e.getMessage());
         activity.finish();
     }

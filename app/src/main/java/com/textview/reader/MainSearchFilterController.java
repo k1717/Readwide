@@ -553,6 +553,7 @@ final class MainSearchFilterController {
                 updateFileTypeChips();
                 activity.currentDirectory = dir;
                 activity.searchReturnToHome = false;
+                activity.syncVisibleFolderChangeObserver();
                 activity.searchReturnDirectory = dir;
                 activity.recentSection.setVisibility(View.GONE);
                 activity.browserSection.setVisibility(View.VISIBLE);
@@ -645,6 +646,7 @@ final class MainSearchFilterController {
         activity.exitFileSelectionMode(false);
         activity.searchMode = true;
         activity.homeMode = false;
+        activity.syncVisibleFolderChangeObserver();
         updateFileTypeChips();
         activity.recentSection.setVisibility(View.GONE);
         activity.browserSection.setVisibility(View.VISIBLE);

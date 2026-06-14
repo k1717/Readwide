@@ -7,7 +7,9 @@ import com.textview.reader.archive.ArchiveSupport;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Validation and destination policy for archive extraction queues.
@@ -18,17 +20,40 @@ final class MainArchiveExtractionPlanner {
 
     @NonNull
     static ArrayList<File> collectReadyArchives(@NonNull List<File> archives) {
-        ArrayList<File> ready = new ArrayList<>();
+        Map<String, File> readyByExtractionRoot = new LinkedHashMap<>();
         for (File archive : archives) {
-            if (archive != null
-                    && ArchiveSupport.isSupportedArchive(archive)
-                    && archive.exists()
-                    && archive.isFile()
-                    && archive.canRead()) {
-                ready.add(archive);
+            if (archive == null
+                    || !archive.exists()
+                    || !archive.isFile()
+                    || !archive.canRead()
+                    || !ArchiveSupport.isSupportedArchive(archive)) {
+                continue;
+            }
+
+            File extractionRoot = ArchiveSupport.normalizeExtractionQueueArchive(archive);
+            if (extractionRoot == null
+                    || !extractionRoot.exists()
+                    || !extractionRoot.isFile()
+                    || !extractionRoot.canRead()
+                    || !ArchiveSupport.isSupportedArchive(extractionRoot)) {
+                extractionRoot = archive;
+            }
+
+            String key = canonicalQueueKey(extractionRoot);
+            if (!readyByExtractionRoot.containsKey(key)) {
+                readyByExtractionRoot.put(key, extractionRoot);
             }
         }
-        return ready;
+        return new ArrayList<>(readyByExtractionRoot.values());
+    }
+
+    @NonNull
+    private static String canonicalQueueKey(@NonNull File file) {
+        try {
+            return file.getCanonicalPath();
+        } catch (Exception ignored) {
+            return file.getAbsolutePath();
+        }
     }
 
     @NonNull

@@ -3,8 +3,11 @@ package com.textview.reader;
 import org.junit.Test;
 
 import java.io.File;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -38,5 +41,21 @@ public class ArchivePreviewCacheTest {
             //noinspection ResultOfMethodCallIgnored
             temp.delete();
         }
+    }
+
+    @Test
+    public void sensitiveArchiveImageReadyMarkersRequireCurrentSessionVerification() {
+        String cacheKey = "/tmp/readwide-preview/page.png";
+
+        assertTrue(ArchiveImageEntryCache.canReuseReadyMarkerForCache(false, null, cacheKey));
+        assertFalse(ArchiveImageEntryCache.canReuseReadyMarkerForCache(true, null, cacheKey));
+
+        Set<String> verified = new HashSet<>();
+        assertFalse(ArchiveImageEntryCache.canReuseReadyMarkerForCache(true, verified, cacheKey));
+        assertTrue(ArchiveImageEntryCache.shouldDiscardUnverifiedSensitiveReadyCache(true, verified, cacheKey));
+
+        verified.add(cacheKey);
+        assertTrue(ArchiveImageEntryCache.canReuseReadyMarkerForCache(true, verified, cacheKey));
+        assertFalse(ArchiveImageEntryCache.shouldDiscardUnverifiedSensitiveReadyCache(true, verified, cacheKey));
     }
 }

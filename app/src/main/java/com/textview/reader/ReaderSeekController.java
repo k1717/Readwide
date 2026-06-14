@@ -1,5 +1,7 @@
 package com.textview.reader;
 
+import android.view.MotionEvent;
+import android.view.View;
 import android.widget.SeekBar;
 
 import androidx.annotation.NonNull;
@@ -21,6 +23,16 @@ final class ReaderSeekController {
     void setupSeekBar() {
         if (activity.seekBar == null) return;
         activity.seekBar.setMax(0);
+        activity.seekBar.setOnTouchListener((view, event) -> {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN
+                    || action == MotionEvent.ACTION_MOVE
+                    || action == MotionEvent.ACTION_UP
+                    || action == MotionEvent.ACTION_CANCEL) {
+                view.post(() -> suppressSeekBarPressedEffect(view));
+            }
+            return false;
+        });
         activity.seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             private int pendingPage = 1;
 
@@ -64,6 +76,12 @@ final class ReaderSeekController {
                 }
             }
         });
+    }
+
+    private void suppressSeekBarPressedEffect(View view) {
+        if (view == null) return;
+        view.setPressed(false);
+        view.jumpDrawablesToCurrentState();
     }
 
     void previewToolbarSeekPage(int page, int totalPages) {

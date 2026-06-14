@@ -32,7 +32,7 @@ final class RarBackendRouter {
                         "RAR5 stored payload has a limited first-party path");
             }
             return RarBackendDecision.libarchive(
-                    "RAR5 compressed payload is libarchive-primary, with a scoped first-party Java fallback for eligible unencrypted single-volume RAR5 v5.0 entries");
+                    "RAR5 compressed payload is libarchive-primary, with scoped first-party Java fallbacks for covered RAR5 v5.0 entries");
         }
 
         if (RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) {

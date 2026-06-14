@@ -8,6 +8,11 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public class RarPpmdContextSkeletonTest {
+
+    // Numeric assertions against the retired pre-rewrite diagnostic
+    // PPMd skeleton were removed. The live PPMd var.H engine is CRC-verified in
+    // Rar3PpmdEngineFixtureProbeTest; the skeleton class itself is not referenced by production code.
+
     @Test
     public void contextInsertsUpdatesPromotesAndTracksScale() throws Exception {
         RarPpmdContext context = new RarPpmdContext();
@@ -84,26 +89,4 @@ public class RarPpmdContextSkeletonTest {
         assertEquals(4, see.count());
     }
 
-    @Test
-    public void modelSymbolSourceOwnsDiagnosticSkeletonButStillFailsCleanly() throws Exception {
-        Rar3PpmdModelSymbolSource source = new Rar3PpmdModelSymbolSource(
-                new RarPpmdByteInput.ArrayInput(new byte[] {1, 2, 3, 4}),
-                true);
-
-        assertEquals(0, source.rootContextForTest().stateCount());
-        assertEquals(1, source.rootContextForTest().stateArrayUnits());
-        assertEquals(12, source.subAllocatorForTest().usedBytes());
-        assertEquals(0, source.escapeMaskForTest().maskedCount());
-        assertEquals(1, source.seeContextForTest().mean());
-
-        try {
-            source.decodeSymbol();
-        } catch (RarArchiveReader.UnsupportedRarFeatureException expected) {
-            assertTrue(expected.getMessage().contains("diagnostic primitives"));
-            assertTrue(expected.getMessage().contains("masked-symbol"));
-            assertTrue(expected.getMessage().contains("keepOldTable=true"));
-            return;
-        }
-        throw new AssertionError("Full PPMd model must remain a precise first-party gap");
-    }
 }

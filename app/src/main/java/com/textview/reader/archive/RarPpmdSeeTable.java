@@ -7,10 +7,10 @@ import java.io.IOException;
 /**
  * SEE-context table for the evolving first-party RAR3/RAR4 PPMd model.
  *
- * <p>Pass195 replaces the earlier three-dimensional diagnostic bucket with a stable 25 x 16
- * PPMd-I-shaped selector table. The live decoder still remains guarded, but suffix fallback now
- * exercises the same row/column lifetime shape that production masked-symbol decoding will need:
- * model order/state density selects the row, and active mask/history pressure selects the column.</p>
+ * <p>The model uses a stable 25 x 16 PPMd-I-shaped selector table. The live decoder still remains
+ * guarded, but suffix fallback now exercises the same row/column lifetime shape that production
+ * masked-symbol decoding will need: model order/state density selects the row, and active
+ * mask/history pressure selects the column.</p>
  */
 final class RarPpmdSeeTable {
     static final int ROOT_ORDER = 0;

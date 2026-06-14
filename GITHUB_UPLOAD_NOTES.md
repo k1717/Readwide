@@ -1,4 +1,4 @@
-# GitHub upload notes for Readwide 1.0.2
+# GitHub upload notes for Readwide 1.0.3
 
 Use this checklist before publishing the public GitHub source and release assets.
 
@@ -6,8 +6,8 @@ Use this checklist before publishing the public GitHub source and release assets
 
 - App name: Readwide
 - Android `applicationId`: `com.textview.reader`
-- `versionName`: `1.0.2`
-- `versionCode`: `10002`
+- `versionName`: `1.0.3`
+- `versionCode`: `10003`
 - First-party license: Apache-2.0
 - Repository: `https://github.com/k1717/Readwide`
 
@@ -27,7 +27,7 @@ Keep these files in the public source package:
 - `CONTRIBUTING.md`
 - `docs/FOSS_STATUS.md`
 - `docs/FDROID_SUBMISSION.md`
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_2.md`
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_3.md`
 - `docs/LICENSE_REPORT_READWIDE_1_0_2.md`
 - `docs/SBOM_READWIDE_1_0_2.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
@@ -44,7 +44,6 @@ Do not commit or attach private release materials:
 - signing passwords or `secrets.properties`
 - local `local.properties`
 - private sample documents or personal test fixtures
-- personal names, account names, e-mail addresses, or other private identity strings
 - build outputs unless they are intentional release APK/AAB assets
 - IDE/user folders such as `.idea/`, `.gradle/`, `captures/`, logs, hprof files
 
@@ -59,9 +58,6 @@ Check the default source package:
 ```bash
 grep -RIn "C:\\Users\|/Users/\|/home/.*Downloads\|TEXTVIEW_KEYSTORE_PASSWORD\|BEGIN PRIVATE KEY" . \
   --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle
-
-# Also run a local private-term scan for personal names, account names, and e-mail addresses.
-# Keep that private term list outside the repository.
 
 find . -type f \( -name "*.jks" -o -name "*.keystore" -o -name "*.p12" -o -name "*.apk" -o -name "*.aab" \)
 ```
@@ -103,8 +99,8 @@ Avoid:
 
 Before opening an F-Droid Data merge request:
 
-1. Tag the exact release commit, e.g. `v1.0.2`.
-2. Confirm `fdroid/metadata/com.textview.reader.yml` points to the immutable `v1.0.2` release tag, or replace it with the exact commit hash if the F-Droid reviewer requests a hash.
+1. Tag the exact release commit, e.g. `v1.0.3`.
+2. Confirm `fdroid/metadata/com.textview.reader.yml` points to the immutable `v1.0.3` release tag, or replace it with the exact commit hash if the F-Droid reviewer requests a hash.
 3. Confirm release builds work without private signing environment variables.
 4. Confirm no optional local jars are present under `app/libs`.
 5. Keep broad-storage and no-network privacy rationale in the merge request.

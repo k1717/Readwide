@@ -51,16 +51,10 @@ final class ArchiveImageEntryCache {
                                                        @Nullable Set<String> verifiedSensitivePaths) {
         String cacheKey = outFile.getAbsolutePath();
         synchronized (lockFor(cacheKey)) {
-            if (!sensitiveCache && isReadyImageFile(entryPath, outFile)) {
+            if (shouldReuseReadyImageFile(entryPath, outFile, sensitiveCache, verifiedSensitivePaths)) {
                 return ArchiveSupport.ExtractionResult.success();
             }
-
-            if (sensitiveCache
-                    && verifiedSensitivePaths != null
-                    && verifiedSensitivePaths.contains(cacheKey)
-                    && isReadyImageFile(entryPath, outFile)) {
-                return ArchiveSupport.ExtractionResult.success();
-            }
+            discardUnverifiedSensitiveReadyCache(outFile, sensitiveCache, verifiedSensitivePaths);
             discardReadyIfStaleOrCorrupt(entryPath, outFile);
 
             File tmpFile = null;
@@ -369,9 +363,10 @@ final class ArchiveImageEntryCache {
             ArchiveSupport.ExtractionResult result;
             int copied;
             synchronized (lockForArchive(archiveFile)) {
-                if (isReadyImageFile(entryPath, outFile)) {
+                if (shouldReuseReadyImageFile(entryPath, outFile, sensitiveCache, verifiedSensitivePaths)) {
                     return ArchiveSupport.ExtractionResult.success();
                 }
+                discardUnverifiedSensitiveReadyCache(outFile, sensitiveCache, verifiedSensitivePaths);
                 result = ArchiveSupport.extractArchiveDetailed(
                         archiveFile,
                         extractRoot,
@@ -501,12 +496,50 @@ final class ArchiveImageEntryCache {
                 && FileUtils.isImageFile(entryPath);
     }
 
+    private static boolean shouldReuseReadyImageFile(@NonNull String entryPath,
+                                                     @NonNull File file,
+                                                     boolean sensitiveCache,
+                                                     @Nullable Set<String> verifiedSensitivePaths) {
+        return canReuseReadyMarkerForCache(sensitiveCache, verifiedSensitivePaths, file.getAbsolutePath())
+                && isReadyImageFile(entryPath, file);
+    }
+
+    static boolean canReuseReadyMarkerForCache(boolean sensitiveCache,
+                                               @Nullable Set<String> verifiedSensitivePaths,
+                                               @NonNull String cacheKey) {
+        return !sensitiveCache
+                || (verifiedSensitivePaths != null && verifiedSensitivePaths.contains(cacheKey));
+    }
+
+    static boolean shouldDiscardUnverifiedSensitiveReadyCache(boolean sensitiveCache,
+                                                              @Nullable Set<String> verifiedSensitivePaths,
+                                                              @NonNull String cacheKey) {
+        return sensitiveCache && !canReuseReadyMarkerForCache(true, verifiedSensitivePaths, cacheKey);
+    }
+
+    private static void discardUnverifiedSensitiveReadyCache(@NonNull File file,
+                                                             boolean sensitiveCache,
+                                                             @Nullable Set<String> verifiedSensitivePaths) {
+        if (!shouldDiscardUnverifiedSensitiveReadyCache(
+                sensitiveCache,
+                verifiedSensitivePaths,
+                file.getAbsolutePath())) {
+            return;
+        }
+        deleteQuietly(readyMarkerFor(file));
+        deleteQuietly(file);
+    }
+
     private static void discardReadyIfStaleOrCorrupt(@NonNull String entryPath, @NonNull File file) {
         File marker = readyMarkerFor(file);
         if (!marker.exists()) return;
         if (isUsableFile(file) && looksLikeExpectedImage(entryPath, file)) return;
         deleteQuietly(marker);
         deleteQuietly(file);
+    }
+
+    static boolean isReadyImageFileForHandoff(@NonNull String entryPath, @Nullable File file) {
+        return isReadyImageFile(entryPath, file);
     }
 
     private static boolean isReadyImageFile(@NonNull String entryPath, @Nullable File file) {

@@ -1,4 +1,4 @@
-# F-Droid submission notes for Readwide 1.0.2
+# F-Droid submission notes for Readwide 1.0.3
 
 This document records the project-side preparation for an F-Droid Data merge request.
 
@@ -6,8 +6,8 @@ This document records the project-side preparation for an F-Droid Data merge req
 
 - App name: Readwide
 - Android application ID: `com.textview.reader`
-- Version name: `1.0.2`
-- Version code: `10002`
+- Version name: `1.0.3`
+- Version code: `10003`
 - First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
@@ -30,10 +30,10 @@ metadata/com.textview.reader.yml
 Create and push the immutable release tag before opening the merge request:
 
 ```text
-v1.0.2
+v1.0.3
 ```
 
-The draft metadata uses `commit: v1.0.2`. Confirm that this tag points to the audited source tree before copying `fdroid/metadata/com.textview.reader.yml` into fdroiddata.
+The draft metadata uses `commit: v1.0.3`. Confirm that this tag points to the audited source tree before copying `fdroid/metadata/com.textview.reader.yml` into fdroiddata.
 
 ## F-Droid-facing baseline
 
@@ -86,7 +86,7 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These provide title, short description, full description, and versionCode `10002` changelog text.
+These provide title, short description, full description, and versionCode `10003` changelog text.
 
 ## Conservative support wording for review
 
@@ -112,6 +112,6 @@ Use conservative wording in the merge request:
 ## Remaining submitter tasks
 
 - Confirm a clean network-enabled Gradle build from the tagged source.
-- Confirm the draft metadata points to the immutable `v1.0.2` tag or to an equivalent exact commit hash requested by the reviewer.
+- Confirm the draft metadata points to the immutable `v1.0.3` tag or to an equivalent exact commit hash requested by the reviewer.
 - Confirm no optional local jars are present in `app/libs`.
 - Confirm native dependency notices for `libarchive-android` / libarchive and `zstd-jni` / Zstandard are included with binary release materials if APK assets are published outside F-Droid.

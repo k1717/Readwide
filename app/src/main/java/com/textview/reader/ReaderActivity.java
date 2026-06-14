@@ -1,5 +1,8 @@
 package com.textview.reader;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
@@ -24,6 +27,7 @@ import android.text.StaticLayout;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.ActionMode;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -147,6 +151,9 @@ public class ReaderActivity extends AppCompatActivity {
     String activeSearchQuery = "";
     int activeSearchIndex = -1;
     int activeSearchOrdinal = 0;
+    private ActionMode txtSelectionActionMode;
+    private String txtSelectionActionText = "";
+    private int txtSelectionActionCharPosition = 0;
     final LargeTextSearchTotalCache largeTextSearchTotalCache = new LargeTextSearchTotalCache();
     LargeTextSearchEngine largeTextSearchEngine;
     ReaderToolbarController readerToolbarController;
@@ -756,6 +763,133 @@ public class ReaderActivity extends AppCompatActivity {
 
     void showQuickTextDisplayRuleDialog(String prefillFind, boolean defaultCurrentFileOnly) {
         new ReaderTextDisplayRuleDialogController(this).showQuickTextDisplayRuleDialog(prefillFind, defaultCurrentFileOnly);
+    }
+
+    void showTxtSelectedTextActionDialog(@Nullable String selectedText, int charPosition) {
+        final String safeText = selectedText != null ? selectedText : "";
+        if (safeText.trim().isEmpty()) {
+            if (readerView != null) readerView.clearTextSelection();
+            finishTxtSelectionActionMode(false);
+            return;
+        }
+
+        txtSelectionActionText = safeText;
+        txtSelectionActionCharPosition = Math.max(0, charPosition);
+        final int actionCopy = 1;
+        final int actionDisplayRule = 2;
+        if (txtSelectionActionMode != null) {
+            txtSelectionActionMode.invalidate();
+            return;
+        }
+
+        ActionMode.Callback2 callback = new ActionMode.Callback2() {
+            @Override
+            public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+                mode.setTitle(getString(R.string.selected));
+                menu.add(Menu.NONE, actionCopy, 0, getString(R.string.copy))
+                        .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+                menu.add(Menu.NONE, actionDisplayRule, 1, getString(R.string.txt_display_rule_quick_add))
+                        .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+                return true;
+            }
+
+            @Override
+            public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+                mode.setTitle(getString(R.string.selected));
+                String preview = txtSelectionActionText != null ? txtSelectionActionText.trim() : "";
+                if (preview.length() > 36) {
+                    preview = preview.substring(0, 36) + "…";
+                }
+                mode.setSubtitle(preview);
+                return true;
+            }
+
+            @Override
+            public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+                String actionText = txtSelectionActionText != null ? txtSelectionActionText : "";
+                int itemId = item.getItemId();
+                if (itemId == actionCopy) {
+                    ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(ClipData.newPlainText(getString(R.string.selected), actionText));
+                        ShortToast.show(ReaderActivity.this, R.string.file_copied);
+                    }
+                    mode.finish();
+                    return true;
+                }
+                if (itemId == actionDisplayRule) {
+                    mode.finish();
+                    showQuickTextDisplayRuleDialog(actionText.trim(), true);
+                    return true;
+                }
+                return false;
+            }
+
+            @Override
+            public void onDestroyActionMode(ActionMode mode) {
+                txtSelectionActionMode = null;
+                txtSelectionActionText = "";
+                txtSelectionActionCharPosition = 0;
+                if (readerView != null) readerView.clearTextSelection();
+            }
+
+            @Override
+            public void onGetContentRect(ActionMode mode, View view, Rect outRect) {
+                if (readerView != null && readerView.getTextSelectionContentRect(outRect)) {
+                    return;
+                }
+                outRect.set(0, 0, Math.max(1, view.getWidth()), dpToPx(48));
+            }
+        };
+        if (readerView != null) {
+            txtSelectionActionMode = readerView.startActionMode(callback, ActionMode.TYPE_FLOATING);
+        }
+        if (txtSelectionActionMode == null) {
+            txtSelectionActionMode = startActionMode(callback);
+        }
+        if (txtSelectionActionMode != null) {
+            txtSelectionActionMode.invalidate();
+        }
+    }
+
+    private void finishTxtSelectionActionMode(boolean clearSelection) {
+        ActionMode mode = txtSelectionActionMode;
+        if (mode != null) {
+            mode.finish();
+        } else if (clearSelection && readerView != null) {
+            readerView.clearTextSelection();
+        }
+    }
+
+    /**
+     * Dismisses a still-showing TXT selection ActionMode bubble. Returns true
+     * if a bubble was present and dismissed, so the caller (a single tap on an
+     * empty area) can consume the tap instead of paging. The bubble can outlive
+     * the selection range when an earlier event cleared the selection without
+     * finishing the floating ActionMode, which previously left the bubble stuck
+     * because a single tap with no active selection never finished it.
+     */
+    boolean dismissLingeringTxtSelectionBubble() {
+        ActionMode mode = txtSelectionActionMode;
+        if (mode == null) return false;
+        mode.finish();
+        txtSelectionActionMode = null;
+        if (readerView != null) readerView.clearTextSelection();
+        return true;
+    }
+
+    /**
+     * Reader view reported that its text selection was cleared (any path).
+     * Finish the floating selection ActionMode so its bubble cannot outlive the
+     * selection. Guarded against re-entrancy: finishing the mode triggers
+     * onDestroyActionMode, which clears selection again, but the reference is
+     * nulled first so the second pass is a no-op.
+     */
+    void onReaderTextSelectionCleared() {
+        ActionMode mode = txtSelectionActionMode;
+        if (mode == null) return;
+        txtSelectionActionMode = null;
+        mode.finish();
     }
 
     void showReaderTextDisplayRulesManagerDialog() {
@@ -1487,6 +1621,7 @@ public class ReaderActivity extends AppCompatActivity {
     }
 
     @Override protected void onDestroy() {
+        finishTxtSelectionActionMode(false);
         readerLifecycle().onDestroy();
         super.onDestroy();
     }

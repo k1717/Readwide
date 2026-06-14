@@ -178,9 +178,16 @@ public class RarSolidFirstPartyProbeTest {
 
     private static byte[] syntheticPayload(Block... blocks) {
         BitWriter bits = new BitWriter();
-        for (Block block : blocks) {
-            writeTable(bits, block.mainSymbols, block.distanceSymbols);
-            bits.writeBitString(block.actionBits);
+        for (int b = 0; b < blocks.length; b++) {
+            if (b > 0) {
+                // End-of-block continuation: bit 15 set means "new table, same
+                // file" (see Rar3ClassicLzEngine.readEndOfBlock).
+                bits.writeBitString("1");
+            }
+            // readTables() byte-aligns the reader before parsing a table.
+            bits.alignToByte();
+            writeTable(bits, blocks[b].mainSymbols, blocks[b].distanceSymbols);
+            bits.writeBitString(blocks[b].actionBits);
         }
         return bits.toByteArray();
     }
@@ -237,6 +244,10 @@ public class RarSolidFirstPartyProbeTest {
         private final ByteArrayOutputStream out = new ByteArrayOutputStream();
         private int current;
         private int bitsInCurrent;
+
+        void alignToByte() {
+            while (bitsInCurrent != 0) writeBits(0, 1);
+        }
 
         void writeBitString(String bits) {
             for (int i = 0; i < bits.length(); i++) {

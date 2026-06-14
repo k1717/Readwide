@@ -68,7 +68,8 @@ public class RarFixtureReportTest {
         assertEquals(1, report.firstPartyRoutedEntryCount());
         assertEquals(0, report.supportedStoredSplitCount());
         assertTrue(report.toMarkdown().contains("TRY_FIRST_PARTY_CLASSIC_LZ_NON_SOLID"));
-        assertTrue(report.toMarkdown().contains("LIMITED_CLASSIC_LZ_FALLBACK"));
+        // Compatibility counts are rendered in camelCase one-line summaries.
+        assertTrue(report.toMarkdown().contains("limitedFallback=1"));
         assertTrue(report.toMarkdown().contains("backend route counts"));
         assertTrue(report.toMarkdown().contains("non-solid compatibility counts"));
         assertTrue(report.toMarkdown().contains("PPMd block probe"));

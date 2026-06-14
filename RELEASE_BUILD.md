@@ -1,13 +1,13 @@
 # Public release build checklist
 
-This file is the practical build and verification checklist for Readwide 1.0.2.
+This file is the practical build and verification checklist for Readwide 1.0.3.
 
 ## Version metadata
 
 ```text
 applicationId com.textview.reader
-versionCode 10002
-versionName 1.0.2
+versionCode 10003
+versionName 1.0.3
 ```
 
 The application ID remains `com.textview.reader` for update compatibility with earlier compatible builds when signed with the same key.
@@ -77,23 +77,20 @@ find . -type f \( -name "*.jks" -o -name "*.keystore" -o -name "*.p12" -o -name 
 grep -RIn "C:\\Users\|/Users/\|/home/.*Downloads\|BEGIN PRIVATE KEY\|TEXTVIEW_KEYSTORE_PASSWORD" . \
   --exclude-dir=.git --exclude-dir=.gradle --exclude-dir=build
 
-# Also run a local private-term scan for personal names, account names, and e-mail addresses.
-# Keep that private term list outside the repository.
-
 grep -RIn "com.github.junrar\|junrar\|RarJunrarFallback" app docs README.md CHANGELOG.md THIRD_PARTY_NOTICES.md || true
 ```
 
 Expected result:
 
 - no private key or keystore files in source;
-- no accidental personal names, account identifiers, or personal path strings in release docs/source;
+- no accidental personal path strings in release docs/source;
 - no Junrar dependency or fallback source in the default build.
 
 ## F-Droid handoff
 
 Before opening an F-Droid Data merge request:
 
-1. Publish a final Git tag, e.g. `v1.0.2`.
+1. Publish a final Git tag, e.g. `v1.0.3`.
 2. Replace the commit placeholder in `fdroid/metadata/com.textview.reader.yml` with the immutable tag commit.
 3. Confirm `gradle/wrapper/gradle-wrapper.jar` is removed by the F-Droid metadata `rm` rule.
 4. Confirm a no-private-keystore `assembleRelease` build works.

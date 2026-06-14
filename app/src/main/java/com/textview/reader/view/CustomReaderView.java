@@ -7,12 +7,16 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.Region;
 import android.graphics.Typeface;
 import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.util.AttributeSet;
 import android.util.TypedValue;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.VelocityTracker;
 import android.view.View;
@@ -47,6 +51,14 @@ public class CustomReaderView extends View {
         void onReaderScrollChanged();
         void onReaderManualScroll();
         void onReaderManualOverscroll(int direction);
+        /**
+         * Called whenever an active text selection is cleared, so the host can
+         * finish any selection ActionMode bubble. This fires for every clear
+         * path (empty-area tap, drag-scroll, page content swap, empty drag
+         * result), which prevents the floating bubble from outliving the
+         * selection it belonged to.
+         */
+        default void onTextSelectionCleared() {}
     }
 
     public static final class PageTextAnchor {
@@ -62,6 +74,8 @@ public class CustomReaderView extends View {
     }
 
 
+
+    private static final int TXT_TEXT_SELECTION_LONG_PRESS_TIMEOUT_MS = 800;
 
     private static int getContentHeightForPaging(StaticLayout sourceLayout,
                                                  String value,
@@ -218,13 +232,25 @@ public class CustomReaderView extends View {
     private final Paint searchHighlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint activeSearchHighlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint ttsHighlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint textSelectionPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint textSelectionHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint textSelectionHandleOutlinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path searchHighlightPath = new Path();
     private final Path ttsHighlightPath = new Path();
+    private final Path textSelectionPath = new Path();
     private final OverScroller scroller;
     private final int touchSlop;
     private final int minFlingVelocity;
     private final int maxFlingVelocity;
     private final int longPressTimeoutMs;
+    private final int selectionHandleRadiusPx;
+    private final int selectionHandleBladeWidthPx;
+    private final int selectionHandleBladeHeightPx;
+    private final int selectionHandleVisualLiftPx;
+    private final int selectionHandleTouchRadiusPx;
+    private static final int SELECTION_HANDLE_NONE = 0;
+    private static final int SELECTION_HANDLE_START = 1;
+    private static final int SELECTION_HANDLE_END = 2;
 
     private VelocityTracker velocityTracker;
     private ReaderListener listener;
@@ -248,6 +274,14 @@ public class CustomReaderView extends View {
     private int activeSearchIndex = -1;
     private int ttsHighlightStart = -1;
     private int ttsHighlightEnd = -1;
+    private int textSelectionStart = -1;
+    private int textSelectionEnd = -1;
+    private int textSelectionAnchorStart = -1;
+    private int textSelectionAnchorEnd = -1;
+    private boolean textSelectionDragging = false;
+    private int activeSelectionHandle = SELECTION_HANDLE_NONE;
+    private float activeSelectionHandleTouchOffsetX = 0f;
+    private float activeSelectionHandleTouchOffsetY = 0f;
     private boolean markdownHighlightingEnabled = false;
 
     private int readerScrollY = 0;
@@ -271,7 +305,12 @@ public class CustomReaderView extends View {
         touchSlop = vc.getScaledTouchSlop();
         minFlingVelocity = vc.getScaledMinimumFlingVelocity();
         maxFlingVelocity = vc.getScaledMaximumFlingVelocity();
-        longPressTimeoutMs = ViewConfiguration.getLongPressTimeout();
+        longPressTimeoutMs = TXT_TEXT_SELECTION_LONG_PRESS_TIMEOUT_MS;
+        selectionHandleRadiusPx = dpToPx(7);
+        selectionHandleBladeWidthPx = dpToPx(22);
+        selectionHandleBladeHeightPx = dpToPx(34);
+        selectionHandleVisualLiftPx = dpToPx(10);
+        selectionHandleTouchRadiusPx = dpToPx(24);
         setFocusable(true);
         paint.setColor(textColor);
         paint.setTextSize(spToPx(fontSizeSp));
@@ -279,8 +318,13 @@ public class CustomReaderView extends View {
         searchHighlightPaint.setStyle(Paint.Style.FILL);
         activeSearchHighlightPaint.setStyle(Paint.Style.FILL);
         ttsHighlightPaint.setStyle(Paint.Style.FILL);
+        textSelectionHandlePaint.setStyle(Paint.Style.FILL);
+        textSelectionHandlePaint.setStrokeWidth(Math.max(1f, dpToPx(2)));
+        textSelectionHandleOutlinePaint.setStyle(Paint.Style.STROKE);
+        textSelectionHandleOutlinePaint.setStrokeWidth(Math.max(1f, dpToPx(1)));
         updateSearchHighlightColors();
         updateTtsHighlightColor();
+        updateTextSelectionColor();
     }
 
     public void setReaderListener(ReaderListener listener) {
@@ -301,10 +345,16 @@ public class CustomReaderView extends View {
         pageAnchors.clear();
         searchHighlightPath.reset();
         ttsHighlightPath.reset();
+        textSelectionPath.reset();
         searchQuery = "";
         activeSearchIndex = -1;
         ttsHighlightStart = -1;
         ttsHighlightEnd = -1;
+        textSelectionStart = -1;
+        textSelectionEnd = -1;
+        textSelectionAnchorStart = -1;
+        textSelectionAnchorEnd = -1;
+        textSelectionDragging = false;
         readerScrollY = 0;
         maxScrollY = 0;
         invalidate();
@@ -313,6 +363,7 @@ public class CustomReaderView extends View {
     public void setTextContent(String value) {
         text = value != null ? value : "";
         clearTtsHighlight();
+        clearTextSelection();
         readerScrollY = 0;
         rebuildLayout();
         invalidate();
@@ -322,6 +373,7 @@ public class CustomReaderView extends View {
     public void setTextContentAtVisualEnd(String value) {
         text = value != null ? value : "";
         clearTtsHighlight();
+        clearTextSelection();
         readerScrollY = 0;
         rebuildLayout();
         ensurePageAnchors();
@@ -387,6 +439,7 @@ public class CustomReaderView extends View {
         paint.setTypeface(this.typeface);
         updateSearchHighlightColors();
         updateTtsHighlightColor();
+        updateTextSelectionColor();
 
         boolean markdownColorChange = markdownHighlightingEnabled && colorChange;
         if (layoutAffectingChange || markdownColorChange) {
@@ -490,6 +543,15 @@ public class CustomReaderView extends View {
         } else {
             ttsHighlightPaint.setColor(Color.argb(105, 110, 172, 255));
         }
+    }
+
+    private void updateTextSelectionColor() {
+        boolean light = isLightColor(backgroundColor);
+        int selection = themeSearchColor(light ? 0.42f : 0.50f, light ? 0.78f : 1.28f);
+        textSelectionPaint.setColor(translucentColor(selection, light ? 104 : 126));
+        int handle = themeSearchColor(light ? 0.50f : 0.58f, light ? 0.72f : 1.36f);
+        textSelectionHandlePaint.setColor(handle);
+        textSelectionHandleOutlinePaint.setColor(translucentColor(light ? Color.BLACK : Color.WHITE, light ? 56 : 72));
     }
 
     private int translucentColor(int color, int alpha) {
@@ -597,10 +659,34 @@ public class CustomReaderView extends View {
                 getFullLineClipBottom());
         canvas.translate(getPaddingLeft() + marginHorizontalPx + leftTextInsetPx,
                 viewportTop + marginVerticalPx - visualScrollY);
+        drawTextSelection(canvas);
         drawTtsHighlight(canvas);
         drawSearchHighlights(canvas);
         layout.draw(canvas);
         canvas.restore();
+        drawTextSelectionHandles(canvas);
+    }
+
+    private void drawTextSelection(Canvas canvas) {
+        if (layout == null || textSelectionStart < 0 || textSelectionEnd <= textSelectionStart) return;
+
+        int start = Math.max(0, Math.min(text.length(), textSelectionStart));
+        int end = Math.max(start, Math.min(text.length(), textSelectionEnd));
+        if (end <= start) return;
+
+        int lineCount = layout.getLineCount();
+        if (lineCount <= 0) return;
+        int startLine = layout.getLineForOffset(start);
+        int endLine = layout.getLineForOffset(Math.max(start, end - 1));
+        int layoutTopY = Math.max(0, readerScrollY - marginVerticalPx);
+        int layoutBottomY = Math.min(layout.getHeight(), layoutTopY + getViewportHeight());
+        if (layout.getLineBottom(startLine) < layoutTopY || layout.getLineTop(endLine) > layoutBottomY) {
+            return;
+        }
+
+        textSelectionPath.reset();
+        layout.getSelectionPath(start, end, textSelectionPath);
+        canvas.drawPath(textSelectionPath, textSelectionPaint);
     }
 
     private void drawTtsHighlight(Canvas canvas) {
@@ -669,15 +755,47 @@ public class CustomReaderView extends View {
                 lastY = downY;
                 dragging = false;
                 longPressTriggered = false;
+                textSelectionDragging = false;
+                activeSelectionHandle = hitTextSelectionHandle(downX, downY);
+                if (activeSelectionHandle != SELECTION_HANDLE_NONE) {
+                    prepareSelectionHandleDrag(activeSelectionHandle, downX, downY);
+                    cancelPendingLongPress();
+                    return true;
+                }
                 scheduleLongPress(downX, downY);
                 return true;
 
             case MotionEvent.ACTION_MOVE:
                 float y = event.getY();
+                if (activeSelectionHandle != SELECTION_HANDLE_NONE) {
+                    cancelPendingLongPress();
+                    updateSelectionFromActiveHandleDrag(event.getX(), event.getY());
+                    return true;
+                }
+                if (longPressTriggered && hasActiveTextSelection()) {
+                    // After a TXT long-press creates the initial word selection,
+                    // keep the body itself passive.  Selection range adjustment is
+                    // handled only by the visible handles, matching the native
+                    // Android feel and preventing accidental body-drag selection.
+                    cancelPendingLongPress();
+                    return true;
+                }
+                if (textSelectionDragging) {
+                    cancelPendingLongPress();
+                    updateDraggedTextSelection(event.getX(), event.getY());
+                    return true;
+                }
+
                 float dy = lastY - y;
                 if (!dragging && Math.abs(y - downY) > touchSlop) {
                     dragging = true;
                     cancelPendingLongPress();
+                    if (hasActiveTextSelection()) {
+                        clearTextSelection();
+                        if (listener != null) listener.onTextLongPress("", -1, event.getX(), event.getY());
+                    } else {
+                        clearTextSelection();
+                    }
                     if (listener != null) listener.onReaderManualScroll();
                 }
                 if (dragging) {
@@ -691,12 +809,27 @@ public class CustomReaderView extends View {
 
             case MotionEvent.ACTION_UP:
                 cancelPendingLongPress();
+                if (activeSelectionHandle != SELECTION_HANDLE_NONE) {
+                    updateSelectionFromActiveHandleDrag(event.getX(), event.getY());
+                    activeSelectionHandle = SELECTION_HANDLE_NONE;
+                    activeSelectionHandleTouchOffsetX = 0f;
+                    activeSelectionHandleTouchOffsetY = 0f;
+                    notifyTextSelectionAction(event.getX(), event.getY());
+                    recycleVelocityTracker();
+                    return true;
+                }
                 if (longPressTriggered) {
+                    finishDraggedTextSelection(event.getX(), event.getY());
                     recycleVelocityTracker();
                     return true;
                 }
                 if (!dragging && Math.abs(event.getX() - downX) < touchSlop && Math.abs(event.getY() - downY) < touchSlop) {
-                    if (listener != null) listener.onSingleTap(event.getX(), event.getY());
+                    if (hasActiveTextSelection()) {
+                        clearTextSelection();
+                        if (listener != null) listener.onTextLongPress("", -1, event.getX(), event.getY());
+                    } else if (listener != null) {
+                        listener.onSingleTap(event.getX(), event.getY());
+                    }
                 } else {
                     velocityTracker.computeCurrentVelocity(1000, maxFlingVelocity);
                     float velocityY = velocityTracker.getYVelocity();
@@ -710,6 +843,10 @@ public class CustomReaderView extends View {
 
             case MotionEvent.ACTION_CANCEL:
                 cancelPendingLongPress();
+                textSelectionDragging = false;
+                activeSelectionHandle = SELECTION_HANDLE_NONE;
+                activeSelectionHandleTouchOffsetX = 0f;
+                activeSelectionHandleTouchOffsetY = 0f;
                 recycleVelocityTracker();
                 return true;
         }
@@ -719,11 +856,16 @@ public class CustomReaderView extends View {
     private void scheduleLongPress(float x, float y) {
         cancelPendingLongPress();
         pendingLongPressRunnable = () -> {
-            if (dragging || listener == null) return;
+            if (dragging) return;
             TextHit hit = getWordHitAt(x, y);
             if (hit == null || hit.text == null || hit.text.trim().isEmpty()) return;
+            textSelectionAnchorStart = hit.charPosition;
+            textSelectionAnchorEnd = hit.endCharPosition;
+            textSelectionDragging = false;
+            activeSelectionHandle = SELECTION_HANDLE_NONE;
             longPressTriggered = true;
-            listener.onTextLongPress(hit.text, hit.charPosition, x, y);
+            setTextSelection(hit.charPosition, hit.endCharPosition);
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
         };
         postDelayed(pendingLongPressRunnable, longPressTimeoutMs);
     }
@@ -735,24 +877,399 @@ public class CustomReaderView extends View {
         }
     }
 
+    public void clearTextSelection() {
+        if (textSelectionStart < 0 && textSelectionEnd < 0 && !textSelectionDragging
+                && textSelectionAnchorStart < 0 && textSelectionAnchorEnd < 0) return;
+        textSelectionStart = -1;
+        textSelectionEnd = -1;
+        textSelectionAnchorStart = -1;
+        textSelectionAnchorEnd = -1;
+        textSelectionDragging = false;
+        activeSelectionHandle = SELECTION_HANDLE_NONE;
+        activeSelectionHandleTouchOffsetX = 0f;
+        activeSelectionHandleTouchOffsetY = 0f;
+        textSelectionPath.reset();
+        invalidate();
+        if (listener != null) listener.onTextSelectionCleared();
+    }
+
+    private void setTextSelection(int startChar, int endChar) {
+        int safeStart = FileUtils.clampToSurrogateSafeStart(text,
+                Math.max(0, Math.min(text.length(), startChar)));
+        int safeEnd = FileUtils.clampToSurrogateSafeEnd(text,
+                Math.max(safeStart, Math.min(text.length(), endChar)));
+        if (safeEnd <= safeStart) {
+            clearTextSelection();
+            return;
+        }
+        textSelectionStart = safeStart;
+        textSelectionEnd = safeEnd;
+        invalidate();
+    }
+
+    private void updateDraggedTextSelection(float x, float y) {
+        if (layout == null || text == null || text.isEmpty()
+                || textSelectionAnchorStart < 0 || textSelectionAnchorEnd <= textSelectionAnchorStart) {
+            return;
+        }
+        TextHit hit = getWordHitAt(x, y);
+        int endpointStart;
+        int endpointEnd;
+        if (hit != null) {
+            endpointStart = hit.charPosition;
+            endpointEnd = hit.endCharPosition;
+        } else {
+            int offset = getCharOffsetAt(x, y);
+            if (offset < 0) return;
+            endpointStart = offset;
+            endpointEnd = offset;
+        }
+
+        int start;
+        int end;
+        if (endpointStart < textSelectionAnchorStart) {
+            start = endpointStart;
+            end = textSelectionAnchorEnd;
+        } else {
+            start = textSelectionAnchorStart;
+            end = endpointEnd;
+        }
+        setTextSelection(start, end);
+    }
+
+    private void finishDraggedTextSelection(float x, float y) {
+        if (textSelectionDragging) {
+            updateDraggedTextSelection(x, y);
+        }
+        textSelectionDragging = false;
+        textSelectionAnchorStart = -1;
+        textSelectionAnchorEnd = -1;
+
+        notifyTextSelectionAction(x, y);
+    }
+
+    private void notifyTextSelectionAction(float x, float y) {
+        String selected = getSelectedTextForAction();
+        if (selected.trim().isEmpty()) {
+            clearTextSelection();
+            return;
+        }
+        if (listener != null) {
+            listener.onTextLongPress(selected, Math.max(0, textSelectionStart), x, y);
+        }
+    }
+
+    public String getSelectedTextForAction() {
+        if (text == null || text.isEmpty() || textSelectionStart < 0 || textSelectionEnd <= textSelectionStart) {
+            return "";
+        }
+        int start = Math.max(0, Math.min(text.length(), textSelectionStart));
+        int end = Math.max(start, Math.min(text.length(), textSelectionEnd));
+        return FileUtils.safeSubstring(text, start, end);
+    }
+
+
+    private void prepareSelectionHandleDrag(int handle, float touchX, float touchY) {
+        float[] visualPoint = getSelectionHandleVisualPoint(handle == SELECTION_HANDLE_START);
+        float[] gripCenter = getSelectionHandleLowerGripCenter(handle, visualPoint);
+        if (gripCenter == null) {
+            activeSelectionHandleTouchOffsetX = 0f;
+            activeSelectionHandleTouchOffsetY = 0f;
+            return;
+        }
+        // Native text handles do not remap the finger to the character under the
+        // finger. They remember the exact spot on the handle that was grabbed and
+        // keep that same spot under the finger while the text endpoint follows the
+        // handle tip. This is the important distinction from body-drag selection.
+        activeSelectionHandleTouchOffsetX = touchX - gripCenter[0];
+        activeSelectionHandleTouchOffsetY = touchY - gripCenter[1];
+    }
+
+    private float adjustedSelectionHandleX(int handle, float touchX) {
+        float scaleX = selectionHandleBladeWidthPx / 22f;
+        float gripCenterX = handle == SELECTION_HANDLE_START ? 12f : 10f;
+        float tipX = handle == SELECTION_HANDLE_START ? 18f : 4f;
+        float desiredGripCenterX = touchX - activeSelectionHandleTouchOffsetX;
+        return desiredGripCenterX - (gripCenterX - tipX) * scaleX;
+    }
+
+    private float adjustedSelectionHandleY(float touchY) {
+        float scaleY = selectionHandleBladeHeightPx / 34f;
+        float gripCenterY = 25.5f * scaleY;
+        float desiredGripCenterY = touchY - activeSelectionHandleTouchOffsetY;
+        // Convert the desired lower-grip center back to the logical text endpoint.
+        // Keep a tiny upward bias so StaticLayout does not resolve a lineBottom
+        // endpoint as the following row.
+        return desiredGripCenterY - gripCenterY + selectionHandleVisualLiftPx - 1f;
+    }
+
+    private void updateSelectionFromActiveHandleDrag(float touchX, float touchY) {
+        if (activeSelectionHandle == SELECTION_HANDLE_NONE) return;
+        int handleBeforeUpdate = activeSelectionHandle;
+        updateSelectionFromHandle(activeSelectionHandle,
+                adjustedSelectionHandleX(activeSelectionHandle, touchX),
+                adjustedSelectionHandleY(touchY));
+        if (!hasActiveTextSelection()) {
+            activeSelectionHandle = SELECTION_HANDLE_NONE;
+            return;
+        }
+        if (activeSelectionHandle != handleBeforeUpdate) {
+            // If the dragged endpoint crosses the other endpoint, ownership flips.
+            // Re-anchor the grabbed lower-grip point to the newly active handle so
+            // the visible handle does not jump away from the finger.
+            prepareSelectionHandleDrag(activeSelectionHandle, touchX, touchY);
+        }
+    }
+
+    private void updateSelectionFromHandle(int handle, float x, float y) {
+        if (layout == null || text == null || text.isEmpty() || textSelectionStart < 0 || textSelectionEnd <= textSelectionStart) {
+            return;
+        }
+        int offset = getCharOffsetAt(x, y);
+        if (offset < 0) return;
+        offset = Math.max(0, Math.min(text.length(), offset));
+        if (handle == SELECTION_HANDLE_START) {
+            int end = Math.max(0, Math.min(text.length(), textSelectionEnd));
+            if (offset >= end) {
+                textSelectionStart = end;
+                textSelectionEnd = FileUtils.clampToSurrogateSafeEnd(text, offset);
+                activeSelectionHandle = SELECTION_HANDLE_END;
+            } else {
+                setTextSelection(offset, end);
+            }
+        } else if (handle == SELECTION_HANDLE_END) {
+            int start = Math.max(0, Math.min(text.length(), textSelectionStart));
+            if (offset <= start) {
+                textSelectionStart = FileUtils.clampToSurrogateSafeStart(text, offset);
+                textSelectionEnd = start;
+                activeSelectionHandle = SELECTION_HANDLE_START;
+                invalidate();
+            } else {
+                setTextSelection(start, offset);
+            }
+        }
+    }
+
+    private float[] getSelectionHandleLowerGripCenter(int handle, float[] visualPoint) {
+        if (visualPoint == null) return null;
+        float scaleX = selectionHandleBladeWidthPx / 22f;
+        float scaleY = selectionHandleBladeHeightPx / 34f;
+        float gripCenterX = handle == SELECTION_HANDLE_START ? 12f : 10f;
+        float tipX = handle == SELECTION_HANDLE_START ? 18f : 4f;
+        float localY = 25.5f;
+        return new float[]{
+                visualPoint[0] + (gripCenterX - tipX) * scaleX,
+                visualPoint[1] + localY * scaleY
+        };
+    }
+
+    private int hitTextSelectionHandle(float x, float y) {
+        if (!hasActiveTextSelection()) return SELECTION_HANDLE_NONE;
+        float[] start = getSelectionHandleVisualPoint(true);
+        float[] end = getSelectionHandleVisualPoint(false);
+        boolean startHit = isPointInBladeHandleTouchArea(start, true, x, y);
+        boolean endHit = isPointInBladeHandleTouchArea(end, false, x, y);
+        if (startHit && !endHit) return SELECTION_HANDLE_START;
+        if (endHit && !startHit) return SELECTION_HANDLE_END;
+        if (startHit && endHit) {
+            float startDx = start != null ? x - start[0] : Float.MAX_VALUE;
+            float startDy = start != null ? y - start[1] : Float.MAX_VALUE;
+            float endDx = end != null ? x - end[0] : Float.MAX_VALUE;
+            float endDy = end != null ? y - end[1] : Float.MAX_VALUE;
+            float startDistance = startDx * startDx + startDy * startDy;
+            float endDistance = endDx * endDx + endDy * endDy;
+            return startDistance <= endDistance ? SELECTION_HANDLE_START : SELECTION_HANDLE_END;
+        }
+        // Do not use a broad nearest-point fallback. It made touches around the
+        // highlighted text feel as if they were handle drags. Only the visible
+        // blade shape, with a small finger-tolerance inset, is draggable.
+        return SELECTION_HANDLE_NONE;
+    }
+
+    private boolean isPointInBladeHandleTouchArea(float[] point, boolean start, float x, float y) {
+        if (point == null) return false;
+
+        // Limit hit-testing to the visible lower grip of the blade handle.
+        // Do not expand into the highlighted text, do not add a broad nearest
+        // fallback, and do not treat the blade tip/upper slant as draggable.
+        Path handlePath = buildBladeSelectionHandlePath(start, point[0], point[1]);
+        RectF rawBounds = new RectF();
+        handlePath.computeBounds(rawBounds, true);
+        if (rawBounds.isEmpty()) return false;
+
+        float lowerTop = rawBounds.top + rawBounds.height() * 0.52f;
+        RectF lowerGripBounds = new RectF(rawBounds.left, lowerTop, rawBounds.right, rawBounds.bottom);
+        if (!lowerGripBounds.contains(x, y)) return false;
+
+        Region clip = new Region(
+                (int) Math.floor(lowerGripBounds.left),
+                (int) Math.floor(lowerGripBounds.top),
+                (int) Math.ceil(lowerGripBounds.right),
+                (int) Math.ceil(lowerGripBounds.bottom));
+        Region handleRegion = new Region();
+        handleRegion.setPath(handlePath, clip);
+        return handleRegion.contains(Math.round(x), Math.round(y));
+    }
+
+    private boolean hasActiveTextSelection() {
+        return layout != null && text != null && !text.isEmpty()
+                && textSelectionStart >= 0 && textSelectionEnd > textSelectionStart;
+    }
+
+    private void drawTextSelectionHandles(Canvas canvas) {
+        if (!hasActiveTextSelection()) return;
+        drawTextSelectionHandle(canvas, true);
+        drawTextSelectionHandle(canvas, false);
+    }
+
+    private void drawTextSelectionHandle(Canvas canvas, boolean start) {
+        float[] point = getSelectionHandleVisualPoint(start);
+        if (point == null) return;
+        drawBladeSelectionHandle(canvas, start, point[0], point[1]);
+    }
+
+    private void drawBladeSelectionHandle(Canvas canvas, boolean start, float anchorX, float anchorY) {
+        Path handlePath = buildBladeSelectionHandlePath(start, anchorX, anchorY);
+        canvas.drawPath(handlePath, textSelectionHandlePaint);
+        canvas.drawPath(handlePath, textSelectionHandleOutlinePaint);
+    }
+
+    private Path buildBladeSelectionHandlePath(boolean start, float anchorX, float anchorY) {
+        float scaleX = selectionHandleBladeWidthPx / 22f;
+        float scaleY = selectionHandleBladeHeightPx / 34f;
+        float tipX = start ? 18f : 4f;
+        float left = anchorX - tipX * scaleX;
+        float top = anchorY;
+
+        Path handlePath = new Path();
+        if (start) {
+            moveBladePath(handlePath, left, top, scaleX, scaleY, 18f, 0f);
+            lineBladePath(handlePath, left, top, scaleX, scaleY, 6f, 12f);
+            lineBladePath(handlePath, left, top, scaleX, scaleY, 6f, 27f);
+            quadBladePath(handlePath, left, top, scaleX, scaleY, 6f, 31f, 9f, 31f);
+            lineBladePath(handlePath, left, top, scaleX, scaleY, 15f, 31f);
+            quadBladePath(handlePath, left, top, scaleX, scaleY, 18f, 31f, 18f, 28f);
+        } else {
+            moveBladePath(handlePath, left, top, scaleX, scaleY, 4f, 0f);
+            lineBladePath(handlePath, left, top, scaleX, scaleY, 16f, 12f);
+            lineBladePath(handlePath, left, top, scaleX, scaleY, 16f, 27f);
+            quadBladePath(handlePath, left, top, scaleX, scaleY, 16f, 31f, 13f, 31f);
+            lineBladePath(handlePath, left, top, scaleX, scaleY, 7f, 31f);
+            quadBladePath(handlePath, left, top, scaleX, scaleY, 4f, 31f, 4f, 28f);
+        }
+        handlePath.close();
+        return handlePath;
+    }
+
+    private void moveBladePath(Path path, float left, float top, float scaleX, float scaleY, float x, float y) {
+        path.moveTo(left + x * scaleX, top + y * scaleY);
+    }
+
+    private void lineBladePath(Path path, float left, float top, float scaleX, float scaleY, float x, float y) {
+        path.lineTo(left + x * scaleX, top + y * scaleY);
+    }
+
+    private void quadBladePath(Path path, float left, float top, float scaleX, float scaleY,
+                               float controlX, float controlY, float endX, float endY) {
+        path.quadTo(left + controlX * scaleX, top + controlY * scaleY,
+                left + endX * scaleX, top + endY * scaleY);
+    }
+
+    private float[] getSelectionHandleVisualPoint(boolean start) {
+        float[] point = getSelectionHandlePoint(start);
+        if (point == null) return null;
+        return new float[]{point[0], point[1] - selectionHandleVisualLiftPx};
+    }
+
+    private float[] getSelectionHandlePoint(boolean start) {
+        if (!hasActiveTextSelection()) return null;
+        int offset = start ? textSelectionStart : textSelectionEnd;
+        offset = Math.max(0, Math.min(text.length(), offset));
+        if (!start && offset > 0) {
+            // StaticLayout line lookup at an end offset that is exactly at the
+            // next line start can make the end handle jump to column 0. Anchor it
+            // to the previous glyph while still drawing the horizontal position
+            // for the logical selection end.
+            int previous = Math.max(0, Math.min(text.length() - 1, offset - 1));
+            int previousLine = layout.getLineForOffset(previous);
+            int offsetLine = offset < text.length() ? layout.getLineForOffset(offset) : previousLine;
+            if (offsetLine != previousLine) {
+                offset = Math.max(0, offset - 1);
+            }
+        }
+        int line = Math.max(0, Math.min(layout.getLineCount() - 1, layout.getLineForOffset(offset)));
+        float horizontal = layout.getPrimaryHorizontal(offset);
+        int lineBottom = layout.getLineBottom(line);
+        float viewX = getPaddingLeft() + marginHorizontalPx + leftTextInsetPx + horizontal;
+        float viewY = getTextViewportTopY() + marginVerticalPx - getVisualScrollYForDraw() + lineBottom;
+        float minY = getTextViewportTopY() - Math.max(selectionHandleRadiusPx, selectionHandleBladeHeightPx / 3f);
+        float maxY = getTextViewportBottomY() + Math.max(selectionHandleRadiusPx, selectionHandleBladeHeightPx);
+        if (viewY < minY || viewY > maxY) return null;
+        return new float[]{viewX, viewY};
+    }
+
+
+    public boolean getTextSelectionContentRect(Rect outRect) {
+        if (outRect == null || !hasActiveTextSelection()) return false;
+        float[] start = getSelectionHandleVisualPoint(true);
+        float[] end = getSelectionHandleVisualPoint(false);
+        if (start == null && end == null) return false;
+        float left;
+        float top;
+        float right;
+        float bottom;
+        if (start != null && end != null) {
+            left = Math.min(start[0], end[0]);
+            top = Math.min(start[1], end[1]);
+            right = Math.max(start[0], end[0]);
+            bottom = Math.max(start[1], end[1]);
+        } else {
+            float[] point = start != null ? start : end;
+            left = right = point[0];
+            top = bottom = point[1];
+        }
+        int pad = selectionHandleTouchRadiusPx;
+        outRect.set(
+                Math.max(0, Math.round(left) - pad),
+                Math.max(0, Math.round(top) - pad),
+                Math.min(getWidth(), Math.round(right) + pad),
+                Math.min(getHeight(), Math.round(bottom) + pad));
+        return true;
+    }
+
     private static final class TextHit {
         final String text;
         final int charPosition;
-        TextHit(String text, int charPosition) {
+        final int endCharPosition;
+        TextHit(String text, int charPosition, int endCharPosition) {
             this.text = text;
             this.charPosition = charPosition;
+            this.endCharPosition = Math.max(charPosition, endCharPosition);
         }
+    }
+
+    private int getCharOffsetAt(float viewX, float viewY) {
+        if (layout == null || text == null || text.isEmpty()) return -1;
+        int viewportTop = getTextViewportTopY();
+        float layoutX = viewX - getPaddingLeft() - marginHorizontalPx - leftTextInsetPx;
+        float layoutY = viewY - viewportTop - marginVerticalPx + getVisualScrollYForDraw();
+        if (layoutY < 0 || layoutY > layout.getHeight()) return -1;
+        int line = Math.max(0, Math.min(layout.getLineCount() - 1,
+                layout.getLineForVertical(Math.max(0, Math.round(layoutY)))));
+        int rawOffset;
+        if (layoutX <= layout.getLineLeft(line)) {
+            rawOffset = layout.getLineStart(line);
+        } else if (layoutX >= layout.getLineRight(line)) {
+            rawOffset = Math.max(layout.getLineStart(line), layout.getLineEnd(line) - 1);
+        } else {
+            rawOffset = layout.getOffsetForHorizontal(line, layoutX);
+        }
+        return Math.max(0, Math.min(text.length(), rawOffset));
     }
 
     private TextHit getWordHitAt(float viewX, float viewY) {
         if (layout == null || text == null || text.isEmpty()) return null;
-        int viewportTop = getTextViewportTopY();
-        float layoutX = viewX - getPaddingLeft() - marginHorizontalPx - leftTextInsetPx;
-        float layoutY = viewY - viewportTop - marginVerticalPx + getVisualScrollYForDraw();
-        if (layoutX < 0 || layoutY < 0 || layoutY > layout.getHeight()) return null;
-        int line = Math.max(0, Math.min(layout.getLineCount() - 1,
-                layout.getLineForVertical(Math.max(0, Math.round(layoutY)))));
-        int offset = Math.max(0, Math.min(text.length(), layout.getOffsetForHorizontal(line, layoutX)));
+        int offset = getCharOffsetAt(viewX, viewY);
         if (offset >= text.length() && text.length() > 0) offset = text.length() - 1;
         if (offset < 0 || offset >= text.length()) return null;
 
@@ -767,9 +1284,12 @@ public class CustomReaderView extends View {
         int end = seed + 1;
         while (start > 0 && isWordChar(text.charAt(start - 1))) start--;
         while (end < text.length() && isWordChar(text.charAt(end))) end++;
+        start = FileUtils.clampToSurrogateSafeStart(text, start);
+        end = FileUtils.clampToSurrogateSafeEnd(text, end);
+        if (end <= start) return null;
         String word = FileUtils.safeSubstring(text, start, end).trim();
         if (word.isEmpty()) return null;
-        return new TextHit(word, start);
+        return new TextHit(word, start, end);
     }
 
     private static boolean isWordChar(char ch) {
@@ -1448,6 +1968,10 @@ public class CustomReaderView extends View {
             scrollY -= Math.round(getLineHeightPx() * 1.2f);
         }
         setReaderScrollY(snapScrollYToLineTop(scrollY));
+    }
+
+    private int dpToPx(float dp) {
+        return Math.max(1, Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp, getResources().getDisplayMetrics())));
     }
 
     private float spToPx(float sp) {

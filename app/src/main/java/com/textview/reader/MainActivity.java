@@ -232,6 +232,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     private MainActivityStartupController mainActivityStartupController;
     private MainRecentFilesController mainRecentFilesController;
     private MainFolderLoadController mainFolderLoadController;
+    private MainFolderChangeObserverController mainFolderChangeObserverController;
     private MainFileOperationProgressController mainFileOperationProgressController;
 
     private MainActivityStartupController startup() {
@@ -351,6 +352,29 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         return mainFolderLoadController;
     }
 
+    private MainFolderChangeObserverController mainFolderChangeObserver() {
+        if (mainFolderChangeObserverController == null) {
+            mainFolderChangeObserverController = new MainFolderChangeObserverController(this);
+        }
+        return mainFolderChangeObserverController;
+    }
+
+    void syncVisibleFolderChangeObserver() {
+        mainFolderChangeObserver().syncToVisibleFolder();
+    }
+
+    void stopVisibleFolderChangeObserver() {
+        if (mainFolderChangeObserverController != null) {
+            mainFolderChangeObserverController.stop();
+        }
+    }
+
+    boolean shouldWatchVisibleFolderForChanges() {
+        if (homeMode || currentDirectory == null) return false;
+        if (!currentDirectory.exists() || !currentDirectory.isDirectory() || !currentDirectory.canRead()) return false;
+        return !searchMode || !searchReturnToHome;
+    }
+
     private MainFileOperationProgressController mainFileOperationProgress() {
         if (mainFileOperationProgressController == null) {
             mainFileOperationProgressController = new MainFileOperationProgressController(this);
@@ -466,6 +490,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         }
         clearPreservedBrowseStateAfterResume();
         updateMainOverflowButtonVisibility();
+        syncVisibleFolderChangeObserver();
     }
 
     void markPreserveBrowseStateForViewerReturn(@Nullable File openedFile) {
@@ -531,6 +556,12 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     @Override
+    protected void onPause() {
+        stopVisibleFolderChangeObserver();
+        super.onPause();
+    }
+
+    @Override
     protected void onDestroy() {
         if (mainImageOpenController != null) mainImageOpenController.onDestroy();
         else hideImageOpenLoadingWindow();
@@ -538,6 +569,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         pendingDrawerNavigationEntry = null;
         drawerNavigationPending = false;
         clearSearchDebounce();
+        stopVisibleFolderChangeObserver();
         fileSearchHandler.removeCallbacksAndMessages(null);
         fileSearchGeneration.incrementAndGet();
 
@@ -840,6 +872,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         }
 
         boolean inBrowse = !homeMode && !searchMode;
+        boolean hasOperationDestination = hasVisibleFileOperationDestination();
         if (mainOverflowButton != null) {
             mainOverflowButton.setVisibility(inBrowse ? View.VISIBLE : View.GONE);
             mainOverflowButton.setEnabled(inBrowse);
@@ -848,11 +881,14 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         if (mainPendingActionButton != null) {
             boolean hasPendingExtract = !pendingExtractArchives.isEmpty();
             boolean hasPendingCreate = !pendingArchiveCreations.isEmpty();
-            boolean showPending = inBrowse && (fileClipboardController.hasPending() || hasPendingExtract || hasPendingCreate);
-            // Keep the pending queue inspectable even while a file/archive operation is
-            // running in the background. The dropdown itself disables execution controls
-            // during active work so a second operation cannot replace the active progress
-            // dialog or mutate a queue being consumed by a worker thread.
+            boolean hasPendingAction = fileClipboardController.hasPending() || hasPendingExtract || hasPendingCreate;
+            boolean showPending = hasOperationDestination && hasPendingAction;
+            // Keep the pending queue inspectable while a file/archive operation is
+            // running in the background. Also keep it visible while the current folder is
+            // represented by a type-filtered/search result view: that state has
+            // searchMode=true, so the old strict "browse only" check hid copy/move/paste
+            // and archive extraction queues even though currentDirectory is still a
+            // valid destination.
             mainPendingActionButton.setContentDescription(getString(R.string.pending_actions));
             mainPendingActionButton.setVisibility(showPending ? View.VISIBLE : View.GONE);
             mainPendingActionButton.setEnabled(showPending);
@@ -865,6 +901,12 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
             mainOperationProgressButton.setEnabled(showProgress);
             mainOperationProgressButton.setAlpha(showProgress ? 1.0f : 0.55f);
         }
+    }
+
+    private boolean hasVisibleFileOperationDestination() {
+        if (homeMode || currentDirectory == null) return false;
+        if (!currentDirectory.exists() || !currentDirectory.isDirectory() || !currentDirectory.canRead()) return false;
+        return !searchMode || !searchReturnToHome;
     }
 
 
@@ -1291,6 +1333,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         searchReturnToHome = true;
         searchReturnDirectory = null;
         homeMode = true;
+        stopVisibleFolderChangeObserver();
         updateFileTypeChips();
         recentSection.setVisibility(View.VISIBLE);
         browserSection.setVisibility(View.GONE);

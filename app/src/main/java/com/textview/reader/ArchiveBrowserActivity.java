@@ -80,7 +80,6 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
     private Toolbar toolbar;
     private TextView pathText;
     private TextView emptyText;
-    private ProgressBar progressBar;
     private RecyclerView recyclerView;
     private EntryAdapter adapter;
     private EditText archiveSearchInput;
@@ -111,7 +110,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
     private static final int FILTER_WORD = ArchiveEntryListController.FILTER_WORD;
     private static final int FILTER_IMAGE = ArchiveEntryListController.FILTER_IMAGE;
     private boolean destroyed = false;
-    private Dialog imagePreviewLoadingDialog;
+    private Dialog archivePreviewLoadingDialog;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -147,7 +146,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        hideImagePreviewLoadingWindow();
+        hideArchivePreviewLoadingWindow();
         destroyed = true;
         mainHandler.removeCallbacksAndMessages(null);
         clearArchivePassword();
@@ -264,13 +263,6 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         root.addView(pathText, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        progressBar = new ProgressBar(this);
-        progressBar.setIndeterminate(true);
-        progressBar.setVisibility(View.INVISIBLE);
-        root.addView(progressBar, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dpToPx(4)));
 
         recyclerView = new RecyclerView(this);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
@@ -558,6 +550,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                 mainHandler.post(() -> {
                     if (destroyed) return;
                     showLoading(false, null);
+                    clearArchivePassword();
                     showPasswordDialog(passwordText -> loadArchiveEntries(passwordText.toCharArray()));
                 });
             } catch (ArchiveSupport.UnsupportedArchiveFeatureException e) {
@@ -569,11 +562,19 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                             true);
                 });
             } catch (Exception e) {
+                final boolean retryPassword = shouldRetryArchivePasswordAfterListFailure(password, e);
+                final boolean showPasswordFailureToast = PasswordChars.hasPassword(password);
                 mainHandler.post(() -> {
                     if (destroyed) return;
                     showLoading(false, null);
-                    ShortToast.show(this, R.string.archive_open_failed);
-                    finish();
+                    if (retryPassword) {
+                        clearArchivePassword();
+                        showPasswordDialogWithOptionalFailureToast(showPasswordFailureToast,
+                                passwordText -> loadArchiveEntries(passwordText.toCharArray()));
+                    } else {
+                        ShortToast.show(this, R.string.archive_open_failed);
+                        finish();
+                    }
                 });
             } finally {
                 PasswordChars.clear(acceptedPassword);
@@ -711,7 +712,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
             extractImageSiblingEntriesAndOpen(entry);
             return;
         }
-        showLoading(true, null);
+        showArchivePreviewLoadingWindow();
         File outFile = buildPreviewOutputFile(entry);
         final File archiveSnapshot = archiveFile;
         final char[] passwordSnapshot = snapshotArchivePassword();
@@ -724,10 +725,10 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                         passwordSnapshot);
                 mainHandler.post(() -> {
                     if (destroyed) return;
-                    showLoading(false, null);
+                    hideArchivePreviewLoadingWindow();
                     if (!result.success || !outFile.exists()) {
                         if (shouldAskArchivePassword(result)) {
-                            showPasswordDialog(passwordText -> {
+                            showPasswordDialogAfterFailedResult(result, passwordText -> {
                                 setArchivePassword(passwordText.toCharArray());
                                 extractEntryAndOpen(entry);
                             });
@@ -776,10 +777,10 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
 
     private void openArchiveImageSequence(@Nullable ArchiveSupport.EntryInfo selectedEntry, boolean useSavedPosition) {
         saveHostArchiveRecentState();
-        showImagePreviewLoadingWindow();
+        showArchivePreviewLoadingWindow();
         List<ArchiveSupport.EntryInfo> images = collectImageEntriesForSequence(selectedEntry);
         if (images.isEmpty()) {
-            hideImagePreviewLoadingWindow();
+            hideArchivePreviewLoadingWindow();
             if (!useSavedPosition) ShortToast.show(this, R.string.archive_entry_unsupported);
             return;
         }
@@ -870,10 +871,10 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                                                   @NonNull ArchiveImageSequenceLoader.Result result,
                                                   boolean finishAfterOpen) {
         if (destroyed) return;
-        hideImagePreviewLoadingWindow();
+        hideArchivePreviewLoadingWindow();
         if (!result.selectedReady || result.imagePaths.isEmpty()) {
             if (shouldAskArchivePassword(result.extractionResult)) {
-                showPasswordDialog(passwordText -> {
+                showPasswordDialogAfterFailedResult(result.extractionResult, passwordText -> {
                     setArchivePassword(passwordText.toCharArray());
                     openArchiveImageSequence(selectedEntry, useSavedPosition);
                 });
@@ -890,12 +891,88 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                 finishAfterOpen);
     }
 
+    private void showPasswordDialogAfterFailedResult(@Nullable ArchiveSupport.ExtractionResult result,
+                                                     @NonNull PasswordCallback callback) {
+        boolean showFailureToast = PasswordChars.hasPassword(archivePassword)
+                || (result != null && result.failure == ArchiveSupport.ExtractionFailure.BAD_PASSWORD);
+        clearArchivePassword();
+        showPasswordDialogWithOptionalFailureToast(showFailureToast, callback);
+    }
+
+    private void showPasswordDialogWithOptionalFailureToast(boolean showFailureToast,
+                                                           @NonNull PasswordCallback callback) {
+        if (!showFailureToast) {
+            showPasswordDialog(callback);
+            return;
+        }
+        ShortToast.show(this, R.string.archive_password_failed);
+        mainHandler.postDelayed(() -> {
+            if (destroyed) return;
+            showPasswordDialog(callback);
+        }, ShortToast.DURATION_MS + 120L);
+    }
+
     private boolean shouldAskArchivePassword(@Nullable ArchiveSupport.ExtractionResult result) {
         return archiveFile != null
                 && ArchiveSupport.canUsePassword(archiveFile)
-                && result != null
-                && result.failure == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED
-                && (archivePassword == null || archivePassword.length == 0);
+                && isArchivePasswordFailure(result);
+    }
+
+    private boolean isArchivePasswordFailure(@Nullable ArchiveSupport.ExtractionResult result) {
+        if (result == null) return false;
+        if (result.failure == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED
+                || result.failure == ArchiveSupport.ExtractionFailure.BAD_PASSWORD) {
+            return true;
+        }
+        return result.failure == ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE
+                && PasswordChars.hasPassword(archivePassword)
+                && detailLooksLikePasswordIntegrityFailure(result.detail);
+    }
+
+    private boolean detailLooksLikePasswordIntegrityFailure(@Nullable String detail) {
+        if (detail == null) return false;
+        String lower = detail.toLowerCase(Locale.ROOT);
+        return lower.contains("crc")
+                || lower.contains("checksum")
+                || lower.contains("decryption")
+                || lower.contains("authentication")
+                || lower.contains("mac check");
+    }
+
+    private boolean shouldRetryArchivePasswordAfterListFailure(@Nullable char[] attemptedPassword,
+                                                              @NonNull Exception error) {
+        return archiveFile != null
+                && ArchiveSupport.canUsePassword(archiveFile)
+                && PasswordChars.hasPassword(attemptedPassword)
+                && looksLikeArchivePasswordFailure(error);
+    }
+
+    private boolean looksLikeArchivePasswordFailure(@NonNull Exception error) {
+        Throwable cursor = error;
+        while (cursor != null) {
+            String message = cursor.getMessage();
+            String text = (message == null || message.trim().isEmpty())
+                    ? cursor.toString()
+                    : message;
+            String lower = text.toLowerCase(Locale.ROOT);
+            if (lower.contains("bad password")
+                    || lower.contains("wrong password")
+                    || lower.contains("invalid password")
+                    || lower.contains("incorrect password")
+                    || lower.contains("password check failed")
+                    || lower.contains("password verification failed")
+                    || lower.contains("password verify failed")
+                    || lower.contains("wrong passphrase")
+                    || lower.contains("decryption failed")
+                    || lower.contains("authentication failed")
+                    || lower.contains("mac check failed")
+                    || lower.contains("crc mismatch")
+                    || lower.contains("failed crc verification")) {
+                return true;
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
     }
 
     private void showArchiveEntryExtractionFailure(@Nullable ArchiveSupport.ExtractionResult result) {
@@ -1226,13 +1303,10 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         row.setOnClickListener(v -> action.run());
     }
 
-    private void showImagePreviewLoadingWindow() {
-        hideImagePreviewLoadingWindow();
-        final boolean dark = prefs == null || prefs.shouldUseDarkColors(this);
-        final int bg = prefs != null ? prefs.getMainBgColor(this) : (dark ? Color.rgb(33, 33, 33) : Color.WHITE);
-        final int fg = prefs != null ? prefs.getMainTextColor(this) : (dark ? Color.rgb(245, 245, 245) : Color.rgb(32, 33, 36));
-        final int line = prefs != null ? prefs.getMainOutlineColor(this) : (dark ? Color.rgb(92, 92, 92) : Color.rgb(210, 210, 210));
-        final int panel = blendArchiveColors(bg, fg, isArchiveLightColor(bg) ? 0.05f : 0.08f);
+    private void showArchivePreviewLoadingWindow() {
+        hideArchivePreviewLoadingWindow();
+        final LoadingWindowTheme.Colors colors = LoadingWindowTheme.main(this, prefs);
+        final int fg = colors.fg;
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -1240,11 +1314,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         box.setMinimumWidth(dpToPx(116));
         box.setMinimumHeight(dpToPx(112));
         box.setPadding(dpToPx(20), dpToPx(22), dpToPx(20), dpToPx(20));
-        GradientDrawable shape = new GradientDrawable();
-        shape.setColor(panel);
-        shape.setCornerRadius(dpToPx(24));
-        shape.setStroke(Math.max(1, dpToPx(1)), line);
-        box.setBackground(shape);
+        box.setBackground(LoadingWindowTheme.boxDrawable(this, colors));
 
         ProgressBar spinner = new ProgressBar(this);
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
@@ -1267,21 +1337,18 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
         dialog.setContentView(box);
         dialog.setCancelable(false);
-        imagePreviewLoadingDialog = dialog;
+        LoadingWindowTheme.configureCenteredDialogWindow(dialog);
+        archivePreviewLoadingDialog = dialog;
         dialog.show();
-        android.view.Window window = dialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-        }
+        LoadingWindowTheme.configureCenteredDialogWindow(dialog);
     }
 
-    private void hideImagePreviewLoadingWindow() {
-        if (imagePreviewLoadingDialog != null) {
+    private void hideArchivePreviewLoadingWindow() {
+        if (archivePreviewLoadingDialog != null) {
             try {
-                if (imagePreviewLoadingDialog.isShowing()) imagePreviewLoadingDialog.dismiss();
+                if (archivePreviewLoadingDialog.isShowing()) archivePreviewLoadingDialog.dismiss();
             } catch (Exception ignored) {}
-            imagePreviewLoadingDialog = null;
+            archivePreviewLoadingDialog = null;
         }
     }
 
@@ -1294,17 +1361,16 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
     }
 
     private void showLoading(boolean show, @Nullable String message) {
-        if (progressBar != null) progressBar.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
+        if (show) showArchivePreviewLoadingWindow();
+        else hideArchivePreviewLoadingWindow();
         if (emptyText == null) return;
 
-        // Keep extraction/opening feedback in the thin progress bar only. Showing
-        // the bottom message row while the archive list is already visible
-        // shrinks the RecyclerView and makes the screen feel like it is pushed
-        // downward when an internal file is tapped.
+        // Keep archive preview/loading feedback in the centered loading window.
+        // A separate inline spinner changes the list height and leaves a tiny
+        // loading indicator visible beside the normal archive loading UI.
         int visibleCount = adapter != null ? adapter.getItemCount() : 0;
         if (show && message != null && visibleCount == 0) {
-            emptyText.setText(message);
-            emptyText.setVisibility(View.VISIBLE);
+            emptyText.setVisibility(View.GONE);
         } else if (show || visibleCount > 0) {
             emptyText.setVisibility(View.GONE);
         }

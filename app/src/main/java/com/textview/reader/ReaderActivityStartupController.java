@@ -179,10 +179,18 @@ final class ReaderActivityStartupController {
         });
         activity.readerView.setReaderListener(new CustomReaderView.ReaderListener() {
             @Override public void onSingleTap(float x, float y) {
+                // A single tap is never a selection gesture. If a floating
+                // selection ActionMode bubble is still showing (e.g. the
+                // selection range was already cleared by an earlier event but
+                // the bubble outlived it), dismiss it here instead of paging,
+                // so an empty-area tap reliably removes the bubble.
+                if (activity.dismissLingeringTxtSelectionBubble()) {
+                    return;
+                }
                 activity.tapNavigation().handleSingleTap(x, y);
             }
             @Override public void onTextLongPress(String selectedText, int charPosition, float x, float y) {
-                activity.showQuickTextDisplayRuleDialog(selectedText, true);
+                activity.showTxtSelectedTextActionDialog(selectedText, charPosition);
             }
             @Override public void onReaderScrollChanged() {
                 activity.onScrollChanged();
@@ -192,6 +200,9 @@ final class ReaderActivityStartupController {
             }
             @Override public void onReaderManualOverscroll(int direction) {
                 activity.handleLargeTextManualOverscroll(direction);
+            }
+            @Override public void onTextSelectionCleared() {
+                activity.onReaderTextSelectionCleared();
             }
         });
     }

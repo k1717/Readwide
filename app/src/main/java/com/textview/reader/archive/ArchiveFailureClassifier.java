@@ -75,6 +75,7 @@ final class ArchiveFailureClassifier {
 
         if (containsAny(lower,
                 "crc mismatch",
+                "failed crc verification",
                 "checksum",
                 "truncated",
                 "corrupt",
@@ -86,6 +87,10 @@ final class ArchiveFailureClassifier {
                 "missing split volume",
                 "missing volume",
                 "invalid signature",
+                "invalid egg signature",
+                "invalid alz signature",
+                "invalid rar signature",
+                "invalid zip signature",
                 "invalid header",
                 "malformed",
                 "not a valid")) {

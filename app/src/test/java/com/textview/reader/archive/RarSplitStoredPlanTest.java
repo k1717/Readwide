@@ -67,6 +67,25 @@ public class RarSplitStoredPlanTest {
     }
 
     @Test
+    public void fromChain_acceptsRar5AesStoredSplitEvenWhenSolidFlagIsSet() throws Exception {
+        RarArchiveReader.EncryptionInfo encryption = new RarArchiveReader.EncryptionInfo(
+                0L,
+                0L,
+                5,
+                new byte[] {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15},
+                new byte[] {16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31},
+                new byte[] {1,2,3,4,5,6,7,8,9,10,11,12});
+        RarArchiveReader.RarEntry first = entry("file.bin", 5, 0, false, true, encryption, 16L, true);
+        RarArchiveReader.RarEntry last = entry("file.bin", 5, 0, true, false, encryption, 16L, true);
+        assignSources(first, last);
+
+        RarSplitStoredPlan plan = RarSplitStoredPlan.fromChain(Arrays.asList(first, last));
+
+        assertEquals(RarSplitStoredPlan.Kind.RAR5_AES_STORED, plan.kind());
+        assertTrue(plan.encrypted());
+    }
+
+    @Test
     public void fromChain_rejectsCompressedSplitInStoredPath() throws Exception {
         RarArchiveReader.RarEntry first = entry("file.bin", 4, 0x33, false, true, null, 7L);
         RarArchiveReader.RarEntry last = entry("file.bin", 4, 0x33, true, false, null, 5L);
@@ -149,6 +168,30 @@ public class RarSplitStoredPlanTest {
                 rarVersion,
                 method,
                 false,
+                splitBefore,
+                splitAfter,
+                encryption,
+                0x12345678L,
+                0L);
+    }
+
+    private static RarArchiveReader.RarEntry entry(String path,
+                                                   int rarVersion,
+                                                   int method,
+                                                   boolean splitBefore,
+                                                   boolean splitAfter,
+                                                   RarArchiveReader.EncryptionInfo encryption,
+                                                   long packedSize,
+                                                   boolean solid) {
+        return new RarArchiveReader.RarEntry(
+                path,
+                false,
+                12L,
+                packedSize,
+                64L,
+                rarVersion,
+                method,
+                solid,
                 splitBefore,
                 splitAfter,
                 encryption,

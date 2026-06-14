@@ -171,7 +171,7 @@ final class RarNonSolidCompatibilityReport {
         StringBuilder sb = new StringBuilder();
         sb.append("# RAR non-solid compatibility audit\n\n");
         sb.append("This report excludes compressed-solid payload support from the compatibility view. ")
-                .append("RAR5 compressed payloads remain libarchive-primary, but eligible unencrypted single-volume RAR5 v5.0 entries have a scoped first-party Java fallback. ")
+                .append("RAR5 compressed payloads remain libarchive-primary, but covered RAR5 v5.0 entries have scoped first-party Java fallbacks. ")
                 .append("RAR5 stored/stored-split remains first-party limited.\n\n");
         sb.append("- ").append(oneLineSummary()).append('\n');
         sb.append("- counts: ").append(countsLabel()).append("\n\n");

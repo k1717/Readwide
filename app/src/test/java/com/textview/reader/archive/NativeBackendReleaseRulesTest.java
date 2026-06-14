@@ -27,7 +27,7 @@ public class NativeBackendReleaseRulesTest {
 
     @Test
     public void rarAvailabilityDoesNotDependOnPerFormatProbe() throws IOException {
-        String bridge = readProjectFile("app/src/main/java/com/textview/reader/archive/LibarchiveNativeBridge.java");
+        String bridge = readProjectFile("app/src/main/java/com/textview/reader/archive/LibarchiveNativeBridge.java", "src/main/java/com/textview/reader/archive/LibarchiveNativeBridge.java");
         assertTrue(bridge.contains("private static final String RAR_FORMAT_PROBE_STATUS"));
         assertTrue(bridge.contains("return AVAILABLE;"));
         assertTrue(bridge.contains("probeRarFormatSupportForDiagnosticsOnly"));
@@ -36,7 +36,7 @@ public class NativeBackendReleaseRulesTest {
 
     @Test
     public void libarchiveBridgeUsesFileNameOpenBeforeCallbackFallback() throws IOException {
-        String bridge = readProjectFile("app/src/main/java/com/textview/reader/archive/LibarchiveNativeBridge.java");
+        String bridge = readProjectFile("app/src/main/java/com/textview/reader/archive/LibarchiveNativeBridge.java", "src/main/java/com/textview/reader/archive/LibarchiveNativeBridge.java");
         assertTrue(bridge.contains("openReaderWithFileNames"));
         assertTrue(bridge.contains("Archive.readOpenFileName("));
         assertTrue(bridge.contains("Archive.readOpenFileNames("));
@@ -46,7 +46,7 @@ public class NativeBackendReleaseRulesTest {
 
     @Test
     public void libarchiveBridgeUsesOwnedHeaderPointerIteration() throws IOException {
-        String bridge = readProjectFile("app/src/main/java/com/textview/reader/archive/LibarchiveNativeBridge.java");
+        String bridge = readProjectFile("app/src/main/java/com/textview/reader/archive/LibarchiveNativeBridge.java", "src/main/java/com/textview/reader/archive/LibarchiveNativeBridge.java");
         assertTrue(bridge.contains("Archive.readNextHeader(archive)"));
         assertTrue(!bridge.contains("Archive.readNextHeader2("));
         assertTrue(!bridge.contains("ArchiveEntry.new2("));

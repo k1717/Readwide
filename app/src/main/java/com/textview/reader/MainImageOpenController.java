@@ -6,7 +6,6 @@ import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
-import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.view.Gravity;
 import android.widget.LinearLayout;
@@ -85,7 +84,11 @@ final class MainImageOpenController {
 
         boolean containsSelected = false;
         for (File file : snapshot) {
-            if (file == null || !file.isFile() || !FileUtils.isImageFile(file.getName())) continue;
+            // Exclude directories (even image-named ones) but keep entries that
+            // no longer stat as files: the snapshot is what the list was
+            // showing, and the viewer handles per-page load failures. This
+            // also keeps the ordering logic unit-testable without disk I/O.
+            if (file == null || file.isDirectory() || !FileUtils.isImageFile(file.getName())) continue;
             String path = file.getAbsolutePath();
             if (selectedPath.equals(path)) containsSelected = true;
             ordered.add(path);
@@ -187,11 +190,8 @@ final class MainImageOpenController {
 
     void showImageOpenLoadingWindow() {
         hideImageOpenLoadingWindow();
-        final boolean dark = activity.prefs == null || activity.prefs.shouldUseDarkColors(activity);
-        final int bg = activity.prefs != null ? activity.prefs.getMainBgColor(activity) : (dark ? Color.rgb(33, 33, 33) : Color.WHITE);
-        final int fg = activity.prefs != null ? activity.prefs.getMainTextColor(activity) : (dark ? Color.rgb(245, 245, 245) : Color.rgb(32, 33, 36));
-        final int line = activity.prefs != null ? activity.prefs.getMainOutlineColor(activity) : (dark ? Color.rgb(92, 92, 92) : Color.rgb(210, 210, 210));
-        final int panel = UiColorUtils.blendColors(bg, fg, UiColorUtils.isLightColor(bg) ? 0.05f : 0.08f);
+        final LoadingWindowTheme.Colors colors = LoadingWindowTheme.main(activity, activity.prefs);
+        final int fg = colors.fg;
 
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -199,11 +199,7 @@ final class MainImageOpenController {
         box.setMinimumWidth(activity.dpToPx(116));
         box.setMinimumHeight(activity.dpToPx(112));
         box.setPadding(activity.dpToPx(20), activity.dpToPx(22), activity.dpToPx(20), activity.dpToPx(20));
-        GradientDrawable shape = new GradientDrawable();
-        shape.setColor(panel);
-        shape.setCornerRadius(activity.dpToPx(24));
-        shape.setStroke(Math.max(1, activity.dpToPx(1)), line);
-        box.setBackground(shape);
+        box.setBackground(LoadingWindowTheme.boxDrawable(activity, colors));
 
         ProgressBar spinner = new ProgressBar(activity);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -226,13 +222,10 @@ final class MainImageOpenController {
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
         dialog.setContentView(box);
         dialog.setCancelable(false);
+        LoadingWindowTheme.configureCenteredDialogWindow(dialog);
         imageOpenLoadingDialog = dialog;
         dialog.show();
-        android.view.Window window = dialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-        }
+        LoadingWindowTheme.configureCenteredDialogWindow(dialog);
     }
 
     void hideImageOpenLoadingWindow() {

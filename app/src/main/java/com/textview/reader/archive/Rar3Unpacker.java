@@ -149,9 +149,14 @@ final class Rar3Unpacker {
         if (engine.hasFilters()) {
             output = applyFilters(output, engine.filters());
         }
-        out.writeDecodedBytes(output, 0, output.length);
+        // UnRAR-compatible boundary: a final match may run past the declared
+        // unpacked size; the surplus stays in the LZ window (preserving solid
+        // continuity) but the produced output is cut at the declared size.
+        // The CRC gate still decides whether the cut output is correct.
+        int produced = (int) Math.min(output.length, limit);
+        out.writeDecodedBytes(output, 0, produced);
 
-        return new Rar3DecodeResult(output.length, input.bitsRead(), 1,
+        return new Rar3DecodeResult(produced, input.bitsRead(), Math.max(1, engine.tableReads()),
                 collectClassicLzTrace ? new Rar3ClassicLzStateTrace().snapshot() : null);
     }
 

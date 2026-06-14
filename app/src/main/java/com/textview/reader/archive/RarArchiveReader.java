@@ -73,11 +73,34 @@ final class RarArchiveReader {
     static List<ArchiveSupport.EntryInfo> listEntries(@NonNull File archive,
                                                       @Nullable char[] password) throws IOException {
         IOException libarchiveFailure = null;
+        ArchiveSupport.PasswordRequiredException libarchivePasswordRequired = null;
+
+        // RAR5 visible-header archives can be listed by the first-party header
+        // reader without touching encrypted/compressed payloads. Prefer that
+        // route before libarchive so password-protected multi-volume archives
+        // do not spend time in the native backend just to build the preview
+        // file list. Header-encrypted archives still fall through to the
+        // existing password/unsupported handling below.
+        if (isRar5Archive(archive)) {
+            try {
+                return toEntryInfoList(readEntries(archive, password));
+            } catch (ArchiveSupport.PasswordRequiredException e) {
+                throw e;
+            } catch (IOException | SecurityException e) {
+                libarchiveFailure = asIOException(e);
+            }
+        }
+
         if (shouldPreferLibarchiveForRar(archive)) {
             try {
                 return RarLibarchiveFallback.listEntries(archive, password);
             } catch (ArchiveSupport.PasswordRequiredException e) {
-                throw e;
+                // libarchive can demand a password for listing on RAR5
+                // encryption variants it cannot verify, even when the headers
+                // are in clear (data-only encryption). First-party header
+                // parsing can still enumerate such archives, so defer this and
+                // try it before surfacing the password prompt.
+                libarchivePasswordRequired = e;
             } catch (IOException | SecurityException e) {
                 libarchiveFailure = asIOException(e);
                 // Keep first-party metadata parsing as a safe fallback for store-only or
@@ -93,6 +116,7 @@ final class RarArchiveReader {
             if (headerDecrypted != null) return headerDecrypted;
             RarHeaderEncryptionDetector.throwIfHeaderEncryptedNeedsUnsupportedPath(
                     archive, password, libarchiveFailure);
+            if (libarchivePasswordRequired != null) throw libarchivePasswordRequired;
             if (isRar4OrOlderArchive(archive)) {
                 if (libarchiveFailure != null) throw libarchiveFailure;
                 return RarLibarchiveFallback.listEntries(archive, password);
@@ -109,11 +133,17 @@ final class RarArchiveReader {
             if (headerDecrypted != null) return headerDecrypted;
             RarHeaderEncryptionDetector.throwIfHeaderEncryptedNeedsUnsupportedPath(
                     archive, password, libarchiveFailure);
+            if (libarchivePasswordRequired != null) throw libarchivePasswordRequired;
             throw e;
         }
+        return toEntryInfoList(entries);
+    }
+
+    @NonNull
+    private static List<ArchiveSupport.EntryInfo> toEntryInfoList(@NonNull List<RarEntry> entries) {
         List<ArchiveSupport.EntryInfo> result = new ArrayList<>();
         for (RarEntry entry : entries) {
-            if (entry.splitBefore) continue;
+            if (entry == null || entry.splitBefore) continue;
             result.add(new ArchiveSupport.EntryInfo(entry.path, entry.directory, entry.unpackedSize, entry.timeMillis));
         }
         return withSyntheticDirectories(result);
@@ -161,12 +191,21 @@ final class RarArchiveReader {
                                                @Nullable FileOperationProgress progress,
                                                @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
         IOException libarchiveFailure = null;
+        ArchiveSupport.PasswordRequiredException libarchivePasswordRequired = null;
         if (shouldPreferLibarchiveForRar(archive)) {
             try {
                 return RarLibarchiveFallback.extractArchiveIntoDirectory(
                         archive, targetDir, password, progress, entryProgress);
             } catch (ArchiveSupport.PasswordRequiredException e) {
-                throw e;
+                // libarchive may report PasswordRequired for RAR5 encryption
+                // variants it cannot verify even with a correct password. With
+                // a password present, fall through to the first-party
+                // decrypt+decode path; only surface this if that path also
+                // ends in PasswordRequired.
+                if (password == null || password.length == 0) {
+                    throw e;
+                }
+                libarchivePasswordRequired = e;
             } catch (IOException | SecurityException e) {
                 libarchiveFailure = asIOException(e);
                 // libarchive is the primary RAR backend. Only fall through to the
@@ -268,12 +307,20 @@ final class RarArchiveReader {
         if (normalized == null || normalized.endsWith("/")) return false;
 
         IOException libarchiveFailure = null;
+        ArchiveSupport.PasswordRequiredException libarchivePasswordRequired = null;
         if (shouldPreferLibarchiveForRar(archive)) {
             try {
                 return RarLibarchiveFallback.extractSingleEntry(
                         archive, normalized, outFile, password, null);
             } catch (ArchiveSupport.PasswordRequiredException e) {
-                throw e;
+                // libarchive can report "password required" on encryption
+                // variants it cannot verify, even when a password was given.
+                // With a password in hand, let the first-party RAR5 path try
+                // to decrypt before surfacing this; without one, rethrow now.
+                if (password == null || password.length == 0) {
+                    throw e;
+                }
+                libarchivePasswordRequired = e;
             } catch (IOException | SecurityException e) {
                 libarchiveFailure = asIOException(e);
                 // Allow only stored-entry Java fallback. Compressed RAR3/RAR4 is
@@ -339,8 +386,17 @@ final class RarArchiveReader {
                     throw RarFeatureClassifier.libarchivePrimaryRarFailure(entry, libarchiveFailure);
                 }
             }
-            extractStoredEntry(entry, outFile, password, entries, null);
+            try {
+                extractStoredEntry(entry, outFile, password, entries, null);
+            } catch (ArchiveSupport.PasswordRequiredException firstPartyPwd) {
+                // First-party path also couldn't proceed; surface the original
+                // backend password error if there was one, else this one.
+                throw libarchivePasswordRequired != null ? libarchivePasswordRequired : firstPartyPwd;
+            }
             return true;
+        }
+        if (libarchivePasswordRequired != null) {
+            throw libarchivePasswordRequired;
         }
         return false;
     }
@@ -867,8 +923,24 @@ final class RarArchiveReader {
                                                           @NonNull List<RarEntry> allEntries,
                                                           @Nullable FileOperationProgress progress) throws IOException {
         if (entry.sourceArchive == null) throw new IOException("RAR5 entry source volume is missing");
+
+        // Encrypted, solid, or split RAR5 entries are the cases where preview
+        // single-entry extraction must preserve archive order. A backend call
+        // that starts from entry.sourceArchive can be a later volume, or can
+        // try to extract the target without priming the solid window. Prefer
+        // the first-party ordered decoder here and fail honestly if it does
+        // not apply; do not accept a misleading successful backend output.
+        if (mustUseFirstPartyRar5CompressedSingleEntry(entry)) {
+            if (Rar5CompressedArchiveExtractor.tryExtractEntry(entry, allEntries, outFile, password, progress)) {
+                return;
+            }
+            throw new UnsupportedRarFeatureException(
+                    "RAR5 solid/encrypted/split single-entry extraction requires first-party ordered decode");
+        }
+
         boolean extracted = false;
         IOException backendFailure = null;
+        ArchiveSupport.PasswordRequiredException backendPasswordRequired = null;
         try {
             extracted = extractRar5SingleEntryWithFallback(
                     entry.sourceArchive,
@@ -877,20 +949,39 @@ final class RarArchiveReader {
                     password,
                     progress);
         } catch (ArchiveSupport.PasswordRequiredException e) {
-            throw e;
+            // libarchive may report "password required" even when a password
+            // was supplied if it cannot verify/handle this RAR5 encryption
+            // variant. When we actually have a password, fall through to the
+            // first-party decrypt+decode path before surfacing this; only
+            // rethrow if no password is available or the first-party path
+            // also cannot handle it.
+            if (password == null || password.length == 0) {
+                throw e;
+            }
+            backendPasswordRequired = e;
         } catch (IOException e) {
             backendFailure = e;
         }
         if (extracted) {
             return;
         }
-        if (Rar5CompressedArchiveExtractor.tryExtractEntry(entry, allEntries, outFile, progress)) {
+        if (Rar5CompressedArchiveExtractor.tryExtractEntry(entry, allEntries, outFile, password, progress)) {
             return;
+        }
+        if (backendPasswordRequired != null) {
+            throw backendPasswordRequired;
         }
         if (backendFailure != null) {
             throw backendFailure;
         }
         throw new UnsupportedRarFeatureException("RAR5 fallback could not extract entry");
+    }
+
+    private static boolean mustUseFirstPartyRar5CompressedSingleEntry(@NonNull RarEntry entry) {
+        return entry.rarVersion >= 5
+                && !entry.directory
+                && entry.method != 0
+                && (entry.encrypted() || entry.solid || entry.splitBefore || entry.splitAfter);
     }
 
     @NonNull

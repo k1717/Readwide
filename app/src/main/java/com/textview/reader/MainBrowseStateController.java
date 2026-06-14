@@ -265,6 +265,7 @@ final class MainBrowseStateController {
         activity.searchReturnDirectory = directory;
         activity.homeMode = false;
         activity.currentDirectory = directory;
+        activity.syncVisibleFolderChangeObserver();
         currentFolderFullyLoaded = true;
         currentLoadedPath = directory.getAbsolutePath();
         currentLoadedSignature = signature;

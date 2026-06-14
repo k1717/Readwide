@@ -4,8 +4,8 @@ Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF
 
 Readwide is the public successor to TextView Reader. The Android `applicationId` remains `com.textview.reader` so compatible installs can be updated when signed with the same key.
 
-- Current public version: **1.0.2**
-- Android metadata: `versionCode 10002`, `versionName "1.0.2"`
+- Current public version: **1.0.3**
+- Android metadata: `versionCode 10003`, `versionName "1.0.3"`
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
 - Release page: `https://github.com/k1717/Readwide/releases`
@@ -40,7 +40,7 @@ See `PRIVACY.md` for the full local-data and cache policy.
 
 ## Format support summary
 
-This table is a release-summary view. See `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` and the format-specific docs for precise boundaries.
+This table is a release-summary view. See the archive support matrix and the format-specific docs for precise boundaries.
 
 | Family | Current public scope |
 | --- | --- |
@@ -54,17 +54,17 @@ This table is a release-summary view. See `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_
 | ZIP/CBZ | Zip4j-primary listing/extraction, covered password and split cases, with Commons Compress fallback for selected non-encrypted methods. |
 | 7z/CB7 | Apache Commons Compress 7z path, password forwarding for covered variants, and standard `.001/.002/...` raw split chains. |
 | TAR family / single compressor streams | Commons Compress primary path for covered tar/compressor combinations and single streams. |
-| RAR/CBR | Limited extraction/read support. libarchive-android is the primary compressed-RAR backend; first-party Java handles covered stored entries and scoped unencrypted single-volume RAR3/RAR4 PPMd and RAR5 v5.0 compressed/solid cases. No broad encrypted, split, SFX, VM-filtered, or complete RAR support claim. |
+| RAR/CBR | Limited extraction/read support. libarchive-android is the primary compressed-RAR backend; first-party Java handles covered stored entries, scoped RAR3/RAR4 PPMd cases, RAR5 v5.0 compressed/solid cases, and fixture-verified RAR5 AES visible-header multi-volume cases. No broad encrypted, split, SFX, VM-filtered, or complete RAR support claim. |
 | ALZ/EGG | First-party read/extraction paths for covered Store/Deflate/BZip2/LZMA/AZO cases with CRC checks. Encrypted/split/solid EGG remains unsupported. |
 
 ## FOSS / F-Droid preparation
 
-Readwide 1.0.2 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
+Readwide 1.0.3 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
 
 - First-party code is Apache-2.0.
 - The default build does not bundle Junrar or RARLAB UnRAR-license code.
 - HWP/HWPX support uses Apache-2.0 Java libraries.
-- `THIRD_PARTY_NOTICES.md`, `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_2.md`, and `docs/SBOM_READWIDE_1_0_2.spdx.json` are included.
+- `THIRD_PARTY_NOTICES.md`, `docs/FOSS_STATUS.md`, license reports, and SBOM drafts are included where available.
 - Draft F-Droid metadata is in `fdroid/metadata/com.textview.reader.yml` and must be copied to `fdroiddata/metadata/com.textview.reader.yml` with the final immutable release commit hash.
 
 F-Droid-facing notes are in `docs/FDROID_SUBMISSION.md`.
@@ -95,7 +95,7 @@ Release signing is conditional. If the `TEXTVIEW_*` signing environment values a
 - `CHANGELOG.md` — public changelog.
 - `PATCHNOTES.md` — detailed public release notes.
 - `GITHUB_UPLOAD_NOTES.md` — GitHub upload checklist.
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_2.md` — copy-ready GitHub release notes.
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_3.md` — copy-ready GitHub release notes.
 - `docs/FDROID_SUBMISSION.md` — F-Droid submission notes.
 - `docs/FOSS_STATUS.md` — FOSS boundary and caveats.
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — archive compatibility wording source.

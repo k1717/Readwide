@@ -4,8 +4,8 @@ import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.pdf.PdfRenderer;
-import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -218,7 +218,7 @@ public class PdfReaderActivity extends AppCompatActivity {
         pdfContinuousList.setLayoutManager(lm);
         pdfContinuousList.setAdapter(pdfContinuousAdapter);
         pdfContinuousList.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
-        pdfContinuousList.setBackgroundColor(readerPanel);
+        pdfContinuousList.setBackgroundColor(readerBg);
         continuousScrollListener = new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
@@ -964,7 +964,7 @@ public class PdfReaderActivity extends AppCompatActivity {
     }
 
     void applyPdfChromeFillColors() {
-        int appbarBg = pdfChromeVisible ? readerToolbarBg : readerBg;
+        int appbarBg = readerToolbarBg;
         if (pdfAppBar != null) {
             pdfAppBar.setBackgroundColor(appbarBg);
         }
@@ -972,10 +972,10 @@ public class PdfReaderActivity extends AppCompatActivity {
             pdfToolbar.setBackgroundColor(readerToolbarBg);
         }
         if (pdfTopPageStatus != null) {
-            pdfTopPageStatus.setBackgroundColor(readerBg);
+            pdfTopPageStatus.setBackgroundColor(readerToolbarBg);
         }
         if (pdfBottomBar != null) {
-            pdfBottomBar.setBackgroundColor(readerPanel);
+            pdfBottomBar.setBackground(pdfBottomChromeBackground(readerPanel, readerBg));
         }
         if (pdfNavBarSpacer != null) {
             pdfNavBarSpacer.setBackgroundColor(readerBg);
@@ -991,6 +991,22 @@ public class PdfReaderActivity extends AppCompatActivity {
 
     int blendColors(int base, int overlay, float overlayAlpha) {
         return UiColorUtils.blendColors(base, overlay, overlayAlpha);
+    }
+
+    private Drawable pdfBottomChromeBackground(int color, int cornerFillColor) {
+        // Match the document/TXT bottom chrome: the toolbar is an overlay and the rounded
+        // top corners remain transparent, so the page behind the toolbar shows through.
+        // Do not fill the outside-corner area with black or the reader background.
+        GradientDrawable panel = new GradientDrawable();
+        panel.setColor(color);
+        float r = dpToPx(12);
+        panel.setCornerRadii(new float[]{
+                r, r,   // top-left
+                r, r,   // top-right
+                0, 0,   // bottom-right
+                0, 0    // bottom-left
+        });
+        return panel;
     }
 
     @Override
@@ -1012,7 +1028,7 @@ public class PdfReaderActivity extends AppCompatActivity {
         resolveReaderThemeColors();
         if (root != null) root.setBackgroundColor(readerBg);
         if (pdfAppBar == null) pdfAppBar = findViewById(R.id.pdf_appbar);
-        if (pdfAppBar != null) pdfAppBar.setBackgroundColor(pdfChromeVisible ? readerToolbarBg : readerBg);
+        if (pdfAppBar != null) pdfAppBar.setBackgroundColor(readerToolbarBg);
         Toolbar toolbar = findViewById(R.id.toolbar);
         if (toolbar != null) {
             pdfToolbar = toolbar;
@@ -1023,13 +1039,13 @@ public class PdfReaderActivity extends AppCompatActivity {
         if (pdfTopPageStatus == null) pdfTopPageStatus = findViewById(R.id.pdf_top_page_status);
         if (pdfTopPageStatus != null) {
             pdfTopPageStatus.setTextColor(readerFg);
-            pdfTopPageStatus.setBackgroundColor(readerBg);
+            pdfTopPageStatus.setBackgroundColor(readerToolbarBg);
         }
         if (pdfBottomBar == null) pdfBottomBar = findViewById(R.id.pdf_bottom_bar);
-        if (pdfBottomBar != null) pdfBottomBar.setBackgroundColor(readerPanel);
+        if (pdfBottomBar != null) pdfBottomBar.setBackground(pdfBottomChromeBackground(readerPanel, readerBg));
         if (pdfNavBarSpacer == null) pdfNavBarSpacer = findViewById(R.id.pdf_nav_bar_spacer);
         if (pdfNavBarSpacer != null) pdfNavBarSpacer.setBackgroundColor(readerBg);
-        if (pdfViewport != null) pdfViewport.setBackgroundColor(readerPanel);
+        if (pdfViewport != null) pdfViewport.setBackgroundColor(readerBg);
         if (pageStatus != null) pageStatus.setTextColor(readerFg);
         if (pdfPageSeekBar != null) tintSeekBar(pdfPageSeekBar);
         applyPdfChromeFillColors();
@@ -1566,7 +1582,8 @@ public class PdfReaderActivity extends AppCompatActivity {
     private void tintSeekBar(SeekBar seekBar) {
         int accent = readerFg;
         int track = readerLine;
-        seekBar.setThumb(makeStaticSeekBarThumb(accent, seekBar));
+        // Match the TXT reader slider: keep the platform/default thumb size and only tint it.
+        // A previously forced 14–20dp oval thumb made PDF/document viewers look larger.
         seekBar.setThumbTintList(android.content.res.ColorStateList.valueOf(accent));
         seekBar.setProgressTintList(android.content.res.ColorStateList.valueOf(accent));
         seekBar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(track));
@@ -1579,18 +1596,6 @@ public class PdfReaderActivity extends AppCompatActivity {
         }
     }
 
-    private Drawable makeStaticSeekBarThumb(int color, SeekBar seekBar) {
-        int fallback = dpToPx(18);
-        Drawable current = seekBar.getThumb();
-        int width = current != null ? current.getIntrinsicWidth() : fallback;
-        int height = current != null ? current.getIntrinsicHeight() : fallback;
-        int size = Math.max(dpToPx(14), Math.min(dpToPx(20), Math.max(width, height)));
-        GradientDrawable thumb = new GradientDrawable();
-        thumb.setShape(GradientDrawable.OVAL);
-        thumb.setColor(color);
-        thumb.setSize(size, size);
-        return thumb;
-    }
 
     private void addDialogAction(LinearLayout box, String text, Runnable action) {
         addDialogActionView(box, text, action);

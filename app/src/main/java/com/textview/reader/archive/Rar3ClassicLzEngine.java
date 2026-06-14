@@ -56,6 +56,7 @@ final class Rar3ClassicLzEngine {
     private RarCanonicalHuffman ldTable, ddTable, lddTable, rdTable;
     private final int[] oldDist = new int[4];
     private int lastLength;
+    private int tableReads;
     private int prevLowDist;
     private int lowDistRepCount;
     private final int[] unpOldTable = new int[HUFF_TABLE_SIZE30];
@@ -172,6 +173,11 @@ final class Rar3ClassicLzEngine {
         }
     }
 
+
+    /** Number of Huffman table (re)reads, i.e. decoded block count for diagnostics. */
+    int tableReads() {
+        return tableReads;
+    }
     boolean hasFilters() { return !filters.isEmpty(); }
 
     List<Rar3VmFilter.PendingFilter> filters() { return filters; }
@@ -184,6 +190,7 @@ final class Rar3ClassicLzEngine {
     }
 
     private boolean readTables() throws IOException {
+        tableReads++;
         in.alignToByte();
         int bitField = in.peekBits(16);
         if ((bitField & 0x8000) != 0) {

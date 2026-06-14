@@ -33,7 +33,7 @@ Readwide 1.0.2 adds best-effort automatic decoding for legacy archive entry name
 | Case | Status | Notes |
 |---|---|---|
 | Standard ZIP/CBZ stored/deflated entries | Supported | Zip4j remains primary. |
-| ZIP encryption covered by Zip4j | Supported, limited | Password prompt path is available for covered ZipCrypto/AES cases. |
+| ZIP encryption covered by Zip4j | Supported, limited | Password prompt path is available for covered ZipCrypto/AES cases. Fixture-verified: listing without a password raises the prompt by design; no/wrong/correct password classify as PASSWORD_REQUIRED / BAD_PASSWORD / success with byte-exact output. |
 | Non-encrypted uncommon ZIP methods | Supported, limited | Commons Compress fallback is attempted when Zip4j rejects a method and the bundled codecs can read it. |
 | Generic raw `.001/.002/...` numeric split chain | Supported, limited | Contiguous raw split chains are combined before normal archive handling. Gapped chains such as `.001` + `.003` with `.002` missing are corrupt/incomplete and are not silently combined. |
 | ZIP spanned `.z01/.z02 + .zip` chain | Backend-dependent / not broadly claimed | This is distinct from raw `.001` splits and is not claimed as a covered generic path. |
@@ -64,16 +64,17 @@ Readwide 1.0.2 adds best-effort automatic decoding for legacy archive entry name
 |---|---|---|
 | RAR metadata listing and safe path handling | Supported, limited | First-party parser handles metadata/safety boundaries used by the app. |
 | RAR3/RAR4 stored method-0/0x30 entries | Supported, limited | First-party Java path, with CRC and partial-output cleanup where covered. |
-| RAR5 v5.0 compressed entries (incl. solid runs), unencrypted single-volume, dict <= 64 MB | Supported, limited | First-party decoder with solid window carryover, predecessor priming, DELTA/x86/ARM filters, and per-entry CRC32 verification. Runs after the libarchive-primary attempt fails or is unavailable. Encrypted, split, and non-5.0 (RAR7-era) algorithm versions still fail cleanly as unsupported. |
+| RAR5 v5.0 compressed entries (incl. solid runs), dict <= 64 MB | Supported, limited | First-party decoder with solid window carryover, predecessor priming, DELTA/x86/ARM filters, and CRC/password-check safeguards. Single-volume unencrypted cases remain CRC32-verified. Covered visible-header AES cases use the RAR5 password-check value where present. Non-5.0 (RAR7-era) algorithm versions still fail cleanly as unsupported. |
 | RAR3/RAR4 PPMd entries (incl. PPMd solid sets), unencrypted single-volume | Supported, limited | First-party PPMd variant H engine with solid model/window carryover, predecessor priming, mandatory end-of-data marker validation, and per-entry CRC32 verification. Runs after the libarchive-primary attempt fails or is unavailable. Classic-LZ solid members, VM filters, and mid-entry table switches still fail cleanly as unsupported. |
 | Covered stored split chains | Supported, limited | Routing/validation exists for covered plain and encrypted stored chains; public wording should still be conservative. |
 | Common RAR3/RAR4 compressed non-encrypted entries | Backend-dependent | Attempted through bundled libarchive-android. Do not describe as complete RAR support. |
 | RAR5 stored entries | Supported, limited | Covered first-party stored-data paths exist. |
-| RAR5 compressed entries outside the eligible v5.0 single-volume subset | Backend-dependent / unsupported | The first-party decoder is limited to unencrypted single-volume RAR5 v5.0 entries with covered filters and CRC verification. Split, encrypted, non-5.0 algorithm versions, and unusual variants remain unsupported or backend-dependent. |
+| Covered RAR5 AES visible-header compressed split chains | Supported, limited | Fixture-verified against real encrypted multi-volume `.partN.rar` chains using password `password`: listing, opening later volumes, single-entry extraction, and whole-archive extraction pass for covered v5.0 compressed/solid entries. Continuation encryption flags may differ, but AES material must match across parts of the same file. |
+| RAR5 compressed entries outside the eligible v5.0 covered subset | Backend-dependent / unsupported | Non-5.0 algorithm versions, damaged/gapped split chains, unsupported filters, unusual encryption/header-encryption cases, and variants outside the tested visible-header AES path remain unsupported or backend-dependent. |
 | Stored split RAR chains | Supported, limited | Covered first-party path concatenates stored split payload segments and verifies CRC. New-style `.partN.rar` and old-style `.rar` + `.rNN` name discovery helpers exist; real fixture QA is still required for broad public claims. |
 | RAR3/RAR4 compressed split chains | Backend-dependent / limited | Visible-header compressed split helpers can rewrite selected chains for libarchive, but this is not broad first-party compressed split decoding. |
-| RAR5 compressed split chains | Unsupported after libarchive failure | The scoped first-party RAR5 compressed decoder is intentionally single-volume only; compressed split members must not fall through to stored-entry extraction. |
-| Encrypted RAR | Best-effort / unverified | Password passing is an attempt, not a compatibility claim. Encrypted RAR was not re-tested for this package. |
+| Other RAR5 compressed split chains | Backend-dependent / unsupported | Covered visible-header AES v5.0 chains have a first-party path; other compressed split variants must not fall through to stored-entry extraction. |
+| Encrypted RAR | Supported, limited / best-effort by variant | Covered RAR5 AES visible-header cases are tested. RAR3/RAR4 encrypted stored paths have scoped support. Other encrypted/header-encrypted RAR variants remain backend-dependent or unsupported. |
 | RAR3/RAR4 classic-LZ compressed solid, VM-filtered, compressed split, broad SFX, unusual variants | Unsupported / backend-dependent | These remain outside public compatibility claims unless a specific file succeeds through the bundled backend or a covered first-party path. |
 | RAR creation/compression | Unsupported | Extraction/read-only only. |
 
@@ -98,14 +99,14 @@ Readwide 1.0.2 adds best-effort automatic decoding for legacy archive entry name
 
 Use wording like this:
 
-> ZIP remains Zip4j-primary, TAR-family remains Commons-Compress-primary, 7z remains Java-7z-primary, and compressed RAR is attempted through bundled libarchive-android. Stored RAR entries, unencrypted single-volume RAR3/RAR4 PPMd entries (including PPMd solid comic archives), and unencrypted single-volume RAR5 v5.0 compressed entries (including solid runs) have first-party handling with CRC verification. RAR/CBR support is otherwise limited: compressed split RAR, solid+split RAR, encrypted RAR, classic-LZ compressed-solid RAR3/RAR4, broad SFX handling, VM-filtered decoding, RAR7-era algorithm versions, and encrypted-header extraction are not guaranteed. Covered stored split chains have a narrow CRC-verified path, but broad split-volume RAR support is not claimed.
+> ZIP remains Zip4j-primary, TAR-family remains Commons-Compress-primary, 7z remains Java-7z-primary, and compressed RAR is attempted through bundled libarchive-android. Stored RAR entries, scoped RAR3/RAR4 PPMd entries, covered RAR5 v5.0 compressed entries, and fixture-tested RAR5 AES visible-header multi-volume chains have first-party handling with CRC/password-check safeguards. RAR/CBR support is otherwise limited: broad compressed split RAR, broad encrypted RAR, classic-LZ compressed-solid RAR3/RAR4, broad SFX handling, VM-filtered decoding, RAR7-era algorithm versions, and encrypted-header extraction are not guaranteed. Covered stored split chains also have a narrow CRC-verified path, but complete split-volume RAR support is not claimed.
 
 Avoid wording such as:
 
 - complete RAR support;
 - RAR3/RAR4 solid supported;
-- encrypted RAR supported;
-- split/multi-volume RAR supported;
+- complete encrypted RAR support;
+- complete split/multi-volume RAR support;
 - RAR5 compressed supported by first-party Java;
 - libarchive handles all RAR variants.
 

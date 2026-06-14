@@ -88,7 +88,14 @@ public final class ArchiveFilenameDecoder {
         }
 
         String utf8 = tryDecode(raw, offset, length, StandardCharsets.UTF_8);
-        if (preferUtf8 && utf8 != null && isUsableDecodedName(utf8)) {
+        if (utf8 != null && isUsableDecodedName(utf8)
+                && (preferUtf8 || charsetForCodePage(localeCodePage) == null)) {
+            // The name contains non-ASCII bytes (checked above) and decodes as
+            // strict UTF-8. Legacy single-byte text that is accidentally valid
+            // multi-byte UTF-8 is statistically rare, while per-script scoring
+            // can be fooled by single-byte charsets that turn one CJK character
+            // into several scoring letters. Only an explicit locale code-page
+            // hint (e.g. from EGG headers) overrides this preference.
             return normalizeName(utf8);
         }
 

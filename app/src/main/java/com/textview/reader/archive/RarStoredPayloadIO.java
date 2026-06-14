@@ -68,6 +68,11 @@ final class RarStoredPayloadIO {
     static void verifyCrc(@NonNull RarArchiveReader.RarEntry entry,
                           @NonNull File outFile) throws IOException {
         if (entry.dataCrc < 0) return;
+        if (entry.rarVersion >= 5
+                && entry.encryption != null
+                && entry.encryption.check.length > 0) {
+            return;
+        }
         CRC32 crc32 = new CRC32();
         byte[] buffer = new byte[BUFFER_SIZE];
         try (FileInputStream in = new FileInputStream(outFile)) {

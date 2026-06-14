@@ -108,7 +108,7 @@ Readwide includes first-party extraction-only Java code for a scoped RAR3/RAR4 P
 
 ### RAR5 compressed decoder
 
-Readwide includes first-party extraction-only Java code for a scoped RAR5 v5.0 compressed decoding path. It is limited to covered unencrypted single-volume cases and performs CRC verification. It does not implement RAR compression, RAR creation, password recovery, or broad encrypted/split/SFX compatibility. No RARLAB UnRAR source code or libarchive source code is copied into the repository.
+Readwide includes first-party extraction-only Java code for a scoped RAR5 v5.0 compressed decoding path. It is limited to covered cases, including fixture-tested visible-header AES multi-volume chains, and uses CRC/password-check safeguards. It does not implement RAR compression, RAR creation, password recovery, or broad encrypted/split/SFX compatibility. No RARLAB UnRAR source code or libarchive source code is copied into the repository.
 
 ### AZO decoder
 

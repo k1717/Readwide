@@ -337,7 +337,6 @@ public class PrefsManager {
                 "epub_top_padding_dp",
                 "epub_bottom_padding_dp",
                 "epub_page_direction",
-                "epub_page_effect",
                 "epub_force_reader_theme_colors",
                 "dark_mode",
                 "language_mode",
@@ -458,13 +457,16 @@ public class PrefsManager {
         prefs.edit().putInt("epub_page_direction",
                 direction == EPUB_PAGE_DIRECTION_RTL ? EPUB_PAGE_DIRECTION_RTL : EPUB_PAGE_DIRECTION_LTR).apply();
     }
+    /**
+     * EPUB page transitions were removed from the WebView document-page model.
+     * Keep this accessor only for older call sites/backups; it now always means
+     * immediate snap with no animation.
+     */
     public int getEpubPageEffect() {
-        int value = prefs.getInt("epub_page_effect", EPUB_PAGE_EFFECT_SLIDE);
-        return value == EPUB_PAGE_EFFECT_NONE ? EPUB_PAGE_EFFECT_NONE : EPUB_PAGE_EFFECT_SLIDE;
+        return EPUB_PAGE_EFFECT_NONE;
     }
     public void setEpubPageEffect(int effect) {
-        prefs.edit().putInt("epub_page_effect",
-                effect == EPUB_PAGE_EFFECT_NONE ? EPUB_PAGE_EFFECT_NONE : EPUB_PAGE_EFFECT_SLIDE).apply();
+        // Deprecated no-op. The setting UI was removed and document pages snap.
     }
 
     public boolean getEpubForceReaderThemeColors() {

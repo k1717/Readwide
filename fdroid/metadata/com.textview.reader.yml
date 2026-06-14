@@ -1,6 +1,6 @@
 # Draft metadata for an F-Droid Data merge request.
 # Copy this file to fdroiddata/metadata/com.textview.reader.yml after
-# creating and pushing the immutable v1.0.2 Git tag.
+# creating and pushing the immutable v1.0.3 Git tag.
 
 Categories:
   - Reading
@@ -38,9 +38,9 @@ Description: |-
 RepoType: git
 Repo: https://github.com/k1717/Readwide.git
 Builds:
-  - versionName: '1.0.2'
-    versionCode: 10002
-    commit: v1.0.2
+  - versionName: '1.0.3'
+    versionCode: 10003
+    commit: v1.0.3
     rm:
       - gradle/wrapper/gradle-wrapper.jar
     gradle:
@@ -49,5 +49,5 @@ Builds:
       - chmod +x gradlew scripts/clean_removed_sources.sh scripts/generate_rar_fixture_reports.sh scripts/generate_archive_fixture_reports.sh
 AutoUpdateMode: Version v%v
 UpdateCheckMode: Tags
-CurrentVersion: '1.0.2'
-CurrentVersionCode: 10002
+CurrentVersion: '1.0.3'
+CurrentVersionCode: 10003

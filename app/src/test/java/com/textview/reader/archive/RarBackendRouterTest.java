@@ -8,8 +8,10 @@ import org.junit.Test;
 
 public class RarBackendRouterTest {
     @Test
-    public void routesNonSolidClassicLzToLimitedFirstPartyFallback() {
+    public void routesNonSolidClassicLzToLimitedFirstPartyFallback() throws Exception {
         RarArchiveReader.RarEntry entry = entry(0x33, false, false, false, false, 4, null);
+        // The live gate probes the first packed byte: bit 7 clear = classic LZ.
+        entry.sourceArchive = writeProbePayload(false);
 
         RarBackendDecision decision = RarBackendRouter.decideEntry(entry);
 
@@ -105,5 +107,14 @@ public class RarBackendRouterTest {
                 encryption,
                 0,
                 0);
+    }
+
+    private static java.io.File writeProbePayload(boolean ppmd) throws java.io.IOException {
+        java.io.File payload = java.io.File.createTempFile("router-probe", ".rar");
+        payload.deleteOnExit();
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(payload)) {
+            out.write(new byte[]{(byte) (ppmd ? 0x80 : 0x00), 0x00, 0x00, 0x00});
+        }
+        return payload;
     }
 }

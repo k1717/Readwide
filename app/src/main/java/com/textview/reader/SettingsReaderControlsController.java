@@ -262,7 +262,6 @@ final class SettingsReaderControlsController {
 
     private void setupEpubPageBehavior() {
         Spinner directionSpinner = activity.findViewById(R.id.spinner_epub_page_direction);
-        Spinner effectSpinner = activity.findViewById(R.id.spinner_epub_page_effect);
 
         if (directionSpinner != null) {
             String[] directionChoices = {
@@ -278,25 +277,6 @@ final class SettingsReaderControlsController {
                     prefs.setEpubPageDirection(position == PrefsManager.EPUB_PAGE_DIRECTION_RTL
                             ? PrefsManager.EPUB_PAGE_DIRECTION_RTL
                             : PrefsManager.EPUB_PAGE_DIRECTION_LTR);
-                }
-                @Override public void onNothingSelected(AdapterView<?> parent) {}
-            });
-        }
-
-        if (effectSpinner != null) {
-            String[] effectChoices = {
-                    activity.getString(R.string.epub_page_effect_slide),
-                    activity.getString(R.string.epub_page_effect_none)
-            };
-            ArrayAdapter<String> adapter = makeSettingsSpinnerAdapter(effectChoices);
-            effectSpinner.setAdapter(adapter);
-            effectSpinner.setSelection(prefs.getEpubPageEffect());
-            effectSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-                @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                    styleSpinnerText(view);
-                    prefs.setEpubPageEffect(position == PrefsManager.EPUB_PAGE_EFFECT_NONE
-                            ? PrefsManager.EPUB_PAGE_EFFECT_NONE
-                            : PrefsManager.EPUB_PAGE_EFFECT_SLIDE);
                 }
                 @Override public void onNothingSelected(AdapterView<?> parent) {}
             });

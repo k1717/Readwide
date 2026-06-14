@@ -72,8 +72,10 @@ public class Rar3PpmdBlockProbeTest {
                         entry,
                         new IOException("Could not extract archive with libarchive: RAR solid archive support unavailable."));
 
-        assertTrue(ex.getMessage().contains("solid PPMd payload"));
-        assertTrue(ex.getMessage().contains("known old-format RAR3/RAR4 solid gap"));
+        // The solid PPMd path is a live scoped first-party
+        // decoder, so the message names the decoder instead of a "known gap".
+        assertTrue(ex.getMessage(),
+                ex.getMessage().contains("first-party RAR3/RAR4 solid PPMd decoder"));
         assertTrue(ex.getMessage().contains("RAR solid archive support unavailable"));
         assertTrue(ex.getMessage().contains("ppmd probe:"));
     }

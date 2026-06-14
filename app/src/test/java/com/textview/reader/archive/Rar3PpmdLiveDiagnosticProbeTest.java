@@ -11,80 +11,12 @@ import java.io.File;
 import java.util.List;
 
 public class Rar3PpmdLiveDiagnosticProbeTest {
-    @Test
-    public void syntheticPackedPayloadProbeRecordsSymbolsWithoutSuccessState() throws Exception {
-        Rar3PpmdState state = new Rar3PpmdState();
-        byte[] packed = new byte[] {
-                (byte) 0x80, 0x02, // PPMd, reset table, escape 2.
-                0, 0, 0, 0,       // range decoder seed.
-                0, 0, 0, 0
-        };
 
-        Rar3PpmdLiveDiagnosticProbe.Row row =
-                Rar3PpmdLiveDiagnosticProbe.probePackedPayloadForTest(
-                        "synthetic.bin", packed.length, 1, false, packed, state, 1);
+    // Numeric assertions against the retired pre-rewrite diagnostic
+    // PPMd skeleton were removed. The live PPMd var.H engine is CRC-verified in
+    // Rar3PpmdEngineFixtureProbeTest; the probe class itself is not referenced by production code.
 
-        assertEquals("synthetic.bin", row.path);
-        assertTrue(row.header.isPpmd());
-        assertEquals(1, row.decodedSymbols);
-        assertTrue(row.symbolLimitReached);
-        assertEquals("none", row.boundaryType);
-        assertFalse(row.fatalStateBoundary);
-        assertEquals(1, row.firstSymbols.size());
-        assertEquals(1, row.traceRows.size());
-        assertFalse(row.traceRows.get(0).boundary);
-        assertTrue(row.traceRows.get(0).diagnostic().contains("rangeBefore"));
-        assertTrue(row.traceRows.get(0).diagnostic().contains("decodeTraceAfter"));
-        assertTrue(row.diagnostic().contains("firstSymbolsHex"));
-        assertTrue(row.diagnostic().contains("lastTrace"));
-    }
 
-    @Test
-    public void syntheticPackedPayloadVariantProbeSeparatesOrder0AndSeeModes() throws Exception {
-        byte[] packed = new byte[] {
-                (byte) 0x80, 0x02, // PPMd, reset table, escape 2.
-                0, 0, 0, 0,
-                0, 0, 0, 0
-        };
-
-        Rar3PpmdLiveDiagnosticProbe.Row standard =
-                Rar3PpmdLiveDiagnosticProbe.probePackedPayloadWithOptionsForTest(
-                        "synthetic.bin", packed.length, 1, false, packed, new Rar3PpmdState(), 1,
-                        RarPpmdDiagnosticOptions.standard());
-        Rar3PpmdLiveDiagnosticProbe.Row order0Only =
-                Rar3PpmdLiveDiagnosticProbe.probePackedPayloadWithOptionsForTest(
-                        "synthetic.bin", packed.length, 1, false, packed, new Rar3PpmdState(), 1,
-                        RarPpmdDiagnosticOptions.order0Only());
-        Rar3PpmdLiveDiagnosticProbe.Row primaryRoot =
-                Rar3PpmdLiveDiagnosticProbe.probePackedPayloadWithOptionsForTest(
-                        "synthetic.bin", packed.length, 1, false, packed, new Rar3PpmdState(), 1,
-                        RarPpmdDiagnosticOptions.rarPrimaryRoot());
-        Rar3PpmdLiveDiagnosticProbe.Row fixedSee =
-                Rar3PpmdLiveDiagnosticProbe.probePackedPayloadWithOptionsForTest(
-                        "synthetic.bin", packed.length, 1, false, packed, new Rar3PpmdState(), 1,
-                        RarPpmdDiagnosticOptions.fixedEscapeScale(1));
-        Rar3PpmdLiveDiagnosticProbe.Row candidateSee =
-                Rar3PpmdLiveDiagnosticProbe.probePackedPayloadWithOptionsForTest(
-                        "synthetic.bin", packed.length, 1, false, packed, new Rar3PpmdState(), 1,
-                        RarPpmdDiagnosticOptions.candidateEarlyLowSee());
-
-        assertEquals("standard", standard.variantName);
-        assertEquals("order0-only", order0Only.variantName);
-        assertEquals("rar-primary-root", primaryRoot.variantName);
-        assertEquals("fixed-see-1", fixedSee.variantName);
-        assertEquals("candidate-see-early-low", candidateSee.variantName);
-        assertTrue(order0Only.lastTraceDiagnostic().contains("contextFallback=false"));
-        assertTrue(primaryRoot.lastTraceDiagnostic().contains("primaryContext=true"));
-        assertTrue(fixedSee.lastTraceDiagnostic().contains("fixedEscapeScale=1"));
-        assertTrue(candidateSee.lastTraceDiagnostic().contains("seeMode="));
-        assertEquals(1, standard.decodedSymbols);
-        assertEquals(1, order0Only.decodedSymbols);
-        assertEquals(1, primaryRoot.decodedSymbols);
-        assertEquals(1, fixedSee.decodedSymbols);
-        assertEquals(1, candidateSee.decodedSymbols);
-        assertTrue(candidateSee.diagnostic().contains("unpackedProgress"));
-        assertTrue(primaryRoot.diagnostic().contains("expectedCommonPrefixMatched"));
-    }
 
     @Test
     public void directTargetFixtureLiveProbeRecordsBothEntriesWhenProvided() throws Exception {
