@@ -1,5 +1,8 @@
 # Readwide
 
+![Latest release](https://img.shields.io/github/v/release/risewide54/Readwide?label=latest)
+![Total downloads](https://img.shields.io/github/downloads/risewide54/Readwide/total?label=downloads)
+
 Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF, EPUB, Word-family documents, images, comic archives, and common archive workflows.
 
 Readwide is the public successor to TextView Reader. The Android `applicationId` remains `com.textview.reader` so compatible installs can be updated when signed with the same key.
