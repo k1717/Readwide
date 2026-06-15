@@ -32,11 +32,12 @@ The app may store local data needed for reading and file-browser behavior:
 - user-added folder shortcuts;
 - reading positions;
 - bookmarks and bookmark labels;
-- reader, toolbar, sort, and view settings;
+- reader, toolbar, sort, search, and view settings;
 - theme settings and custom reading themes;
 - optional imported fonts;
 - optional PIN-lock enabled state and salted PIN verifier;
 - PDF reading-mode preference;
+- the last reader search query and reader search option states, used only to prefill the search dialog locally;
 - saved TXT display rules, including rule text, scope, enabled state, case-sensitivity setting, regex setting, ordering, and source-file labels/paths used for current-file-only rules;
 - disposable TXT page/index cache metadata for large-file handling;
 - temporary extracted archive entries used when opening files from archives, including a separate shorter-lived sensitive cache for password-protected archive previews.
@@ -86,6 +87,12 @@ If no mail app is available, the app copies the contact address to the clipboard
 ## File permissions
 
 The app requests storage access so it can open local documents selected by the user and act as a local file browser. On Android versions that require scoped-storage handling, the app may request broader storage access for file-browser behavior. These permissions are for local file access; they are not paired with an app network upload path.
+
+## Broad file access and FileProvider scope
+
+The default manifest requests `MANAGE_EXTERNAL_STORAGE` for local file-browser behavior on Android versions where broad file browsing cannot be implemented with older storage permissions alone. This gives the app broad local-file visibility when the user grants that permission. Readwide uses that access for local browsing, opening, copying, moving, deleting, extracting, compressing, and reading files selected through the app. It is not paired with an `INTERNET` permission or developer-operated upload path.
+
+The `FileProvider` path configuration includes app-private files/cache, external app files/cache, and a broad `external-path` entry. The broad entry is used so explicit user actions such as **Open with** or **Share** can grant another selected app temporary read access to a file chosen from normal external storage. The provider is `exported=false`; access is granted through Android's URI permission mechanism for the selected intent target. After the handoff, the receiving app controls its own copy/access behavior.
 
 ## Generated cache data
 

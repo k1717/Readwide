@@ -381,6 +381,9 @@
     <string name="enter_search_text">Εισαγάγετε κείμενο αναζήτησης</string>
     <string name="found_match_status">%1$d / %2$d βρέθηκε στη θέση %3$d</string>
     <string name="search_hint_multiple">Χρησιμοποιήστε Εύρεση επόμενου/προηγούμενου ή εισαγάγετε αριθμό αντιστοίχισης και πατήστε Nο.</string>
+    <string name="search_option_case_sensitive">Διάκριση πεζών-κεφαλαίων</string>
+    <string name="search_option_whole_word">Ολόκληρη λέξη</string>
+    <string name="search_option_regex">Κανονική έκφραση</string>
     <string name="find_nth">Nο</string>
     <string name="search_occurrence_hint">Αριθμός αντιστοίχισης (προαιρετικό)</string>
     <string name="search_occurrence_invalid">Εισαγάγετε έγκυρο αριθμό αντιστοίχισης.</string>

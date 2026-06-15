@@ -381,6 +381,9 @@
     <string name="enter_search_text">ป้อนข้อความค้นหา</string>
     <string name="found_match_status">พบ %1$d / %2$d ที่ตำแหน่ง %3$d</string>
     <string name="search_hint_multiple">ใช้ ค้นหาถัดไป / ก่อนหน้า หรือป้อนหมายเลขผลลัพธ์แล้วแตะ ลำดับที่ N</string>
+    <string name="search_option_case_sensitive">ตรงตามตัวพิมพ์ใหญ่-เล็ก</string>
+    <string name="search_option_whole_word">ทั้งคำ</string>
+    <string name="search_option_regex">นิพจน์ทั่วไป</string>
     <string name="find_nth">ลำดับที่ N</string>
     <string name="search_occurrence_hint">หมายเลขผลลัพธ์ลำดับที่ N (ไม่บังคับ)</string>
     <string name="search_occurrence_invalid">ป้อนหมายเลขผลลัพธ์ที่ถูกต้อง</string>

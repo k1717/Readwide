@@ -381,6 +381,9 @@
     <string name="enter_search_text">Voer zoektekst in</string>
     <string name="found_match_status">%1$d / %2$d gevonden op positie %3$d</string>
     <string name="search_hint_multiple">Gebruik Volgende/Vorige zoeken, of voer een overeenkomstnummer in en tik op Nde.</string>
+    <string name="search_option_case_sensitive">Hoofdlettergevoelig</string>
+    <string name="search_option_whole_word">Heel woord</string>
+    <string name="search_option_regex">Reguliere expressie</string>
     <string name="find_nth">Nde</string>
     <string name="search_occurrence_hint">Overeenkomstnummer (optioneel)</string>
     <string name="search_occurrence_invalid">Voer een geldig overeenkomstnummer in.</string>

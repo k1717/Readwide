@@ -6,4 +6,4 @@ TXT keeps an exact source-page reader model. Markdown uses a rendered WebView vi
 
 The default build does not request INTERNET permission and does not include ads, analytics, telemetry SDKs, Firebase, Google Play Services, an account system, cloud sync, or a developer-operated upload backend. Android Auto Backup is disabled. Broad file access is used for local file browsing and management of user-selected folders and files.
 
-Readwide 1.0.2 is the current public package. The Android applicationId remains com.textview.reader for update compatibility with earlier compatible builds when signed with the same key.
+Readwide 1.0.4 is the current public package and uses the Android applicationId com.readwide.manager. Earlier TextView Reader/Readwide builds used a different applicationId, so 1.0.4 installs as a separate app rather than an in-place update. Existing users can carry their bookmarks, reading positions, themes, and settings across with the in-app JSON backup export/import.

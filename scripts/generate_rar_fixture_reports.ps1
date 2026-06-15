@@ -7,7 +7,7 @@ param(
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
 .\gradlew.bat testDebugUnitTest `
-  --tests "com.textview.reader.archive.ExternalArchiveFixtureSmokeTest.rarFixtureMatrixReport_generatesExtractionSmokeMarkdown" `
+  --tests "com.readwide.manager.archive.ExternalArchiveFixtureSmokeTest.rarFixtureMatrixReport_generatesExtractionSmokeMarkdown" `
   -Dtextview.externalArchiveFixtureDir="$FixtureDir" `
   -Dtextview.rarFixtureReportOutDir="$OutputDir"
 

@@ -381,6 +381,9 @@
     <string name="enter_search_text">輸入搜尋文字</string>
     <string name="found_match_status">第 %1$d / %2$d 個，位於位置 %3$d</string>
     <string name="search_hint_multiple">使用尋找下一個/上一個，或輸入符合編號並點按「第 N 個」。</string>
+    <string name="search_option_case_sensitive">區分大小寫</string>
+    <string name="search_option_whole_word">全字匹配</string>
+    <string name="search_option_regex">正規表示式</string>
     <string name="find_nth">第 N 個</string>
     <string name="search_occurrence_hint">符合編號（選填）</string>
     <string name="search_occurrence_invalid">請輸入有效的符合編號。</string>

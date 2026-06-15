@@ -1,39 +1,39 @@
-# F-Droid submission notes for Readwide 1.0.3
+# F-Droid submission notes for Readwide 1.0.4
 
 This document records the project-side preparation for an F-Droid Data merge request.
 
 ## App identity
 
 - App name: Readwide
-- Android application ID: `com.textview.reader`
-- Version name: `1.0.3`
-- Version code: `10003`
+- Android application ID: `com.readwide.manager`
+- Version name: `1.0.4`
+- Version code: `10004`
 - First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
-The Android application ID intentionally remains `com.textview.reader` for update compatibility with the earlier TextView Reader/Readwide lineage when the APK is signed with the same key.
+As of 1.0.4 the Android application ID is `com.readwide.manager`. Earlier TextView Reader/Readwide builds used a different application ID, so this is a separate app rather than an in-place update; users transfer data with the in-app JSON backup export/import.
 
 ## Draft metadata
 
 A draft metadata file is included at:
 
 ```text
-fdroid/metadata/com.textview.reader.yml
+fdroid/metadata/com.readwide.manager.yml
 ```
 
 For submission, copy it into the F-Droid Data repository as:
 
 ```text
-metadata/com.textview.reader.yml
+metadata/com.readwide.manager.yml
 ```
 
 Create and push the immutable release tag before opening the merge request:
 
 ```text
-v1.0.3
+v1.0.4
 ```
 
-The draft metadata uses `commit: v1.0.3`. Confirm that this tag points to the audited source tree before copying `fdroid/metadata/com.textview.reader.yml` into fdroiddata.
+The draft metadata uses `commit: v1.0.4`. Confirm that this tag points to the audited source tree before copying `fdroid/metadata/com.readwide.manager.yml` into fdroiddata.
 
 ## F-Droid-facing baseline
 
@@ -86,7 +86,7 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These provide title, short description, full description, and versionCode `10003` changelog text.
+These provide title, short description, full description, and versionCode `10004` changelog text.
 
 ## Conservative support wording for review
 
@@ -103,15 +103,15 @@ Use conservative wording in the merge request:
 - `PRIVACY.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_2.md`
-- `docs/SBOM_READWIDE_1_0_2.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_4.md`
+- `docs/SBOM_READWIDE_1_0_4.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
-- `fdroid/metadata/com.textview.reader.yml`
+- `fdroid/metadata/com.readwide.manager.yml`
 
 ## Remaining submitter tasks
 
 - Confirm a clean network-enabled Gradle build from the tagged source.
-- Confirm the draft metadata points to the immutable `v1.0.3` tag or to an equivalent exact commit hash requested by the reviewer.
+- Confirm the draft metadata points to the immutable `v1.0.4` tag or to an equivalent exact commit hash requested by the reviewer.
 - Confirm no optional local jars are present in `app/libs`.
 - Confirm native dependency notices for `libarchive-android` / libarchive and `zstd-jni` / Zstandard are included with binary release materials if APK assets are published outside F-Droid.

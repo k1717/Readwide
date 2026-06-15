@@ -134,7 +134,7 @@
                 android:layout_height="0dp"
                 android:layout_weight="1">
 
-                <com.textview.reader.view.TinyPartialItemClipRecyclerView
+                <com.readwide.manager.view.TinyPartialItemClipRecyclerView
                     android:id="@+id/recent_list"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
@@ -189,7 +189,7 @@
             android:clipToPadding="false"
             android:visibility="gone">
 
-            <com.textview.reader.view.TinyPartialItemClipRecyclerView
+            <com.readwide.manager.view.TinyPartialItemClipRecyclerView
                 android:id="@+id/file_list"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"

@@ -381,6 +381,9 @@
     <string name="enter_search_text">Введіть текст для пошуку</string>
     <string name="found_match_status">%1$d / %2$d знайдено на позиції %3$d</string>
     <string name="search_hint_multiple">Використовуйте Знайти наступне/попереднє або введіть номер збігу й торкніться N-го.</string>
+    <string name="search_option_case_sensitive">З урахуванням регістру</string>
+    <string name="search_option_whole_word">Слово цілком</string>
+    <string name="search_option_regex">Регулярний вираз</string>
     <string name="find_nth">N-й</string>
     <string name="search_occurrence_hint">Номер N-го збігу (необов’язково)</string>
     <string name="search_occurrence_invalid">Введіть правильний номер збігу.</string>

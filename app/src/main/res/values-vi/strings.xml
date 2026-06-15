@@ -381,6 +381,9 @@
     <string name="enter_search_text">Nhập văn bản tìm kiếm</string>
     <string name="found_match_status">Tìm thấy %1$d / %2$d ở vị trí %3$d</string>
     <string name="search_hint_multiple">Dùng Tìm tiếp / Tìm trước, hoặc nhập số thứ tự kết quả rồi chạm Thứ N.</string>
+    <string name="search_option_case_sensitive">Phân biệt chữ hoa/thường</string>
+    <string name="search_option_whole_word">Nguyên từ</string>
+    <string name="search_option_regex">Biểu thức chính quy</string>
     <string name="find_nth">Thứ N</string>
     <string name="search_occurrence_hint">Số thứ tự kết quả (tùy chọn)</string>
     <string name="search_occurrence_invalid">Nhập số thứ tự kết quả hợp lệ.</string>

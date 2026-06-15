@@ -1,16 +1,16 @@
 # Public release build checklist
 
-This file is the practical build and verification checklist for Readwide 1.0.3.
+This file is the practical build and verification checklist for Readwide 1.0.4.
 
 ## Version metadata
 
 ```text
-applicationId com.textview.reader
-versionCode 10003
-versionName 1.0.3
+applicationId com.readwide.manager
+versionCode 10004
+versionName 1.0.4
 ```
 
-The application ID remains `com.textview.reader` for update compatibility with earlier compatible builds when signed with the same key.
+As of 1.0.4 the application ID is `com.readwide.manager`. Earlier builds used `com.textview.reader`, so 1.0.4 installs as a separate app; users transfer data with the in-app JSON backup export/import.
 
 ## Keystore policy
 
@@ -45,6 +45,18 @@ Optional source-builder check without private signing values:
 unset TEXTVIEW_KEYSTORE_PATH TEXTVIEW_KEYSTORE_PASSWORD TEXTVIEW_KEY_ALIAS TEXTVIEW_KEY_PASSWORD
 ./gradlew clean assembleRelease
 ```
+
+## Release notice files
+
+Keep these files with source and binary release materials:
+
+- `LICENSE`
+- `NOTICE`
+- `THIRD_PARTY_NOTICES.md`
+- `PRIVACY.md`
+- `docs/FOSS_STATUS.md`
+- `docs/LICENSE_REPORT_READWIDE_1_0_4.md`
+- `docs/SBOM_READWIDE_1_0_4.spdx.json`
 
 ## APK verification
 
@@ -90,8 +102,8 @@ Expected result:
 
 Before opening an F-Droid Data merge request:
 
-1. Publish a final Git tag, e.g. `v1.0.3`.
-2. Replace the commit placeholder in `fdroid/metadata/com.textview.reader.yml` with the immutable tag commit.
+1. Publish a final Git tag, e.g. `v1.0.4`.
+2. Replace the commit placeholder in `fdroid/metadata/com.readwide.manager.yml` with the immutable tag commit.
 3. Confirm `gradle/wrapper/gradle-wrapper.jar` is removed by the F-Droid metadata `rm` rule.
 4. Confirm a no-private-keystore `assembleRelease` build works.
 5. Keep RAR and HWP/HWPX support wording conservative.
@@ -100,11 +112,11 @@ Before opening an F-Droid Data merge request:
 
 Run representative files through these paths before publishing:
 
-- TXT large-file open, page tap, slider, search, bookmark save/restore, and legacy bookmark fallback.
-- Markdown WebView open, visual page navigation, bookmarks, and table/code rendering.
-- EPUB reflow and fixed-layout samples, including cover/title page and image-heavy pages.
-- OOXML Word document open and bookmark/search paths.
-- HWP/HWPX text-first open, encrypted-HWP failure, and archive-internal HWP/HWPX open.
+- TXT large-file open, page tap, slider, search options, end-of-file search reveal, bookmark save/restore, and legacy bookmark fallback.
+- Markdown WebView open, visual page navigation, bookmarks, document search, and table/code rendering.
+- EPUB reflow and fixed-layout samples, including cover/title page, image-heavy pages, and document search highlight/reveal.
+- OOXML Word document open, bookmark paths, and document search highlight/reveal.
+- HWP/HWPX text-first open, encrypted-HWP failure, archive-internal HWP/HWPX open, and document search highlight/reveal.
 - PDF single-page and vertical-continuous modes, zoom/pan, bookmarks, slider, and toolbar hidden/visible state.
 - ZIP/CBZ, 7z/CB7, RAR/CBR, TAR-family, ALZ, and EGG fixture coverage according to `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`.
 - Android 3-button navigation and gesture navigation safe areas across TXT, WebView documents, PDF, and image viewer.

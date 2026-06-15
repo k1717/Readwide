@@ -22,15 +22,15 @@ def hasReleaseSigning =
         textviewSecret("TEXTVIEW_KEY_PASSWORD", "") != ""
 
 android {
-    namespace 'com.textview.reader'
+    namespace 'com.readwide.manager'
     compileSdk 35
 
     defaultConfig {
-        applicationId "com.textview.reader"
+        applicationId "com.readwide.manager"
         minSdk 24
         targetSdk 35
-        versionCode 10003
-        versionName "1.0.3"
+        versionCode 10004
+        versionName "1.0.4"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         // Release APKs keep Android ARM ABIs only.
@@ -100,7 +100,7 @@ android {
 // existed in an older working tree. A stale RarJunrarFallback.java would still be
 // compiled and fail because the Junrar dependency is intentionally gone.
 def textviewRemovedLegacySourceFiles = [
-        'src/main/java/com/textview/reader/archive/RarJunrarFallback.java'
+        'src/main/java/com/readwide/manager/archive/RarJunrarFallback.java'
 ]
 
 tasks.register('deleteRemovedLegacySourceFiles') {

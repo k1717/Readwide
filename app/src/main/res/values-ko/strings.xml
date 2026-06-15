@@ -394,6 +394,9 @@
     <string name="enter_search_text">검색할 텍스트를 입력하세요</string>
     <string name="found_match_status">%2$d개 중 %1$d번째, 위치 %3$d</string>
     <string name="search_hint_multiple">다음/이전 찾기 또는 번호 입력 후 n번째 버튼으로 이동합니다.</string>
+    <string name="search_option_case_sensitive">대소문자 구분</string>
+    <string name="search_option_whole_word">단어 단위</string>
+    <string name="search_option_regex">정규식</string>
     <string name="find_nth">n번째</string>
     <string name="search_occurrence_hint">n번째 일치 항목 (선택)</string>
     <string name="search_occurrence_invalid">올바른 일치 항목 번호를 입력하세요.</string>

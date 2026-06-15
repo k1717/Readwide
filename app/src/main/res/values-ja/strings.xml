@@ -381,6 +381,9 @@
     <string name="enter_search_text">検索する文字を入力</string>
     <string name="found_match_status">%2$d 件中 %1$d 件目、位置 %3$d</string>
     <string name="search_hint_multiple">次/前を検索するか、一致番号を入力して「N番目」をタップしてください。</string>
+    <string name="search_option_case_sensitive">大文字と小文字を区別</string>
+    <string name="search_option_whole_word">単語単位</string>
+    <string name="search_option_regex">正規表現</string>
     <string name="find_nth">N番目</string>
     <string name="search_occurrence_hint">一致番号（任意）</string>
     <string name="search_occurrence_invalid">有効な一致番号を入力してください。</string>

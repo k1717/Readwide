@@ -402,6 +402,9 @@
     <string name="enter_search_text">Enter search text</string>
     <string name="found_match_status">%1$d / %2$d found at position %3$d</string>
     <string name="search_hint_multiple">Use Find Next / Previous, or enter a match number and tap Nth.</string>
+    <string name="search_option_case_sensitive">Case sensitive</string>
+    <string name="search_option_whole_word">Whole word</string>
+    <string name="search_option_regex">Regular expression</string>
     <string name="find_nth">Nth</string>
     <string name="search_occurrence_hint">Nth match number (optional)</string>
     <string name="search_occurrence_invalid">Enter a valid match number.</string>

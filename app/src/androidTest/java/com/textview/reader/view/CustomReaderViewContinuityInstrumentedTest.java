@@ -1,4 +1,4 @@
-package com.textview.reader.view;
+package com.readwide.manager.view;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -11,8 +11,8 @@ import android.content.Context;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
-import com.textview.reader.util.FileUtils;
-import com.textview.reader.util.LargeTextContinuityMath;
+import com.readwide.manager.util.FileUtils;
+import com.readwide.manager.util.LargeTextContinuityMath;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;

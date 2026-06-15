@@ -18,6 +18,6 @@ if ($Password.Length -gt 0) {
     $argsList += "-Dtextview.archiveFixturePassword=$Password"
 }
 
-& .\gradlew.bat testDebugUnitTest --tests com.textview.reader.archive.ExternalArchiveFixtureSmokeTest --tests com.textview.reader.archive.ArchiveFixtureMatrixReportTest @argsList
+& .\gradlew.bat testDebugUnitTest --tests com.readwide.manager.archive.ExternalArchiveFixtureSmokeTest --tests com.readwide.manager.archive.ArchiveFixtureMatrixReportTest @argsList
 
 Write-Host "Archive fixture reports written under: $OutDir"

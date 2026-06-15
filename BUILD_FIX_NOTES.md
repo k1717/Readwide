@@ -1,11 +1,11 @@
-# Readwide 1.0.2 Build / Release Notes
+# Readwide 1.0.4 Build / Release Notes
 
-This file records source-build notes for the current public package: **Readwide 1.0.2**.
+This file records source-build notes for the current public package: **Readwide 1.0.4**.
 
 ## Version metadata
 
-- Android metadata is `versionCode 10002`, `versionName "1.0.2"`.
-- The Android package/application ID remains `com.textview.reader` for update compatibility with earlier compatible builds when signed with the same key.
+- Android metadata is `versionCode 10004`, `versionName "1.0.4"`.
+- As of 1.0.4 the Android package/application ID is `com.readwide.manager`. Earlier builds used `com.textview.reader`, so 1.0.4 installs as a separate app rather than an in-place update; users transfer data with the in-app JSON backup export/import.
 - The default source package is Junrar-free, UnRAR-license-fallback-free, analytics-free, ads-free, and does not request the `INTERNET` permission.
 
 ## Stale removed-source cleanup
@@ -59,5 +59,5 @@ zstd-jni desktop resource binaries (`win/**`, `darwin/**`, `linux/**`, `freebsd/
 
 - The default source package contains no optional decoder jar under `app/libs`.
 - Release signing is conditional, so source-build review can run `assembleRelease` without a private developer keystore.
-- `fdroid/metadata/com.textview.reader.yml` is a draft metadata file; replace its commit placeholder with the final immutable `v1.0.2` commit hash before F-Droid submission.
+- `fdroid/metadata/com.readwide.manager.yml` is a draft metadata file; confirm it points to the immutable `v1.0.4` tag (or the exact commit hash requested by the reviewer) before F-Droid submission.
 - If any local jar or native binary is added later, re-audit that custom build before describing it as FOSS.

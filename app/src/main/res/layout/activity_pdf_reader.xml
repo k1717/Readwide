@@ -26,7 +26,7 @@
             android:background="#000000"
             app:titleTextColor="#FFFFFFFF" />
 
-        <com.textview.reader.ui.PageCounterTextView
+        <com.readwide.manager.ui.PageCounterTextView
             android:id="@+id/pdf_top_page_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

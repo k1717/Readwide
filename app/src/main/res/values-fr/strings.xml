@@ -381,6 +381,9 @@
     <string name="enter_search_text">Saisissez le texte à rechercher</string>
     <string name="found_match_status">%1$d / %2$d trouvé à la position %3$d</string>
     <string name="search_hint_multiple">Utilisez Suivant/Précédent, ou saisissez un numéro de correspondance et touchez Nᵉ.</string>
+    <string name="search_option_case_sensitive">Sensible à la casse</string>
+    <string name="search_option_whole_word">Mot entier</string>
+    <string name="search_option_regex">Expression régulière</string>
     <string name="find_nth">Nᵉ</string>
     <string name="search_occurrence_hint">Numéro de correspondance (facultatif)</string>
     <string name="search_occurrence_invalid">Saisissez un numéro de correspondance valide.</string>

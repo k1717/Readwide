@@ -381,6 +381,9 @@
     <string name="enter_search_text">Arama metni gir</string>
     <string name="found_match_status">%1$d / %2$d eşleşme %3$d konumunda bulundu</string>
     <string name="search_hint_multiple">Sonrakini/Öncekini Bul düğmelerini kullanın veya eşleşme numarası girip Ninciye dokunun.</string>
+    <string name="search_option_case_sensitive">Büyük/küçük harf duyarlı</string>
+    <string name="search_option_whole_word">Tam sözcük</string>
+    <string name="search_option_regex">Düzenli ifade</string>
     <string name="find_nth">Ninci</string>
     <string name="search_occurrence_hint">Ninci eşleşme numarası (isteğe bağlı)</string>
     <string name="search_occurrence_invalid">Geçerli bir eşleşme numarası girin.</string>

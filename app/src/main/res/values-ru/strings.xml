@@ -381,6 +381,9 @@
     <string name="enter_search_text">Введите текст для поиска</string>
     <string name="found_match_status">%1$d / %2$d найдено в позиции %3$d</string>
     <string name="search_hint_multiple">Используйте Найти далее/ранее или введите номер совпадения и нажмите «N-е».</string>
+    <string name="search_option_case_sensitive">С учётом регистра</string>
+    <string name="search_option_whole_word">Слово целиком</string>
+    <string name="search_option_regex">Регулярное выражение</string>
     <string name="find_nth">N-е</string>
     <string name="search_occurrence_hint">Номер совпадения (необязательно)</string>
     <string name="search_occurrence_invalid">Введите допустимый номер совпадения.</string>

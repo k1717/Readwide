@@ -13,7 +13,7 @@
         android:orientation="vertical"
         android:background="#121212">
 
-        <com.textview.reader.ui.PageCounterTextView
+        <com.readwide.manager.ui.PageCounterTextView
             android:id="@+id/document_top_page_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

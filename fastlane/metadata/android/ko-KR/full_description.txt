@@ -6,4 +6,4 @@ TXT는 정확한 원문 페이지 모델을 유지합니다. Markdown은 WebView
 
 기본 빌드는 INTERNET 권한을 요청하지 않으며 광고, 분석, 원격 텔레메트리 SDK, Firebase, Google Play Services, 계정 시스템, 클라우드 동기화, 개발자 운영 업로드 서버를 포함하지 않습니다. Android Auto Backup도 비활성화되어 있습니다. 넓은 파일 접근 권한은 사용자가 선택한 로컬 폴더와 파일을 읽고 관리하기 위해 사용됩니다.
 
-Readwide 1.0.2는 현재 공개 패키지입니다. 동일한 서명키로 이전 호환 빌드를 업데이트할 수 있도록 Android applicationId는 com.textview.reader로 유지됩니다.
+Readwide 1.0.4는 현재 공개 패키지이며 Android applicationId로 com.readwide.manager를 사용합니다. 이전 TextView Reader/Readwide 빌드는 다른 applicationId를 사용했기 때문에 1.0.4는 기존 앱을 덮어쓰는 업데이트가 아니라 별도의 앱으로 설치됩니다. 기존 사용자는 앱 내 JSON 백업 내보내기/가져오기로 북마크, 읽기 위치, 테마, 설정을 그대로 옮길 수 있습니다.

@@ -1,17 +1,17 @@
-# GitHub upload notes for Readwide 1.0.3
+# GitHub upload notes for Readwide 1.0.4
 
 Use this checklist before publishing the public GitHub source and release assets.
 
 ## Identity
 
 - App name: Readwide
-- Android `applicationId`: `com.textview.reader`
-- `versionName`: `1.0.3`
-- `versionCode`: `10003`
+- Android `applicationId`: `com.readwide.manager`
+- `versionName`: `1.0.4`
+- `versionCode`: `10004`
 - First-party license: Apache-2.0
 - Repository: `https://github.com/k1717/Readwide`
 
-The `applicationId` intentionally remains `com.textview.reader` for update compatibility with earlier compatible builds when signed with the same key.
+As of 1.0.4 the `applicationId` is `com.readwide.manager`. Earlier TextView Reader/Readwide builds used a different application ID, so 1.0.4 installs as a separate app rather than an in-place update. Existing users transfer data with the in-app JSON backup export/import.
 
 ## Files expected in the source release
 
@@ -27,12 +27,13 @@ Keep these files in the public source package:
 - `CONTRIBUTING.md`
 - `docs/FOSS_STATUS.md`
 - `docs/FDROID_SUBMISSION.md`
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_3.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_2.md`
-- `docs/SBOM_READWIDE_1_0_2.spdx.json`
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_4.md`
+- `docs/LICENSE_REPORT_READWIDE_1_0_4.md`
+- `docs/SBOM_READWIDE_1_0_4.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
-- `fdroid/metadata/com.textview.reader.yml`
+- `docs/TXT_SEARCH_USAGE.md`
+- `fdroid/metadata/com.readwide.manager.yml`
 - `fastlane/metadata/android/en-US/*`
 - `fastlane/metadata/android/ko-KR/*`
 
@@ -86,6 +87,7 @@ Use:
 - "HWP/HWPX text-first read-only support"
 - "limited/scoped/backend-dependent archive support"
 - "RAR/CBR support remains limited"
+- "shared reader search options for TXT and document viewers"
 
 Avoid:
 
@@ -99,8 +101,8 @@ Avoid:
 
 Before opening an F-Droid Data merge request:
 
-1. Tag the exact release commit, e.g. `v1.0.3`.
-2. Confirm `fdroid/metadata/com.textview.reader.yml` points to the immutable `v1.0.3` release tag, or replace it with the exact commit hash if the F-Droid reviewer requests a hash.
+1. Tag the exact release commit, e.g. `v1.0.4`.
+2. Confirm `fdroid/metadata/com.readwide.manager.yml` points to the immutable `v1.0.4` release tag, or replace it with the exact commit hash if the F-Droid reviewer requests a hash.
 3. Confirm release builds work without private signing environment variables.
 4. Confirm no optional local jars are present under `app/libs`.
 5. Keep broad-storage and no-network privacy rationale in the merge request.

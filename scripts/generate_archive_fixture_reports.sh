@@ -16,6 +16,6 @@ if [[ -n "$PASSWORD" ]]; then
   ARGS+=("-Dtextview.archiveFixturePassword=$PASSWORD")
 fi
 
-./gradlew testDebugUnitTest --tests com.textview.reader.archive.ExternalArchiveFixtureSmokeTest --tests com.textview.reader.archive.ArchiveFixtureMatrixReportTest "${ARGS[@]}"
+./gradlew testDebugUnitTest --tests com.readwide.manager.archive.ExternalArchiveFixtureSmokeTest --tests com.readwide.manager.archive.ArchiveFixtureMatrixReportTest "${ARGS[@]}"
 
 echo "Archive fixture reports written under: $OUT_DIR"

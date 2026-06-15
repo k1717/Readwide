@@ -54,14 +54,15 @@ After the app installs:
 2. Open a `.txt` file.
 3. Drag-scroll normally.
 4. Use the TXT bottom toolbar: Find, Go to Page/Position, Bookmarks, Settings, and More.
-5. Add a TXT bookmark, then close and reopen the file to confirm the saved position restores.
+5. Add a TXT bookmark, then close and reopen the file to confirm the saved position restores. Also search for a word near the end of a TXT file and confirm the result is pulled above the search dialog.
 6. In the TXT viewer, use **More > Add display rule** on a disposable TXT file and confirm the visible text changes after the rule window closes.
 7. In Settings opened from that TXT viewer, check **TXT Display Rules** and confirm the rule appears with its enabled/scope/case/regex options.
 8. Only with a disposable TXT file, test **Edit Actual TXT File** once in copy mode and confirm it creates or overwrites the same `*_edited.txt` copy.
 9. Open a PDF and verify horizontal/vertical reading mode behavior.
 10. Open a ZIP/CBZ archive and verify archive browsing, selected-image-first viewing, next/previous lazy image loading, and zoom-to-detail behavior if you changed archive/image code.
 11. Open an EPUB and verify Settings > EPUB layout changes apply after returning to the viewer.
-12. Change the reader theme from Settings while an EPUB is open and confirm the page refreshes to the new theme.
+12. In Markdown, EPUB, HWP/HWPX, and Word-family viewers, test document search previous/next, nth-result jump, highlight visibility, and bottom-dialog reveal near the end of the document.
+13. Change the reader theme from Settings while an EPUB is open and confirm the page refreshes to the new theme.
 13. Export and import a backup if you need to verify bookmarks/settings backup behavior.
 
 ## 6. Current notes

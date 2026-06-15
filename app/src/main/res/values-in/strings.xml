@@ -381,6 +381,9 @@
     <string name="enter_search_text">Masukkan teks pencarian</string>
     <string name="found_match_status">%1$d / %2$d ditemukan pada posisi %3$d</string>
     <string name="search_hint_multiple">Gunakan Temukan Berikutnya/Sebelumnya, atau masukkan nomor kecocokan lalu ketuk Ke-n.</string>
+    <string name="search_option_case_sensitive">Peka huruf besar/kecil</string>
+    <string name="search_option_whole_word">Seluruh kata</string>
+    <string name="search_option_regex">Ekspresi reguler</string>
     <string name="find_nth">Ke-n</string>
     <string name="search_occurrence_hint">Nomor kecocokan ke-n (opsional)</string>
     <string name="search_occurrence_invalid">Masukkan nomor kecocokan yang valid.</string>

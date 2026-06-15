@@ -1,17 +1,17 @@
-# FOSS status for Readwide 1.0.2
+# FOSS status for Readwide 1.0.4
 
-This is the project-level FOSS status note for the default Readwide 1.0.2 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
+This is the project-level FOSS status note for the default Readwide 1.0.4 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
 
 ## Current assessment
 
-The default Readwide 1.0.2 source package is intended to remain FOSS-friendly:
+The default Readwide 1.0.4 source package is intended to remain FOSS-friendly:
 
 - First-party source is licensed under Apache License 2.0.
 - Source code needed for the default build is included in the repository/source package.
 - No proprietary app EULA is added by the project.
 - The default build does not bundle Junrar or RARLAB UnRAR-license code.
 - The default manifest does not request `INTERNET`.
-- The app contains no ads, analytics, telemetry SDK, Firebase, Google Play Services dependency, account system, cloud sync, or in-app network update checker.
+- The app contains no ads, analytics, telemetry SDK, Firebase, Google Play Services dependency, account system, cloud sync, developer-operated upload backend, or in-app network update checker.
 - Android Auto Backup is disabled with `android:allowBackup="false"`.
 - Private signing files, build outputs, and optional proprietary binary dependencies are not part of the default source package.
 
@@ -31,7 +31,7 @@ The default Readwide 1.0.2 source package is intended to remain FOSS-friendly:
 | hwpxlib | HWPX read/text extraction backend | Apache-2.0 |
 | xunazo-derived AZO port | EGG AZO extraction | zlib license notice retained in source |
 
-See `docs/LICENSE_REPORT_READWIDE_1_0_2.md` and `THIRD_PARTY_NOTICES.md` for detail.
+See `docs/LICENSE_REPORT_READWIDE_1_0_4.md`, `docs/SBOM_READWIDE_1_0_4.spdx.json`, and `THIRD_PARTY_NOTICES.md` for detail.
 
 ## RAR / CBR boundary
 
@@ -56,6 +56,12 @@ HWP/HWPX support is read-only and text-first:
 - Readwide does not bundle Hancom proprietary SDKs, LibreOffice, a server conversion service, or non-FOSS HWP code.
 - Hancom-compatible layout rendering, editing/writing, original page-count parity, and password/encrypted HWP support are not claimed.
 
+## Permission and privacy boundary
+
+The app is a local file browser/reader and requests broad storage access for that purpose. Broad storage access is not a FOSS license issue by itself, but it is a privacy/review-sensitive Android permission and must stay documented in `PRIVACY.md`, the F-Droid metadata, and release notes.
+
+The `FileProvider` configuration includes broad external storage sharing support so user-triggered open-with/share actions can grant temporary read access to selected files outside app-private storage. The provider is not exported and grants access through Android intent URI grants; this behavior still needs to remain documented because static scanners may flag broad `external-path` use.
+
 ## Optional local jars
 
 The default source package does not require optional local jars under `app/libs`. If a developer adds local jars in a private fork, that is a separate custom build and must be re-audited before calling the resulting APK FOSS.
@@ -77,13 +83,14 @@ When distributing APK/AAB files, keep these alongside the binary release assets:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_2.md`
-- `docs/SBOM_READWIDE_1_0_2.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_4.md`
+- `docs/SBOM_READWIDE_1_0_4.spdx.json`
 
 The Android packaging block excludes duplicate dependency `META-INF/LICENSE*` / `META-INF/NOTICE*` resources to avoid resource merge conflicts. That does not remove the obligation to provide project-level and third-party notices with source and binary release materials.
 
 ## Caveats
 
-- `docs/LICENSE_REPORT_READWIDE_1_0_2.md` and `docs/SBOM_READWIDE_1_0_2.spdx.json` are direct-dependency/source-declared drafts, not a fully resolved transitive Gradle SBOM.
+- `docs/LICENSE_REPORT_READWIDE_1_0_4.md` and `docs/SBOM_READWIDE_1_0_4.spdx.json` are direct-dependency/source-declared drafts, not a fully resolved transitive Gradle SBOM.
 - A strict repository submission should regenerate a resolved dependency report/SBOM from a clean, network-enabled build environment.
+- Native Maven dependencies such as libarchive-android and zstd-jni may require additional explanation or source-build handling for strict source-only repositories.
 - Archive compatibility claims must follow `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`.

@@ -1,6 +1,6 @@
 # Keep Bookmark/ReaderState models for JSON serialization.
--keep class com.textview.reader.model.** { *; }
--keepclassmembers class com.textview.reader.model.** {
+-keep class com.readwide.manager.model.** { *; }
+-keepclassmembers class com.readwide.manager.model.** {
     public *;
 }
 

@@ -18,4 +18,4 @@ $env:TEXTVIEW_EXTERNAL_ARCHIVE_FIXTURE_DIR = $FixtureDir
 Write-Host "Project root: $ProjectRoot"
 Write-Host "Fixture dir: $env:TEXTVIEW_EXTERNAL_ARCHIVE_FIXTURE_DIR"
 
-.\gradlew.bat :app:testDebugUnitTest --tests com.textview.reader.archive.ExternalArchiveFixtureSmokeTest --offline
+.\gradlew.bat :app:testDebugUnitTest --tests com.readwide.manager.archive.ExternalArchiveFixtureSmokeTest --offline

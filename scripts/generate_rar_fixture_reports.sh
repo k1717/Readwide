@@ -12,7 +12,7 @@ OUT_DIR="${2:-build/reports/rar-fixtures}"
 mkdir -p "$OUT_DIR"
 
 ./gradlew testDebugUnitTest \
-  --tests 'com.textview.reader.archive.ExternalArchiveFixtureSmokeTest.rarFixtureMatrixReport_generatesExtractionSmokeMarkdown' \
+  --tests 'com.readwide.manager.archive.ExternalArchiveFixtureSmokeTest.rarFixtureMatrixReport_generatesExtractionSmokeMarkdown' \
   -Dtextview.externalArchiveFixtureDir="$FIXTURE_DIR" \
   -Dtextview.rarFixtureReportOutDir="$OUT_DIR"
 

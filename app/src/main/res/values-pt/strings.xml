@@ -381,6 +381,9 @@
     <string name="enter_search_text">Digite o texto de pesquisa</string>
     <string name="found_match_status">%1$d / %2$d encontrado na posição %3$d</string>
     <string name="search_hint_multiple">Use Localizar próximo/anterior ou digite um número de correspondência e toque em Nº.</string>
+    <string name="search_option_case_sensitive">Diferenciar maiúsculas</string>
+    <string name="search_option_whole_word">Palavra inteira</string>
+    <string name="search_option_regex">Expressão regular</string>
     <string name="find_nth">Nº</string>
     <string name="search_occurrence_hint">Número de correspondência (opcional)</string>
     <string name="search_occurrence_invalid">Digite um número de correspondência válido.</string>

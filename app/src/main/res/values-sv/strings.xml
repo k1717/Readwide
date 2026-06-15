@@ -381,6 +381,9 @@
     <string name="enter_search_text">Ange söktext</string>
     <string name="found_match_status">%1$d / %2$d hittades vid position %3$d</string>
     <string name="search_hint_multiple">Använd Sök nästa/föregående, eller ange ett träffnummer och tryck på N:e.</string>
+    <string name="search_option_case_sensitive">Skiftlägeskänslig</string>
+    <string name="search_option_whole_word">Helt ord</string>
+    <string name="search_option_regex">Reguljärt uttryck</string>
     <string name="find_nth">N:e</string>
     <string name="search_occurrence_hint">Träffnummer (valfritt)</string>
     <string name="search_occurrence_invalid">Ange ett giltigt träffnummer.</string>

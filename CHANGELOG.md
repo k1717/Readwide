@@ -1,5 +1,56 @@
 # Changelog
 
+## Readwide 1.0.4 - 2026-06-14
+
+### Release scope
+
+- Android metadata is `versionCode 10004` and `versionName "1.0.4"`.
+- Readwide moves to a new Android applicationId, `com.readwide.manager`, completing the rename away from the earlier TextView Reader package identity.
+- Because the application ID changed, 1.0.4 is installed as a separate app rather than an in-place update over older TextView Reader/Readwide builds.
+- This release keeps the 1.0.3 document-fidelity cycle and focuses on package identity cleanup, reader-search consistency, document-viewer search behavior, and translated UI clipping fixes.
+
+### Final changes included in this upload
+
+**Package identity**
+
+- Renamed the Android applicationId and source package from `com.textview.reader` to `com.readwide.manager`, including all package declarations, the FileProvider authority (derived from `${applicationId}`), layout custom-view references, ProGuard keep rules, fixture report scripts, F-Droid metadata, and release materials.
+- Existing users are not auto-updated to 1.0.4 because the package identity differs; bookmarks, reading positions, themes, and settings transfer through the in-app JSON backup export/import, which is independent of package name and signing key.
+
+**PDF viewer**
+
+- Improved PDF page sharpness by rendering pages above 1:1 screen density (supersampling) and downscaling them for display, which noticeably crispens text. The page is displayed at its fit width with the aspect ratio preserved, so it is never stretched (including when the toolbar is hidden and the viewport grows taller). Per-page pixel budgets still bound memory, so large pages are capped automatically.
+- Fixed the PDF viewer hiding the lower part of the page behind the bottom toolbar when chrome is visible. The floating toolbar's height is now reserved at the bottom of the page viewport while it is shown (and released when hidden), so a full PDF page sits between the top title area and the toolbar. Applies to both single-page and continuous-scroll modes and on first load.
+
+**Image viewer**
+
+- Raised the preview decode budget from 12 to 16 megapixels, so higher-resolution images are shown at full detail before any downsampling. Larger images are still downsampled to fit the screen and memory, with the existing out-of-memory fallback intact.
+
+**TXT find-in-page**
+
+- Fixed TXT find-in-page being extremely slow for common words in some files. The matcher now prepares the comparison view once per search and reuses it, and the large-file engine scans each line in a single pass, keeping returned offsets aligned to the original text for bookmarks and page anchors.
+- Improved TXT find-in-page with case-sensitive, whole-word, and regular-expression options. Unicode normalization is always applied, overlapping literal occurrences are counted correctly, and the in-memory and large-file search paths share the same matcher and option semantics.
+- Improved TXT search reveal near the end of a file. Search jumps now use a search-only virtual bottom scroll allowance so a match in the final lines can be pulled above the search dialog without changing normal paging, manual scrolling, bookmarks, or saved-position restore.
+
+**Document-viewer search (Markdown, EPUB, HWP/HWPX, Word)**
+
+- Reworked Markdown, EPUB, HWP/HWPX, and Word-family document-viewer search to use the same TXT-style search options and match counter instead of relying on WebView native find. The document search dialog supports previous/next movement, nth-match jumps, current/total status, case-sensitive mode, whole-word mode, and regex mode.
+- Fixed document-viewer search result visibility. Current matches now use explicit highlighted spans and popup-safe reveal logic; the selected result is placed near the upper safe area, with top/bottom document spacer handling so matches near the beginning or end of a rendered document can still be moved into view above the bottom search dialog.
+- Reduced same-page Markdown search bounce by updating the current highlighted match inside the existing DOM when possible instead of reloading the whole page for every previous/next movement.
+- Strengthened EPUB/HWP/Word search highlight styling so reader/theme CSS does not erase the yellow/current-result highlight.
+
+**Toolbar and dialogs**
+
+- Fixed tap-to-turn paging firing when tapping the visible bottom toolbar (and top bar). The toolbar floats over the full-screen reader/document/PDF view, so a tap on it also fell inside the page-turn zone underneath. Taps that land on a shown chrome bar now toggle/keep the toolbar instead of turning the page; with the toolbar hidden, the whole view still pages normally. Fixed in the TXT, document (Markdown/EPUB/Word/HWP/HWPX), and PDF viewers.
+
+- Fixed reader toolbar buttons running their action multiple times when tapped repeatedly, which could open duplicate dialogs or trigger repeated loading. Toolbar taps are now debounced, and only one positioned reader dialog is shown at a time.
+- Fixed the settings "Button / icon order" rows (main filter, TXT, EPUB/Word, PDF) being vertically clipped under longer translations such as German. The rows changed from a fixed `48dp` height to `wrap_content` with a `48dp` minimum height and vertical padding, so longer labels wrap instead of being cut off.
+- Applied the same wrapping fix to the sort dialog's options and to the TXT search dialog's option/action rows, whose fixed-height controls could clip longer translations.
+
+**Manifest and distribution**
+
+- Removed the dead `android:requestLegacyExternalStorage="true"` manifest flag, which had no effect under `targetSdk 35` and added an unnecessary legacy-storage signal for static scanners. File access behavior is unchanged.
+- Public GitHub/F-Droid materials were updated for the 1.0.4 package, including the renamed F-Droid metadata file, Fastlane changelogs, and the package/version references in the release and submission docs.
+
 ## Readwide 1.0.3 - 2026-06-14
 
 ### Release scope
