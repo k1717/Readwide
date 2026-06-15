@@ -7,16 +7,8 @@ Readwide is the public successor to TextView Reader. As of 1.0.4 the Android `ap
 ![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)
 ![Total downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)
 
-<<<<<<< HEAD
 - Current public version: **1.0.4**
 - Android metadata: `versionCode 10004`, `versionName "1.0.4"`
-=======
-![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)
-![Total downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)
-
-- Current public version: **1.0.3**
-- Android metadata: `versionCode 10003`, `versionName "1.0.3"`
->>>>>>> 194df8725b928fbf5b59774765fcdb66cc5a206a
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
 - Release page: `https://github.com/k1717/Readwide/releases`
