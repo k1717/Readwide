@@ -1,0 +1,13 @@
+Readwide
+Copyright 2026 k1717 aka Delphinium
+
+This product includes first-party Readwide source code licensed under
+the Apache License, Version 2.0. The applied first-party copyright notice is
+recorded above and in LICENSE.
+
+This product includes a modified Java port of the xunazo AZO decoder for
+extraction-only EGG method-3 payload support. xunazo is distributed under the
+zlib license and is credited in THIRD_PARTY_NOTICES.md and in the source file
+that contains the modified port.
+
+Third-party dependency notices are maintained in THIRD_PARTY_NOTICES.md.

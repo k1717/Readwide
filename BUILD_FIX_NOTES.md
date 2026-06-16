@@ -1,0 +1,63 @@
+# Readwide 1.0.4 Build / Release Notes
+
+This file records source-build notes for the current public package: **Readwide 1.0.4**.
+
+## Version metadata
+
+- Android metadata is `versionCode 10004`, `versionName "1.0.4"`.
+- As of 1.0.4 the Android package/application ID is `com.readwide.manager`. Earlier builds used `com.textview.reader`, so 1.0.4 installs as a separate app rather than an in-place update; users transfer data with the in-app JSON backup export/import.
+- The default source package is Junrar-free, UnRAR-license-fallback-free, analytics-free, ads-free, and does not request the `INTERNET` permission.
+
+## Stale removed-source cleanup
+
+If this ZIP is extracted over an older working folder, removed files from the old tree can remain on disk. In particular, stale archive fallback source files from older development builds can fail compilation because their dependencies are no longer part of the public source package.
+
+The app Gradle module registers `deleteRemovedLegacySourceFiles` and wires it into `preBuild` and Java compile tasks. Manual cleanup scripts are also available:
+
+```powershell
+.\scripts\clean_removed_sources.ps1
+```
+
+```bash
+./scripts/clean_removed_sources.sh
+```
+
+## Gradle / Android Studio notes
+
+This source uses the modern Gradle layout for the Android project root:
+
+- root `plugins { ... }` block;
+- `pluginManagement` and `dependencyResolutionManagement` in `settings.gradle`;
+- Android Gradle Plugin `9.2.0`;
+- Gradle wrapper `9.4.1`;
+- `compileSdk 35` and `targetSdk 35`;
+- Java compatibility set to 17.
+
+Open the repository root folder in Android Studio, not the `app/` folder, then click **Sync Now**. If Android Studio asks to install SDK Platform 35 or Build Tools, click **Install**.
+
+## Current Gradle notes
+
+This package removes the deprecated AGP compatibility toggles that previously produced AGP-10 removal warnings. The project uses `android.dependency.useConstraints=false` instead of the deprecated `android.dependency.excludeLibraryComponentsFromConstraints=true` flag. If a future build still prints warnings, treat the first red compile/test failure as the priority and clean non-blocking Gradle warnings separately.
+
+`settings.gradle` intentionally avoids an extra Java toolchain resolver plugin. Local builds should run with Android Studio's bundled JDK 17 or another compatible JDK configured through `JAVA_HOME`.
+
+## Archive backend notes
+
+- ZIP/CBZ uses Zip4j as the primary path, with Apache Commons Compress fallback for non-encrypted methods where bundled codecs can read them.
+- 7z/CB7 and TAR-family paths use Apache Commons Compress.
+- ALZ/EGG are limited first-party extraction paths with documented method boundaries.
+- RAR/CBR is read/extract only: first-party Java handles metadata/stored-entry boundaries and `libarchive-android` is attempted for common compressed cases. Do not advertise complete RAR support.
+- No manual `libarchive.so`, NDK/CMake flag, Junrar dependency, or optional local decoder jar is required for the default build.
+
+## APK size / ABI notes
+
+Release APK packaging filters Android native ABIs to `armeabi-v7a` and `arm64-v8a`. This removes x86/x86_64 native payloads from bundled native dependencies while preserving ARM device support.
+
+zstd-jni desktop resource binaries (`win/**`, `darwin/**`, `linux/**`, `freebsd/**`, `aix/**`, `sunos/**`) are excluded from Android packaging. Android ARM native libraries under `lib/armeabi-v7a/` and `lib/arm64-v8a/` are preserved.
+
+## FOSS / F-Droid build boundary
+
+- The default source package contains no optional decoder jar under `app/libs`.
+- Release signing is conditional, so source-build review can run `assembleRelease` without a private developer keystore.
+- `fdroid/metadata/com.readwide.manager.yml` is a draft metadata file; confirm it points to the immutable `v1.0.4` tag (or the exact commit hash requested by the reviewer) before F-Droid submission.
+- If any local jar or native binary is added later, re-audit that custom build before describing it as FOSS.

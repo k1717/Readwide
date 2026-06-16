@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Theme overlays applied via ContextThemeWrapper to dialog EditTexts in the reader.
+        The reader has its own theme (ThemeManager.getActiveTheme()) that is independent
+        of the system night mode, so dialog widgets must be styled by the READER background
+        brightness, not by system day/night. These overlays force the local context to a
+        consistent palette so the caret, the selection-handle teardrop, and the floating
+        ActionMode toolbar all stay readable regardless of which system mode the user is in.
+
+        Used in conjunction with EditText.setTextCursorDrawable() in tintReaderDialogEditHandles
+        which still picks the caret color based on isLightColor(readerBgColor).
+    -->
+
+    <!-- Reader background is LIGHT: dialog uses a light surface, dark caret/handle -->
+    <style name="ThemeOverlay.TextView.ReaderDialogLight" parent="ThemeOverlay.MaterialComponents.Light">
+        <item name="android:isLightTheme">true</item>
+        <item name="colorControlActivated">#222222</item>
+        <item name="colorControlNormal">#222222</item>
+        <item name="colorAccent">#222222</item>
+        <item name="android:textColorPrimary">#1C1D1F</item>
+        <item name="android:textColorSecondary">#5A5E63</item>
+        <item name="android:textColorHint">#8E9197</item>
+        <item name="android:colorBackground">#FAFAFA</item>
+        <item name="android:textSelectHandle">@drawable/text_select_handle_middle</item>
+        <item name="android:textSelectHandleLeft">@drawable/text_select_handle_left</item>
+        <item name="android:textSelectHandleRight">@drawable/text_select_handle_right</item>
+    </style>
+
+    <!-- Reader background is DARK: dialog uses a dark surface, light caret/handle -->
+    <style name="ThemeOverlay.TextView.ReaderDialogDark" parent="ThemeOverlay.MaterialComponents.Light">
+        <item name="android:isLightTheme">true</item>
+        <item name="colorControlActivated">#FFFFFF</item>
+        <item name="colorControlNormal">#FFFFFF</item>
+        <item name="colorAccent">#FFFFFF</item>
+        <item name="android:textColorPrimary">#F5F6F8</item>
+        <item name="android:textColorSecondary">#BDC1C6</item>
+        <item name="android:textColorHint">#7A7E83</item>
+        <item name="android:colorBackground">#1F2123</item>
+        <item name="android:textSelectHandle">@drawable/text_select_handle_middle_white</item>
+        <item name="android:textSelectHandleLeft">@drawable/text_select_handle_left_white</item>
+        <item name="android:textSelectHandleRight">@drawable/text_select_handle_right_white</item>
+    </style>
+
+
+    <style name="TextAppearance.TextView.ImageViewer.Title" parent="TextAppearance.Widget.AppCompat.Toolbar.Title">
+        <item name="android:textSize">17sp</item>
+        <item name="android:textColor">#FFFFFFFF</item>
+    </style>
+
+    <style name="TextAppearance.TextView.ImageViewer.Subtitle" parent="TextAppearance.Widget.AppCompat.Toolbar.Subtitle">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">#FFD2D2D2</item>
+    </style>
+
+</resources>

@@ -1,0 +1,10 @@
+Readwide 1.0.2
+- Added a dedicated Markdown WebView reader while preserving the exact TXT reader model for plain TXT.
+- Added text-first, read-only HWP/HWPX support via Apache-2.0 hwplib/hwpxlib.
+- Grouped OOXML Word, HWP/HWPX, and recognized legacy DOC files under the compact Word filter; legacy DOC rendering remains unsupported.
+- Unified rendered-document bookmark display for Markdown, EPUB, Word, HWP/HWPX, and PDF around content/text anchors plus separate page/position metadata.
+- Refined WebView document chrome, compact page labels, bottom toolbar shape, slider behavior, Markdown CSS isolation, and Android navigation-inset handling without changing TXT paging.
+- Tightened 7z/CB7 split/password handling, decoded-stream limits, single-entry extraction cleanup, and solid-member drain safety.
+- Kept RAR/CBR support conservatively scoped, including only documented unencrypted single-volume decode-only cases; no full RAR/encrypted RAR/broad split RAR claim.
+- Updated the project-supplied Readwide launcher source reference while leaving checked-in Android launcher PNG resources unchanged.
+- Updated GitHub/F-Droid documentation, privacy notes, third-party notices, license report, SBOM draft, and release checklist for the 1.0.2 package.

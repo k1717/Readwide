@@ -1,0 +1,7 @@
+Readwide 1.0.0
+
+- 공개 앱 라인을 TextView Reader에서 Readwide로 변경했습니다.
+- 기존 설치본 업데이트 호환성을 위해 Android 패키지 식별자는 유지했습니다.
+- INTERNET 권한 없음, 광고 없음, 분석 없음, 계정 시스템 없음이라는 로컬 우선 개인정보 기준을 유지했습니다.
+- 기본 FOSS 지향 빌드에서 Junrar / UnRAR-license fallback 코드를 제거했습니다.
+- 공개 배포 문서, 의존성 notice, SBOM 초안, F-Droid 제출 참고 문서를 추가했습니다.

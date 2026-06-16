@@ -1,0 +1,56 @@
+# Draft metadata for an F-Droid Data merge request.
+# Copy this file to fdroiddata/metadata/com.readwide.manager.yml after
+# creating and pushing the immutable v1.0.4 Git tag.
+
+Categories:
+  - Reading
+License: Apache-2.0
+AuthorName: k1717
+AuthorEmail: readwide.kj7w5@addy.io
+SourceCode: https://github.com/k1717/Readwide
+IssueTracker: https://github.com/k1717/Readwide/issues
+Changelog: https://github.com/k1717/Readwide/blob/main/CHANGELOG.md
+Summary: Local-first reader and file browser
+Description: |-
+  Readwide is a local-first Android reader and file browser for TXT,
+  Markdown, PDF, EPUB, Word-family documents, images, comic archives, and
+  common archive workflows.
+
+  It supports local reading, recent files, bookmarks, folder shortcuts,
+  search/filtering, shared reader search options, archive browsing,
+  archive-backed image viewing, and local copy/move/delete/extract/compress
+  queues.
+
+  The default build does not request INTERNET permission and does not include
+  ads, analytics, telemetry SDKs, Firebase, Google Play Services, an account
+  system, cloud sync, or a developer-operated upload backend. Android Auto
+  Backup is disabled.
+
+  Broad file access is requested because Readwide is a local file browser and
+  reader for user-selected folders, documents, images, and archives.
+
+  HWP/HWPX support is text-first and read-only through Apache-2.0 Java
+  libraries. RAR/CBR support is limited and does not claim complete RAR,
+  encrypted RAR, broad split RAR, or SFX compatibility.
+
+  Readwide 1.0.4 moves to a new Android applicationId, com.readwide.manager.
+  Earlier TextView Reader/Readwide builds used a different applicationId, so
+  this is installed as a separate app rather than an in-place update; existing
+  users can carry bookmarks, reading positions, themes, and settings across
+  with the in-app JSON backup export/import.
+RepoType: git
+Repo: https://github.com/k1717/Readwide.git
+Builds:
+  - versionName: '1.0.4'
+    versionCode: 10004
+    commit: v1.0.4
+    rm:
+      - gradle/wrapper/gradle-wrapper.jar
+    gradle:
+      - 'yes'
+    prebuild:
+      - chmod +x gradlew scripts/clean_removed_sources.sh scripts/generate_rar_fixture_reports.sh scripts/generate_archive_fixture_reports.sh
+AutoUpdateMode: Version v%v
+UpdateCheckMode: Tags
+CurrentVersion: '1.0.4'
+CurrentVersionCode: 10004

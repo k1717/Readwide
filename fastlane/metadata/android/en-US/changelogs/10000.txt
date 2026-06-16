@@ -1,0 +1,7 @@
+Readwide 1.0.0
+
+- Rebranded the public app line from TextView Reader to Readwide.
+- Kept the existing Android package identity for update compatibility.
+- Kept the local-first privacy baseline: no INTERNET permission, no ads, no analytics, and no account system.
+- Removed Junrar / UnRAR-license fallback code from the default FOSS-oriented build.
+- Added public release documentation, dependency notices, SBOM draft, and F-Droid submission notes.

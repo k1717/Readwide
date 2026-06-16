@@ -1,0 +1,12 @@
+Readwide 1.0.3
+- DOCX, HWPX, HWP 문서 뷰어 충실도 작업을 시작했습니다. 이번 목표는 L3 내용 충실 HTML 미리보기(문서 구조, 인라인 서식, 표, 이미지)이며, 정확한 페이지 나눔/폰트 metric/편집/완전한 floating object 배치는 목표가 아닙니다.
+- 공유 rendered-document 모델(page container, 문단/run 스타일, 표, 이미지, 텍스트 앵커, 미지원 placeholder)을 추가했고, 변환 실패 시 기존 semantic HTML 경로로 fallback합니다.
+- DOCX의 문단, run/character 스타일과 style 상속, numbering.xml 순서/불릿 목록, 기본 표(너비/열 비율/세로 병합/테두리 색/음영), extent 힌트가 있는 인라인 이미지, 각주/미주, 머리글/바닥글을 rendered 모델로 연결했습니다.
+- DOCX의 Symbol/Wingdings 불릿을 표준 Unicode 글머리로 정규화하고, 목록 문단에서 Word hanging indent가 이중 적용되던 문제를 고쳤습니다.
+- DOCX rendered 표는 셀 overflow를 clamp하고 단어 단위로 줄바꿈해 좁은 폰 화면에서 글자가 옆 셀을 침범하지 않으며, 첫 열의 긴 라벨도 가로 스크롤 없이 읽히도록 했습니다.
+- DOCX 강의노트 수식을 렌더합니다. 인라인 및 보수적인 $$...$$ 디스플레이 수식, 분수, 제곱근, 위/아래 첨자, 그리스 문자, 기호를 지원하며 spell/grammar marker로 run이 쪼개진 수식도 처리합니다.
+- HWP/HWPX rendered 출력에서 부분 괘선 표 테두리를 변별로, 글머리표 기호, 빈 레이아웃 셀의 원본 높이, 글자 크기/굵게/기울임/색, 정렬, 수평선을 보존합니다.
+- RAR5 AES visible-header 멀티볼륨 처리와 암호 압축파일 미리보기 캐시를 보강해, 오래되었거나 잘못된 비밀번호로 만든 미리보기 이미지를 재사용하지 않고 다시 생성합니다.
+- EPUB/Markdown/문서/PDF 페이지가 slide/fade 애니메이션 없이 snap되도록 했고, 툴바가 숨겨졌을 때의 compact 페이지 카운터 높이를 정리했습니다.
+- 새로 추가된 압축파일 지원 범위 안내, 북마크 "파일 없음" 안내, 탭/이미지 페이징 라벨을 기본 언어를 제외한 20개 언어로 모두 번역했습니다. 앞으로 번역이 없는 문자열은 영어로 표시됩니다.
+- 1.0.3 문서 뷰어 충실도 매트릭스를 포함해 GitHub/F-Droid 문서를 1.0.3 기준으로 갱신했습니다.

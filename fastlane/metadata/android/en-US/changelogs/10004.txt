@@ -1,0 +1,7 @@
+Readwide 1.0.4
+- Reworked single-page PDF zoom: double-tap and pinch-to-zoom now keep the spot you tap or pinch under your finger, without the position jump or flicker the previous version could show, and text sharpens in place when the zoom settles. Turn pages by swiping or by tapping the left/right edges, and tap the center to toggle the toolbar; page-turn taps respond immediately. (Vertical continuous mode keeps the existing zoom for now.)
+- Moved to a new Android applicationId, com.readwide.manager, completing the rename from the earlier TextView Reader lineage. Because the application ID changed, 1.0.4 installs as a separate app rather than an in-place update over older builds; use the in-app JSON backup export/import to carry bookmarks, reading positions, themes, and settings across.
+- Unified reader search options across TXT, Markdown, EPUB, HWP/HWPX, and Word-family document viewers: case-sensitive, whole-word, regular-expression, nth-result jumps, and current/total match status where supported.
+- Improved search result reveal: TXT results near the end of a file and document-viewer results near the top or bottom are pulled into a visible area instead of staying behind the search dialog.
+- Fixed the settings "Button / icon order" rows and sort/search controls being vertically clipped in longer translations; rows now grow or wrap instead of cutting text off at a fixed height.
+- Removed the obsolete requestLegacyExternalStorage manifest flag under target SDK 35. File access behavior is unchanged.

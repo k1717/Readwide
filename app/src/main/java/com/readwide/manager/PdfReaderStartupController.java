@@ -1,0 +1,159 @@
+package com.readwide.manager;
+
+import android.graphics.Color;
+import android.os.Bundle;
+import android.view.View;
+import android.view.ViewConfiguration;
+import android.view.ViewGroup;
+import android.view.WindowManager;
+
+import androidx.activity.OnBackPressedCallback;
+import androidx.annotation.NonNull;
+import androidx.appcompat.widget.Toolbar;
+
+import com.readwide.manager.util.BookmarkManager;
+
+final class PdfReaderStartupController {
+    private final PdfReaderActivity activity;
+
+    PdfReaderStartupController(@NonNull PdfReaderActivity activity) {
+        this.activity = activity;
+    }
+
+    void onCreateAfterSuper(Bundle savedInstanceState) {
+        ViewerRegistry.activate(activity);
+
+        activity.resolveReaderThemeColors();
+        activity.touchSlop = ViewConfiguration.get(activity).getScaledTouchSlop();
+
+        activity.setContentView(R.layout.activity_pdf_reader);
+        activity.applyDocumentSystemBarColors();
+        com.readwide.manager.util.EdgeToEdgeUtil.applyPdfReaderInsets(
+                activity,
+                activity.findViewById(R.id.pdf_root),
+                activity.findViewById(R.id.pdf_appbar),
+                activity.findViewById(R.id.pdf_bottom_bar),
+                activity.findViewById(R.id.pdf_nav_bar_spacer),
+                activity.findViewById(R.id.pdf_viewport),
+                () -> activity.pdfChromeVisible);
+        activity.applyDocumentSystemBarColors();
+
+        bindToolbar();
+        bindViews();
+        activity.pdfToolbarController = new com.readwide.manager.controller.ReaderToolbarController(
+                activity, activity.findViewById(R.id.pdf_bottom_bar));
+        activity.pdfToolbarController.prepareToolbarContainer();
+        activity.pdfToolbarController.setupScrollableActionStrip(
+                R.id.pdf_toolbar_action_scroll,
+                R.id.pdf_bottom_actions,
+                5,
+                0);
+        ButtonOrderManager.applyOrder(activity, activity.prefs, ButtonOrderManager.GROUP_PDF_VIEWER);
+
+        activity.setupContinuousPdfList();
+        activity.bookmarkManager = BookmarkManager.getInstance(activity);
+        activity.verticalPageSlideMode = activity.getSharedPreferences("pdf_reader", activity.MODE_PRIVATE)
+                .getBoolean("vertical_page_slide_mode", false);
+        activity.styleControls();
+        activity.setupControls();
+        activity.installPdfGestures();
+
+        activity.getOnBackPressedDispatcher().addCallback(activity, new OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() { activity.finish(); }
+        });
+
+        WindowManager.LayoutParams lp = activity.getWindow().getAttributes();
+        lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+        activity.getWindow().setAttributes(lp);
+
+        activity.loadPdfFromIntent();
+    }
+
+    void onNewIntent(@NonNull android.content.Intent intent) {
+        activity.saveReadingState();
+        activity.setIntent(intent);
+        activity.loadPdfFromIntent();
+    }
+
+    void onResume() {
+        activity.cancelPdfBackgroundMemoryTrim();
+        activity.resolveReaderThemeColors();
+        activity.applyDocumentSystemBarColors();
+        ButtonOrderManager.applyOrder(activity, activity.prefs, ButtonOrderManager.GROUP_PDF_VIEWER);
+        activity.styleControls();
+        activity.restorePdfBitmapsAfterBackgroundTrimIfNeeded();
+    }
+
+    private void bindToolbar() {
+        Toolbar toolbar = activity.findViewById(R.id.toolbar);
+        activity.setSupportActionBar(toolbar);
+        if (activity.getSupportActionBar() != null) {
+            activity.getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+        }
+        toolbar.setTitleTextColor(Color.WHITE);
+        toolbar.setNavigationIcon(activity.tintedBackIcon());
+    }
+
+    private void bindViews() {
+        activity.root = activity.findViewById(R.id.pdf_root);
+        activity.pdfAppBar = activity.findViewById(R.id.pdf_appbar);
+        activity.pdfToolbar = activity.findViewById(R.id.toolbar);
+        activity.pdfTopPageStatus = activity.findViewById(R.id.pdf_top_page_status);
+        installStandaloneTopPageStatusInsets();
+        activity.pdfBottomBar = activity.findViewById(R.id.pdf_bottom_bar);
+        activity.pdfNavBarSpacer = activity.findViewById(R.id.pdf_nav_bar_spacer);
+        activity.pageImage = activity.findViewById(R.id.pdf_page_image);
+        activity.pdfContinuousList = activity.findViewById(R.id.pdf_continuous_list);
+        activity.progressBar = activity.findViewById(R.id.pdf_progress);
+        activity.pageStatus = activity.findViewById(R.id.pdf_page_status);
+        activity.pdfPageSeekBar = activity.findViewById(R.id.pdf_page_seek_bar);
+        activity.prevButton = activity.findViewById(R.id.pdf_prev);
+        activity.nextButton = activity.findViewById(R.id.pdf_next);
+        activity.slideModeButton = activity.findViewById(R.id.pdf_slide_toggle);
+        activity.pageButton = activity.findViewById(R.id.pdf_page);
+        activity.bookmarkButton = activity.findViewById(R.id.pdf_bookmark);
+        activity.zoomMoreButton = activity.findViewById(R.id.pdf_zoom_more);
+        activity.pdfViewport = activity.findViewById(R.id.pdf_viewport);
+        activity.pdfHScroll = activity.findViewById(R.id.pdf_h_scroll);
+        activity.pdfVScroll = activity.findViewById(R.id.pdf_v_scroll);
+        activity.pdfPageMatrixView = activity.findViewById(R.id.pdf_page_matrix_view);
+        if (activity.pdfPageMatrixView != null) {
+            activity.pdfPageMatrixView.setMaxScale(4.5f);
+            activity.pdfPageMatrixView.setTapListener(activity::onMatrixTap);
+            activity.pdfPageMatrixView.setTapZoneQuery(activity::isMatrixPageTurnZone);
+            activity.pdfPageMatrixView.setSharpenRequestListener(activity::renderSharpenPatch);
+            activity.pdfPageMatrixView.setPageSwipeListener(activity::onMatrixPageSwipe);
+        }
+        // Reserve space for the floating toolbar on first load so the initial
+        // page is not hidden behind it when chrome starts visible.
+        if (activity.pdfViewport != null) {
+            activity.pdfViewport.post(activity::applyPdfViewportBottomInset);
+        }
+    }
+
+    private void installStandaloneTopPageStatusInsets() {
+        View topPageStatus = activity.findViewById(R.id.pdf_top_page_status);
+        if (topPageStatus == null) return;
+        final int baseLeft = topPageStatus.getPaddingLeft();
+        final int baseTop = topPageStatus.getPaddingTop();
+        final int baseRight = topPageStatus.getPaddingRight();
+        final int baseBottom = topPageStatus.getPaddingBottom();
+        final int baseHeight = activity.dpToPx(32f);
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(topPageStatus, (v, insets) -> {
+            // pdf_appbar already owns the status-bar/cutout top inset through
+            // EdgeToEdgeUtil.applyPdfReaderInsets().  The collapsed PDF page
+            // counter must therefore reserve only its compact content height;
+            // adding bars.top again made the PDF strip taller than the Word/EPUB/HWP strip.
+            ViewGroup.LayoutParams lp = v.getLayoutParams();
+            int targetHeight = baseHeight;
+            if (lp != null && lp.height != targetHeight) {
+                lp.height = targetHeight;
+                v.setLayoutParams(lp);
+            }
+            v.setMinimumHeight(targetHeight);
+            v.setPadding(baseLeft, baseTop, baseRight, baseBottom);
+            return insets;
+        });
+        androidx.core.view.ViewCompat.requestApplyInsets(topPageStatus);
+    }
+}
