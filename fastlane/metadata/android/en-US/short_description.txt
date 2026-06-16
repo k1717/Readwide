@@ -1,1 +1,0 @@
-Local-first reader and file browser
