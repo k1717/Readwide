@@ -16,12 +16,26 @@ public final class TapZoneMath {
                                    int tapZoneMode,
                                    int leadingPercent,
                                    int trailingPercent) {
+        return actionForTap(x, y, width, height, hasContent, tapPagingEnabled,
+                tapZoneMode, (float) leadingPercent, (float) trailingPercent);
+    }
+
+    /** Float-percent variant, for viewers that use fractional tap zones (e.g. 27.5%). */
+    public static int actionForTap(float x,
+                                   float y,
+                                   int width,
+                                   int height,
+                                   boolean hasContent,
+                                   boolean tapPagingEnabled,
+                                   int tapZoneMode,
+                                   float leadingPercent,
+                                   float trailingPercent) {
         if (!hasContent || !tapPagingEnabled) return ACTION_MENU;
 
-        int leading = clamp(leadingPercent, 5, 80);
-        int trailing = clamp(trailingPercent, 5, 80);
-        if (leading + trailing > 90) {
-            trailing = Math.max(5, 90 - leading);
+        float leading = clampF(leadingPercent, 5f, 80f);
+        float trailing = clampF(trailingPercent, 5f, 80f);
+        if (leading + trailing > 90f) {
+            trailing = Math.max(5f, 90f - leading);
         }
 
         float leadingRatio = leading / 100f;
@@ -44,7 +58,7 @@ public final class TapZoneMath {
         return ACTION_MENU;
     }
 
-    private static int clamp(int value, int min, int max) {
+    private static float clampF(float value, float min, float max) {
         return Math.max(min, Math.min(max, value));
     }
 }

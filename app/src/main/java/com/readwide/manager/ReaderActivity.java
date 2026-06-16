@@ -738,6 +738,26 @@ public class ReaderActivity extends AppCompatActivity {
         readerActions().openHomeFromViewer();
     }
 
+    void toggleScreenOrientation() {
+        com.readwide.manager.util.ScreenOrientationToggle.toggle(this);
+    }
+
+    void updateRotationButtonIcon() {
+        com.readwide.manager.util.ScreenOrientationToggle.applyButtonIcon(
+                this,
+                findViewById(R.id.btn_screen_rotation),
+                R.drawable.ic_bottom_screen_rotation,
+                R.drawable.ic_bottom_screen_portrait);
+    }
+
+    @Override
+    public void onConfigurationChanged(@androidx.annotation.NonNull android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        updateRotationButtonIcon();
+        applyTheme();
+        if (readerRoot != null) androidx.core.view.ViewCompat.requestApplyInsets(readerRoot);
+    }
+
     void setupBottomControls() {
         bottomControls().setupBottomControls();
     }

@@ -44,6 +44,8 @@ final class ReaderBottomControlsController {
         activity.readerToolbarController.bindScrollableButton(R.id.btn_bookmark, activity::showBookmarksForFile);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_auto_page, activity::showAutoPageTurnDialog);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_tts, activity::showTtsDialog);
+        activity.readerToolbarController.bindScrollableButton(R.id.btn_screen_rotation,
+                activity::toggleScreenOrientation);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_settings, () -> {
             Intent settingsIntent = new Intent(activity, SettingsActivity.class);
             if (activity.filePath != null) settingsIntent.putExtra("txt_file_path", activity.filePath);
@@ -54,6 +56,7 @@ final class ReaderBottomControlsController {
         activity.readerToolbarController.bindScrollableButton(R.id.btn_rule_manage, activity::showReaderTextDisplayRulesManagerDialog);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_text_encoding, activity::showTextEncodingDialog);
         activity.readerToolbarController.bindFixedButton(R.id.btn_more, activity::showMoreDialog);
+        activity.updateRotationButtonIcon();
     }
 
     void showPageMoveBubble() {

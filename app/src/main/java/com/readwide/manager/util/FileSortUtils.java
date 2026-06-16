@@ -29,40 +29,71 @@ public final class FileSortUtils {
     }
 
     public static void sortMainFiles(@Nullable Context context, @NonNull List<File> target, int sortMode) {
+        int n = target.size();
+        if (n < 2) return;
         Map<String, Long> dateCache = sortMode == PrefsManager.SORT_DATE_NEW
                 || sortMode == PrefsManager.SORT_DATE_OLD
                 ? buildDateCache(context, target)
                 : Collections.emptyMap();
-        Collections.sort(target, (a, b) -> {
-            if (a.isDirectory() != b.isDirectory()) return a.isDirectory() ? -1 : 1;
+        // Schwartzian transform: extract each file's sort attributes ONCE instead
+        // of calling File.getName()/isDirectory()/length() inside the comparator,
+        // where they would run O(n log n) times (and isDirectory()/length() hit
+        // the filesystem). This is the main list-refresh speedup.
+        boolean needDate = sortMode == PrefsManager.SORT_DATE_NEW || sortMode == PrefsManager.SORT_DATE_OLD;
+        boolean needSize = sortMode == PrefsManager.SORT_SIZE_LARGE || sortMode == PrefsManager.SORT_SIZE_SMALL;
+        boolean needExt = sortMode == PrefsManager.SORT_TYPE;
+        SortKey[] keys = new SortKey[n];
+        for (int i = 0; i < n; i++) {
+            File f = target.get(i);
+            SortKey k = new SortKey();
+            k.file = f;
+            k.name = f.getName();
+            k.isDir = f.isDirectory();
+            k.date = needDate ? cachedFileSortDate(dateCache, f) : 0L;
+            k.size = needSize ? fileSortSize(f) : 0L;
+            k.ext = needExt ? fileExtension(k.name) : null;
+            keys[i] = k;
+        }
+        java.util.Arrays.sort(keys, (a, b) -> {
+            if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
             switch (sortMode) {
                 case PrefsManager.SORT_NAME_DESC:
-                    return NaturalSort.compare(b.getName(), a.getName());
+                    return NaturalSort.compare(b.name, a.name);
                 case PrefsManager.SORT_DATE_NEW: {
-                    int cmp = Long.compare(cachedFileSortDate(dateCache, b), cachedFileSortDate(dateCache, a));
-                    return cmp != 0 ? cmp : NaturalSort.compare(a.getName(), b.getName());
+                    int cmp = Long.compare(b.date, a.date);
+                    return cmp != 0 ? cmp : NaturalSort.compare(a.name, b.name);
                 }
                 case PrefsManager.SORT_DATE_OLD: {
-                    int cmp = Long.compare(cachedFileSortDate(dateCache, a), cachedFileSortDate(dateCache, b));
-                    return cmp != 0 ? cmp : NaturalSort.compare(a.getName(), b.getName());
+                    int cmp = Long.compare(a.date, b.date);
+                    return cmp != 0 ? cmp : NaturalSort.compare(a.name, b.name);
                 }
                 case PrefsManager.SORT_SIZE_LARGE: {
-                    int cmp = Long.compare(fileSortSize(b), fileSortSize(a));
-                    return cmp != 0 ? cmp : NaturalSort.compare(a.getName(), b.getName());
+                    int cmp = Long.compare(b.size, a.size);
+                    return cmp != 0 ? cmp : NaturalSort.compare(a.name, b.name);
                 }
                 case PrefsManager.SORT_SIZE_SMALL: {
-                    int cmp = Long.compare(fileSortSize(a), fileSortSize(b));
-                    return cmp != 0 ? cmp : NaturalSort.compare(a.getName(), b.getName());
+                    int cmp = Long.compare(a.size, b.size);
+                    return cmp != 0 ? cmp : NaturalSort.compare(a.name, b.name);
                 }
                 case PrefsManager.SORT_TYPE: {
-                    int cmp = fileExtension(a.getName()).compareTo(fileExtension(b.getName()));
-                    return cmp != 0 ? cmp : NaturalSort.compare(a.getName(), b.getName());
+                    int cmp = a.ext.compareTo(b.ext);
+                    return cmp != 0 ? cmp : NaturalSort.compare(a.name, b.name);
                 }
                 case PrefsManager.SORT_NAME_ASC:
                 default:
-                    return NaturalSort.compare(a.getName(), b.getName());
+                    return NaturalSort.compare(a.name, b.name);
             }
         });
+        for (int i = 0; i < n; i++) target.set(i, keys[i].file);
+    }
+
+    private static final class SortKey {
+        File file;
+        String name;
+        boolean isDir;
+        long date;
+        long size;
+        String ext;
     }
 
     public static void sortArchiveImageSequence(@NonNull List<ArchiveSupport.EntryInfo> target) {

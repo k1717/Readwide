@@ -57,6 +57,7 @@ final class ButtonOrderManager {
                 items.add(new Item("rule_add", R.string.toolbar_rule_add, R.id.btn_rule_add));
                 items.add(new Item("rule_manage", R.string.toolbar_rule_manage, R.id.btn_rule_manage));
                 items.add(new Item("encoding", R.string.toolbar_text_encoding, R.id.btn_text_encoding));
+                items.add(new Item("screen_rotation", R.string.screen_orientation_rotate, R.id.btn_screen_rotation));
                 break;
             case GROUP_DOCUMENT_VIEWER:
                 items.add(new Item("prev", R.string.previous_page, R.id.btn_prev_page));
@@ -64,7 +65,8 @@ final class ButtonOrderManager {
                 items.add(new Item("find", R.string.find, R.id.btn_document_search));
                 items.add(new Item("page", R.string.bottom_page, R.id.btn_page_move));
                 items.add(new Item("bookmark", R.string.bookmark, R.id.btn_bookmarks));
-                items.add(new Item("more", R.string.more, R.id.btn_more));
+                items.add(new Item("screen_rotation", R.string.screen_orientation_rotate, R.id.btn_screen_rotation));
+                items.add(new Item("settings", R.string.settings, R.id.btn_document_settings));
                 break;
             case GROUP_PDF_VIEWER:
                 items.add(new Item("prev", R.string.previous_page, R.id.pdf_prev));
@@ -72,7 +74,8 @@ final class ButtonOrderManager {
                 items.add(new Item("mode", R.string.viewer_mode, R.id.pdf_slide_toggle));
                 items.add(new Item("page", R.string.bottom_page, R.id.pdf_page));
                 items.add(new Item("bookmark", R.string.bookmark, R.id.pdf_bookmark));
-                items.add(new Item("more", R.string.more, R.id.pdf_zoom_more));
+                items.add(new Item("screen_rotation", R.string.screen_orientation_rotate, R.id.pdf_screen_rotation));
+                items.add(new Item("settings", R.string.settings, R.id.pdf_settings));
                 break;
             case GROUP_MAIN_FILTERS:
             default:

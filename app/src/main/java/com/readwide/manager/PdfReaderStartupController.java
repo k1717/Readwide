@@ -34,11 +34,20 @@ final class PdfReaderStartupController {
                 activity.findViewById(R.id.pdf_appbar),
                 activity.findViewById(R.id.pdf_bottom_bar),
                 activity.findViewById(R.id.pdf_nav_bar_spacer),
+                activity.findViewById(R.id.pdf_viewport),
                 () -> activity.pdfChromeVisible);
         activity.applyDocumentSystemBarColors();
 
         bindToolbar();
         bindViews();
+        activity.pdfToolbarController = new com.readwide.manager.controller.ReaderToolbarController(
+                activity, activity.findViewById(R.id.pdf_bottom_bar));
+        activity.pdfToolbarController.prepareToolbarContainer();
+        activity.pdfToolbarController.setupScrollableActionStrip(
+                R.id.pdf_toolbar_action_scroll,
+                R.id.pdf_bottom_actions,
+                5,
+                0);
         ButtonOrderManager.applyOrder(activity, activity.prefs, ButtonOrderManager.GROUP_PDF_VIEWER);
 
         activity.setupContinuousPdfList();
@@ -107,6 +116,14 @@ final class PdfReaderStartupController {
         activity.pdfViewport = activity.findViewById(R.id.pdf_viewport);
         activity.pdfHScroll = activity.findViewById(R.id.pdf_h_scroll);
         activity.pdfVScroll = activity.findViewById(R.id.pdf_v_scroll);
+        activity.pdfPageMatrixView = activity.findViewById(R.id.pdf_page_matrix_view);
+        if (activity.pdfPageMatrixView != null) {
+            activity.pdfPageMatrixView.setMaxScale(4.5f);
+            activity.pdfPageMatrixView.setTapListener(activity::onMatrixTap);
+            activity.pdfPageMatrixView.setTapZoneQuery(activity::isMatrixPageTurnZone);
+            activity.pdfPageMatrixView.setSharpenRequestListener(activity::renderSharpenPatch);
+            activity.pdfPageMatrixView.setPageSwipeListener(activity::onMatrixPageSwipe);
+        }
         // Reserve space for the floating toolbar on first load so the initial
         // page is not hidden behind it when chrome starts visible.
         if (activity.pdfViewport != null) {

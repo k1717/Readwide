@@ -90,6 +90,12 @@ public class ImageReaderActivity extends AppCompatActivity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ExecutorService sequenceExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService detailExecutor = Executors.newSingleThreadExecutor();
+    // Parallel pool for pre-decoding neighbor pages into the bitmap cache. Kept
+    // separate from extraction (sequenceExecutor) and from the on-demand decode
+    // (executor) so prefetch decoding runs concurrently instead of queuing behind
+    // a slow archive extraction. Sized to the device's CPU budget, capped small.
+    private final ExecutorService prefetchDecodeExecutor = Executors.newFixedThreadPool(
+            Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() - 1)));
     private final Object archiveExtractLock = new Object();
     private final Object deferredSequenceLock = new Object();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -128,6 +134,14 @@ public class ImageReaderActivity extends AppCompatActivity {
     private String displayedImagePath;
     private String displayedImageEntryPath;
 
+    // Decoded-preview bitmap cache keyed by image index. Lets adjacent pages be
+    // shown instantly (no re-decode) and keeps prefetched neighbors ready. The
+    // cache OWNS these bitmaps: they are recycled only on eviction/clear, never
+    // by the normal display swap, so a cached page is always safe to re-show.
+    private android.util.LruCache<Integer, Bitmap> decodedBitmapCache;
+    private final java.util.Set<Integer> bitmapPrefetchInFlight =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         prefs = PrefsManager.getInstance(this);
@@ -139,6 +153,26 @@ public class ImageReaderActivity extends AppCompatActivity {
         dialogStyle = new ImageDialogStyleController(this);
         overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
         ViewerRegistry.activate(this);
+
+        // Budget the decoded-bitmap cache to a fraction of app heap. Sized by
+        // bitmap byte count; evicted bitmaps are recycled unless still on screen.
+        int cacheBudgetBytes = (int) Math.max(
+                8L * 1024L * 1024L,
+                Math.min(64L * 1024L * 1024L, Runtime.getRuntime().maxMemory() / 8L));
+        decodedBitmapCache = new android.util.LruCache<Integer, Bitmap>(cacheBudgetBytes) {
+            @Override protected int sizeOf(Integer key, Bitmap value) {
+                return value == null || value.isRecycled() ? 0 : value.getByteCount();
+            }
+            @Override protected void entryRemoved(boolean evicted, Integer key,
+                                                  Bitmap oldValue, Bitmap newValue) {
+                // Never recycle the bitmap currently shown on screen; the display
+                // swap path owns that one until it is replaced.
+                if (oldValue != null && oldValue != newValue
+                        && oldValue != currentBitmap && !oldValue.isRecycled()) {
+                    oldValue.recycle();
+                }
+            }
+        };
 
         filePath = getIntent().getStringExtra(EXTRA_FILE_PATH);
         fileUri = getIntent().getStringExtra(EXTRA_FILE_URI);
@@ -183,10 +217,15 @@ public class ImageReaderActivity extends AppCompatActivity {
         executor.shutdownNow();
         sequenceExecutor.shutdownNow();
         detailExecutor.shutdownNow();
+        prefetchDecodeExecutor.shutdownNow();
         if (currentDrawable instanceof AnimatedImageDrawable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             ((AnimatedImageDrawable) currentDrawable).stop();
         }
         clearCurrentImageSurface(true);
+        if (decodedBitmapCache != null) {
+            decodedBitmapCache.evictAll(); // recycles all cached bitmaps
+            decodedBitmapCache = null;
+        }
         persistArchiveImageProgress();
         ViewerRegistry.unregister(this);
         super.onDestroy();
@@ -743,7 +782,34 @@ public class ImageReaderActivity extends AppCompatActivity {
         fileUri = null;
         persistArchiveImageProgress();
         updateToolbarTitle();
+        // Instant path: if this page's bitmap is already decoded and cached, show
+        // it immediately without queuing a decode. This is what makes rapid taps
+        // feel responsive instead of waiting on the single-thread decode queue.
+        if (showCachedBitmapIfAvailable(currentIndex)) {
+            prefetchAdjacentArchiveImages(currentIndex);
+            return;
+        }
         loadImageAsync();
+    }
+
+    /** Displays a cached decoded bitmap for the index if present. */
+    private boolean showCachedBitmapIfAvailable(int index) {
+        if (decodedBitmapCache == null) return false;
+        Bitmap cached = decodedBitmapCache.get(index);
+        if (cached == null || cached.isRecycled()) return false;
+        // Bump the load generation so any in-flight decode for the old page
+        // won't overwrite us, and present from cache.
+        ++imageLoadGeneration;
+        detailRequestGeneration = -1;
+        currentImageDetailLoaded = false;
+        String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, index);
+        LoadedImage cachedLoaded = LoadedImage.forBitmap(
+                cached, false, cached.getWidth(), cached.getHeight(), 1);
+        applyLoadedImage(cachedLoaded, false, index, filePath, entryPath);
+        setLoading(false, null);
+        // A cached preview may be lower quality; let the detail pass refine it.
+        requestDetailImageForCurrent();
+        return true;
     }
 
     private void loadImageAsync() {
@@ -780,6 +846,12 @@ public class ImageReaderActivity extends AppCompatActivity {
                     return;
                 }
                 if (result != null && (result.bitmap != null || result.drawable != null)) {
+                    // Cache the decoded bitmap (not animated drawables) so this
+                    // page can be re-shown instantly later.
+                    if (result.bitmap != null && !result.bitmap.isRecycled()
+                            && decodedBitmapCache != null) {
+                        decodedBitmapCache.put(index, result.bitmap);
+                    }
                     applyLoadedImage(result, false, index, path, entryPath);
                     currentImageDetailLoaded = result.originalQuality;
                     persistArchiveImageProgress();
@@ -877,7 +949,18 @@ public class ImageReaderActivity extends AppCompatActivity {
         displayedImageIndex = requestIndex;
         displayedImagePath = requestPath;
         displayedImageEntryPath = requestEntryPath;
-        if (oldBitmap != null && oldBitmap != currentBitmap && !oldBitmap.isRecycled()) oldBitmap.recycle();
+        // Only recycle the previous bitmap if the cache does not own it. Cached
+        // bitmaps are recycled exclusively on eviction/clear.
+        if (oldBitmap != null && oldBitmap != currentBitmap && !oldBitmap.isRecycled()
+                && !isBitmapInCache(oldBitmap)) {
+            oldBitmap.recycle();
+        }
+    }
+
+    private boolean isBitmapInCache(@Nullable Bitmap bitmap) {
+        if (bitmap == null || decodedBitmapCache == null) return false;
+        java.util.Map<Integer, Bitmap> snapshot = decodedBitmapCache.snapshot();
+        return snapshot.containsValue(bitmap);
     }
 
     private void clearCurrentImageSurface(boolean recycleBitmap) {
@@ -892,7 +975,10 @@ public class ImageReaderActivity extends AppCompatActivity {
         displayedImagePath = null;
         displayedImageEntryPath = null;
         if (imageView != null) imageView.clearImageReady();
-        if (recycleBitmap && oldBitmap != null && !oldBitmap.isRecycled()) oldBitmap.recycle();
+        if (recycleBitmap && oldBitmap != null && !oldBitmap.isRecycled()
+                && !isBitmapInCache(oldBitmap)) {
+            oldBitmap.recycle();
+        }
     }
 
     private void recycleLoadedImage(@Nullable LoadedImage result) {
@@ -950,18 +1036,70 @@ public class ImageReaderActivity extends AppCompatActivity {
             passwordSnapshot = PasswordChars.cloneOf(sourceArchivePassword);
         }
         final int total = imagePathsSnapshot.size();
-        final int first = ImageSequenceNavigationMath.nextIndex(centerIndex, 1, total);
-        final int second = ImageSequenceNavigationMath.nextIndex(centerIndex, -1, total);
+        // Prefetch two pages each direction; comics are usually read in one
+        // direction quickly, so a little depth keeps the next taps instant.
+        final int[] offsets = { 1, -1, 2, -2 };
         sequenceExecutor.execute(() -> {
             try {
-                prefetchArchiveImageEntry(archivePathSnapshot, entryPathsSnapshot, imagePathsSnapshot, first, passwordSnapshot, verifiedSensitiveArchiveCachePaths);
-                if (second != first) {
-                    prefetchArchiveImageEntry(archivePathSnapshot, entryPathsSnapshot, imagePathsSnapshot, second, passwordSnapshot, verifiedSensitiveArchiveCachePaths);
+                for (int off : offsets) {
+                    if (destroyed) break;
+                    int idx = ImageSequenceNavigationMath.nextIndex(centerIndex, off, total);
+                    if (idx == centerIndex) continue;
+                    // Extract (sequential, shares archive state)...
+                    prefetchArchiveImageEntry(archivePathSnapshot, entryPathsSnapshot, imagePathsSnapshot, idx, passwordSnapshot, verifiedSensitiveArchiveCachePaths);
+                    // ...then hand decoding to the parallel pool so it doesn't
+                    // block the next extraction.
+                    final int decodeIndex = idx;
+                    final ArrayList<String> pathsRef = imagePathsSnapshot;
+                    final ArrayList<String> entriesRef = entryPathsSnapshot;
+                    if (!destroyed) {
+                        prefetchDecodeExecutor.execute(
+                                () -> prefetchDecodeIntoCache(decodeIndex, pathsRef, entriesRef));
+                    }
                 }
             } finally {
                 PasswordChars.clear(passwordSnapshot);
             }
         });
+    }
+
+    /**
+     * Decodes a neighbor page's preview bitmap into the cache (off the main
+     * thread) so a later page turn to it is instant. No-op if already cached or
+     * already being decoded.
+     */
+    private void prefetchDecodeIntoCache(int index,
+                                         @NonNull ArrayList<String> imagePathsSnapshot,
+                                         @NonNull ArrayList<String> entryPathsSnapshot) {
+        if (destroyed || decodedBitmapCache == null) return;
+        if (index < 0 || index >= imagePathsSnapshot.size()) return;
+        if (decodedBitmapCache.get(index) != null) return;
+        Integer key = index;
+        if (!bitmapPrefetchInFlight.add(key)) return;
+        final String path = imagePathsSnapshot.get(index);
+        final String displayName = path != null ? new File(path).getName() : null;
+        final Context appContext = getApplicationContext();
+        try {
+            if (path == null || !new File(path).exists()) return;
+            LoadedImage decoded = ImageDecodeHelper.decodePreview(appContext, path, null, displayName);
+            if (decoded == null || decoded.bitmap == null || decoded.bitmap.isRecycled()) return;
+            final Bitmap bmp = decoded.bitmap;
+            mainHandler.post(() -> {
+                if (destroyed || decodedBitmapCache == null || bmp.isRecycled()) {
+                    if (!bmp.isRecycled()) bmp.recycle();
+                    return;
+                }
+                if (decodedBitmapCache.get(index) != null) {
+                    bmp.recycle(); // someone else cached it meanwhile
+                    return;
+                }
+                decodedBitmapCache.put(index, bmp);
+            });
+        } catch (Exception ignored) {
+            // Prefetch is best-effort; a failed neighbor just decodes on demand.
+        } finally {
+            bitmapPrefetchInFlight.remove(key);
+        }
     }
 
     private static void prefetchArchiveImageEntry(@NonNull String archivePath,

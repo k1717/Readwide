@@ -18,12 +18,34 @@
 
 **PDF viewer**
 
+- Fixed single-page PDF fit when toggling the PDF toolbar on tablets. The visible toolbar now reserves its full overlay height before fitting the page, stale pre-reserve renders are cancelled, and the cache key includes viewport height so returning from toolbar-off mode cannot leave an oversized page under the toolbar. Toolbar-off mode releases the reserve and immediately refits the current bitmap into the larger viewport before the sharper rerender completes.
+- Made double-tap zoom smoother in vertical (continuous) mode. Zooming has to re-render every visible page at the new scale on the one render thread; while zoomed, each page now renders at a smaller pixel cap (about half the work), reducing the stutter.
+- Made horizontal (single-page) prefetch buffer equally forward and backward (two pages each way), so flipping back is as fast as flipping forward. The page cache holds several full pages (each ~13MB at fit size), and prefetch runs on a second independent PDF renderer so it fills without blocking the page you're reading. This brings rapid horizontal paging much closer to vertical mode, which stays fast because it pages by scrolling over pages it already rendered.
+- Improved rapid tapping in horizontal (single-page) mode by prerendering further ahead in the direction you're paging (two ahead, one behind) and kicking it off almost immediately rather than only after you pause.
+- Fixed the PDF viewer dropping back to the main screen when you double-tap to zoom. Zoomed pages make large bitmaps, and caching several of them could run the app out of memory, causing the system to quietly close the viewer. Prefetch is now skipped while zoomed, cached neighbor pages are freed when you zoom in, and zoomed pages render at a smaller pixel cap, so zooming no longer exhausts memory.
+- Made PDF pages render about twice as fast by lowering the supersample factor from 2.0 to 1.4. Pages are still rendered above screen resolution and scaled down for display, so text stays sharp, but roughly half as many pixels are rendered. Both regular page turns and neighbor prerender benefit.
+- Fixed the lag at the start of rapid tapping in horizontal (single-page) mode. Every tap queued a full render on the one render thread, and pages you'd already tapped past were rendered to completion before the page you stopped on, so the first few taps felt stuck until the queue drained. Renders for pages you've moved past are now dropped before rendering, so the page you land on shows right away. Neighbor prerender now also kicks in during short gaps between taps instead of only after you stop.
+- Fixed the page number flickering between nearby pages on rapid taps in vertical (continuous) mode before landing on the target. Page turns scheduled delayed settle timers that weren't cancelled, so quick taps left several stale timers that fired in sequence and momentarily reverted the page. Pending scroll/settle callbacks are now cancelled before the next is scheduled, so only the most recent target is applied.
+- Fixed the page number showing the previous page after dragging the page slider a long distance in continuous mode. The target page is re-asserted after the scroll settles so a late scroll callback can't revert the counter to an intermediate page.
+- Fixed pressing a toolbar icon hiding the toolbar while its popup stayed open. A tap on a visible toolbar or app-bar no longer also toggles the viewer chrome beneath it.
 - Sharpened PDF text by rendering pages at a higher-than-screen resolution (supersampling) and downscaling for display in both single-page and continuous modes. The page keeps its aspect ratio and is never stretched, including when the toolbar is hidden. The existing per-page pixel cap still limits memory, so very large pages are scaled down automatically.
 - Fixed the PDF viewer placing the page behind the bottom toolbar. With the toolbar visible, the page viewport now reserves the toolbar's height at the bottom so a full page is shown between the top title area and the toolbar; the reserved space is released when the toolbar is hidden. Works in single-page and continuous modes and on initial load.
+- Fixed the PDF page being partly hidden under the 3-button navigation bar in landscape; the page area is inset from the side nav bar and the fit-to-width calc accounts for it, so the page fits the visible area when the toolbar is shown.
+
+**EPUB viewer**
+
+- Fixed fixed-layout EPUBs (pages with a declared fixed pixel size such as 1366×768) not fitting the screen. The viewer now lets the WebView scale the declared viewport to fit the screen width and only removes page margins / matches the page width to prevent sideways scroll; it no longer forces a fixed body height or centering, which had pushed full-page images to the top. The book's own layout is kept.
 
 **Image viewer**
 
+- Removed the per-tap latency on image page turns. A page-turn tap in a side zone now fires as soon as the finger lifts rather than waiting for the gesture detector to rule out a double tap (about 300 ms). Before, a quick second or third tap was absorbed into a double-tap sequence and delayed, so fast tapping felt sluggish; each tap now registers right away. Horizontal swipes and double-tap-to-zoom still behave as before.
+- Sped up image page turns, especially under rapid repeated taps. Decoded preview bitmaps are cached (with a memory budget), and neighboring pages (two each direction) are pre-decoded on a small parallel pool that runs alongside archive extraction rather than behind it, so a turn to a prepared page is shown immediately. The cache owns its bitmaps and recycles them only on eviction, so a page that is on screen or cached is never recycled while still in use.
 - Raised the preview decode budget from 12 to 16 megapixels so higher-resolution images display at full detail before any downsampling. Larger images are still downsampled to fit the screen and memory, and the out-of-memory fallback is unchanged.
+
+**File list and sorting**
+
+- Sped up file-list sorting and refresh by extracting each file's sort attributes (name, directory flag, and the active date/size/type key) one time before sorting, instead of calling `File.getName()`/`isDirectory()`/`length()` repeatedly inside the comparator where they ran about n·log n times and hit the filesystem. The resulting order is identical.
+- Cut redundant filesystem calls during folder listing, which is the path used when entering a folder or a folder shortcut such as Downloads. Each entry's name and directory flag are read once per item rather than repeatedly, so the initial load of large folders is faster.
 
 **TXT find-in-page**
 
@@ -40,6 +62,11 @@
 
 **Toolbar and dialogs**
 
+- Fixed content and toolbars overlapping the Android 3-button navigation bar in landscape (the nav bar moves to a screen side). Left/right insets are now applied on the main screen, settings, and the TXT, document, and PDF viewers, so nothing slides under the side nav bar.
+
+- Added a screen-rotation (portrait/landscape) button to the TXT, document (Markdown/EPUB/Word/HWP/HWPX), and PDF viewer toolbars (the image viewer already had one), using the same icon as the image viewer. The icon now matches the current screen orientation — landscape icon in landscape, portrait icon in portrait — and updates when you tap it or rotate the device. It flips the screen orientation and is independent of any page-slide direction. In TXT it sits at the far right of the buttons (right of Text encoding); in the document and PDF viewers it sits next to a new Settings button, just left of the pinned More. All can be rearranged in the button-order settings.
+- Added a Settings button to the document and PDF viewer toolbars (right of the rotation button); Settings is still also in those viewers' More dialog.
+- Made the PDF and document bottom toolbars scroll like the TXT viewer's: buttons sit in a horizontally scrollable row with More pinned at the far right. They now use the same toolbar controller as TXT, so button widths are balanced evenly and the row snaps to the nearest button when you stop scrolling (and re-balances on rotation). The rotation and settings buttons are also tinted with the active theme color like the rest.
 - Fixed tap-to-turn paging triggering when the visible bottom toolbar was tapped. Because the toolbar floats over the full-screen view, a tap on it also landed in the page-turn zone beneath it. A tap on a shown chrome bar now just toggles/keeps the toolbar; with the toolbar hidden the whole view pages as before. Applies to the TXT, document (Markdown/EPUB/Word/HWP/HWPX), and PDF viewers.
 
 - Fixed reader toolbar buttons running their action multiple times when tapped repeatedly, which could open duplicate dialogs or trigger repeated loading. Toolbar taps are now debounced, and only one positioned reader dialog is shown at a time.

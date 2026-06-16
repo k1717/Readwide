@@ -44,6 +44,9 @@ public class ZoomImageView extends AppCompatImageView {
     private float maxScale = 5f;
     private float lastX;
     private float lastY;
+    private float downRawX;
+    private float downRawY;
+    private long downTimeMs;
     private int lastScrollerX;
     private int lastScrollerY;
     private boolean dragging;
@@ -147,6 +150,26 @@ public class ZoomImageView extends AppCompatImageView {
         return true;
     }
 
+    /**
+     * Fires a page-turn tap the instant the finger lifts, if the gesture was a
+     * short stationary tap in a page-turn side zone. This bypasses the gesture
+     * detector's double-tap wait so rapid repeated taps each register without the
+     * ~300ms confirmation delay. The downTime guard in handleImmediatePageTap
+     * prevents the later onSingleTapUp/onSingleTapConfirmed from double-firing the
+     * same tap. Swipes and zoomed panning are excluded by the movement/pointer
+     * checks and by shouldHandleTapImmediately().
+     */
+    private void maybeHandleImmediateUpTap(@NonNull MotionEvent e) {
+        if (dragging || panGestureStarted) return;
+        if (e.getPointerCount() != 1) return;
+        float dx = e.getX() - downRawX;
+        float dy = e.getY() - downRawY;
+        if ((dx * dx + dy * dy) > (touchSlop * touchSlop)) return; // moved => not a tap
+        long dt = e.getEventTime() - downTimeMs;
+        if (dt > ViewConfiguration.getTapTimeout() + ViewConfiguration.getLongPressTimeout()) return;
+        handleImmediatePageTap(e);
+    }
+
     private boolean shouldHandleTapImmediately(@NonNull MotionEvent e) {
         return callbacks != null
                 && !scaleDetector.isInProgress()
@@ -215,6 +238,9 @@ public class ZoomImageView extends AppCompatImageView {
                 stopImageFling();
                 lastX = event.getX();
                 lastY = event.getY();
+                downRawX = event.getX();
+                downRawY = event.getY();
+                downTimeMs = event.getEventTime();
                 dragging = false;
                 panGestureStarted = false;
                 disallowParentIntercept(canPanCurrentImage());
@@ -235,6 +261,9 @@ public class ZoomImageView extends AppCompatImageView {
                 return true;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
+                if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                    maybeHandleImmediateUpTap(event);
+                }
                 dragging = false;
                 panGestureStarted = false;
                 if (!canPanCurrentImage()) disallowParentIntercept(false);

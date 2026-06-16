@@ -1,5 +1,6 @@
 package com.readwide.manager;
 
+import android.net.Uri;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -52,6 +53,17 @@ final class DocumentWebViewController {
 
         activity.webView.setWebViewClient(new WebViewClient() {
             @Override
+            public boolean shouldOverrideUrlLoading(@NonNull WebView view, @NonNull WebResourceRequest request) {
+                return activity.handleEpubInternalNavigation(request.getUrl());
+            }
+
+            @Override
+            @SuppressWarnings("deprecation")
+            public boolean shouldOverrideUrlLoading(@NonNull WebView view, String url) {
+                return activity.handleEpubInternalNavigation(Uri.parse(url));
+            }
+
+            @Override
             public WebResourceResponse shouldInterceptRequest(
                     @NonNull WebView view,
                     @NonNull WebResourceRequest request) {
@@ -85,12 +97,13 @@ final class DocumentWebViewController {
     void configureForCurrentPage() {
         if (activity.webView == null) return;
         WebSettings settings = activity.webView.getSettings();
-        if ("EPUB".equals(activity.docType) && activity.epubFixedLayoutLike) {
-            settings.setUseWideViewPort(true);
-            settings.setLoadWithOverviewMode(true);
+        boolean fixedLayout = "EPUB".equals(activity.docType) && activity.epubFixedLayoutLike;
+        if (fixedLayout) {
+            settings.setUseWideViewPort(false);
+            settings.setLoadWithOverviewMode(false);
             settings.setLayoutAlgorithm(WebSettings.LayoutAlgorithm.NORMAL);
             settings.setTextZoom(100);
-            activity.webView.setInitialScale(0);
+            activity.webView.setInitialScale(100);
         } else {
             settings.setLoadWithOverviewMode(false);
             settings.setUseWideViewPort(false);

@@ -30,6 +30,7 @@ public final class EdgeToEdgeUtil {
                                            @Nullable View topBar,
                                            @Nullable View bottomContent) {
         prepareWindow(activity, root);
+        final Padding rootPad = new Padding(root);
         final Padding topPad = topBar != null ? new Padding(topBar) : null;
         final Padding bottomPad = bottomContent != null ? new Padding(bottomContent) : null;
 
@@ -39,13 +40,17 @@ public final class EdgeToEdgeUtil {
             Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
             boolean imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
 
+            root.setPadding(rootPad.left + bars.left, rootPad.top,
+                    rootPad.right + bars.right, rootPad.bottom);
+
             if (topBar != null) {
-                topBar.setPadding(topPad.left, topPad.top + bars.top, topPad.right, topPad.bottom);
+                topBar.setPadding(topPad.left, topPad.top + bars.top,
+                        topPad.right, topPad.bottom);
             }
             if (bottomContent != null) {
                 int bottomInset = imeVisible ? Math.max(bars.bottom, ime.bottom) : bars.bottom;
-                bottomContent.setPadding(bottomPad.left, bottomPad.top, bottomPad.right,
-                        bottomPad.bottom + bottomInset);
+                bottomContent.setPadding(bottomPad.left, bottomPad.top,
+                        bottomPad.right, bottomPad.bottom + bottomInset);
             }
             return insets;
         });
@@ -85,6 +90,7 @@ public final class EdgeToEdgeUtil {
                                                          ChromeVisibilityProvider chromeVisibilityProvider,
                                                          boolean keepBottomChromeFixedDuringIme) {
         prepareWindow(activity, root);
+        final Padding rootPad = new Padding(root);
         final Padding topPad = topBar != null ? new Padding(topBar) : null;
         final Padding bottomPad = bottomContent != null ? new Padding(bottomContent) : null;
         final Padding foldedPad = foldedContent != null ? new Padding(foldedContent) : null;
@@ -98,25 +104,27 @@ public final class EdgeToEdgeUtil {
 
             boolean chromeVisible = chromeVisibilityProvider == null || chromeVisibilityProvider.isChromeVisible();
 
+            // Inset the whole viewer horizontally at the root so the side nav bar
+            // (3-button bar in landscape) and any display cutout get their own
+            // clear strip; appbar, document body and bottom bar all stay inside it.
+            root.setPadding(rootPad.left + bars.left, rootPad.top,
+                    rootPad.right + bars.right, rootPad.bottom);
+
             if (topBar != null) {
-                topBar.setPadding(topPad.left, topPad.top + bars.top, topPad.right, topPad.bottom);
+                topBar.setPadding(topPad.left, topPad.top + bars.top,
+                        topPad.right, topPad.bottom);
             }
             if (bottomContent != null) {
                 int bottomInset = keepBottomChromeFixedDuringIme
                         ? bars.bottom
                         : (imeVisible ? Math.max(bars.bottom, ime.bottom) : bars.bottom);
-                bottomContent.setPadding(bottomPad.left, bottomPad.top, bottomPad.right,
-                        bottomPad.bottom + bottomInset);
+                bottomContent.setPadding(bottomPad.left, bottomPad.top,
+                        bottomPad.right, bottomPad.bottom + bottomInset);
             }
             if (foldedContent != null) {
                 int bottomInset = keepBottomChromeFixedDuringIme
                         ? bars.bottom
                         : (imeVisible ? 0 : bars.bottom);
-                // If a visible top strip is still present while the main chrome is collapsed
-                // (DocumentPageActivity keeps a compact page counter there), that top strip
-                // already owns the status-bar inset.  Do not also push the folded content
-                // down by the same inset, otherwise the hidden-toolbar state leaves a large
-                // blank area before the document body starts.
                 boolean visibleTopStripOwnsInset = !chromeVisible
                         && topBar != null
                         && topBar.getVisibility() == View.VISIBLE
@@ -143,8 +151,10 @@ public final class EdgeToEdgeUtil {
                                             @Nullable View topBar,
                                             @Nullable View bottomContent,
                                             @Nullable View hiddenNavigationSpacer,
+                                            @Nullable View pdfViewport,
                                             ChromeVisibilityProvider chromeVisibilityProvider) {
         prepareWindow(activity, root);
+        final Padding rootPad = new Padding(root);
         final Padding topPad = topBar != null ? new Padding(topBar) : null;
         final Padding bottomPad = bottomContent != null ? new Padding(bottomContent) : null;
 
@@ -155,13 +165,20 @@ public final class EdgeToEdgeUtil {
             boolean imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
             boolean chromeVisible = chromeVisibilityProvider == null || chromeVisibilityProvider.isChromeVisible();
 
+            // Inset the whole reader horizontally at the root so the side nav bar
+            // (3-button bar in landscape) and any display cutout get their own
+            // clear strip; every child (top bar, page, bottom bar) stays inside it.
+            root.setPadding(rootPad.left + bars.left, rootPad.top,
+                    rootPad.right + bars.right, rootPad.bottom);
+
             if (topBar != null) {
-                topBar.setPadding(topPad.left, topPad.top + bars.top, topPad.right, topPad.bottom);
+                topBar.setPadding(topPad.left, topPad.top + bars.top,
+                        topPad.right, topPad.bottom);
             }
             if (bottomContent != null) {
                 int bottomInset = imeVisible ? Math.max(bars.bottom, ime.bottom) : bars.bottom;
-                bottomContent.setPadding(bottomPad.left, bottomPad.top, bottomPad.right,
-                        bottomPad.bottom + bottomInset);
+                bottomContent.setPadding(bottomPad.left, bottomPad.top,
+                        bottomPad.right, bottomPad.bottom + bottomInset);
             }
             if (hiddenNavigationSpacer != null) {
                 int spacerHeight = chromeVisible ? 0 : bars.bottom;
@@ -183,6 +200,7 @@ public final class EdgeToEdgeUtil {
                                          View reader,
                                          @Nullable View bottomBar) {
         prepareWindow(activity, root);
+        final Padding rootPad = new Padding(root);
         final Padding topPad = topBar != null ? new Padding(topBar) : null;
         final Padding readerPad = new Padding(reader);
         final Padding bottomPad = bottomBar != null ? new Padding(bottomBar) : null;
@@ -191,14 +209,20 @@ public final class EdgeToEdgeUtil {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()
                     | WindowInsetsCompat.Type.displayCutout());
 
+            // Horizontal inset at the root clears the side nav bar / cutout for the
+            // whole reader; children only handle their own top/bottom insets.
+            root.setPadding(rootPad.left + bars.left, rootPad.top,
+                    rootPad.right + bars.right, rootPad.bottom);
+
             if (topBar != null) {
-                topBar.setPadding(topPad.left, topPad.top + bars.top, topPad.right, topPad.bottom);
+                topBar.setPadding(topPad.left, topPad.top + bars.top,
+                        topPad.right, topPad.bottom);
             }
             reader.setPadding(readerPad.left, readerPad.top + bars.top,
                     readerPad.right, readerPad.bottom + bars.bottom);
             if (bottomBar != null) {
-                bottomBar.setPadding(bottomPad.left, bottomPad.top, bottomPad.right,
-                        bottomPad.bottom + bars.bottom);
+                bottomBar.setPadding(bottomPad.left, bottomPad.top,
+                        bottomPad.right, bottomPad.bottom + bars.bottom);
             }
             return insets;
         });
@@ -229,6 +253,28 @@ public final class EdgeToEdgeUtil {
             top = v.getPaddingTop();
             right = v.getPaddingRight();
             bottom = v.getPaddingBottom();
+        }
+    }
+
+    /**
+     * Sets left/right margins on a view so its full extent (including background)
+     * stops short of the side navigation bar in landscape. Padding only insets the
+     * content, not the background, so an opaque bar would still paint under the
+     * nav bar; a margin shrinks the bar itself. baseLeft/baseRight are the view's
+     * original margins to preserve.
+     */
+    private static void setHorizontalMargins(View view, int baseLeft, int baseRight,
+                                             int extraLeft, int extraRight) {
+        if (view == null) return;
+        android.view.ViewGroup.LayoutParams lp = view.getLayoutParams();
+        if (!(lp instanceof android.view.ViewGroup.MarginLayoutParams)) return;
+        android.view.ViewGroup.MarginLayoutParams mlp = (android.view.ViewGroup.MarginLayoutParams) lp;
+        int newLeft = baseLeft + extraLeft;
+        int newRight = baseRight + extraRight;
+        if (mlp.leftMargin != newLeft || mlp.rightMargin != newRight) {
+            mlp.leftMargin = newLeft;
+            mlp.rightMargin = newRight;
+            view.setLayoutParams(mlp);
         }
     }
 }

@@ -62,9 +62,12 @@ final class MainFolderLoadController {
                 if (fileArray != null) {
                     for (File f : fileArray) {
                         if (isCancelled(loadGeneration)) return;
-                        if (!showHidden && f.getName().startsWith(".")) continue;
-                        if (f.isDirectory() || FileUtils.isVisibleInAllFilesFilter(f.getName())) {
-                            if (f.isDirectory()) folderList.add(f);
+                        String name = f.getName();
+                        if (!showHidden && name.startsWith(".")) continue;
+                        // isDirectory() is a filesystem stat; call it once per entry.
+                        boolean isDir = f.isDirectory();
+                        if (isDir || FileUtils.isVisibleInAllFilesFilter(name)) {
+                            if (isDir) folderList.add(f);
                             else visibleFiles.add(f);
                             maybePublishFolderLoadProgress(progress, folderList, visibleFiles);
                         }
@@ -101,8 +104,9 @@ final class MainFolderLoadController {
                 if (fileArray != null) {
                     for (File f : fileArray) {
                         if (isCancelled(loadGeneration)) return;
-                        if (!showHidden && f.getName().startsWith(".")) continue;
-                        if (f.isDirectory() || FileUtils.isVisibleInAllFilesFilter(f.getName())) {
+                        String name = f.getName();
+                        if (!showHidden && name.startsWith(".")) continue;
+                        if (f.isDirectory() || FileUtils.isVisibleInAllFilesFilter(name)) {
                             fileList.add(f);
                         }
                     }

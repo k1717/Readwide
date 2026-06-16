@@ -142,6 +142,7 @@ public class DocumentPageActivity extends AppCompatActivity {
     TextView pageButton;
     TextView bookmarkButton;
     TextView moreButton;
+    com.readwide.manager.controller.ReaderToolbarController documentToolbarController;
     SeekBar documentPageSeekBar;
     boolean documentPageSeekBarUserTracking = false;
     int lastMarkdownMaxScrollYPx = 0;
@@ -526,7 +527,8 @@ public class DocumentPageActivity extends AppCompatActivity {
         }
         if (documentPageSeekBar != null) tintSeekBar(documentPageSeekBar);
         updateLoadingIndicatorTheme();
-        TextView[] buttons = {prevButton, nextButton, searchButton, pageButton, bookmarkButton, moreButton};
+        TextView[] buttons = {prevButton, nextButton, searchButton, pageButton, bookmarkButton,
+                findViewById(R.id.btn_screen_rotation), findViewById(R.id.btn_document_settings), moreButton};
         for (TextView b : buttons) {
             if (b == null) continue;
             b.setTextColor(readerFg);
@@ -545,6 +547,10 @@ public class DocumentPageActivity extends AppCompatActivity {
         closeResourceZip();
         pages.clear();
         wordRelationships.clear();
+        if (documentToolbarController != null) {
+            documentToolbarController.release();
+            documentToolbarController = null;
+        }
         executor.shutdownNow();
         super.onDestroy();
     }
@@ -597,6 +603,7 @@ public class DocumentPageActivity extends AppCompatActivity {
             return false;
         }
         if (!isPagedWebDocument() || webView == null || prefs == null
+                || ("EPUB".equals(docType) && epubFixedLayoutLike)
                 || !prefs.getDocumentTapPagingEnabled(docType)
                 || documentPageCount() <= 1 || pageTurnInFlight) {
             documentTapPagingSequence = false;
@@ -856,9 +863,37 @@ public class DocumentPageActivity extends AppCompatActivity {
         if (searchButton != null) searchButton.setOnClickListener(v -> showDocumentSearchDialog());
         if (pageButton != null) pageButton.setOnClickListener(v -> showGoToPageDialog());
         bookmarkButton.setOnClickListener(v -> showBookmarksDialog());
+        View rotationButton = findViewById(R.id.btn_screen_rotation);
+        if (rotationButton != null) {
+            rotationButton.setOnClickListener(v ->
+                    com.readwide.manager.util.ScreenOrientationToggle.toggle(this));
+        }
+        updateRotationButtonIcon();
+        View documentSettingsButton = findViewById(R.id.btn_document_settings);
+        if (documentSettingsButton != null) {
+            documentSettingsButton.setOnClickListener(v ->
+                    startActivity(new Intent(this, SettingsActivity.class)));
+        }
         if (moreButton != null) {
             moreButton.setOnClickListener(v -> showMoreDialog());
         }
+    }
+
+    private void updateRotationButtonIcon() {
+        com.readwide.manager.util.ScreenOrientationToggle.applyButtonIcon(
+                this,
+                findViewById(R.id.btn_screen_rotation),
+                R.drawable.ic_bottom_screen_rotation,
+                R.drawable.ic_bottom_screen_portrait);
+    }
+
+    @Override
+    public void onConfigurationChanged(@NonNull android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        updateRotationButtonIcon();
+        applyDocumentThemeToViews();
+        View documentRoot = findViewById(R.id.document_root);
+        if (documentRoot != null) androidx.core.view.ViewCompat.requestApplyInsets(documentRoot);
     }
 
     private void setupDocumentPageSeekBar() {
@@ -938,7 +973,14 @@ public class DocumentPageActivity extends AppCompatActivity {
             @Override
             public boolean onDoubleTap(@NonNull MotionEvent e) {
                 documentDoubleTapResetSequence = true;
-                resetDocumentZoom();
+                if (webView != null && webView.canZoomOut()) {
+                    // Already zoomed in (pinch or a previous double-tap): reset to fit.
+                    resetDocumentZoom();
+                } else if (webView != null) {
+                    // At fit size: zoom in a couple of native steps for a quick magnify.
+                    webView.zoomIn();
+                    webView.zoomIn();
+                }
                 clearDocumentEdgeArm();
                 if (webView != null) {
                     webView.postDelayed(() -> {
@@ -2873,28 +2915,71 @@ public class DocumentPageActivity extends AppCompatActivity {
         }
     }
 
+    boolean handleEpubInternalNavigation(Uri uri) {
+        if (uri == null || !"EPUB".equals(docType) || pages == null || pages.isEmpty()) return false;
+        if (!LOCAL_HOST.equalsIgnoreCase(uri.getHost())) return false;
+        String path = uri.getPath();
+        if (path == null || !path.startsWith(EPUB_PREFIX)) return false;
+
+        String zipPath = path.substring(EPUB_PREFIX.length());
+        try {
+            zipPath = URLDecoder.decode(zipPath, "UTF-8");
+        } catch (Exception ignored) {}
+        zipPath = normalizeZipPath(zipPath);
+        int hash = zipPath.indexOf('#');
+        if (hash >= 0) zipPath = zipPath.substring(0, hash);
+        if (zipPath.isEmpty()) return false;
+
+        for (int i = 0; i < pages.size(); i++) {
+            Page page = pages.get(i);
+            if (page == null || page.sourcePath == null) continue;
+            if (normalizeZipPath(page.sourcePath).equals(zipPath)) {
+                if (i != currentPage) {
+                    showPage(i, Integer.compare(i, currentPage));
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
     String prepareFixedLayoutEpubHtml(String html) {
         if (html == null) html = "";
         int[] viewport = extractFixedLayoutViewportSize(html);
+        if (viewport[0] <= 0 || viewport[1] <= 0) {
+            viewport = extractSvgViewBoxSize(html);
+        }
         String css;
         if (viewport[0] > 0 && viewport[1] > 0) {
-            int[] margins = computeFixedLayoutCenterMarginsCssPx(viewport[0], viewport[1]);
-            int leftRight = margins[0];
-            int topMargin = margins[1];
-            int bottomMargin = margins[2];
-            int minWidth = viewport[0] + (leftRight * 2);
-            int minHeight = viewport[1] + topMargin + bottomMargin;
             css = "<style id=\"textview-fixed-layout-center\">"
-                    + "html{margin:0 !important;padding:0 !important;width:auto !important;"
-                    + "min-width:" + minWidth + "px !important;min-height:" + minHeight + "px !important;"
+                    + "html{margin:0 !important;padding:0 !important;width:100vw !important;min-height:100vh !important;"
                     + "background:" + cssColor(readerBg) + " !important;overflow:auto !important;}"
-                    + "body{width:" + viewport[0] + "px !important;min-width:" + viewport[0] + "px !important;"
-                    + "height:" + viewport[1] + "px !important;min-height:" + viewport[1] + "px !important;"
-                    + "margin:" + topMargin + "px " + leftRight + "px " + bottomMargin + "px " + leftRight + "px !important;"
-                    + "padding:0 !important;box-sizing:border-box !important;position:relative !important;"
-                    + "overflow:visible !important;background:transparent !important;}"
-                    + "body>img:only-child,body>svg:only-child{display:block;margin:0 auto;}"
-                    + "</style>";
+                    + "body{margin:0 !important;padding:0 !important;width:" + viewport[0] + "px !important;"
+                    + "height:auto !important;min-width:" + viewport[0] + "px !important;"
+                    + "min-height:" + viewport[1] + "px !important;position:absolute !important;left:0;top:0;"
+                    + "transform-origin:0 0 !important;background:transparent !important;overflow:visible !important;}"
+                    + "body>div:only-child,body>svg:only-child{width:100% !important;height:100% !important;}"
+                    + "body img,body svg{max-width:100% !important;max-height:100% !important;}"
+                    + "</style>"
+                    + "<script id=\"textview-fixed-layout-fit\">"
+                    + "(function(){var W=" + viewport[0] + ",H=" + viewport[1] + ";"
+                    + "function fit(){try{var vw=Math.max(1,window.innerWidth||document.documentElement.clientWidth||W);"
+                    + "var vh=Math.max(1,window.innerHeight||document.documentElement.clientHeight||H);"
+                    + "var naturalH=Math.max(H,document.body.scrollHeight||0);"
+                    + "var landscape=W>H*1.2;"
+                    + "var safe=landscape?Math.min(36,Math.max(18,Math.round(vw*0.025))):0;"
+                    + "var fitW=Math.max(1,vw-(safe*2));"
+                    + "var s=Math.min(fitW/W,vh/H);if(!isFinite(s)||s<=0)s=1;"
+                    + "var scaledH=naturalH*s;"
+                    + "var l=Math.max(safe,(vw-W*s)/2),t=Math.max(0,(vh-Math.min(H*s,scaledH))/2);"
+                    + "document.documentElement.style.width=vw+'px';document.documentElement.style.height=Math.max(vh,scaledH+t)+'px';"
+                    + "document.body.style.width=W+'px';document.body.style.minHeight=naturalH+'px';"
+                    + "document.body.style.left=l+'px';document.body.style.top=t+'px';"
+                    + "document.body.style.transform='scale('+s+')';}catch(e){}}"
+                    + "window.addEventListener('resize',fit);window.addEventListener('orientationchange',function(){setTimeout(fit,60);});"
+                    + "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',fit);else fit();"
+                    + "setTimeout(fit,0);setTimeout(fit,180);})();"
+                    + "</script>";
         } else {
             css = "<style id=\"textview-fixed-layout-center\">"
                     + "html{margin:0 !important;padding:0 !important;width:100vw !important;height:100vh !important;"
@@ -2904,7 +2989,15 @@ public class DocumentPageActivity extends AppCompatActivity {
                     + "body>img:only-child,body>svg:only-child{display:block;margin:0 auto;}"
                     + "</style>";
         }
-        return injectIntoHtmlHead(html, css);
+        return injectIntoHtmlHead(replaceFixedLayoutViewportMeta(html), css);
+    }
+
+    private String replaceFixedLayoutViewportMeta(String html) {
+        if (html == null) return "";
+        String replacement = "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\"/>";
+        String next = html.replaceFirst("(?is)<meta[^>]+name\\s*=\\s*['\\\"]viewport['\\\"][^>]*>", replacement);
+        if (!next.equals(html)) return next;
+        return html.replaceFirst("(?i)<head[^>]*>", "$0" + replacement);
     }
 
     private int[] computeFixedLayoutCenterMarginsCssPx(int pageWidthCssPx, int pageHeightCssPx) {
@@ -3041,6 +3134,27 @@ public class DocumentPageActivity extends AppCompatActivity {
             java.util.regex.Matcher h = java.util.regex.Pattern.compile("(?i)(?:^|[,;\\s])height\\s*=\\s*([0-9]{2,5})").matcher(content);
             if (w.find()) result[0] = Integer.parseInt(w.group(1));
             if (h.find()) result[1] = Integer.parseInt(h.group(1));
+        } catch (Throwable ignored) {
+            result[0] = 0;
+            result[1] = 0;
+        }
+        return result;
+    }
+
+    private int[] extractSvgViewBoxSize(String html) {
+        int[] result = new int[]{0, 0};
+        if (html == null) return result;
+        try {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                    "(?is)<svg[^>]+viewBox\\s*=\\s*['\\\"]\\s*[-0-9.]+\\s+[-0-9.]+\\s+([0-9.]+)\\s+([0-9.]+)")
+                    .matcher(html);
+            if (!m.find()) return result;
+            result[0] = Math.round(Float.parseFloat(m.group(1)));
+            result[1] = Math.round(Float.parseFloat(m.group(2)));
+            if (result[0] < 100 || result[1] < 100) {
+                result[0] = 0;
+                result[1] = 0;
+            }
         } catch (Throwable ignored) {
             result[0] = 0;
             result[1] = 0;

@@ -47,7 +47,8 @@ final class DocumentPageDisplayController {
         resetDocumentPageTransform();
         activity.wordSelectionActive = false;
         activity.webView.removeCallbacks(activity.checkWordSelectionAfterScrollRunnable);
-        activity.webView.getSettings().setJavaScriptEnabled("Word".equals(activity.docType));
+        activity.webView.getSettings().setJavaScriptEnabled("Word".equals(activity.docType)
+                || ("EPUB".equals(activity.docType) && activity.epubFixedLayoutLike));
         activity.configureWebViewForCurrentPage();
         activity.applyEpubBoundaryMarginsIfNeeded();
         activity.lastAppliedDocumentThemeSignature = activity.documentThemeSignature();

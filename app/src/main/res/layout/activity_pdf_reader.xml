@@ -65,14 +65,19 @@
                     android:id="@+id/pdf_page_image"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_gravity="center_horizontal"
+                    android:layout_gravity="center_horizontal|top"
                     android:adjustViewBounds="true"
-                    android:background="#FFFFFFFF"
                     android:contentDescription="@string/pdf_page"
                     android:padding="0dp" />
 
             </ScrollView>
         </HorizontalScrollView>
+
+        <com.readwide.manager.PdfPageView
+            android:id="@+id/pdf_page_matrix_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/pdf_continuous_list"
@@ -149,38 +154,85 @@
             android:gravity="center"
             android:orientation="horizontal">
 
-            <TextView
-                android:id="@+id/pdf_prev"
-                style="@style/ReaderBottomButton"
-                android:drawableTop="@drawable/ic_bottom_arrow_left"
-                android:text="@string/previous_page" />
+            <HorizontalScrollView
+                android:id="@+id/pdf_toolbar_action_scroll"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="5"
+                android:fillViewport="false"
+                android:overScrollMode="never"
+                android:scrollbars="none">
 
-            <TextView
-                android:id="@+id/pdf_next"
-                style="@style/ReaderBottomButton"
-                android:drawableTop="@drawable/ic_bottom_arrow_right"
-                android:text="@string/next_page" />
+                <LinearLayout
+                    android:id="@+id/pdf_bottom_actions"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:baselineAligned="false"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
-            <TextView
-                android:id="@+id/pdf_slide_toggle"
-                style="@style/ReaderBottomButton"
-                android:text="" />
+                    <TextView
+                        android:id="@+id/pdf_prev"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_arrow_left"
+                        android:text="@string/previous_page" />
 
-            <TextView
-                android:id="@+id/pdf_page"
-                style="@style/ReaderBottomButton"
-                android:drawableTop="@drawable/ic_bottom_page"
-                android:text="@string/bottom_page" />
+                    <TextView
+                        android:id="@+id/pdf_next"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_arrow_right"
+                        android:text="@string/next_page" />
 
-            <TextView
-                android:id="@+id/pdf_bookmark"
-                style="@style/ReaderBottomButton"
-                android:drawableTop="@drawable/ic_bottom_bookmark"
-                android:text="@string/bookmark" />
+                    <TextView
+                        android:id="@+id/pdf_slide_toggle"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:text="" />
+
+                    <TextView
+                        android:id="@+id/pdf_page"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_page"
+                        android:text="@string/bottom_page" />
+
+                    <TextView
+                        android:id="@+id/pdf_bookmark"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_bookmark"
+                        android:text="@string/bookmark" />
+
+                    <TextView
+                        android:id="@+id/pdf_screen_rotation"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_screen_rotation"
+                        android:text="@string/screen_orientation_rotate" />
+
+                    <TextView
+                        android:id="@+id/pdf_settings"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_settings"
+                        android:text="@string/settings" />
+                </LinearLayout>
+            </HorizontalScrollView>
 
             <TextView
                 android:id="@+id/pdf_zoom_more"
                 style="@style/ReaderBottomButton"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:drawableTop="@drawable/ic_bottom_more_horiz"
                 android:text="@string/more" />
 

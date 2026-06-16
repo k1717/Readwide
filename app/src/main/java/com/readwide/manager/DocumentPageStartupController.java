@@ -34,6 +34,13 @@ final class DocumentPageStartupController {
         installNavigationBarSpacerInsets();
 
         bindViews();
+        activity.documentToolbarController = new com.readwide.manager.controller.ReaderToolbarController(
+                activity, activity.findViewById(R.id.document_bottom_bar));
+        activity.documentToolbarController.setupScrollableActionStrip(
+                R.id.document_toolbar_action_scroll,
+                R.id.document_bottom_bar,
+                5,
+                0);
         ButtonOrderManager.applyOrder(activity, activity.prefs, ButtonOrderManager.GROUP_DOCUMENT_VIEWER);
         activity.bookmarkManager = BookmarkManager.getInstance(activity);
         activity.applyDocumentThemeToViews();

@@ -224,8 +224,18 @@ final class ReaderChromeController {
 
     void applyReaderInsets() {
         if (activity.readerRoot == null) return;
+        final int baseRootLeft = activity.readerRoot.getPaddingLeft();
+        final int baseRootRight = activity.readerRoot.getPaddingRight();
+        final int baseRootTop = activity.readerRoot.getPaddingTop();
+        final int baseRootBottom = activity.readerRoot.getPaddingBottom();
         ViewCompat.setOnApplyWindowInsetsListener(activity.readerRoot, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets sideBars = insets.getInsets(WindowInsetsCompat.Type.systemBars()
+                    | WindowInsetsCompat.Type.displayCutout());
+            // Horizontal inset at the root clears the side nav bar / cutout for the
+            // whole reader in landscape; top/bottom keep the existing pagination logic.
+            activity.readerRoot.setPadding(baseRootLeft + sideBars.left, baseRootTop,
+                    baseRootRight + sideBars.right, baseRootBottom);
             int topInset = (activity.prefs != null && activity.prefs.getShowStatusBar()) ? bars.top : 0;
             int bottomInset = bars.bottom;
             activity.lastReaderTopInset = topInset;

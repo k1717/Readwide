@@ -64,6 +64,18 @@ android {
             }
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
+        diagnostic {
+            initWith release
+            matchingFallbacks = ['release']
+            minifyEnabled false
+            shrinkResources false
+            debuggable true
+            jniDebuggable false
+            zipAlignEnabled true
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
     }
 
     compileOptions {

@@ -258,6 +258,14 @@
                         android:layout_weight="0"
                         android:drawableTop="@drawable/ic_bottom_encoding"
                         android:text="@string/toolbar_text_encoding" />
+
+                    <TextView
+                        android:id="@+id/btn_screen_rotation"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_screen_rotation"
+                        android:text="@string/screen_orientation_rotate" />
                 </LinearLayout>
             </HorizontalScrollView>
 
