@@ -140,6 +140,18 @@ public class PdfPageView extends View {
         sharpPatchPageRect.setEmpty();
     }
 
+    /**
+     * Drop references to the page bitmap without recycling it (the host owns the
+     * fit bitmap and its cache). Call before the host recycles the current bitmap
+     * — e.g. on a mode switch — so onDraw can't touch a freed bitmap.
+     */
+    public void detachBitmaps() {
+        handler.removeCallbacks(sharpenRunnable);
+        clearSharpPatch();
+        fitBitmap = null;
+        invalidate();
+    }
+
     /** Compute the fit matrix: page fully visible, horizontally centered, vertically centered. */
     private void resetToFit() {
         if (fitBitmap == null || getWidth() == 0 || getHeight() == 0) return;
@@ -211,7 +223,7 @@ public class PdfPageView extends View {
 
     @Override
     protected void onDraw(Canvas canvas) {
-        if (fitBitmap == null) return;
+        if (fitBitmap == null || fitBitmap.isRecycled()) return;
         canvas.drawBitmap(fitBitmap, matrix, bitmapPaint);
 
         // Draw the crisp patch on top, positioned by the same matrix mapped from

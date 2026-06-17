@@ -104,6 +104,10 @@ final class ReaderActivityStartupController {
 
     private void bindViews() {
         activity.readerRoot = activity.findViewById(R.id.reader_root);
+        activity.ttsFloatingCard = activity.findViewById(R.id.tts_floating_card);
+        activity.ttsFloatingPlayPause = activity.findViewById(R.id.tts_floating_play_pause);
+        activity.ttsFloatingStop = activity.findViewById(R.id.tts_floating_stop);
+        setupTtsFloatingCard(activity);
         activity.toolbar = activity.findViewById(R.id.toolbar);
         activity.setSupportActionBar(activity.toolbar);
         if (activity.getSupportActionBar() != null) {
@@ -130,6 +134,91 @@ final class ReaderActivityStartupController {
         activity.updateReaderFileTitle();
         activity.updateReaderFileTitleVisibility();
         activity.updateLoadingIndicatorColors(activity.currentReaderBackgroundColor);
+    }
+
+    /**
+     * Wires up the floating TTS control card over the text reader: per-button
+     * click listeners for accessibility/normal taps, plus a card-level touch
+     * listener that lets the whole card be dragged anywhere on screen and routes
+     * a non-drag press to whichever button it landed on. The card-level listener
+     * takes the gesture on ACTION_DOWN so a drag can start from any point on the
+     * card, including over a button.
+     */
+    private void setupTtsFloatingCard(@NonNull ReaderActivity activity) {
+        if (activity.ttsFloatingCard == null) return;
+
+        if (activity.ttsFloatingPlayPause != null) {
+            activity.ttsFloatingPlayPause.setOnClickListener(v ->
+                    activity.readerTtsFloatingTogglePlayPause());
+        }
+        if (activity.ttsFloatingStop != null) {
+            activity.ttsFloatingStop.setOnClickListener(v ->
+                    activity.readerTtsFloatingStop());
+        }
+
+        final View card = activity.ttsFloatingCard;
+        final android.view.View playPause = activity.ttsFloatingPlayPause;
+        final android.view.View stopBtn = activity.ttsFloatingStop;
+        final int touchSlop = android.view.ViewConfiguration.get(activity).getScaledTouchSlop();
+        final float[] downRaw = new float[2];
+        final float[] startXY = new float[2];
+        final boolean[] dragging = {false};
+        card.setOnTouchListener((view, event) -> {
+            switch (event.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    downRaw[0] = event.getRawX();
+                    downRaw[1] = event.getRawY();
+                    startXY[0] = card.getTranslationX();
+                    startXY[1] = card.getTranslationY();
+                    dragging[0] = false;
+                    return true; // take the whole gesture so dragging works anywhere
+                case android.view.MotionEvent.ACTION_MOVE: {
+                    float dx = event.getRawX() - downRaw[0];
+                    float dy = event.getRawY() - downRaw[1];
+                    if (!dragging[0] && Math.hypot(dx, dy) > touchSlop) {
+                        dragging[0] = true;
+                    }
+                    if (dragging[0]) {
+                        float nx = startXY[0] + dx;
+                        float ny = startXY[1] + dy;
+                        View parent = (View) card.getParent();
+                        if (parent != null) {
+                            float maxX = (parent.getWidth() - card.getWidth()) / 2f;
+                            float maxY = parent.getHeight() - card.getHeight() - card.getTop();
+                            float minY = -card.getTop();
+                            if (maxX < 0) maxX = 0;
+                            nx = Math.max(-maxX, Math.min(maxX, nx));
+                            ny = Math.max(minY, Math.min(maxY, ny));
+                        }
+                        card.setTranslationX(nx);
+                        card.setTranslationY(ny);
+                    }
+                    return true;
+                }
+                case android.view.MotionEvent.ACTION_UP:
+                    if (!dragging[0]) {
+                        // Treat as a tap: route to the button under the finger.
+                        if (playPause != null && isPointInsideView(event.getRawX(), event.getRawY(), playPause)) {
+                            activity.readerTtsFloatingTogglePlayPause();
+                        } else if (stopBtn != null && isPointInsideView(event.getRawX(), event.getRawY(), stopBtn)) {
+                            activity.readerTtsFloatingStop();
+                        }
+                    }
+                    dragging[0] = false;
+                    return true;
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    dragging[0] = false;
+                    return true;
+            }
+            return false;
+        });
+    }
+
+    private static boolean isPointInsideView(float rawX, float rawY, @NonNull View view) {
+        int[] loc = new int[2];
+        view.getLocationOnScreen(loc);
+        return rawX >= loc[0] && rawX <= loc[0] + view.getWidth()
+                && rawY >= loc[1] && rawY <= loc[1] + view.getHeight();
     }
 
     private void bindServicesAndControllers() {

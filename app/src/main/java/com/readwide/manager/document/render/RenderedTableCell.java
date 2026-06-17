@@ -72,7 +72,7 @@ public final class RenderedTableCell {
         public Builder addBlock(RenderedBlock block) { if (block != null) blocks.add(block); return this; }
         public Builder colSpan(int v) { this.colSpan = Math.max(1, v); return this; }
         public Builder rowSpan(int v) { this.rowSpan = Math.max(1, v); return this; }
-        public Builder borderColor(String v) { this.borderColor = emptyToNull(v); return this; }
+        public Builder borderColor(String v) { this.borderColor = RenderStyleUtil.emptyToNull(v); return this; }
         public Builder borderVisible(boolean v) { this.borderVisible = v; return this; }
         public Builder borderEdges(Boolean top, Boolean right, Boolean bottom, Boolean left) {
             this.borderTop = top;
@@ -81,7 +81,7 @@ public final class RenderedTableCell {
             this.borderLeft = left;
             return this;
         }
-        public Builder backgroundColor(String v) { this.backgroundColor = emptyToNull(v); return this; }
+        public Builder backgroundColor(String v) { this.backgroundColor = RenderStyleUtil.emptyToNull(v); return this; }
         public Builder widthPercent(float v) { this.widthPercent = v > 0 ? v : null; return this; }
         public Builder minHeightPt(float v) { this.minHeightPt = v > 0 ? v : null; return this; }
         public Builder paddingPt(Float top, Float right, Float bottom, Float left) {
@@ -92,8 +92,6 @@ public final class RenderedTableCell {
             return this;
         }
         public RenderedTableCell build() { return new RenderedTableCell(this); }
-
-        private static String emptyToNull(String v) { return v == null || v.trim().isEmpty() ? null : v.trim(); }
         private static Float positiveOrNull(Float v) { return v != null && v >= 0f ? v : null; }
     }
 

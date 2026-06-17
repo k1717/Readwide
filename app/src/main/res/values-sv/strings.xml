@@ -699,4 +699,19 @@
     <string name="image_tap_paging_off">Tryckzoner för sidor: av</string>
     <string name="image_slider_direction_rtl">Bildflöde: höger till vänster</string>
     <string name="epub_force_reader_theme_colors">EPUB: använd lästemats färger</string>
+    <string name="tts_sleep_timer_finished">Timern nådd – TTS stoppad</string>
+    <string name="tts_sleep_timer">Timer</string>
+    <string name="tts_sleep_timer_off">Av</string>
+    <string name="tts_sleep_timer_15">15 minuter</string>
+    <string name="tts_sleep_timer_30">30 minuter</string>
+    <string name="tts_sleep_timer_45">45 minuter</string>
+    <string name="tts_sleep_timer_60">60 minuter</string>
+    <string name="tts_sleep_timer_custom">Anpassad…</string>
+    <string name="tts_sleep_timer_custom_minutes">Minuter (uppspelningstid)</string>
+    <string name="tts_sleep_timer_finish_sentence">Läs klart meningen innan stopp</string>
+    <string name="tts_sleep_timer_set">Timer: %1$d min</string>
+    <string name="tts_pause">Pausa</string>
+    <string name="tts_resume">Återuppta</string>
+    <string name="tts_floating_drag">Dra för att flytta</string>
+    <string name="delete_selected_includes_folders_warning">%1$d av dessa är mappar – allt deras innehåll raderas också.</string>
 </resources>

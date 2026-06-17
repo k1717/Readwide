@@ -4,12 +4,12 @@
 
 The Readwide launcher artwork source and checked-in Android launcher icon resources are project-owned artwork supplied by the project maintainer for the Readwide 1.0.x release line.
 
-- Source reference: `docs/readwide_launcher_icon_source.png` (project-supplied Readwide book icon artwork; updated for the 1.0.4 public documentation package)
+- Source reference: `docs/readwide_launcher_icon_source.png` (project-supplied Readwide book icon artwork; updated for the 1.0.5 public documentation package)
 - Checked-in Android assets: existing `app/src/main/res/mipmap-*` launcher/adaptive PNG resources and `app/src/main/ic_launcher-playstore.png`
 - Scope: app launcher, round launcher, adaptive foreground, and Play Store style icon material
 - Third-party dependency: none required for this artwork
 
-The source reference and checked-in launcher assets are treated as project-owned release assets. This cleanup package updates the source reference image only; it does not regenerate or replace the checked-in Android launcher/adaptive/play-store PNG resources. No external stock image, third-party logo, or copied upstream icon path is required for the Readwide launcher artwork.
+The source reference and checked-in launcher assets are treated as project-owned release assets. For 1.0.5 the launcher icon was re-derived from the project-owned source artwork: the book was re-centered (raised slightly for visual balance) and enlarged, composited onto the existing blue gradient, and regenerated across all `mipmap-*` densities as legacy, round, adaptive-foreground, and adaptive-background PNGs. No external stock image, third-party logo, or copied upstream icon path is required for the Readwide launcher artwork.
 
 ## UI Vector Icons
 

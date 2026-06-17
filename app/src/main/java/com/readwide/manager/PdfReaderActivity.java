@@ -346,9 +346,23 @@ public class PdfReaderActivity extends AppCompatActivity {
         }
 
         if (continuous) {
+            // Drop the Matrix view's references before recycling single-page
+            // bitmaps, so it can't draw a freed bitmap during the transition.
+            if (pdfPageMatrixView != null) pdfPageMatrixView.detachBitmaps();
             releaseSinglePageBitmap();
             renderContinuousPages();
         } else {
+            // Single-page mode: the Matrix view owns zoom via its own transform, so
+            // the page must be rendered at fit. Drop any zoom carried over from
+            // continuous mode (otherwise the fit render would be scaled up to that
+            // zoom and allocate an oversized bitmap, crashing the viewer).
+            zoom = 1.0f;
+            renderedZoom = 1.0f;
+            if (pdfPageMatrixView != null) pdfPageMatrixView.detachBitmaps();
+            singlePageCache.evictAll();
+            singlePageCacheZoom = 1.0f;
+            singlePageCacheWidth = -1;
+            singlePageCacheHeight = -1;
             resetContinuousPageViews(true);
             renderCurrentPage(currentBitmap == null);
         }
@@ -2234,6 +2248,7 @@ public class PdfReaderActivity extends AppCompatActivity {
 
     private void releaseSinglePageBitmap() {
         ++renderGeneration;
+        if (pdfPageMatrixView != null) pdfPageMatrixView.detachBitmaps();
         if (pendingSinglePagePrefetch != null) {
             handler.removeCallbacks(pendingSinglePagePrefetch);
             pendingSinglePagePrefetch = null;

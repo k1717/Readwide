@@ -43,8 +43,8 @@ public final class ParagraphStyle {
         this.lineHeightPt = b.lineHeightPt;
         this.listType = b.listType != null ? b.listType : ListType.NONE;
         this.listLevel = b.listLevel;
-        this.listLabel = emptyToNull(b.listLabel);
-        this.backgroundColor = emptyToNull(b.backgroundColor);
+        this.listLabel = RenderStyleUtil.emptyToNull(b.listLabel);
+        this.backgroundColor = RenderStyleUtil.emptyToNull(b.backgroundColor);
     }
 
     public static ParagraphStyle normal() {
@@ -95,14 +95,10 @@ public final class ParagraphStyle {
         public Builder list(ListType type, int level, String label) {
             this.listType = type != null ? type : ListType.NONE;
             this.listLevel = Math.max(0, level);
-            this.listLabel = emptyToNull(label);
+            this.listLabel = RenderStyleUtil.emptyToNull(label);
             return this;
         }
-        public Builder backgroundColor(String v) { this.backgroundColor = emptyToNull(v); return this; }
+        public Builder backgroundColor(String v) { this.backgroundColor = RenderStyleUtil.emptyToNull(v); return this; }
         public ParagraphStyle build() { return new ParagraphStyle(this); }
-    }
-
-    private static String emptyToNull(String v) {
-        return v == null || v.trim().isEmpty() ? null : v.trim();
     }
 }

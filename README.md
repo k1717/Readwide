@@ -2,13 +2,13 @@
 
 Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF, EPUB, Word-family documents, images, comic archives, and common archive workflows.
 
-Readwide is the public successor to TextView Reader. As of 1.0.4 the Android `applicationId` is `com.readwide.manager`. Earlier TextView Reader/Readwide builds used a different application ID, so 1.0.4 installs as a separate app rather than an in-place update; bookmarks, reading positions, themes, and settings transfer through the in-app JSON backup export/import.
+Readwide is the public successor to TextView Reader. Since 1.0.4 the Android `applicationId` is `com.readwide.manager`, and 1.0.5 is an in-place update over 1.0.4 when signed with the same key. Earlier TextView Reader/Readwide builds used a different application ID and install as a separate app; bookmarks, reading positions, themes, and settings transfer through the in-app JSON backup export/import.
 
 ![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)
 ![Total downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)
 
-- Current public version: **1.0.4**
-- Android metadata: `versionCode 10004`, `versionName "1.0.4"`
+- Current public version: **1.0.5**
+- Android metadata: `versionCode 10005`, `versionName "1.0.5"`
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
 - Release page: `https://github.com/k1717/Readwide/releases`
@@ -63,7 +63,7 @@ This table is a release-summary view. See the archive support matrix and the for
 
 ## FOSS / F-Droid preparation
 
-Readwide 1.0.4 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
+Readwide 1.0.5 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
 
 - First-party code is Apache-2.0.
 - The default build does not bundle Junrar or RARLAB UnRAR-license code.
@@ -99,10 +99,10 @@ Release signing is conditional. If the `TEXTVIEW_*` signing environment values a
 - `CHANGELOG.md` — public changelog.
 - `PATCHNOTES.md` — detailed public release notes.
 - `GITHUB_UPLOAD_NOTES.md` — GitHub upload checklist.
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_4.md` — copy-ready GitHub release notes.
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_5.md` — copy-ready GitHub release notes.
 - `docs/FDROID_SUBMISSION.md` — F-Droid submission notes.
 - `docs/TXT_SEARCH_USAGE.md` — reader find-in-page options for TXT and WebView document readers (case sensitive, whole word, regular expression).
 - `docs/FOSS_STATUS.md` — FOSS boundary and caveats.
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — archive compatibility wording source.
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md` — HWP/HWPX scope and license notes.
-- `docs/LICENSE_REPORT_READWIDE_1_0_4.md` and `docs/SBOM_READWIDE_1_0_4.spdx.json` — direct-dependency license/SBOM drafts.
+- `docs/LICENSE_REPORT_READWIDE_1_0_5.md` and `docs/SBOM_READWIDE_1_0_5.spdx.json` — direct-dependency license/SBOM drafts.

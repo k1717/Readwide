@@ -699,4 +699,19 @@
     <string name="image_tap_paging_off">Vùng chạm lật trang: tắt</string>
     <string name="image_slider_direction_rtl">Luồng ảnh: phải sang trái</string>
     <string name="epub_force_reader_theme_colors">EPUB: dùng màu của chủ đề đọc</string>
+    <string name="tts_sleep_timer_finished">Đã đến hẹn giờ — đã dừng đọc</string>
+    <string name="tts_sleep_timer">Hẹn giờ</string>
+    <string name="tts_sleep_timer_off">Tắt</string>
+    <string name="tts_sleep_timer_15">15 phút</string>
+    <string name="tts_sleep_timer_30">30 phút</string>
+    <string name="tts_sleep_timer_45">45 phút</string>
+    <string name="tts_sleep_timer_60">60 phút</string>
+    <string name="tts_sleep_timer_custom">Tùy chỉnh…</string>
+    <string name="tts_sleep_timer_custom_minutes">Phút (thời gian phát)</string>
+    <string name="tts_sleep_timer_finish_sentence">Đọc hết câu hiện tại trước khi dừng</string>
+    <string name="tts_sleep_timer_set">Hẹn giờ: %1$d phút</string>
+    <string name="tts_pause">Tạm dừng</string>
+    <string name="tts_resume">Tiếp tục</string>
+    <string name="tts_floating_drag">Kéo để di chuyển</string>
+    <string name="delete_selected_includes_folders_warning">%1$d trong số này là thư mục — toàn bộ nội dung bên trong cũng sẽ bị xóa.</string>
 </resources>

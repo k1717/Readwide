@@ -1,6 +1,6 @@
 # Draft metadata for an F-Droid Data merge request.
 # Copy this file to fdroiddata/metadata/com.readwide.manager.yml after
-# creating and pushing the immutable v1.0.4 Git tag.
+# creating and pushing the immutable v1.0.5 Git tag.
 
 Categories:
   - Reading
@@ -50,7 +50,16 @@ Builds:
       - 'yes'
     prebuild:
       - chmod +x gradlew scripts/clean_removed_sources.sh scripts/generate_rar_fixture_reports.sh scripts/generate_archive_fixture_reports.sh
+  - versionName: '1.0.5'
+    versionCode: 10005
+    commit: v1.0.5
+    rm:
+      - gradle/wrapper/gradle-wrapper.jar
+    gradle:
+      - 'yes'
+    prebuild:
+      - chmod +x gradlew scripts/clean_removed_sources.sh scripts/generate_rar_fixture_reports.sh scripts/generate_archive_fixture_reports.sh
 AutoUpdateMode: Version v%v
 UpdateCheckMode: Tags
-CurrentVersion: '1.0.4'
-CurrentVersionCode: 10004
+CurrentVersion: '1.0.5'
+CurrentVersionCode: 10005

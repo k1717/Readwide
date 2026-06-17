@@ -49,10 +49,11 @@ final class TtsSegmenter {
     }
 
     private static int findPreferredEnd(@NonNull String text, int start, int hardEnd) {
-        if (hardEnd >= text.length()) return text.length();
+        boolean reachesEnd = hardEnd >= text.length();
+        int scanEnd = Math.min(hardEnd, text.length());
 
-        int minUseful = start + Math.min(80, Math.max(8, (hardEnd - start) / 8));
-        for (int i = Math.max(start, minUseful); i < hardEnd; i++) {
+        int minUseful = start + Math.min(80, Math.max(8, (scanEnd - start) / 8));
+        for (int i = Math.max(start, minUseful); i < scanEnd; i++) {
             if (isSentenceTerminator(text.charAt(i))) {
                 int sentence = i + 1;
                 while (sentence < text.length() && isClosingPunctuation(text.charAt(sentence))) {
@@ -61,6 +62,9 @@ final class TtsSegmenter {
                 return sentence;
             }
         }
+
+        // No sentence terminator found in range.
+        if (reachesEnd) return text.length();
 
         int paragraph = text.lastIndexOf("\n\n", hardEnd);
         if (paragraph >= minUseful) return paragraph + 1;

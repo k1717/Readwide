@@ -20,7 +20,7 @@ final class RarPpmdPrimaryContextDecoder {
     static Result decode(@NonNull RarPpmdContext context,
                          @NonNull RarPpmdRangeDecoder rangeDecoder,
                          @NonNull RarPpmdEscapeMask mask) throws IOException {
-        return decode(context, rangeDecoder, mask, RarPpmdPrimaryUpdatePolicy.unrarShaped());
+        return decode(context, rangeDecoder, mask, RarPpmdPrimaryUpdatePolicy.referenceShaped());
     }
 
     @NonNull

@@ -52,6 +52,8 @@ final class ReaderLargeTextExactAnchorBuildController {
 
         List<TextDisplayRule> activeRules =
                 TextDisplayRuleManager.getActiveRules(activity.getApplicationContext(), loadedFilePath);
+        TextDisplayRuleManager.CompiledRules compiledRules =
+                TextDisplayRuleManager.compile(activeRules);
         try (BufferedReader reader = LargeTextPartitionReader.openReader(
                 source, activity.resolveTextEncodingForFile(source))) {
             String lineText;
@@ -60,7 +62,7 @@ final class ReaderLargeTextExactAnchorBuildController {
 
                 sawAnyLine = true;
                 String normalized = FileUtils.enforceTextPresentationSelectors(lineText);
-                normalized = TextDisplayRuleManager.apply(normalized, activeRules);
+                normalized = TextDisplayRuleManager.apply(normalized, compiledRules);
                 windowStarts.add(globalChar);
                 windowLines.add(normalized);
                 globalChar += normalized.length() + 1;

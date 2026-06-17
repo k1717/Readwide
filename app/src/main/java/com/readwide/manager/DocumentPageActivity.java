@@ -1923,12 +1923,11 @@ public class DocumentPageActivity extends AppCompatActivity {
 
 
     private String cssColor(int color) {
-        return String.format(Locale.US, "#%06X", 0xFFFFFF & color);
+        return CssUtils.cssColor(color);
     }
 
     private String cssQuote(String text) {
-        if (text == null) return "";
-        return text.replace("\\", "\\\\").replace("'", "\\'");
+        return CssUtils.cssQuote(text);
     }
 
 

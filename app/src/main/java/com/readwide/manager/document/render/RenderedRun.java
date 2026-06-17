@@ -18,7 +18,7 @@ public final class RenderedRun {
         this.style = style != null ? style : TextStyle.plain();
         this.anchorStart = anchorStart;
         this.anchorEnd = anchorEnd;
-        this.linkHref = emptyToNull(linkHref);
+        this.linkHref = RenderStyleUtil.emptyToNull(linkHref);
         this.elementId = safeElementId(elementId);
     }
 
@@ -44,10 +44,6 @@ public final class RenderedRun {
 
     public boolean hasElementId() {
         return elementId != null;
-    }
-
-    private static String emptyToNull(String v) {
-        return v == null || v.trim().isEmpty() ? null : v.trim();
     }
 
     private static String safeElementId(String v) {

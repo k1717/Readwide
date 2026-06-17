@@ -7,10 +7,10 @@ import java.io.IOException;
 /**
  * First-party diagnostic skeleton for RAR3/RAR4 PPMd CreateSuccessors-style materialization.
  *
- * <p>UnRAR's PPMd model does not treat every {@code FoundState.Successor} as an already-built
+ * <p>The reference RAR PPMd model does not treat every {@code FoundState.Successor} as an already-built
  * context pointer. Some successors are text-position/pending successors that are materialized into
  * contexts only when the model later needs to traverse them. This class keeps that distinction in
- * our own representation without copying UnRAR code or constants. The current implementation is
+ * our own representation without copying reference RAR code or constants. The current implementation is
  * intentionally conservative: it creates a bounded order-1/order-2 context and seeds it with the
  * decoded state symbol at frequency 1 so fixture probes can distinguish an empty materialized
  * context from a minimally linked one. It remains a diagnostic scaffold and is not a production

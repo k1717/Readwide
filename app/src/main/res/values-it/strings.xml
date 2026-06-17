@@ -699,4 +699,19 @@
     <string name="image_tap_paging_off">Zone pagina touch: disattive</string>
     <string name="image_slider_direction_rtl">Flusso immagini: da destra a sinistra</string>
     <string name="epub_force_reader_theme_colors">EPUB: usa i colori del tema di lettura</string>
+    <string name="tts_sleep_timer_finished">Timer scaduto — TTS interrotto</string>
+    <string name="tts_sleep_timer">Timer</string>
+    <string name="tts_sleep_timer_off">Disattivato</string>
+    <string name="tts_sleep_timer_15">15 minuti</string>
+    <string name="tts_sleep_timer_30">30 minuti</string>
+    <string name="tts_sleep_timer_45">45 minuti</string>
+    <string name="tts_sleep_timer_60">60 minuti</string>
+    <string name="tts_sleep_timer_custom">Personalizzato…</string>
+    <string name="tts_sleep_timer_custom_minutes">Minuti (tempo di riproduzione)</string>
+    <string name="tts_sleep_timer_finish_sentence">Termina la frase corrente prima di fermarti</string>
+    <string name="tts_sleep_timer_set">Timer: %1$d min</string>
+    <string name="tts_pause">Pausa</string>
+    <string name="tts_resume">Riprendi</string>
+    <string name="tts_floating_drag">Trascina per spostare</string>
+    <string name="delete_selected_includes_folders_warning">%1$d di questi sono cartelle: verrà eliminato anche tutto il loro contenuto.</string>
 </resources>

@@ -699,4 +699,19 @@
     <string name="image_tap_paging_off">टच पेज क्षेत्र: बंद</string>
     <string name="image_slider_direction_rtl">चित्र प्रवाह: दाएँ से बाएँ</string>
     <string name="epub_force_reader_theme_colors">EPUB: पढ़ने वाली थीम के रंग इस्तेमाल करें</string>
+    <string name="tts_sleep_timer_finished">टाइमर पूरा — TTS रोक दिया गया</string>
+    <string name="tts_sleep_timer">टाइमर</string>
+    <string name="tts_sleep_timer_off">बंद</string>
+    <string name="tts_sleep_timer_15">15 मिनट</string>
+    <string name="tts_sleep_timer_30">30 मिनट</string>
+    <string name="tts_sleep_timer_45">45 मिनट</string>
+    <string name="tts_sleep_timer_60">60 मिनट</string>
+    <string name="tts_sleep_timer_custom">कस्टम…</string>
+    <string name="tts_sleep_timer_custom_minutes">मिनट (प्लेबैक समय)</string>
+    <string name="tts_sleep_timer_finish_sentence">रोकने से पहले मौजूदा वाक्य पूरा पढ़ें</string>
+    <string name="tts_sleep_timer_set">टाइमर: %1$d मिनट</string>
+    <string name="tts_pause">रोकें</string>
+    <string name="tts_resume">जारी रखें</string>
+    <string name="tts_floating_drag">ले जाने के लिए खींचें</string>
+    <string name="delete_selected_includes_folders_warning">इनमें से %1$d फ़ोल्डर हैं — उनकी सारी सामग्री भी हटा दी जाएगी.</string>
 </resources>

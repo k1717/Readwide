@@ -710,4 +710,19 @@
     <string name="image_tap_paging_off">터치 페이지 이동: 꺼짐</string>
     <string name="image_slider_direction_rtl">이미지 흐름: 우에서 좌</string>
     <string name="epub_force_reader_theme_colors">EPUB에서 읽기 테마 색상 우선</string>
+    <string name="tts_sleep_timer_finished">타이머 종료 — TTS를 멈췄습니다</string>
+    <string name="tts_sleep_timer">타이머</string>
+    <string name="tts_sleep_timer_off">끄기</string>
+    <string name="tts_sleep_timer_15">15분</string>
+    <string name="tts_sleep_timer_30">30분</string>
+    <string name="tts_sleep_timer_45">45분</string>
+    <string name="tts_sleep_timer_60">60분</string>
+    <string name="tts_sleep_timer_custom">사용자 지정…</string>
+    <string name="tts_sleep_timer_custom_minutes">분 (재생 시간)</string>
+    <string name="tts_sleep_timer_finish_sentence">멈추기 전에 현재 문장을 끝까지 읽기</string>
+    <string name="tts_sleep_timer_set">타이머: %1$d분</string>
+    <string name="tts_pause">일시정지</string>
+    <string name="tts_resume">계속</string>
+    <string name="tts_floating_drag">드래그하여 이동</string>
+    <string name="delete_selected_includes_folders_warning">이 중 %1$d개는 폴더입니다 — 폴더 안의 모든 내용도 함께 삭제됩니다.</string>
 </resources>

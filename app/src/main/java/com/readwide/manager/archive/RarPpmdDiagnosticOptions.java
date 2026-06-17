@@ -64,7 +64,7 @@ final class RarPpmdDiagnosticOptions {
                                      boolean rarPrimaryRootOnly) throws IOException {
         this(name, contextFallbackEnabled, rootContextEnabled, fixedEscapeScale, seeMode,
                 rarPrimaryRootEnabled, rarPrimaryRootOnly,
-                RarPpmdPrimaryUpdatePolicy.unrarShaped(), false, false);
+                RarPpmdPrimaryUpdatePolicy.referenceShaped(), false, false);
     }
 
     private RarPpmdDiagnosticOptions(@NonNull String name,
@@ -232,42 +232,42 @@ final class RarPpmdDiagnosticOptions {
     static RarPpmdDiagnosticOptions rarPrimaryRootCursor() throws IOException {
         return new RarPpmdDiagnosticOptions("rar-primary-root-cursor", true, true,
                 NO_FIXED_ESCAPE_SCALE, SEE_MODE_STANDARD, true, false,
-                RarPpmdPrimaryUpdatePolicy.unrarShaped(), true, false);
+                RarPpmdPrimaryUpdatePolicy.referenceShaped(), true, false);
     }
 
     @NonNull
     static RarPpmdDiagnosticOptions rarPrimaryRootCursorLoop() throws IOException {
         return new RarPpmdDiagnosticOptions("rar-primary-root-cursor-loop", true, true,
                 NO_FIXED_ESCAPE_SCALE, SEE_MODE_STANDARD, true, false,
-                RarPpmdPrimaryUpdatePolicy.unrarShaped(), true, true);
+                RarPpmdPrimaryUpdatePolicy.referenceShaped(), true, true);
     }
 
     @NonNull
     static RarPpmdDiagnosticOptions rarPrimaryRootCursorOrderFall() throws IOException {
         return new RarPpmdDiagnosticOptions("rar-primary-root-cursor-orderfall", true, true,
                 NO_FIXED_ESCAPE_SCALE, SEE_MODE_STANDARD, true, false,
-                RarPpmdPrimaryUpdatePolicy.unrarShaped(), true, false, false, true);
+                RarPpmdPrimaryUpdatePolicy.referenceShaped(), true, false, false, true);
     }
 
     @NonNull
     static RarPpmdDiagnosticOptions rarPrimaryRootCursorLoopTerminal() throws IOException {
         return new RarPpmdDiagnosticOptions("rar-primary-root-cursor-loop-terminal", true, true,
                 NO_FIXED_ESCAPE_SCALE, SEE_MODE_STANDARD, true, false,
-                RarPpmdPrimaryUpdatePolicy.unrarShaped(), true, true, true, true);
+                RarPpmdPrimaryUpdatePolicy.referenceShaped(), true, true, true, true);
     }
 
     @NonNull
     static RarPpmdDiagnosticOptions rarPrimaryRootPendingSuccessor() throws IOException {
         return new RarPpmdDiagnosticOptions("rar-primary-root-pending-successor", true, true,
                 NO_FIXED_ESCAPE_SCALE, SEE_MODE_STANDARD, true, false,
-                RarPpmdPrimaryUpdatePolicy.unrarShaped(), true, false, false, true, true);
+                RarPpmdPrimaryUpdatePolicy.referenceShaped(), true, false, false, true, true);
     }
 
     @NonNull
     static RarPpmdDiagnosticOptions rarPrimaryRootCreateSuccessors() throws IOException {
         return new RarPpmdDiagnosticOptions("rar-primary-root-create-successors", true, true,
                 NO_FIXED_ESCAPE_SCALE, SEE_MODE_STANDARD, true, false,
-                RarPpmdPrimaryUpdatePolicy.unrarShaped(), true, false, false, true, true,
+                RarPpmdPrimaryUpdatePolicy.referenceShaped(), true, false, false, true, true,
                 RarPpmdCreateSuccessors.SEED_OWNER_SYMBOL);
     }
 
@@ -275,7 +275,7 @@ final class RarPpmdDiagnosticOptions {
     static RarPpmdDiagnosticOptions rarPrimaryRootCreateSuccessorsPendingSeed() throws IOException {
         return new RarPpmdDiagnosticOptions("rar-primary-root-create-successors-pending-seed", true, true,
                 NO_FIXED_ESCAPE_SCALE, SEE_MODE_STANDARD, true, false,
-                RarPpmdPrimaryUpdatePolicy.unrarShaped(), true, false, false, true, true,
+                RarPpmdPrimaryUpdatePolicy.referenceShaped(), true, false, false, true, true,
                 RarPpmdCreateSuccessors.SEED_PENDING_SYMBOL);
     }
 
@@ -283,7 +283,7 @@ final class RarPpmdDiagnosticOptions {
     static RarPpmdDiagnosticOptions rarPrimaryRootCreateSuccessorsHistorySeed() throws IOException {
         return new RarPpmdDiagnosticOptions("rar-primary-root-create-successors-history-seed", true, true,
                 NO_FIXED_ESCAPE_SCALE, SEE_MODE_STANDARD, true, false,
-                RarPpmdPrimaryUpdatePolicy.unrarShaped(), true, false, false, true, true,
+                RarPpmdPrimaryUpdatePolicy.referenceShaped(), true, false, false, true, true,
                 RarPpmdCreateSuccessors.SEED_HISTORY_NEWEST);
     }
 

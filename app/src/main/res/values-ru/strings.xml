@@ -699,4 +699,19 @@
     <string name="image_tap_paging_off">Сенсорные зоны страниц: выкл.</string>
     <string name="image_slider_direction_rtl">Поток изображений: справа налево</string>
     <string name="epub_force_reader_theme_colors">EPUB: использовать цвета темы чтения</string>
+    <string name="tts_sleep_timer_finished">Таймер сработал — TTS остановлен</string>
+    <string name="tts_sleep_timer">Таймер</string>
+    <string name="tts_sleep_timer_off">Выкл.</string>
+    <string name="tts_sleep_timer_15">15 минут</string>
+    <string name="tts_sleep_timer_30">30 минут</string>
+    <string name="tts_sleep_timer_45">45 минут</string>
+    <string name="tts_sleep_timer_60">60 минут</string>
+    <string name="tts_sleep_timer_custom">Другое…</string>
+    <string name="tts_sleep_timer_custom_minutes">Минуты (время воспроизведения)</string>
+    <string name="tts_sleep_timer_finish_sentence">Дочитать текущее предложение перед остановкой</string>
+    <string name="tts_sleep_timer_set">Таймер: %1$d мин</string>
+    <string name="tts_pause">Пауза</string>
+    <string name="tts_resume">Продолжить</string>
+    <string name="tts_floating_drag">Перетащите, чтобы переместить</string>
+    <string name="delete_selected_includes_folders_warning">Из них %1$d — папки: всё их содержимое также будет удалено.</string>
 </resources>

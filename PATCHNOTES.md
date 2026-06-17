@@ -1,6 +1,64 @@
 # Patch Notes
 
-## Readwide 1.0.4 - 2026-06-14
+## Readwide 1.0.5 - 2026-06-17
+
+### Release scope
+
+- Android metadata is `versionCode 10005` and `versionName "1.0.5"`.
+- Keeps the `com.readwide.manager` applicationId from 1.0.4, so 1.0.5 installs as an in-place update over 1.0.4 when signed with the same key.
+- This release centers on a text-to-speech overhaul, a folder-aware multi-select delete confirmation, two PDF mode-switch crash fixes, a text-rule performance fix, and internal code cleanup.
+
+### Final changes included in this release
+
+**Text-to-speech — sleep timer**
+
+- Added a sleep timer with Off / 15 / 30 / 45 / 60-minute presets and a custom-minutes entry (0–600). An optional "finish the current sentence" setting lets playback complete the sentence in progress before stopping.
+- The timer measures playback time only: time spent paused does not count toward it. When it expires, playback stops.
+- The timer can be changed mid-playback and takes effect immediately. The setting is shown as "Timer" in the UI.
+
+**Text-to-speech — pause, resume, and session**
+
+- Added real pause and resume. Pausing stops speech but keeps the session active and remembers the current sentence; resuming continues from that sentence rather than restarting from a saved character position. Because the Android speech engine cannot pause mid-sentence, resume replays from the start of the interrupted sentence.
+- A paused session now persists its position when you leave the app, so playback can resume where it left off on return.
+
+**Text-to-speech — floating control card**
+
+- Added a floating control card over the text reader (TXT) with play/pause and stop buttons. It appears while TTS is active, reflects the paused state on its play/pause button, and can be dragged anywhere on screen; a tap on either button is distinguished from a drag by the touch slop.
+- The card complements, and stays in sync with, the existing foreground-service notification, lock-screen controls, and Bluetooth/media-button controls.
+
+**Text-to-speech — audio policy**
+
+- TTS keeps reading when you scroll or move within the page; manual navigation no longer stops playback. As a result the reading position and the visible position can diverge.
+- Audio focus is now requested for speech playback. A transient focus loss (for example a phone call) pauses playback and auto-resumes when focus returns; a permanent loss (another app taking over media) stops playback.
+- Unplugging headphones (audio becoming noisy) now pauses playback instead of stopping it, so it can be resumed after reconnecting.
+
+**Text-to-speech — translations**
+
+- All new text-to-speech strings (sleep-timer presets and labels, pause/resume, and the folder-warning message) were translated across the bundled locales: Arabic, German, Greek, Spanish, French, Hindi, Indonesian, Italian, Japanese, Korean, Dutch, Polish, Portuguese, Russian, Swedish, Thai, Turkish, Ukrainian, Vietnamese, Simplified Chinese, and Traditional Chinese, with English as the fallback.
+
+**Files**
+
+- The multi-select delete confirmation now appends a warning when the selection includes one or more folders, stating that all of their contents will be deleted too. The warning is shown only when at least one folder is selected. All real file and folder deletions in the app continue to pass through a confirmation dialog; the single-file action-sheet delete and the image-viewer delete are unchanged.
+
+**Fixes**
+
+- Fixed a PDF crash when switching from a zoomed-in vertical (continuous) view into horizontal (single-page) mode. The single-page render reused the carried-over zoom factor and could allocate an oversized bitmap; single-page mode now resets to fit and evicts the stale single-page cache on entry.
+- Fixed a second PDF crash when switching display modes, where the matrix page view could draw a bitmap that the activity had already recycled. The view now detaches its bitmap references before any recycle and skips drawing a null or recycled bitmap.
+- Fixed text-to-speech sentence segmentation for short pages. A page shorter than the internal segment size was returned as a single segment, so pause/resume rewound to the start of the page; segmentation now always splits by sentence terminator, so resume continues from the correct sentence.
+- Made the navigation drawer's Recent shortcut respond immediately. Building the recent list scanned saved reading states on the main thread (checking file existence and cleaning up stale or image-only entries) before the list appeared; the scan and cleanup now run on a background thread.
+
+**Performance**
+
+- Text display rules compile their regular expressions once per file load instead of once per line. When a large text file is read line by line with active regex rules, each rule's pattern was recompiled for every line; rules are now pre-compiled and reused, so compilation scales with the rule count rather than the line count. Invalid user regexes are skipped at compile time, matching the previous fail-safe behavior, and files with no rules or only literal rules are unaffected.
+
+**Internal**
+
+- Removed dead code (an unused stop-on-navigation path left over after TTS stopped halting on scroll) and an unused, fully duplicated color utility class.
+- Consolidated duplicated helpers into shared utilities: CSS quoting/coloring, same-or-child path checks, and an empty-to-null string helper used by the document render builders.
+- Collapsed a redundant tap-zone action overload into a single method.
+- Split the text-to-speech controller's sleep-timer dialog and its stateless dialog view builders into their own classes, reducing the controller's size without changing behavior.
+
+## Readwide 1.0.4 - 2026-06-16
 
 ### Release scope
 

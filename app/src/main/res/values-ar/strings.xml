@@ -699,4 +699,19 @@
     <string name="image_tap_paging_off">مناطق تقليب الصفحة باللمس: إيقاف</string>
     <string name="image_slider_direction_rtl">تدفق الصور: من اليمين إلى اليسار</string>
     <string name="epub_force_reader_theme_colors">EPUB: استخدام ألوان سمة القراءة</string>
+    <string name="tts_sleep_timer_finished">انتهى المؤقّت — تم إيقاف القراءة الصوتية</string>
+    <string name="tts_sleep_timer">المؤقّت</string>
+    <string name="tts_sleep_timer_off">إيقاف</string>
+    <string name="tts_sleep_timer_15">15 دقيقة</string>
+    <string name="tts_sleep_timer_30">30 دقيقة</string>
+    <string name="tts_sleep_timer_45">45 دقيقة</string>
+    <string name="tts_sleep_timer_60">60 دقيقة</string>
+    <string name="tts_sleep_timer_custom">مخصّص…</string>
+    <string name="tts_sleep_timer_custom_minutes">الدقائق (وقت التشغيل)</string>
+    <string name="tts_sleep_timer_finish_sentence">إنهاء الجملة الحالية قبل التوقف</string>
+    <string name="tts_sleep_timer_set">المؤقّت: %1$d دقيقة</string>
+    <string name="tts_pause">إيقاف مؤقت</string>
+    <string name="tts_resume">استئناف</string>
+    <string name="tts_floating_drag">اسحب للتحريك</string>
+    <string name="delete_selected_includes_folders_warning">%1$d من هذه العناصر مجلدات — سيتم حذف كل محتوياتها أيضًا.</string>
 </resources>

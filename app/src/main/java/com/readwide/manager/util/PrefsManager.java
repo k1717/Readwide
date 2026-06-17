@@ -915,6 +915,24 @@ public class PrefsManager {
         return Math.max(0L, prefs.getLong("tts_last_timestamp", 0L));
     }
 
+    /** Sleep-timer duration in minutes of playback time; 0 means off. */
+    public int getTtsSleepTimerMinutes() {
+        return Math.max(0, prefs.getInt("tts_sleep_timer_minutes", 0));
+    }
+
+    public void setTtsSleepTimerMinutes(int minutes) {
+        prefs.edit().putInt("tts_sleep_timer_minutes", Math.max(0, minutes)).apply();
+    }
+
+    /** When the timer elapses, finish the current sentence before stopping. */
+    public boolean getTtsSleepTimerFinishSentence() {
+        return prefs.getBoolean("tts_sleep_timer_finish_sentence", true);
+    }
+
+    public void setTtsSleepTimerFinishSentence(boolean finishSentence) {
+        prefs.edit().putBoolean("tts_sleep_timer_finish_sentence", finishSentence).apply();
+    }
+
     private String normalizeTtsLanguageTag(String tag) {
         if ("ko".equals(tag) || "en".equals(tag) || "ja".equals(tag)
                 || "zh-CN".equals(tag) || "zh-TW".equals(tag)

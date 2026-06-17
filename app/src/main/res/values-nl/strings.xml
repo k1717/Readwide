@@ -699,4 +699,19 @@
     <string name="image_tap_paging_off">Touchpaginazones: uit</string>
     <string name="image_slider_direction_rtl">Afbeeldingsrichting: rechts naar links</string>
     <string name="epub_force_reader_theme_colors">EPUB: kleuren van leesthema gebruiken</string>
+    <string name="tts_sleep_timer_finished">Timer verstreken — TTS gestopt</string>
+    <string name="tts_sleep_timer">Timer</string>
+    <string name="tts_sleep_timer_off">Uit</string>
+    <string name="tts_sleep_timer_15">15 minuten</string>
+    <string name="tts_sleep_timer_30">30 minuten</string>
+    <string name="tts_sleep_timer_45">45 minuten</string>
+    <string name="tts_sleep_timer_60">60 minuten</string>
+    <string name="tts_sleep_timer_custom">Aangepast…</string>
+    <string name="tts_sleep_timer_custom_minutes">Minuten (afspeeltijd)</string>
+    <string name="tts_sleep_timer_finish_sentence">Huidige zin afmaken voordat je stopt</string>
+    <string name="tts_sleep_timer_set">Timer: %1$d min</string>
+    <string name="tts_pause">Pauzeren</string>
+    <string name="tts_resume">Hervatten</string>
+    <string name="tts_floating_drag">Sleep om te verplaatsen</string>
+    <string name="delete_selected_includes_folders_warning">%1$d hiervan zijn mappen — al hun inhoud wordt ook verwijderd.</string>
 </resources>

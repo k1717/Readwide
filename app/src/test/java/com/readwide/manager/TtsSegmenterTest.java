@@ -41,6 +41,21 @@ public class TtsSegmenterTest {
     }
 
     @Test
+    public void segmentPage_shortPageStillSplitsBySentence() {
+        // Regression: a page shorter than maxSegmentChars must split by sentence,
+        // not collapse into a single segment (which made pause/resume rewind to
+        // the page start).
+        String text = "Hello world. This is a short page. Done.";
+
+        List<TtsSpeechSegment> segments = TtsSegmenter.segmentPage(text, 0, 700);
+
+        assertEquals(3, segments.size());
+        assertEquals("Hello world.", segments.get(0).speechText);
+        assertEquals("This is a short page.", segments.get(1).speechText);
+        assertEquals("Done.", segments.get(2).speechText);
+    }
+
+    @Test
     public void normalizeForSpeech_trimsTabsAndExcessBlankLines() {
         assertEquals("hello world\n\nagain",
                 TtsSegmenter.normalizeForSpeech("  hello\tworld\n\n\n\nagain  "));

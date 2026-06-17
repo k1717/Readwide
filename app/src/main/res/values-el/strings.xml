@@ -699,4 +699,19 @@
     <string name="image_tap_paging_off">Ζώνες αφής για σελίδες: ανενεργές</string>
     <string name="image_slider_direction_rtl">Ροή εικόνων: δεξιά προς αριστερά</string>
     <string name="epub_force_reader_theme_colors">EPUB: χρήση χρωμάτων θέματος ανάγνωσης</string>
+    <string name="tts_sleep_timer_finished">Έληξε το χρονόμετρο — η εκφώνηση σταμάτησε</string>
+    <string name="tts_sleep_timer">Χρονόμετρο</string>
+    <string name="tts_sleep_timer_off">Ανενεργό</string>
+    <string name="tts_sleep_timer_15">15 λεπτά</string>
+    <string name="tts_sleep_timer_30">30 λεπτά</string>
+    <string name="tts_sleep_timer_45">45 λεπτά</string>
+    <string name="tts_sleep_timer_60">60 λεπτά</string>
+    <string name="tts_sleep_timer_custom">Προσαρμογή…</string>
+    <string name="tts_sleep_timer_custom_minutes">Λεπτά (χρόνος αναπαραγωγής)</string>
+    <string name="tts_sleep_timer_finish_sentence">Ολοκλήρωση της τρέχουσας πρότασης πριν τη διακοπή</string>
+    <string name="tts_sleep_timer_set">Χρονόμετρο: %1$d λεπτά</string>
+    <string name="tts_pause">Παύση</string>
+    <string name="tts_resume">Συνέχιση</string>
+    <string name="tts_floating_drag">Σύρετε για μετακίνηση</string>
+    <string name="delete_selected_includes_folders_warning">%1$d από αυτά είναι φάκελοι — θα διαγραφούν και όλα τα περιεχόμενά τους.</string>
 </resources>

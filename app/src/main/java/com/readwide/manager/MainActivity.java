@@ -1985,22 +1985,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     private boolean isSameOrChildPath(String candidatePath, String rootPath) {
-        if (candidatePath == null || rootPath == null) return false;
-        String candidate = candidatePath.trim();
-        String root = rootPath.trim();
-        if (candidate.isEmpty() || root.isEmpty()) return false;
-
-        try {
-            candidate = new File(candidate).getCanonicalPath();
-            root = new File(root).getCanonicalPath();
-        } catch (IOException ignored) {
-            candidate = new File(candidate).getAbsolutePath();
-            root = new File(root).getAbsolutePath();
-        }
-
-        if (candidate.equals(root)) return true;
-        String normalizedRoot = root.endsWith(File.separator) ? root : root + File.separator;
-        return candidate.startsWith(normalizedRoot);
+        return com.readwide.manager.util.FileUtils.isSameOrChildPath(candidatePath, rootPath);
     }
 
     boolean deleteRecursive(File file) {

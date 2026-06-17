@@ -705,4 +705,19 @@ Kurallar: %2$d etkin kural</string>
     <string name="image_tap_paging_off">Dokunma sayfa bölgeleri: kapalı</string>
     <string name="image_slider_direction_rtl">Görüntü akışı: sağdan sola</string>
     <string name="epub_force_reader_theme_colors">EPUB: okuma teması renklerini kullan</string>
+    <string name="tts_sleep_timer_finished">Zamanlayıcı doldu — TTS durduruldu</string>
+    <string name="tts_sleep_timer">Zamanlayıcı</string>
+    <string name="tts_sleep_timer_off">Kapalı</string>
+    <string name="tts_sleep_timer_15">15 dakika</string>
+    <string name="tts_sleep_timer_30">30 dakika</string>
+    <string name="tts_sleep_timer_45">45 dakika</string>
+    <string name="tts_sleep_timer_60">60 dakika</string>
+    <string name="tts_sleep_timer_custom">Özel…</string>
+    <string name="tts_sleep_timer_custom_minutes">Dakika (oynatma süresi)</string>
+    <string name="tts_sleep_timer_finish_sentence">Durmadan önce mevcut cümleyi bitir</string>
+    <string name="tts_sleep_timer_set">Zamanlayıcı: %1$d dk</string>
+    <string name="tts_pause">Duraklat</string>
+    <string name="tts_resume">Sürdür</string>
+    <string name="tts_floating_drag">Taşımak için sürükleyin</string>
+    <string name="delete_selected_includes_folders_warning">Bunlardan %1$d tanesi klasör — içindeki tüm öğeler de silinecek.</string>
 </resources>

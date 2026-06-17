@@ -733,4 +733,28 @@ public class FileUtils {
         }
         return suspicious <= Math.max(2, read / 20);
     }
+
+    /**
+     * True if {@code candidatePath} is the same as, or a descendant of,
+     * {@code rootPath}. Uses canonical paths when resolvable, falling back to
+     * absolute paths. Consolidated from MainActivity / MainRecentFilesController.
+     */
+    public static boolean isSameOrChildPath(String candidatePath, String rootPath) {
+        if (candidatePath == null || rootPath == null) return false;
+        String candidate = candidatePath.trim();
+        String root = rootPath.trim();
+        if (candidate.isEmpty() || root.isEmpty()) return false;
+
+        try {
+            candidate = new File(candidate).getCanonicalPath();
+            root = new File(root).getCanonicalPath();
+        } catch (IOException ignored) {
+            candidate = new File(candidate).getAbsolutePath();
+            root = new File(root).getAbsolutePath();
+        }
+
+        if (candidate.equals(root)) return true;
+        String normalizedRoot = root.endsWith(File.separator) ? root : root + File.separator;
+        return candidate.startsWith(normalizedRoot);
+    }
 }

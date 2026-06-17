@@ -9,11 +9,11 @@ import org.junit.Test;
 public class RarPpmdPrimaryUpdatePolicyTest {
     @Test
     public void primaryUpdatePoliciesExposeDiagnosticKnobs() throws Exception {
-        RarPpmdPrimaryUpdatePolicy unrar = RarPpmdPrimaryUpdatePolicy.unrarShaped();
-        assertEquals("unrar-shaped", unrar.name());
-        assertEquals(4, unrar.frequencyDelta());
-        assertTrue(unrar.promoteOneStepIfMoreFrequent());
-        assertTrue(unrar.rescaleIfNeeded());
+        RarPpmdPrimaryUpdatePolicy reference = RarPpmdPrimaryUpdatePolicy.referenceShaped();
+        assertEquals("reference-shaped", reference.name());
+        assertEquals(4, reference.frequencyDelta());
+        assertTrue(reference.promoteOneStepIfMoreFrequent());
+        assertTrue(reference.rescaleIfNeeded());
 
         RarPpmdPrimaryUpdatePolicy frozen = RarPpmdPrimaryUpdatePolicy.frozen();
         assertEquals("frozen", frozen.name());
@@ -25,7 +25,7 @@ public class RarPpmdPrimaryUpdatePolicyTest {
     @Test
     public void diagnosticOptionsCarryPrimaryUpdatePolicy() throws Exception {
         assertTrue(RarPpmdDiagnosticOptions.rarPrimaryRoot().diagnostic()
-                .contains("primaryUpdatePolicy={name=unrar-shaped"));
+                .contains("primaryUpdatePolicy={name=reference-shaped"));
         assertTrue(RarPpmdDiagnosticOptions.rarPrimaryRootFrozen().diagnostic()
                 .contains("primaryUpdatePolicy={name=frozen"));
     }

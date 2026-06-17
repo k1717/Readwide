@@ -86,31 +86,92 @@ public final class TextDisplayRuleManager {
         if (text == null || text.isEmpty() || rules == null || rules.isEmpty()) {
             return text != null ? text : "";
         }
-        String result = text;
-        for (TextDisplayRule rule : rules) {
-            if (rule == null || !rule.enabled || !rule.isValid()) continue;
-            result = rule.useRegex
-                    ? replaceRegexSafely(result, rule.findText, rule.replacementText, rule.caseSensitive)
-                    : replaceLiteral(result, rule.findText, rule.replacementText, rule.caseSensitive);
-        }
-        return result;
+        return apply(text, compile(rules));
     }
 
-    private static String replaceRegexSafely(String source, String patternText, String replacement, boolean caseSensitive) {
-        if (source == null || source.isEmpty() || patternText == null || patternText.isEmpty()) {
-            return source != null ? source : "";
+    /**
+     * A set of display rules with their regex patterns compiled once. Build this
+     * outside a per-line loop with {@link #compile(List)} and reuse it for every
+     * line via {@link #apply(String, CompiledRules)}, instead of recompiling each
+     * rule's pattern on every call.
+     */
+    public static final class CompiledRules {
+        private final CompiledRule[] rules;
+
+        private CompiledRules(CompiledRule[] rules) {
+            this.rules = rules;
         }
-        String repl = replacement != null ? replacement : "";
-        try {
-            int flags = Pattern.MULTILINE;
-            if (!caseSensitive) flags |= Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE;
-            Pattern pattern = Pattern.compile(patternText, flags);
-            Matcher matcher = pattern.matcher(source);
-            return matcher.replaceAll(repl);
-        } catch (IllegalArgumentException | IndexOutOfBoundsException ex) {
-            // Bad user regex or invalid replacement group should not break file loading.
-            return source;
+
+        boolean isEmpty() {
+            return rules.length == 0;
         }
+    }
+
+    private static final class CompiledRule {
+        final Pattern pattern;          // non-null for regex rules; null for literal rules
+        final String find;              // literal find text (literal rules only)
+        final String replacement;
+        final boolean caseSensitive;
+
+        CompiledRule(Pattern pattern, String find, String replacement, boolean caseSensitive) {
+            this.pattern = pattern;
+            this.find = find;
+            this.replacement = replacement;
+            this.caseSensitive = caseSensitive;
+        }
+    }
+
+    /**
+     * Compile a rule list once. Invalid regex rules are skipped here rather than
+     * per-line. This matches the previous fail-safe behavior: a pattern that
+     * fails to compile fails identically for every line, so skipping it once at
+     * compile time produces the same output as skipping it on each line.
+     */
+    public static CompiledRules compile(List<TextDisplayRule> rules) {
+        if (rules == null || rules.isEmpty()) {
+            return new CompiledRules(new CompiledRule[0]);
+        }
+        ArrayList<CompiledRule> out = new ArrayList<>(rules.size());
+        for (TextDisplayRule rule : rules) {
+            if (rule == null || !rule.enabled || !rule.isValid()) continue;
+            String repl = rule.replacementText != null ? rule.replacementText : "";
+            if (rule.useRegex) {
+                if (rule.findText == null || rule.findText.isEmpty()) continue;
+                try {
+                    int flags = Pattern.MULTILINE;
+                    if (!rule.caseSensitive) flags |= Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE;
+                    Pattern pattern = Pattern.compile(rule.findText, flags);
+                    out.add(new CompiledRule(pattern, null, repl, rule.caseSensitive));
+                } catch (IllegalArgumentException ex) {
+                    // Bad user regex: skip this rule rather than break file loading.
+                }
+            } else {
+                if (rule.findText == null || rule.findText.isEmpty()) continue;
+                out.add(new CompiledRule(null, rule.findText, repl, rule.caseSensitive));
+            }
+        }
+        return new CompiledRules(out.toArray(new CompiledRule[0]));
+    }
+
+    /** Apply pre-compiled rules to one piece of text, reusing compiled patterns. */
+    public static String apply(String text, CompiledRules compiled) {
+        if (text == null || text.isEmpty() || compiled == null || compiled.isEmpty()) {
+            return text != null ? text : "";
+        }
+        String result = text;
+        for (CompiledRule rule : compiled.rules) {
+            if (rule.pattern != null) {
+                try {
+                    Matcher matcher = rule.pattern.matcher(result);
+                    result = matcher.replaceAll(rule.replacement);
+                } catch (IndexOutOfBoundsException ex) {
+                    // Invalid replacement group reference: leave this text unchanged.
+                }
+            } else {
+                result = replaceLiteral(result, rule.find, rule.replacement, rule.caseSensitive);
+            }
+        }
+        return result;
     }
 
     private static String replaceLiteral(String source, String find, String replacement, boolean caseSensitive) {

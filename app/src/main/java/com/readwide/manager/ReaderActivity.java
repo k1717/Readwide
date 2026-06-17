@@ -116,6 +116,9 @@ public class ReaderActivity extends AppCompatActivity {
     static final long BACKGROUND_MEMORY_TRIM_DELAY_MS = 420_000L;
 
     View readerRoot;
+    View ttsFloatingCard;
+    android.widget.ImageButton ttsFloatingPlayPause;
+    android.widget.ImageButton ttsFloatingStop;
     CustomReaderView readerView;
     ProgressBar progressBar;
     TextView progressText;
@@ -942,6 +945,37 @@ public class ReaderActivity extends AppCompatActivity {
         return readerTtsController != null && readerTtsController.isActive();
     }
 
+    void readerTtsFloatingTogglePlayPause() {
+        if (readerTtsController == null) return;
+        if (readerTtsController.isPaused()) readerTtsController.resumePlayback();
+        else readerTtsController.pausePlayback();
+        updateTtsFloatingCard();
+    }
+
+    void readerTtsFloatingStop() {
+        if (readerTtsController != null) readerTtsController.stop(true);
+        updateTtsFloatingCard();
+    }
+
+    /** Show/hide and refresh the floating TTS control card based on current state. */
+    void updateTtsFloatingCard() {
+        if (ttsFloatingCard == null) return;
+        boolean active = readerTtsController != null && readerTtsController.isActive();
+        boolean paused = readerTtsController != null && readerTtsController.isPaused();
+        if (active) {
+            ttsFloatingCard.setVisibility(View.VISIBLE);
+            if (ttsFloatingPlayPause != null) {
+                ttsFloatingPlayPause.setImageResource(paused
+                        ? android.R.drawable.ic_media_play
+                        : android.R.drawable.ic_media_pause);
+                ttsFloatingPlayPause.setContentDescription(
+                        getString(paused ? R.string.tts_resume : R.string.tts_pause));
+            }
+        } else {
+            ttsFloatingCard.setVisibility(View.GONE);
+        }
+    }
+
     void startAutoPageTurn() {
         readerActions().startAutoPageTurn();
     }
@@ -952,15 +986,11 @@ public class ReaderActivity extends AppCompatActivity {
 
     void stopAutoPageTurnForManualNavigation() {
         readerActions().stopAutoPageTurnForManualNavigation();
-        stopTtsForManualNavigation();
+        // TTS intentionally keeps playing when the user scrolls or moves the view.
     }
 
     void stopTts(boolean showToast) {
         if (readerTtsController != null) readerTtsController.stop(showToast);
-    }
-
-    void stopTtsForManualNavigation() {
-        if (readerTtsController != null) readerTtsController.stopForManualNavigation();
     }
 
     void releaseTts() {

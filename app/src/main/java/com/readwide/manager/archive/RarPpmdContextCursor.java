@@ -12,7 +12,7 @@ import java.io.IOException;
  * decoder carries a current min/max context, the state that was found during the previous decode,
  * and an order-fall counter. This class captures that cursor state without enabling production
  * PPMd extraction. It gives the live fixture probe a successor-first path that is closer to the
- * UnRAR-shaped DecodeChar/UpdateModel flow, while still keeping the unsupported production
+ * reference RAR PPMd DecodeChar/UpdateModel flow, while still keeping the unsupported production
  * boundary in place.</p>
  */
 final class RarPpmdContextCursor {

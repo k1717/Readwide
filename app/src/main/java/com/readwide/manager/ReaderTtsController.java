@@ -2,9 +2,14 @@ package com.readwide.manager;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
-import android.graphics.drawable.GradientDrawable;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
@@ -14,7 +19,6 @@ import android.text.TextUtils;
 import android.view.Gravity;
 import android.widget.ScrollView;
 import android.widget.LinearLayout;
-import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -52,8 +56,89 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     private String lastQueuedUtteranceId = "";
     private final ArrayList<TtsSpeechSegment> queuedSegments = new ArrayList<>();
 
+    // Real pause/resume: keep active, remember where we stopped, continue from there.
+    private boolean paused = false;
+    private boolean pausedForFocusLoss = false;     // paused due to transient focus loss (auto-resume on regain)
+    private TtsSleepTimerDialog sleepTimerDialog;
+
+    private TtsSleepTimerDialog sleepTimerDialog() {
+        if (sleepTimerDialog == null) {
+            sleepTimerDialog = new TtsSleepTimerDialog(activity, this);
+        }
+        return sleepTimerDialog;
+    }
+    private int currentSegmentIndex = 0;            // segment currently being spoken
+    private int pausedSegmentIndex = 0;             // segment to resume from
+    private int currentSpeechGeneration = 0;        // generation of the queued page
+
+    // Sleep timer (counts playback time only; paused time does not accrue).
+    private long sleepTimerTargetMs = 0L;       // 0 = timer off
+    private long sleepTimerAccruedMs = 0L;      // accumulated speaking time
+    private long sleepTimerSegmentStartMs = 0L; // start time of the current utterance (0 = not speaking)
+    private boolean sleepTimerFinishSentence = true;
+
+    // Audio focus + headphone-unplug handling.
+    private AudioManager audioManager;
+    private AudioFocusRequest audioFocusRequest;
+    private boolean audioFocusHeld = false;
+    private boolean noisyReceiverRegistered = false;
+    private final BroadcastReceiver becomingNoisyReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (intent != null && AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {
+                // Headphones unplugged / BT disconnected — pause (don't stop) so the
+                // audio doesn't blast the speaker and the user can resume after
+                // reconnecting. There's no system signal when audio is replugged, so
+                // resume is manual (floating card / notification / media button).
+                if (active && !paused) {
+                    pausePlayback();
+                }
+            }
+        }
+    };
+    private final AudioManager.OnAudioFocusChangeListener audioFocusListener;
+
     ReaderTtsController(@NonNull ReaderActivity activity) {
         this.activity = activity;
+        this.audioFocusListener = focusChange -> {
+            switch (focusChange) {
+                case AudioManager.AUDIOFOCUS_LOSS:
+                    // Permanent loss — another app took over audio. Stop and yield.
+                    if (active) {
+                        this.activity.runOnUiThread(() -> {
+                            if (!active) return;
+                            pausedForFocusLoss = false;
+                            stop(false);
+                            clearTtsHighlight();
+                            TtsPlaybackService.stop(this.activity.getApplicationContext());
+                        });
+                    }
+                    break;
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                    // Transient loss (phone call, nav prompt, notification). Pause and
+                    // remember to auto-resume when focus comes back.
+                    if (active && !paused) {
+                        this.activity.runOnUiThread(() -> {
+                            if (!active || paused) return;
+                            pausePlayback();
+                            pausedForFocusLoss = true;
+                        });
+                    }
+                    break;
+                case AudioManager.AUDIOFOCUS_GAIN:
+                    // Focus returned after a transient loss — resume if we paused for it.
+                    if (pausedForFocusLoss && active && paused) {
+                        this.activity.runOnUiThread(() -> {
+                            if (!pausedForFocusLoss || !active || !paused) return;
+                            pausedForFocusLoss = false;
+                            resumePlayback();
+                        });
+                    }
+                    break;
+                default:
+                    break;
+            }
+        };
     }
 
     void showDialog() {
@@ -86,7 +171,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
         final android.app.Dialog[] dialogRef = new android.app.Dialog[1];
-        LinearLayout languageBox = makeOptionBox();
+        LinearLayout languageBox = TtsDialogViews.makeOptionBox(activity);
         final TextView[] voiceButtonRef = new TextView[1];
         TextView languageButton = activity.dialogStyler().makeReaderActionRow(
                 currentLanguageRowLabel(), fg);
@@ -121,7 +206,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             languageBox.addView(resumeButton);
         }
 
-        addPercentSlider(languageBox,
+        TtsDialogViews.addPercentSlider(activity, languageBox,
                 activity.getString(R.string.tts_speed),
                 activity.prefs != null ? activity.prefs.getTtsSpeechRatePercent() : 100,
                 value -> {
@@ -130,7 +215,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 },
                 fg,
                 sub);
-        addPercentSlider(languageBox,
+        TtsDialogViews.addPercentSlider(activity, languageBox,
                 activity.getString(R.string.tts_pitch),
                 activity.prefs != null ? activity.prefs.getTtsPitchPercent() : 100,
                 value -> {
@@ -139,6 +224,14 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 },
                 fg,
                 sub);
+
+        TextView sleepTimerButton = activity.dialogStyler().makeReaderActionRow(
+                sleepTimerDialog().rowLabel(), fg);
+        sleepTimerButton.setGravity(Gravity.CENTER);
+        sleepTimerButton.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
+        sleepTimerButton.setOnClickListener(v -> sleepTimerDialog().show(() ->
+                sleepTimerButton.setText(sleepTimerDialog().rowLabel())));
+        languageBox.addView(sleepTimerButton);
 
         TextView systemSettings = activity.dialogStyler().makeReaderActionRow(
                 activity.getString(R.string.tts_android_settings), fg);
@@ -175,7 +268,21 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 activity.getString(R.string.tts_read_page), fg, Gravity.CENTER);
         TextView continuousButton = activity.dialogStyler().makeReaderDialogActionText(
                 activity.getString(R.string.tts_read_continuous), fg, Gravity.CENTER);
-        for (TextView actionButton : new TextView[]{stopButton, pageButton, continuousButton}) {
+
+        // Pause/Resume is only meaningful while playback is active.
+        TextView pauseButton = null;
+        if (active) {
+            pauseButton = activity.dialogStyler().makeReaderDialogActionText(
+                    activity.getString(paused ? R.string.tts_resume : R.string.tts_pause),
+                    fg, Gravity.CENTER);
+        }
+
+        java.util.ArrayList<TextView> actionButtons = new java.util.ArrayList<>();
+        actionButtons.add(stopButton);
+        if (pauseButton != null) actionButtons.add(pauseButton);
+        actionButtons.add(pageButton);
+        actionButtons.add(continuousButton);
+        for (TextView actionButton : actionButtons) {
             actionButton.setTextSize(12.5f);
             actionButton.setPadding(activity.dpToPx(8), 0, activity.dpToPx(8), 0);
             actionButton.setSingleLine(true);
@@ -183,6 +290,10 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
         actionRow.addView(stopButton, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+        if (pauseButton != null) {
+            actionRow.addView(pauseButton, new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+        }
         actionRow.addView(pageButton, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
         actionRow.addView(continuousButton, new LinearLayout.LayoutParams(
@@ -205,6 +316,13 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             stop(true);
             dialog.dismiss();
         });
+        if (pauseButton != null) {
+            pauseButton.setOnClickListener(v -> {
+                if (paused) resumePlayback();
+                else pausePlayback();
+                dialog.dismiss();
+            });
+        }
         pageButton.setOnClickListener(v -> {
             start(false);
             dialog.dismiss();
@@ -247,10 +365,16 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     private void stopInternal(boolean showToast, boolean stopService) {
         pendingStart = false;
         active = false;
+        paused = false;
+        pausedForFocusLoss = false;
         speechGeneration++;
         lastQueuedUtteranceId = "";
         queuedSegments.clear();
         clearTtsHighlight();
+        activity.updateTtsFloatingCard();
+        unregisterNoisyReceiver();
+        abandonAudioFocus();
+        sleepTimerSegmentStartMs = 0L;
         if (tts != null) {
             tts.stop();
         }
@@ -265,14 +389,12 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         }
     }
 
-    void stopForManualNavigation() {
-        if (active || pendingStart) {
-            stop(false);
-        }
-    }
+
 
     void release() {
         stop(false);
+        unregisterNoisyReceiver();
+        abandonAudioFocus();
         if (tts != null) {
             tts.shutdown();
             tts = null;
@@ -285,11 +407,79 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         return active || pendingStart;
     }
 
+    /** True pause: stop speaking but keep state/focus/timer so we can resume in place. */
+    void pausePlayback() {
+        if (!active || paused) return;
+        pausedForFocusLoss = false;
+        sleepTimerAccrueSegment(); // stop accruing playback time while paused
+        pausedSegmentIndex = currentSegmentIndex;
+        paused = true;
+        if (tts != null) tts.stop(); // flushes the queue; segments are remembered
+        activity.updateTtsFloatingCard();
+        // Persist the paused position so it survives leaving the app.
+        if (activity.prefs != null && activity.filePath != null
+                && pausedSegmentIndex >= 0 && pausedSegmentIndex < queuedSegments.size()) {
+            TtsSpeechSegment seg = queuedSegments.get(pausedSegmentIndex);
+            activity.prefs.setTtsLastPlaybackState(
+                    activity.filePath,
+                    seg.startChar,
+                    activity.getDisplayedCurrentPageNumber(),
+                    continuous);
+        }
+        updatePlaybackNotification(false);
+    }
+
+    /** Resume from the segment we paused on, without reloading the page or jumping. */
+    void resumePlayback() {
+        if (!active || !paused) return;
+        paused = false;
+        if (tts == null || queuedSegments.isEmpty()) {
+            // Fall back to a fresh start if we lost the queue somehow.
+            start(continuous);
+            return;
+        }
+        if (!applySelectedLanguage(false)) {
+            stop(false);
+            return;
+        }
+        applySpeechParameters();
+        int from = Math.max(0, Math.min(pausedSegmentIndex, queuedSegments.size() - 1));
+        speakQueuedFrom(from);
+        updatePlaybackNotification(true);
+        activity.updateTtsFloatingCard();
+    }
+
+    /** Re-enqueue the already-segmented current page starting at the given index. */
+    private void speakQueuedFrom(int fromIndex) {
+        if (tts == null || queuedSegments.isEmpty()) return;
+        int generation = currentSpeechGeneration;
+        lastQueuedUtteranceId = utteranceId(generation, queuedSegments.size() - 1);
+        for (int i = fromIndex; i < queuedSegments.size(); i++) {
+            Bundle params = new Bundle();
+            String utteranceId = utteranceId(generation, i);
+            int queueMode = (i == fromIndex) ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
+            int result = tts.speak(queuedSegments.get(i).speechText, queueMode, params, utteranceId);
+            if (result == TextToSpeech.ERROR) {
+                stop(false);
+                ShortToast.show(activity, R.string.tts_engine_unavailable);
+                return;
+            }
+        }
+    }
+
+    boolean isPaused() {
+        return paused;
+    }
+
     void handlePlaybackCommand(@NonNull String action) {
         if (TtsPlaybackService.ACTION_STOP.equals(action)) {
             stop(true);
         } else if (TtsPlaybackService.ACTION_PLAY_PAUSE.equals(action)) {
-            if (active || pendingStart) {
+            if (active && !paused) {
+                pausePlayback();
+            } else if (active && paused) {
+                resumePlayback();
+            } else if (pendingStart) {
                 stopInternal(false, false);
             } else if (hasResumeStateForCurrentFile()) {
                 resumeFromSavedState();
@@ -375,6 +565,108 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         });
     }
 
+    private boolean requestAudioFocus() {
+        if (audioManager == null) {
+            audioManager = (AudioManager) activity.getSystemService(Context.AUDIO_SERVICE);
+        }
+        if (audioManager == null) return true; // can't manage focus; don't block playback
+        int result;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            AudioAttributes attrs = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build();
+            audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(attrs)
+                    .setOnAudioFocusChangeListener(audioFocusListener)
+                    .setWillPauseWhenDucked(true)
+                    .build();
+            result = audioManager.requestAudioFocus(audioFocusRequest);
+        } else {
+            result = audioManager.requestAudioFocus(audioFocusListener,
+                    AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
+        }
+        audioFocusHeld = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        return audioFocusHeld;
+    }
+
+    private void abandonAudioFocus() {
+        if (audioManager == null || !audioFocusHeld) { audioFocusHeld = false; return; }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (audioFocusRequest != null) audioManager.abandonAudioFocusRequest(audioFocusRequest);
+        } else {
+            audioManager.abandonAudioFocus(audioFocusListener);
+        }
+        audioFocusHeld = false;
+    }
+
+    private void registerNoisyReceiver() {
+        if (noisyReceiverRegistered) return;
+        try {
+            activity.registerReceiver(becomingNoisyReceiver,
+                    new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
+            noisyReceiverRegistered = true;
+        } catch (Exception ignored) { }
+    }
+
+    private void unregisterNoisyReceiver() {
+        if (!noisyReceiverRegistered) return;
+        try {
+            activity.unregisterReceiver(becomingNoisyReceiver);
+        } catch (Exception ignored) { }
+        noisyReceiverRegistered = false;
+    }
+
+    private void initSleepTimer() {
+        if (activity.prefs != null) {
+            int minutes = activity.prefs.getTtsSleepTimerMinutes();
+            sleepTimerTargetMs = minutes > 0 ? minutes * 60_000L : 0L;
+            sleepTimerFinishSentence = activity.prefs.getTtsSleepTimerFinishSentence();
+        } else {
+            sleepTimerTargetMs = 0L;
+            sleepTimerFinishSentence = true;
+        }
+        sleepTimerAccruedMs = 0L;
+        sleepTimerSegmentStartMs = 0L;
+    }
+
+    /** Re-read timer settings mid-playback (e.g. user changed the timer while playing). */
+    void refreshSleepTimerFromPrefs() {
+        if (!active || activity.prefs == null) return;
+        int minutes = activity.prefs.getTtsSleepTimerMinutes();
+        sleepTimerTargetMs = minutes > 0 ? minutes * 60_000L : 0L;
+        sleepTimerFinishSentence = activity.prefs.getTtsSleepTimerFinishSentence();
+    }
+
+    /** Mark the start of an utterance for playback-time accrual. */
+    private void sleepTimerOnSegmentStart() {
+        sleepTimerSegmentStartMs = android.os.SystemClock.elapsedRealtime();
+    }
+
+    /** Accrue the time spent speaking the segment that just ended/was interrupted. */
+    private void sleepTimerAccrueSegment() {
+        if (sleepTimerSegmentStartMs > 0L) {
+            long now = android.os.SystemClock.elapsedRealtime();
+            long delta = now - sleepTimerSegmentStartMs;
+            if (delta > 0) sleepTimerAccruedMs += delta;
+            sleepTimerSegmentStartMs = 0L;
+        }
+    }
+
+    /** @return true if the timer has elapsed and playback was stopped. */
+    private boolean sleepTimerCheckAndMaybeStop() {
+        if (sleepTimerTargetMs <= 0L) return false;
+        if (sleepTimerAccruedMs >= sleepTimerTargetMs) {
+            // Reached at a sentence boundary, so finish-sentence is honored here.
+            stop(false);
+            clearTtsHighlight();
+            TtsPlaybackService.stop(activity.getApplicationContext());
+            ShortToast.show(activity, R.string.tts_sleep_timer_finished);
+            return true;
+        }
+        return false;
+    }
+
     private void startNow(boolean continuousMode) {
         if (tts == null || !initialized) return;
         if (!applySelectedLanguage(true)) {
@@ -384,10 +676,20 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         }
         applySpeechParameters();
         active = true;
+        paused = false;
         continuous = continuousMode;
+        if (!requestAudioFocus()) {
+            // Another app holds exclusive audio focus; don't start over it.
+            active = false;
+            ShortToast.show(activity, R.string.tts_stopped);
+            return;
+        }
+        registerNoisyReceiver();
+        initSleepTimer();
         int generation = ++speechGeneration;
         updatePlaybackNotification(true);
         ShortToast.show(activity, continuousMode ? R.string.tts_continuous_started : R.string.tts_started);
+        activity.updateTtsFloatingCard();
         speakCurrentPage(generation, 0);
     }
 
@@ -437,6 +739,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
         queuedSegments.clear();
         queuedSegments.addAll(segments);
+        currentSpeechGeneration = generation;
+        currentSegmentIndex = 0;
         lastQueuedUtteranceId = utteranceId(generation, segments.size() - 1);
         for (int i = 0; i < segments.size(); i++) {
             Bundle params = new Bundle();
@@ -454,8 +758,14 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     private void handleUtteranceStart(String utteranceId) {
         activity.runOnUiThread(() -> {
             if (activity.activityDestroyed || !active || utteranceId == null) return;
+            // Sleep timer: account for the segment that just finished, then stop at
+            // this sentence boundary if the playback-time target has been reached.
+            sleepTimerAccrueSegment();
+            if (sleepTimerCheckAndMaybeStop()) return;
+            sleepTimerOnSegmentStart();
             int segmentIndex = segmentIndexFromUtteranceId(utteranceId);
             if (segmentIndex < 0 || segmentIndex >= queuedSegments.size()) return;
+            currentSegmentIndex = segmentIndex;
             TtsSpeechSegment segment = queuedSegments.get(segmentIndex);
             if (activity.readerView != null) {
                 activity.readerView.setTtsHighlightRange(segment.startChar, segment.endChar);
@@ -474,6 +784,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     private void handleUtteranceDone(String utteranceId) {
         activity.runOnUiThread(() -> {
             if (activity.activityDestroyed || !active || !TextUtils.equals(utteranceId, lastQueuedUtteranceId)) return;
+            sleepTimerAccrueSegment();
+            if (sleepTimerCheckAndMaybeStop()) return;
             int generation = speechGeneration;
             if (continuous && canAdvancePage()) {
                 advanceAndSpeakNextPage(generation);
@@ -619,74 +931,6 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             initializing = true;
             tts = new TextToSpeech(activity.getApplicationContext(), this);
         }
-    }
-
-    private LinearLayout makeOptionBox() {
-        LinearLayout box = new LinearLayout(activity);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(activity.dpToPx(10), activity.dpToPx(10),
-                activity.dpToPx(10), activity.dpToPx(2));
-        box.setBackground(roundedPanelBackground(activity.dialogStyler().readerDialogPanelColor(), 14));
-        return box;
-    }
-
-    private interface PercentValueCallback {
-        void onChanged(int value);
-    }
-
-    private void addPercentSlider(LinearLayout parent,
-                                  String title,
-                                  int initialValue,
-                                  @NonNull PercentValueCallback callback,
-                                  int fg,
-                                  int sub) {
-        LinearLayout box = new LinearLayout(activity);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(activity.dpToPx(8), activity.dpToPx(8),
-                activity.dpToPx(8), activity.dpToPx(6));
-        box.setBackground(roundedPanelBackground(activity.dialogStyler().readerDialogBgColor(), 10));
-
-        TextView label = new TextView(activity);
-        label.setText(percentLabel(title, initialValue));
-        label.setTextColor(fg);
-        label.setTextSize(13f);
-        label.setGravity(Gravity.CENTER);
-        label.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
-        label.setIncludeFontPadding(false);
-        box.addView(label, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                activity.dpToPx(22)));
-
-        SeekBar seek = new SeekBar(activity);
-        seek.setMax(150);
-        seek.setProgress(Math.max(50, Math.min(200, initialValue)) - 50);
-        seek.setPadding(activity.dpToPx(16), 0, activity.dpToPx(16), 0);
-        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                int value = Math.max(50, Math.min(200, progress + 50));
-                label.setText(percentLabel(title, value));
-                if (fromUser) callback.onChanged(value);
-            }
-
-            @Override public void onStartTrackingTouch(SeekBar seekBar) { }
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {
-                callback.onChanged(Math.max(50, Math.min(200, seekBar.getProgress() + 50)));
-            }
-        });
-        box.addView(seek, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                activity.dpToPx(34)));
-
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.setMargins(0, 0, 0, activity.dpToPx(8));
-        parent.addView(box, lp);
-    }
-
-    private String percentLabel(String title, int value) {
-        return title + ": " + Math.max(50, Math.min(200, value)) + "%";
     }
 
     private void openAndroidTtsSettings() {
@@ -1057,12 +1301,4 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         return voice.getName() + (language.isEmpty() ? "" : " / " + language) + " / " + network;
     }
 
-    @NonNull
-    private GradientDrawable roundedPanelBackground(int color, int radiusDp) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color);
-        drawable.setCornerRadius(activity.dpToPx(radiusDp));
-        drawable.setStroke(0, Color.TRANSPARENT);
-        return drawable;
-    }
 }

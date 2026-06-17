@@ -51,19 +51,15 @@ public final class TextStyle {
         private String backgroundColor;
         private VerticalAlign verticalAlign;
 
-        public Builder fontFamily(String v) { this.fontFamily = emptyToNull(v); return this; }
+        public Builder fontFamily(String v) { this.fontFamily = RenderStyleUtil.emptyToNull(v); return this; }
         public Builder fontSizePt(float v) { this.fontSizePt = v > 0 ? v : null; return this; }
         public Builder bold(boolean v) { this.bold = v; return this; }
         public Builder italic(boolean v) { this.italic = v; return this; }
         public Builder underline(boolean v) { this.underline = v; return this; }
         public Builder strike(boolean v) { this.strike = v; return this; }
-        public Builder color(String v) { this.color = emptyToNull(v); return this; }
-        public Builder backgroundColor(String v) { this.backgroundColor = emptyToNull(v); return this; }
+        public Builder color(String v) { this.color = RenderStyleUtil.emptyToNull(v); return this; }
+        public Builder backgroundColor(String v) { this.backgroundColor = RenderStyleUtil.emptyToNull(v); return this; }
         public Builder verticalAlign(VerticalAlign v) { this.verticalAlign = v; return this; }
         public TextStyle build() { return new TextStyle(this); }
-
-        private static String emptyToNull(String v) {
-            return v == null || v.trim().isEmpty() ? null : v.trim();
-        }
     }
 }

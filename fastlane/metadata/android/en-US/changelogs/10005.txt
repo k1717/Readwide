@@ -1,0 +1,8 @@
+Readwide 1.0.5
+- Text-to-speech now has a sleep timer (Off/15/30/45/60 min or a custom value) that counts playback time only and can finish the current sentence before stopping.
+- Added real pause and resume that keeps your place and continues from the sentence you stopped on, and a paused session is remembered if you leave the app.
+- Added a draggable floating play/pause/stop card over the text reader, alongside the existing notification and lock-screen controls.
+- TTS keeps reading while you scroll, pauses for phone calls and headphone unplug (resuming afterward), and stops when another app takes over audio for good.
+- Multi-select delete now warns when the selection includes folders, since their contents are deleted too.
+- Fixed two PDF crashes when switching between continuous and single-page modes, and fixed text-to-speech resume rewinding to the start of short pages.
+- The Recent shortcut in the navigation drawer now responds immediately, and text display rules with regular expressions load large files faster.

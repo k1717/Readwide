@@ -711,4 +711,19 @@ Reguły: %2$d włączonych reguł</string>
     <string name="image_tap_paging_off">Dotykowe strefy stron: wyłączone</string>
     <string name="image_slider_direction_rtl">Kierunek obrazów: od prawej do lewej</string>
     <string name="epub_force_reader_theme_colors">EPUB: używaj kolorów motywu czytania</string>
+    <string name="tts_sleep_timer_finished">Czas minął — zatrzymano TTS</string>
+    <string name="tts_sleep_timer">Czasomierz</string>
+    <string name="tts_sleep_timer_off">Wył.</string>
+    <string name="tts_sleep_timer_15">15 minut</string>
+    <string name="tts_sleep_timer_30">30 minut</string>
+    <string name="tts_sleep_timer_45">45 minut</string>
+    <string name="tts_sleep_timer_60">60 minut</string>
+    <string name="tts_sleep_timer_custom">Niestandardowy…</string>
+    <string name="tts_sleep_timer_custom_minutes">Minuty (czas odtwarzania)</string>
+    <string name="tts_sleep_timer_finish_sentence">Dokończ bieżące zdanie przed zatrzymaniem</string>
+    <string name="tts_sleep_timer_set">Czasomierz: %1$d min</string>
+    <string name="tts_pause">Pauza</string>
+    <string name="tts_resume">Wznów</string>
+    <string name="tts_floating_drag">Przeciągnij, aby przenieść</string>
+    <string name="delete_selected_includes_folders_warning">%1$d z nich to foldery — cała ich zawartość również zostanie usunięta.</string>
 </resources>

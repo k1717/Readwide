@@ -1,9 +1,9 @@
 Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF, EPUB, Word-family documents, images, comic archives, and common archive workflows.
 
-It supports local reading, recent files, bookmarks, folder shortcuts, search/filtering, archive browsing, archive-backed image viewing, multi-select file operations, and local copy/move/delete/extract/compress queues.
+It supports local reading, recent files, bookmarks, folder shortcuts, search/filtering, archive browsing, archive-backed image viewing, multi-select file operations, local copy/move/delete/extract/compress queues, and text-to-speech with a sleep timer, pause/resume, and a floating on-screen control.
 
 TXT keeps an exact source-page reader model. Markdown uses a rendered WebView visual-page model. HWP/HWPX is text-first and read-only through Apache-2.0 Java libraries; it is not Hancom-compatible layout rendering or editing. RAR/CBR support is limited and conservatively documented rather than advertised as complete compatibility.
 
 The default build does not request INTERNET permission and does not include ads, analytics, telemetry SDKs, Firebase, Google Play Services, an account system, cloud sync, or a developer-operated upload backend. Android Auto Backup is disabled. Broad file access is used for local file browsing and management of user-selected folders and files.
 
-Readwide 1.0.4 is the current public package and uses the Android applicationId com.readwide.manager. Earlier TextView Reader/Readwide builds used a different applicationId, so 1.0.4 installs as a separate app rather than an in-place update. Existing users can carry their bookmarks, reading positions, themes, and settings across with the in-app JSON backup export/import.
+Readwide 1.0.5 is the current public package and uses the Android applicationId com.readwide.manager. It is an in-place update over 1.0.4 when signed with the same key. Earlier TextView Reader/Readwide builds used a different applicationId and install as a separate app; existing users can carry their bookmarks, reading positions, themes, and settings across with the in-app JSON backup export/import.

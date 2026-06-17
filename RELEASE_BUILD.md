@@ -1,16 +1,16 @@
 # Public release build checklist
 
-This file is the practical build and verification checklist for Readwide 1.0.4.
+This file is the practical build and verification checklist for Readwide 1.0.5.
 
 ## Version metadata
 
 ```text
 applicationId com.readwide.manager
-versionCode 10004
-versionName 1.0.4
+versionCode 10005
+versionName 1.0.5
 ```
 
-As of 1.0.4 the application ID is `com.readwide.manager`. Earlier builds used `com.textview.reader`, so 1.0.4 installs as a separate app; users transfer data with the in-app JSON backup export/import.
+The application ID has been `com.readwide.manager` since 1.0.4, and 1.0.5 is an in-place update over 1.0.4 when signed with the same key. Earlier builds used `com.textview.reader` and install as a separate app; users transfer data with the in-app JSON backup export/import.
 
 ## Keystore policy
 
@@ -55,8 +55,8 @@ Keep these files with source and binary release materials:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_4.md`
-- `docs/SBOM_READWIDE_1_0_4.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_5.md`
+- `docs/SBOM_READWIDE_1_0_5.spdx.json`
 
 ## APK verification
 
@@ -102,7 +102,7 @@ Expected result:
 
 Before opening an F-Droid Data merge request:
 
-1. Publish a final Git tag, e.g. `v1.0.4`.
+1. Publish a final Git tag, e.g. `v1.0.5`.
 2. Replace the commit placeholder in `fdroid/metadata/com.readwide.manager.yml` with the immutable tag commit.
 3. Confirm `gradle/wrapper/gradle-wrapper.jar` is removed by the F-Droid metadata `rm` rule.
 4. Confirm a no-private-keystore `assembleRelease` build works.

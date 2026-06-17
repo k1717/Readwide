@@ -149,7 +149,7 @@ final class Rar3Unpacker {
         if (engine.hasFilters()) {
             output = applyFilters(output, engine.filters());
         }
-        // UnRAR-compatible boundary: a final match may run past the declared
+        // Reference-compatible boundary: a final match may run past the declared
         // unpacked size; the surplus stays in the LZ window (preserving solid
         // continuity) but the produced output is cut at the declared size.
         // The CRC gate still decides whether the cut output is correct.

@@ -901,8 +901,7 @@ final class DocumentFontDialogController {
     }
 
     private String cssQuote(String text) {
-        if (text == null) return "";
-        return text.replace("\\", "\\\\").replace("'", "\\'");
+        return CssUtils.cssQuote(text);
     }
 
     private String getString(int resId) {

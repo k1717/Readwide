@@ -699,4 +699,19 @@
     <string name="image_tap_paging_off">觸控翻頁區域：關閉</string>
     <string name="image_slider_direction_rtl">圖片流向：由右至左</string>
     <string name="epub_force_reader_theme_colors">EPUB：使用閱讀主題色彩</string>
+    <string name="tts_sleep_timer_finished">計時器已到 — 已停止朗讀</string>
+    <string name="tts_sleep_timer">計時器</string>
+    <string name="tts_sleep_timer_off">關閉</string>
+    <string name="tts_sleep_timer_15">15 分鐘</string>
+    <string name="tts_sleep_timer_30">30 分鐘</string>
+    <string name="tts_sleep_timer_45">45 分鐘</string>
+    <string name="tts_sleep_timer_60">60 分鐘</string>
+    <string name="tts_sleep_timer_custom">自訂…</string>
+    <string name="tts_sleep_timer_custom_minutes">分鐘（播放時間）</string>
+    <string name="tts_sleep_timer_finish_sentence">停止前讀完目前句子</string>
+    <string name="tts_sleep_timer_set">計時器：%1$d 分鐘</string>
+    <string name="tts_pause">暫停</string>
+    <string name="tts_resume">繼續</string>
+    <string name="tts_floating_drag">拖曳以移動</string>
+    <string name="delete_selected_includes_folders_warning">其中 %1$d 個是資料夾 — 其中的所有內容也會一併刪除。</string>
 </resources>

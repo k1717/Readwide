@@ -222,9 +222,15 @@ final class MainSelectionModeController {
             exitFileSelectionMode(true);
             return;
         }
+        String message = activity.getString(R.string.delete_selected_files_confirm, selected.size());
+        int folderCount = countSelectedFolders(selected);
+        if (folderCount > 0) {
+            message = message + "\n\n"
+                    + activity.getString(R.string.delete_selected_includes_folders_warning, folderCount);
+        }
         activity.showSimpleConfirmDialog(
                 activity.getString(R.string.delete),
-                activity.getString(R.string.delete_selected_files_confirm, selected.size()),
+                message,
                 activity.getString(R.string.delete),
                 () -> deleteSelectedFiles(selected));
     }

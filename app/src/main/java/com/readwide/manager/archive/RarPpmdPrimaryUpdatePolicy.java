@@ -7,10 +7,10 @@ import java.io.IOException;
 /**
  * Diagnostic knobs for primary-context PPMd updates.
  *
- * <p>UnRAR updates a multi-state primary context by adding four to the decoded state's frequency
+ * <p>The reference RAR PPMd model updates a multi-state primary context by adding four to the decoded state's frequency
  * and then moving it only if it becomes more frequent than its predecessor. The target fixture now
  * matches the PNG signature, but diverges immediately after it. This policy object lets the
- * non-success probe compare that UnRAR-shaped update with deliberately weaker variants without
+ * non-success probe compare that reference-shaped update with deliberately weaker variants without
  * enabling production extraction or pretending that any variant is correct.</p>
  */
 final class RarPpmdPrimaryUpdatePolicy {
@@ -39,8 +39,8 @@ final class RarPpmdPrimaryUpdatePolicy {
     }
 
     @NonNull
-    static RarPpmdPrimaryUpdatePolicy unrarShaped() throws IOException {
-        return new RarPpmdPrimaryUpdatePolicy("unrar-shaped", 4, true, true);
+    static RarPpmdPrimaryUpdatePolicy referenceShaped() throws IOException {
+        return new RarPpmdPrimaryUpdatePolicy("reference-shaped", 4, true, true);
     }
 
     @NonNull

@@ -699,4 +699,19 @@
     <string name="image_tap_paging_off">タッチページ領域: オフ</string>
     <string name="image_slider_direction_rtl">画像の流れ: 右から左</string>
     <string name="epub_force_reader_theme_colors">EPUB: 読書テーマの色を使用</string>
+    <string name="tts_sleep_timer_finished">タイマー終了 — TTSを停止しました</string>
+    <string name="tts_sleep_timer">タイマー</string>
+    <string name="tts_sleep_timer_off">オフ</string>
+    <string name="tts_sleep_timer_15">15分</string>
+    <string name="tts_sleep_timer_30">30分</string>
+    <string name="tts_sleep_timer_45">45分</string>
+    <string name="tts_sleep_timer_60">60分</string>
+    <string name="tts_sleep_timer_custom">カスタム…</string>
+    <string name="tts_sleep_timer_custom_minutes">分（再生時間）</string>
+    <string name="tts_sleep_timer_finish_sentence">停止する前に現在の文を読み終える</string>
+    <string name="tts_sleep_timer_set">タイマー: %1$d分</string>
+    <string name="tts_pause">一時停止</string>
+    <string name="tts_resume">再開</string>
+    <string name="tts_floating_drag">ドラッグして移動</string>
+    <string name="delete_selected_includes_folders_warning">このうち %1$d 個はフォルダです。フォルダ内のすべての内容も削除されます。</string>
 </resources>

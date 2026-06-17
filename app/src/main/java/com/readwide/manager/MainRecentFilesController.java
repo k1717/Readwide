@@ -11,7 +11,6 @@ import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.PrefsManager;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -39,16 +38,25 @@ final class MainRecentFilesController {
             applyRecentFiles(new ArrayList<>(), new ArrayList<>());
             return;
         }
-
-        List<ReaderState> recent = activity.bookmarkManager.getRecentFiles(SCAN_LIMIT);
-        List<File> recentFiles = new ArrayList<>();
-        for (ReaderState state : recent) {
-            if (recentFiles.size() >= DISPLAY_LIMIT) break;
-            File file = visibleRecentFileFor(state);
-            if (file != null) recentFiles.add(file);
-        }
-        applyRecentFiles(recent, recentFiles);
+        final long token = ++recentLoadToken;
+        activity.fileOperationExecutor.execute(() -> {
+            List<ReaderState> recent = activity.bookmarkManager.getRecentFiles(SCAN_LIMIT);
+            List<File> recentFiles = new ArrayList<>();
+            for (ReaderState state : recent) {
+                if (recentFiles.size() >= DISPLAY_LIMIT) break;
+                File file = visibleRecentFileFor(state);
+                if (file != null) recentFiles.add(file);
+            }
+            activity.runOnUiThread(() -> {
+                // Drop stale results if another reload started or the activity is gone.
+                if (activity.isFinishing() || activity.isDestroyed()) return;
+                if (token != recentLoadToken) return;
+                applyRecentFiles(recent, recentFiles);
+            });
+        });
     }
+
+    private volatile long recentLoadToken = 0;
 
     private void applyRecentFiles(@NonNull List<ReaderState> recent,
                                   @NonNull List<File> recentFiles) {
@@ -111,21 +119,6 @@ final class MainRecentFilesController {
     }
 
     private boolean isSameOrChildPath(@Nullable String candidatePath, @Nullable String rootPath) {
-        if (candidatePath == null || rootPath == null) return false;
-        String candidate = candidatePath.trim();
-        String root = rootPath.trim();
-        if (candidate.isEmpty() || root.isEmpty()) return false;
-
-        try {
-            candidate = new File(candidate).getCanonicalPath();
-            root = new File(root).getCanonicalPath();
-        } catch (IOException ignored) {
-            candidate = new File(candidate).getAbsolutePath();
-            root = new File(root).getAbsolutePath();
-        }
-
-        if (candidate.equals(root)) return true;
-        String normalizedRoot = root.endsWith(File.separator) ? root : root + File.separator;
-        return candidate.startsWith(normalizedRoot);
+        return com.readwide.manager.util.FileUtils.isSameOrChildPath(candidatePath, rootPath);
     }
 }
