@@ -11,13 +11,19 @@ import java.util.List;
 import java.util.Set;
 
 final class MainFileSearchWalker {
-    private static final int RESULT_LIMIT = Integer.MAX_VALUE;
-    private static final int VISIT_LIMIT = Integer.MAX_VALUE;
+    // No result cap: a File entry is light (a path string), so even tens of
+    // thousands of matches are a few MB. Results are streamed to the adapter
+    // incrementally rather than held twice. VISIT_LIMIT is only a runaway guard
+    // (e.g. a pathological tree) and is set far above any real device's file
+    // count.
+    private static final int VISIT_LIMIT = 1_000_000;
     private static final int PROGRESS_BATCH = 96;
     private static final long PROGRESS_MIN_INTERVAL_MS = 220L;
 
     interface ProgressCallback {
-        void onProgress(@NonNull String query, int generation, @NonNull List<File> snapshot);
+        // Receives only the items found since the previous callback (a delta),
+        // so a growing result set is never re-copied or re-bound wholesale.
+        void onProgress(@NonNull String query, int generation, @NonNull List<File> delta);
     }
 
     private final MainActivity activity;
@@ -35,6 +41,7 @@ final class MainFileSearchWalker {
                 int generation,
                 @NonNull List<File> results) {
         Set<String> seen = new LinkedHashSet<>();
+        Set<String> visitedDirs = new java.util.HashSet<>();
         String needle = query.toLowerCase(java.util.Locale.ROOT);
         int[] visited = new int[]{0};
         SearchProgress progress = new SearchProgress(query, generation);
@@ -42,10 +49,9 @@ final class MainFileSearchWalker {
         for (File root : roots) {
             if (isCancelled(generation)) return;
             if (root == null || !root.exists() || !root.canRead()) continue;
-            searchFilesRecursive(root, needle, filter, showHidden, seen, results, visited, generation, 0, progress);
-            if (isCancelled(generation)
-                    || results.size() >= RESULT_LIMIT
-                    || visited[0] >= VISIT_LIMIT) return;
+            searchFilesRecursive(root, needle, filter, showHidden, seen, results, visited, generation, 0, progress,
+                    visitedDirs);
+            if (isCancelled(generation) || visited[0] >= VISIT_LIMIT) return;
         }
     }
 
@@ -58,11 +64,20 @@ final class MainFileSearchWalker {
                                       @NonNull int[] visited,
                                       int generation,
                                       int depth,
-                                      @NonNull SearchProgress progress) {
+                                      @NonNull SearchProgress progress,
+                                      @NonNull Set<String> visitedDirs) {
         if (isCancelled(generation)
                 || depth > 16
-                || results.size() >= RESULT_LIMIT
                 || visited[0] >= VISIT_LIMIT) return;
+        // Guard against symlink cycles: skip a directory whose canonical path was
+        // already walked, so a link pointing back up the tree cannot re-scan it.
+        String canonical;
+        try {
+            canonical = dir.getCanonicalPath();
+        } catch (java.io.IOException e) {
+            canonical = dir.getAbsolutePath();
+        }
+        if (!visitedDirs.add(canonical)) return;
         File[] children = dir.listFiles();
         if (children == null) return;
 
@@ -70,25 +85,28 @@ final class MainFileSearchWalker {
             if (isCancelled(generation)) return;
             if (child == null) continue;
             visited[0]++;
-            if (visited[0] >= VISIT_LIMIT || results.size() >= RESULT_LIMIT) return;
+            if (visited[0] >= VISIT_LIMIT) return;
             String name = child.getName();
             if (!showHidden && name.startsWith(".")) continue;
             String path = child.getAbsolutePath();
             if (path.contains("/Android/data/") || path.contains("/Android/obb/")) continue;
 
+            // Stat the directory flag once per entry instead of up to three times
+            // (filesystem access adds up on Downloads/FUSE/external storage).
+            boolean isDir = child.isDirectory();
             boolean nameMatch = needle.isEmpty() || name.toLowerCase(java.util.Locale.ROOT).contains(needle);
-            boolean fileMatch = !child.isDirectory() && FileTypeFilter.matches(name, filter);
-            boolean directoryMatch = child.isDirectory() && !needle.isEmpty()
+            boolean fileMatch = !isDir && FileTypeFilter.matches(name, filter);
+            boolean directoryMatch = isDir && !needle.isEmpty()
                     && filter == MainActivity.FILTER_ALL
                     && nameMatch;
             if ((fileMatch || directoryMatch) && nameMatch && seen.add(path)) {
                 results.add(child);
-                maybePublishSearchProgress(progress, results);
-                if (results.size() >= RESULT_LIMIT) return;
+                progress.pendingDelta.add(child);
+                maybePublishSearchProgress(progress);
             }
-            if (child.isDirectory() && child.canRead()) {
+            if (isDir && child.canRead()) {
                 searchFilesRecursive(child, needle, filter, showHidden, seen, results, visited, generation, depth + 1,
-                        progress);
+                        progress, visitedDirs);
             }
         }
     }
@@ -97,23 +115,30 @@ final class MainFileSearchWalker {
         return activity.activityDestroyed || generation != activity.fileSearchGeneration.get();
     }
 
-    private void maybePublishSearchProgress(@NonNull SearchProgress progress, @NonNull List<File> results) {
-        int size = results.size();
+    // Publishes the items accumulated since the last callback (a delta), throttled
+    // by batch size and time so the UI thread is not flooded on fast filesystems.
+    private void maybePublishSearchProgress(@NonNull SearchProgress progress) {
         long now = android.os.SystemClock.uptimeMillis();
-        if (size - progress.lastPublishedCount < PROGRESS_BATCH
+        if (progress.pendingDelta.size() < PROGRESS_BATCH
                 && now - progress.lastPublishedAt < PROGRESS_MIN_INTERVAL_MS) {
             return;
         }
-        progress.lastPublishedCount = size;
+        flushSearchProgress(progress, now);
+    }
+
+    private void flushSearchProgress(@NonNull SearchProgress progress, long now) {
+        if (progress.pendingDelta.isEmpty()) return;
         progress.lastPublishedAt = now;
-        progressCallback.onProgress(progress.query, progress.generation, new ArrayList<>(results));
+        List<File> delta = progress.pendingDelta;
+        progress.pendingDelta = new ArrayList<>();
+        progressCallback.onProgress(progress.query, progress.generation, delta);
     }
 
     private static final class SearchProgress {
         final String query;
         final int generation;
-        int lastPublishedCount;
         long lastPublishedAt;
+        List<File> pendingDelta = new ArrayList<>();
 
         SearchProgress(@NonNull String query, int generation) {
             this.query = query;

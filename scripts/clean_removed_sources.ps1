@@ -2,7 +2,8 @@
 # Run from the repository root.
 $ErrorActionPreference = "Stop"
 $paths = @(
-  "app\src\main\java\com\textview\reader\archive\RarJunrarFallback.java"
+  "app\src\main\java\com\readwide\manager\archive\RarJunrarFallback.java",
+  "app\src\main\java\com\readwide\manager\archive\Rar3PpmdEngineFixtureProbe.java"
 )
 foreach ($p in $paths) {
   if (Test-Path $p) {

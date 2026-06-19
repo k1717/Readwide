@@ -33,7 +33,7 @@ final class MainArchiveImageOpenController {
         if (!shouldOpenDirectlyAsImageSequence(archiveFile)) return false;
         activity.markPreserveBrowseStateForViewerReturn(archiveFile);
         activity.mainImageOpen().showImageOpenLoadingWindow();
-        activity.fileOperationExecutor.execute(() -> openDirectImageViewerInBackground(archiveFile));
+        activity.executeFolderBackgroundTask(() -> openDirectImageViewerInBackground(archiveFile));
         return true;
     }
 

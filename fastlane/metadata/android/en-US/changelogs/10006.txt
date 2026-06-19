@@ -1,0 +1,6 @@
+Readwide 1.0.6
+- Large folders (e.g. Downloads) open much faster, and file search is no longer capped — results stream in as it runs.
+- Image archives now show reading progress in the recent list, like PDF and EPUB.
+- Per-type file icons (PDF, EPUB, document, archive, image, video, audio, app), and long names keep their extension.
+- The current folder refreshes when you return to the app; pull down to refresh.
+- If reading aloud was interrupted, reopening offers to resume the book.

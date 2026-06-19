@@ -594,6 +594,9 @@ Rules: %2$d enabled rules</string>
     <string name="tts_continuous_started">Continuous TTS started</string>
     <string name="tts_stopped">TTS stopped</string>
     <string name="tts_finished">TTS finished</string>
+    <string name="tts_resume_title">Resume reading aloud?</string>
+    <string name="tts_resume_continue">Continue</string>
+    <string name="tts_resume_later">Later</string>
     <string name="tts_pause">Pause</string>
     <string name="tts_resume">Resume</string>
     <string name="tts_floating_drag">Drag to move</string>

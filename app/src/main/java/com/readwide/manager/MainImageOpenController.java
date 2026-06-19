@@ -15,6 +15,7 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.readwide.manager.model.FileListItem;
 import com.readwide.manager.util.FileSortUtils;
 import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.PrefsManager;
@@ -35,8 +36,8 @@ final class MainImageOpenController {
 
     void attachDeferredImageViewerSequence(@NonNull Intent intent, @NonNull File selected) {
         final String selectedPath = selected.getAbsolutePath();
-        final ArrayList<File> visibleSnapshot = activity.fileAdapter != null
-                ? activity.fileAdapter.getFilesSnapshot()
+        final ArrayList<FileListItem> visibleSnapshot = activity.fileAdapter != null
+                ? activity.fileAdapter.getItemsSnapshot()
                 : null;
         final ArrayList<String> visiblePaths = buildVisibleImageResultPaths(selectedPath, visibleSnapshot);
         if (!visiblePaths.isEmpty()) {
@@ -65,7 +66,7 @@ final class MainImageOpenController {
 
     @NonNull
     private ArrayList<String> buildVisibleImageResultPaths(@NonNull File selected) {
-        ArrayList<File> snapshot = activity.fileAdapter != null ? activity.fileAdapter.getFilesSnapshot() : null;
+        ArrayList<FileListItem> snapshot = activity.fileAdapter != null ? activity.fileAdapter.getItemsSnapshot() : null;
         return buildVisibleImageResultPaths(selected.getAbsolutePath(), snapshot);
     }
 
@@ -78,18 +79,20 @@ final class MainImageOpenController {
      */
     @NonNull
     static ArrayList<String> buildVisibleImageResultPaths(@NonNull String selectedPath,
-                                                          @Nullable ArrayList<File> snapshot) {
+                                                          @Nullable ArrayList<FileListItem> snapshot) {
         if (snapshot == null) return new ArrayList<>();
         LinkedHashSet<String> ordered = new LinkedHashSet<>();
 
         boolean containsSelected = false;
-        for (File file : snapshot) {
-            // Exclude directories (even image-named ones) but keep entries that
-            // no longer stat as files: the snapshot is what the list was
-            // showing, and the viewer handles per-page load failures. This
-            // also keeps the ordering logic unit-testable without disk I/O.
-            if (file == null || file.isDirectory() || !FileUtils.isImageFile(file.getName())) continue;
-            String path = file.getAbsolutePath();
+        for (FileListItem item : snapshot) {
+            // Exclude directories (even image-named ones) using the metadata the
+            // list already captured off the UI thread — no fresh stat here. The
+            // snapshot is what the list was showing and the viewer handles
+            // per-page load failures, so entries that have since vanished are
+            // still kept. This also keeps the ordering logic unit-testable
+            // without disk I/O.
+            if (item == null || item.isDirectory() || !FileUtils.isImageFile(item.getName())) continue;
+            String path = item.getAbsolutePath();
             if (selectedPath.equals(path)) containsSelected = true;
             ordered.add(path);
         }

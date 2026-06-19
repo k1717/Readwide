@@ -208,7 +208,7 @@ public class PdfReaderActivity extends AppCompatActivity {
     private final android.util.LruCache<Integer, Bitmap> singlePageCache =
             new android.util.LruCache<Integer, Bitmap>((int) Math.max(
                     24L * 1024L * 1024L,
-                    Math.min(72L * 1024L * 1024L, Runtime.getRuntime().maxMemory() / 6L))) {
+                    Math.min(96L * 1024L * 1024L, Runtime.getRuntime().maxMemory() / 6L))) {
                 @Override protected int sizeOf(Integer key, Bitmap value) {
                     return value == null || value.isRecycled() ? 0 : value.getByteCount();
                 }
@@ -3250,7 +3250,7 @@ public class PdfReaderActivity extends AppCompatActivity {
 
     int calculatePdfContinuousCacheKb() {
         long maxMemoryKb = Runtime.getRuntime().maxMemory() / 1024L;
-        long targetKb = Math.max(12L * 1024L, Math.min(64L * 1024L, maxMemoryKb / 8L));
+        long targetKb = Math.max(12L * 1024L, Math.min(96L * 1024L, maxMemoryKb / 8L));
         return (int) Math.max(8L * 1024L, targetKb);
     }
 

@@ -2,11 +2,11 @@
 
 Readwide first-party source code is licensed under the Apache License 2.0. Keep this file with source releases and with binary release materials such as APK/AAB release assets.
 
-This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.5 build. It does not replace a fully resolved transitive dependency report.
+This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.6 build. It does not replace a fully resolved transitive dependency report.
 
 ## Default build boundary
 
-The default Readwide 1.0.5 package is the FOSS-oriented public line:
+The default Readwide 1.0.6 package is the FOSS-oriented public line:
 
 - first-party source: Apache-2.0;
 - no Junrar or RARLAB UnRAR-license code bundled;
@@ -15,7 +15,7 @@ The default Readwide 1.0.5 package is the FOSS-oriented public line:
 - no Hancom proprietary SDK, LibreOffice bundle, or server conversion service;
 - no ads, analytics, telemetry SDK, account system, or network update checker in the default app.
 
-See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_5.md`, and `docs/SBOM_READWIDE_1_0_5.spdx.json`.
+See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_6.md`, and `docs/SBOM_READWIDE_1_0_6.spdx.json`.
 
 ## Runtime dependencies
 
@@ -26,6 +26,7 @@ See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_5.md`, and `docs/SB
 - `androidx.constraintlayout:constraintlayout:2.2.1`
 - `androidx.activity:activity:1.10.1`
 - `androidx.drawerlayout:drawerlayout:1.2.0`
+- `androidx.swiperefreshlayout:swiperefreshlayout:1.1.0`
 
 License: Apache License 2.0.
 
@@ -134,7 +135,12 @@ RAR fixture archives embedded in unit tests or referenced by optional external f
 
 The Readwide launcher artwork source and checked-in launcher/adaptive icon assets are project-owned artwork supplied by the project maintainer for this release line. See `docs/ASSET_PROVENANCE.md`.
 
-Local vector UI icons are ordinary app UI assets. If any vector path is replaced with a copied upstream Material Symbols / Material Icons path, preserve the Apache License 2.0 attribution for that source.
+Local vector UI icons are ordinary app UI assets. Several file-type and action icons — including the per-type file icons (`ic_file_*`) — are vector drawable glyph paths adapted from Google's Material Symbols / Material Icons:
+
+- Source: Material Symbols / Material Icons (`https://github.com/google/material-design-icons`)
+- Copyright: Google LLC
+- License: Apache License 2.0
+- Use: selected glyph paths were copied/adapted into local vector drawables for file-type and UI action icons. Any Material Symbols / Material Icons paths added later are covered by this same Apache-2.0 attribution.
 
 ## Release distribution note
 
@@ -143,5 +149,5 @@ The Gradle packaging block may exclude duplicate dependency `META-INF/LICENSE*` 
 - `LICENSE`
 - `NOTICE`
 - `THIRD_PARTY_NOTICES.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_5.md`
-- `docs/SBOM_READWIDE_1_0_5.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_6.md`
+- `docs/SBOM_READWIDE_1_0_6.spdx.json`

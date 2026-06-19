@@ -159,6 +159,11 @@ public class FileUtils {
                     int idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
                     if (idx >= 0) result = cursor.getString(idx);
                 }
+            } catch (Exception e) {
+                // A hostile or buggy content provider can throw SecurityException,
+                // IllegalArgumentException, or a crashy RuntimeException from query()
+                // (ACTION_VIEW is exported). Fall back to the URI's last path segment.
+                result = null;
             }
         }
 
@@ -169,24 +174,197 @@ public class FileUtils {
     /**
      * Copy content URI to a local file and return the file.
      */
+    /** Cleanup target (not a hard cap) for the inactive opened_files cache, plus a max
+     *  age. Pruned opportunistically before and after each copy; the just-opened file
+     *  is kept, so the live total can briefly exceed this budget (a single external copy
+     *  is separately bounded by MAX_OPENED_URI_COPY_BYTES). */
+    private static final long MAX_OPENED_FILES_CACHE_BYTES = 1024L * 1024L * 1024L;
+    private static final long MAX_OPENED_FILES_CACHE_AGE_MS = 30L * 24L * 60L * 60L * 1000L;
+    /** Hard cap for one external ACTION_VIEW/OpenDocument URI copied into opened_files;
+     *  external providers (browser, messenger, file manager, document provider) may hand
+     *  Readwide a large local document. The inactive opened_files cache budget
+     *  (MAX_OPENED_FILES_CACHE_BYTES) is lower and is a cleanup target, not a hard cap:
+     *  older entries are pruned before and after the copy, but the just-opened file is
+     *  preserved so the requested document can still be read. Internal file-manager moves
+     *  use FileSystemOps and are not affected. */
+    private static final long MAX_OPENED_URI_COPY_BYTES = 2L * 1024L * 1024L * 1024L;
+    /** Cap per EPUB chapter read during text extraction, so a crafted chapter can't OOM. */
+    private static final long MAX_EPUB_CHAPTER_BYTES = 32L * 1024L * 1024L;
+
     public static File copyUriToLocal(Context context, Uri uri, String fileName) throws IOException {
         File cacheDir = new File(context.getCacheDir(), "opened_files");
-        if (!cacheDir.exists()) cacheDir.mkdirs();
+        if (!cacheDir.exists() && !cacheDir.mkdirs()) {
+            throw new IOException("Cannot create opened_files cache");
+        }
+        pruneOpenedFilesCache(cacheDir);
 
-        File localFile = new File(cacheDir, fileName);
+        // The display name comes from a possibly-untrusted content provider (this app
+        // exports ACTION_VIEW), so reduce it to a bare, safe filename. Each distinct
+        // source URI gets its own subdirectory keyed by a hash of the URI, so two
+        // different files sharing a display name (e.g. book.pdf from two folders) do
+        // not collide on one cache file. The visible filename stays the original, so
+        // the viewer title is unaffected. Verify the path stays inside opened_files.
+        String safeName = safeCacheFileName(fileName, "opened_file");
+        File uriDir = new File(cacheDir, uriCacheKey(uri));
+        if (!uriDir.exists() && !uriDir.mkdirs()) {
+            throw new IOException("Cannot create URI cache directory");
+        }
+        File localFile = new File(uriDir, safeName);
+        String root = cacheDir.getCanonicalPath() + File.separator;
+        if (!localFile.getCanonicalPath().startsWith(root)) {
+            throw new IOException("Unsafe cache file name");
+        }
+
+        boolean success = false;
         try (InputStream is = context.getContentResolver().openInputStream(uri);
              FileOutputStream fos = new FileOutputStream(localFile)) {
             if (is == null) throw new IOException("Cannot open URI");
 
             byte[] buffer = new byte[8192];
             int bytesRead;
+            long copied = 0L;
 
             while ((bytesRead = is.read(buffer)) != -1) {
+                copied += bytesRead;
+                if (copied > MAX_OPENED_URI_COPY_BYTES) {
+                    throw new IOException("External file exceeds size limit");
+                }
                 fos.write(buffer, 0, bytesRead);
             }
+            success = true;
+        } finally {
+            // A failed, aborted, or over-limit copy must not leave a broken partial
+            // file in the cache.
+            if (!success) localFile.delete();
         }
 
+        // Re-prune now that the new file exists, so it counts against the total budget
+        // and older entries are evicted oldest-first. The just-opened file is preserved
+        // even if it alone exceeds the budget (it is about to be read); it will be
+        // eligible for eviction on a later open.
+        deleteSiblingsInDirectory(uriDir, localFile);
+        pruneOpenedFilesCache(cacheDir, uriDir);
         return localFile;
+    }
+
+    // Reduce a content-provider display name to a safe single path segment: strip path
+    // separators, control characters and any ".." run so it cannot escape the cache
+    // directory, fall back when empty, and cap the length.
+    private static String safeCacheFileName(String name, String fallback) {
+        String n = normalizeDisplayFileName(name);
+        n = n.replace('\\', '_').replace('/', '_');
+        n = n.replaceAll("\\p{Cntrl}", "_");
+        while (n.contains("..")) n = n.replace("..", "_");
+        n = n.trim();
+        if (n.isEmpty()) n = fallback;
+        if (n.length() > 120) {
+            // Preserve a short trailing extension when truncating, so the viewer title
+            // keeps the right type suffix. ".." has already been removed above.
+            int dot = n.lastIndexOf('.');
+            if (dot > 0 && n.length() - dot <= 10) {
+                String ext = n.substring(dot);
+                n = n.substring(0, Math.max(1, 120 - ext.length())) + ext;
+            } else {
+                n = n.substring(0, 120);
+            }
+        }
+        return n;
+    }
+
+    // Stable per-URI cache subdirectory name (hash of the URI), so distinct sources
+    // with the same display name don't share one cache file.
+    private static String uriCacheKey(Uri uri) {
+        String s = uri != null ? uri.toString() : "";
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] d = md.digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(16);
+            for (int i = 0; i < 8; i++) sb.append(String.format("%02x", d[i]));
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(s.hashCode());
+        }
+    }
+
+    // Opportunistic cache hygiene: drop opened_files entries (per-URI subdirectories)
+    // older than the max age, then enforce the total-size budget oldest-first. Runs
+    // before a new copy, so the entry about to be written is never the one pruned.
+    private static void pruneOpenedFilesCache(File cacheDir) {
+        pruneOpenedFilesCache(cacheDir, null);
+    }
+
+    // When 'keep' is non-null (the just-opened file's per-URI subdirectory), it is
+    // never evicted even if it alone exceeds the size budget, since it is about to be
+    // read. Other entries are still cleaned oldest-first to re-enforce the budget.
+    private static void pruneOpenedFilesCache(File cacheDir, File keep) {
+        File[] entries = cacheDir.listFiles();
+        if (entries == null || entries.length == 0) return;
+        String keepPath = keep != null ? keep.getAbsolutePath() : null;
+        Arrays.sort(entries, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+        long now = System.currentTimeMillis();
+        long total = 0L;
+        for (File e : entries) {
+            if (e == null) continue;
+            boolean isKeep = keepPath != null && keepPath.equals(e.getAbsolutePath());
+            if (!isKeep && now - e.lastModified() > MAX_OPENED_FILES_CACHE_AGE_MS) {
+                deleteRecursive(e);
+            } else {
+                total += sizeOf(e);
+            }
+        }
+        if (total <= MAX_OPENED_FILES_CACHE_BYTES) return;
+        for (File e : entries) {
+            if (total <= MAX_OPENED_FILES_CACHE_BYTES) break;
+            if (e == null || !e.exists()) continue;
+            if (keepPath != null && keepPath.equals(e.getAbsolutePath())) continue;
+            long sz = sizeOf(e);
+            deleteRecursive(e);
+            total -= sz;
+        }
+    }
+
+    private static long sizeOf(File f) {
+        if (f.isFile()) return f.length();
+        File[] kids = f.listFiles();
+        if (kids == null) return 0L;
+        long s = 0L;
+        for (File k : kids) if (k != null) s += sizeOf(k);
+        return s;
+    }
+
+    private static void deleteRecursive(File f) {
+        if (f.isDirectory()) {
+            File[] kids = f.listFiles();
+            if (kids != null) for (File k : kids) if (k != null) deleteRecursive(k);
+        }
+        f.delete();
+    }
+
+    // After a successful copy the per-URI subdirectory should hold only the current
+    // file; drop any stale siblings (e.g. a prior copy under a different display name,
+    // or a leftover partial) so the keep-the-whole-dir post-copy prune doesn't preserve
+    // dead files. Compares canonical paths, falling back to absolute on failure.
+    private static void deleteSiblingsInDirectory(File dir, File keepFile) {
+        File[] kids = dir.listFiles();
+        if (kids == null || kids.length == 0) return;
+        String keepPath;
+        try {
+            keepPath = keepFile.getCanonicalPath();
+        } catch (IOException e) {
+            keepPath = keepFile.getAbsolutePath();
+        }
+        for (File kid : kids) {
+            if (kid == null) continue;
+            String path;
+            try {
+                path = kid.getCanonicalPath();
+            } catch (IOException e) {
+                path = kid.getAbsolutePath();
+            }
+            if (!keepPath.equals(path)) {
+                deleteRecursive(kid);
+            }
+        }
     }
 
 
@@ -246,7 +424,7 @@ public class FileUtils {
     }
 
     public static boolean isExternalOpenableFile(String fileName) {
-        return isVideoFile(fileName);
+        return isVideoFile(fileName) || isAudioFile(fileName);
     }
 
     public static boolean isArchiveFile(String fileName) {
@@ -283,10 +461,13 @@ public class FileUtils {
         String lower = lowerName(fileName);
         return lower.endsWith(".jpg")
                 || lower.endsWith(".jpeg")
+                || lower.endsWith(".jfif")
                 || lower.endsWith(".png")
                 || lower.endsWith(".webp")
                 || lower.endsWith(".gif")
                 || lower.endsWith(".bmp")
+                || lower.endsWith(".wbmp")
+                || lower.endsWith(".dng")
                 || lower.endsWith(".heic")
                 || lower.endsWith(".heif")
                 || lower.endsWith(".avif");
@@ -314,6 +495,27 @@ public class FileUtils {
                 || lower.endsWith(".mpg")
                 || lower.endsWith(".mpeg")
                 || lower.endsWith(".ogv");
+    }
+
+    public static boolean isAudioFile(String fileName) {
+        String lower = lowerName(fileName);
+        return lower.endsWith(".mp3")
+                || lower.endsWith(".m4a")
+                || lower.endsWith(".m4b")
+                || lower.endsWith(".aac")
+                || lower.endsWith(".wav")
+                || lower.endsWith(".flac")
+                || lower.endsWith(".ogg")
+                || lower.endsWith(".oga")
+                || lower.endsWith(".opus")
+                || lower.endsWith(".wma")
+                || lower.endsWith(".mid")
+                || lower.endsWith(".midi")
+                || lower.endsWith(".amr")
+                || lower.endsWith(".aiff")
+                || lower.endsWith(".aif")
+                || lower.endsWith(".ape")
+                || lower.endsWith(".mka");
     }
 
     public static boolean isPdfFile(String fileName) {
@@ -428,7 +630,7 @@ public class FileUtils {
                 if (entry == null || entry.isDirectory()) continue;
                 String html;
                 try (InputStream is = zip.getInputStream(entry)) {
-                    byte[] data = TextEncodingDetector.readAllBytes(is);
+                    byte[] data = TextEncodingDetector.readAllBytes(is, MAX_EPUB_CHAPTER_BYTES);
                     html = TextEncodingDetector.decodeBestEffort(data, TextEncodingDetector.detectEncodingFromBytes(TextEncodingDetector.sampleBytes(data)));
                 }
                 String text = htmlToPlainText(html);

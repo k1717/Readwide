@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">Kontinuerlig TTS startad</string>
     <string name="tts_stopped">TTS stoppad</string>
     <string name="tts_finished">TTS klar</string>
+    <string name="tts_resume_title">Återuppta uppläsningen?</string>
+    <string name="tts_resume_continue">Fortsätt</string>
+    <string name="tts_resume_later">Senare</string>
     <string name="tts_no_text">Ingen läsbar text på den här sidan</string>
     <string name="tts_waiting_for_page">Väntar på nästa sida</string>
     <string name="tts_engine_unavailable">Text-till-tal-motorn är inte tillgänglig</string>

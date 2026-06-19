@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">निरंतर TTS शुरू हुआ</string>
     <string name="tts_stopped">TTS रुका</string>
     <string name="tts_finished">TTS पूरा हुआ</string>
+    <string name="tts_resume_title">ज़ोर से पढ़ना जारी रखें?</string>
+    <string name="tts_resume_continue">जारी रखें</string>
+    <string name="tts_resume_later">बाद में</string>
     <string name="tts_no_text">इस पृष्ठ पर कोई पठनीय टेक्स्ट नहीं है</string>
     <string name="tts_waiting_for_page">अगले पृष्ठ की प्रतीक्षा है</string>
     <string name="tts_engine_unavailable">टेक्स्ट-टू-स्पीच इंजन उपलब्ध नहीं है</string>

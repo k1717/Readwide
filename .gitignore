@@ -29,6 +29,7 @@ captures/
 *.jks
 *.keystore
 *.p12
+*.pfx
 *.pem
 *.der
 keystore.properties

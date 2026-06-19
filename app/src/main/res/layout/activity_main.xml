@@ -189,13 +189,20 @@
             android:clipToPadding="false"
             android:visibility="gone">
 
-            <com.readwide.manager.view.TinyPartialItemClipRecyclerView
-                android:id="@+id/file_list"
+            <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+                android:id="@+id/file_list_refresh"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="?attr/colorSurface"
-                android:clipToPadding="false"
-                android:scrollbars="none" />
+                android:layout_height="match_parent">
+
+                <com.readwide.manager.view.TinyPartialItemClipRecyclerView
+                    android:id="@+id/file_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="?attr/colorSurface"
+                    android:clipToPadding="false"
+                    android:scrollbars="none" />
+
+            </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
             <TextView
                 android:id="@+id/empty_text"

@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Legacy theme name from the TextView Reader lineage, referenced by AndroidManifest
+         (application/activity android:theme) and derived styles. Kept to avoid churn: renaming
+         would require updating the manifest and every reference for no user-visible change. -->
     <style name="Theme.TextViewReader" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">@color/md_theme_light_primary</item>
         <item name="colorOnPrimary">@color/md_theme_light_onPrimary</item>

@@ -112,7 +112,7 @@ public class DocumentPageActivity extends AppCompatActivity {
     public static final String EXTRA_MARKDOWN_SOURCE_OFFSET = "markdown_source_offset";
     public static final String EXTRA_CONTENT_ANCHOR_JSON = "content_anchor_json";
 
-    static final String LOCAL_HOST = "textview.local";
+    static final String LOCAL_HOST = "readwide.local";
     static final String EPUB_PREFIX = "/epub/";
     private static final String WORD_PREFIX = "/word/";
     private static final String FONT_PREFIX = "/font/";
@@ -124,6 +124,9 @@ public class DocumentPageActivity extends AppCompatActivity {
     // Match toolbar-triggered document popups to the Go to Page bottom offset.
     static final int DOCUMENT_TOOLBAR_POPUP_Y_DP = 74;
     private static final long DOCUMENT_CHROME_TRANSITION_MS = 145L;
+    // Cap per in-document WebView resource (EPUB/Word image/font/entry) so a crafted
+    // oversized entry can't blow up memory while being served. See interceptLocalResource.
+    private static final long MAX_DOCUMENT_RESOURCE_BYTES = 64L * 1024L * 1024L;
 
     Toolbar toolbar;
     View documentAppBar;
@@ -159,6 +162,17 @@ public class DocumentPageActivity extends AppCompatActivity {
     int pendingThemeRefreshScrollY = 0;
 
     final ExecutorService executor = Executors.newSingleThreadExecutor();
+
+    // Submit to the document executor defensively: after onDestroy it is shut
+    // down, and a late task would otherwise throw RejectedExecutionException.
+    public void submitDocumentTask(@NonNull Runnable task) {
+        if (activityDestroyed || executor.isShutdown()) return;
+        try {
+            executor.execute(task);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // Executor shut down between check and submit; nothing to do.
+        }
+    }
     final List<Page> pages = new ArrayList<>();
     BookmarkManager bookmarkManager;
     PrefsManager prefs;
@@ -804,7 +818,7 @@ public class DocumentPageActivity extends AppCompatActivity {
             webView.setOnTouchListener(null);
             webView.setOnScrollChangeListener(null);
             webView.setWebViewClient(null);
-            webView.removeJavascriptInterface("TextViewSelectionBridge");
+            webView.removeJavascriptInterface("ReadwideSelectionBridge");
             webView.stopLoading();
             webView.loadUrl("about:blank");
             webView.clearHistory();
@@ -972,6 +986,28 @@ public class DocumentPageActivity extends AppCompatActivity {
 
             @Override
             public boolean onDoubleTap(@NonNull MotionEvent e) {
+                // Inside a page-turn zone a double tap must page, not zoom: a
+                // quick double tap to flip pages must not be captured as a zoom
+                // toggle. Mirrors the PDF viewer. Non-fixed-layout documents
+                // never reach here for side taps (their fast tap-paging path
+                // consumes the sequence first and bypasses this detector), so in
+                // practice this covers fixed-layout EPUB, whose side taps fall
+                // through to the gesture detector. Outside the page-turn zones
+                // the double tap still toggles zoom below.
+                int tapAction = getDocumentTapPagingAction(e);
+                if (tapAction == TapZoneMath.ACTION_PREVIOUS || tapAction == TapZoneMath.ACTION_NEXT) {
+                    // Consume the rest of this tap sequence so the WebView's own
+                    // double-tap zoom does not also fire.
+                    documentDoubleTapResetSequence = true;
+                    turnDocumentPageByTap(tapAction == TapZoneMath.ACTION_PREVIOUS ? -1 : 1);
+                    clearDocumentEdgeArm();
+                    if (webView != null) {
+                        webView.postDelayed(() -> {
+                            if (!activityDestroyed) documentDoubleTapResetSequence = false;
+                        }, 360);
+                    }
+                    return true;
+                }
                 documentDoubleTapResetSequence = true;
                 if (webView != null && webView.canZoomOut()) {
                     // Already zoomed in (pinch or a previous double-tap): reset to fit.
@@ -1198,7 +1234,7 @@ public class DocumentPageActivity extends AppCompatActivity {
     private void checkWordSelectionAfterScroll() {
         if (activityDestroyed || !"Word".equals(docType) || webView == null) return;
         webView.evaluateJavascript(
-                "(function(){try{return !!(window.__textviewClearSelectionIfOffscreen&&window.__textviewClearSelectionIfOffscreen());}catch(e){return false;}})()",
+                "(function(){try{return !!(window.__readwideClearSelectionIfOffscreen&&window.__readwideClearSelectionIfOffscreen());}catch(e){return false;}})()",
                 value -> {
                     if ("true".equals(value)) {
                         wordSelectionActive = false;
@@ -1210,12 +1246,12 @@ public class DocumentPageActivity extends AppCompatActivity {
         if (activityDestroyed || !"Word".equals(docType) || webView == null) return;
         webView.evaluateJavascript(
                 "(function(){try{"
-                        + "if(window.__textviewSelectionCleanupInstalled){return true;}"
-                        + "window.__textviewSelectionCleanupInstalled=true;"
+                        + "if(window.__readwideSelectionCleanupInstalled){return true;}"
+                        + "window.__readwideSelectionCleanupInstalled=true;"
                         + "function sel(){return window.getSelection?window.getSelection():null;}"
                         + "function active(){var s=sel();return !!(s&&!s.isCollapsed&&s.rangeCount>0&&String(s).length>0);}"
-                        + "function notify(){try{if(window.TextViewSelectionBridge){window.TextViewSelectionBridge.onSelectionChanged(active());}}catch(e){}}"
-                        + "window.__textviewClearSelectionIfOffscreen=function(){"
+                        + "function notify(){try{if(window.ReadwideSelectionBridge){window.ReadwideSelectionBridge.onSelectionChanged(active());}}catch(e){}}"
+                        + "window.__readwideClearSelectionIfOffscreen=function(){"
                         + "try{var s=sel();if(!s||s.isCollapsed||s.rangeCount===0||String(s).length===0){notify();return false;}"
                         + "var r=s.getRangeAt(0);var rects=Array.prototype.slice.call(r.getClientRects()).filter(function(x){return x&&x.width>0&&x.height>0;});"
                         + "if(!rects.length){s.removeAllRanges();notify();return true;}"
@@ -1225,11 +1261,26 @@ public class DocumentPageActivity extends AppCompatActivity {
                         + "document.addEventListener('selectionchange',function(){setTimeout(notify,0);},true);"
                         + "document.addEventListener('touchend',function(){setTimeout(notify,70);},true);"
                         + "document.addEventListener('mouseup',function(){setTimeout(notify,70);},true);"
-                        + "window.addEventListener('scroll',function(){clearTimeout(window.__textviewScrollCleanupTimer);window.__textviewScrollCleanupTimer=setTimeout(window.__textviewClearSelectionIfOffscreen,80);},{passive:true});"
+                        + "window.addEventListener('scroll',function(){clearTimeout(window.__readwideScrollCleanupTimer);window.__readwideScrollCleanupTimer=setTimeout(window.__readwideClearSelectionIfOffscreen,80);},{passive:true});"
                         + "setTimeout(notify,120);return true;}catch(e){return false;}})()",
                 null);
     }
 
+    /**
+     * The only JavaScript-callable bridge exposed to document WebView content.
+     *
+     * Threat model: JavaScript is disabled by default and turned on only for Word
+     * documents -- whose HTML the app generates itself -- and fixed-layout EPUB,
+     * which may carry untrusted scripts. Even when reachable, this interface has a
+     * single method that takes a boolean and only flips an internal "word is
+     * selected" flag: no file or content access, no reflection, no navigation, no
+     * eval, no data returned. On targetSdk 17 or higher only methods annotated with
+     * JavascriptInterface are exposed, so nothing else such as getClass is callable.
+     * The WebView also disables file access, content access, and DOM storage, and
+     * serves only readwide.local resources bound to the current document archive --
+     * see interceptLocalResource. Keep this surface boolean-only: do not add String
+     * or Object parameters, or methods that touch the filesystem or app state.
+     */
     class WordSelectionBridge {
         @JavascriptInterface
         public void onSelectionChanged(boolean active) {
@@ -2869,6 +2920,11 @@ public class DocumentPageActivity extends AppCompatActivity {
         return Math.round(dp * getResources().getDisplayMetrics().density);
     }
 
+    // Serves only readwide.local resources, and only entries that exist INSIDE the
+    // current document archive resourceZip or the user-selected font -- never an
+    // arbitrary filesystem path. getEntry and getInputStream read from the in-memory
+    // zip, so a crafted ../ path in document HTML cannot escape to the filesystem;
+    // together with disabled file access this leaves no local-file read surface.
     WebResourceResponse interceptLocalResource(Uri uri) {
         if (uri == null) return null;
         if (!LOCAL_HOST.equalsIgnoreCase(uri.getHost())) {
@@ -3391,7 +3447,21 @@ public class DocumentPageActivity extends AppCompatActivity {
     }
 
     private byte[] readAllBytes(InputStream is) throws IOException {
-        return DocumentArchiveUtils.readAllBytes(is);
+        // Bounded read for resources served to the WebView (interceptLocalResource):
+        // a crafted document could otherwise declare a huge image/font/entry and OOM
+        // the process here. Oversized entries fail to serve instead.
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[32768];
+        int n;
+        long total = 0L;
+        while ((n = is.read(buffer)) != -1) {
+            total += n;
+            if (total > MAX_DOCUMENT_RESOURCE_BYTES) {
+                throw new IOException("Document resource exceeds size limit");
+            }
+            out.write(buffer, 0, n);
+        }
+        return out.toByteArray();
     }
 
     private DocumentBuilder secureDocumentBuilder() throws Exception {

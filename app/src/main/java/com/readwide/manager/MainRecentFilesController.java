@@ -6,6 +6,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.readwide.manager.model.FileListItem;
 import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.PrefsManager;
@@ -15,8 +16,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class MainRecentFilesController {
-    private static final int DISPLAY_LIMIT = 100;
-    private static final int SCAN_LIMIT = 400;
+    private static final int DISPLAY_LIMIT = 300;
+    private static final int SCAN_LIMIT = 600;
 
     private final MainActivity activity;
 
@@ -39,7 +40,7 @@ final class MainRecentFilesController {
             return;
         }
         final long token = ++recentLoadToken;
-        activity.fileOperationExecutor.execute(() -> {
+        activity.executeFolderBackgroundTask(() -> {
             List<ReaderState> recent = activity.bookmarkManager.getRecentFiles(SCAN_LIMIT);
             List<File> recentFiles = new ArrayList<>();
             for (ReaderState state : recent) {
@@ -47,11 +48,12 @@ final class MainRecentFilesController {
                 File file = visibleRecentFileFor(state);
                 if (file != null) recentFiles.add(file);
             }
+            final java.util.List<FileListItem> recentItems = FileListItem.fromList(recentFiles);
             activity.runOnUiThread(() -> {
                 // Drop stale results if another reload started or the activity is gone.
                 if (activity.isFinishing() || activity.isDestroyed()) return;
                 if (token != recentLoadToken) return;
-                applyRecentFiles(recent, recentFiles);
+                applyRecentFiles(recent, recentItems);
             });
         });
     }
@@ -59,7 +61,7 @@ final class MainRecentFilesController {
     private volatile long recentLoadToken = 0;
 
     private void applyRecentFiles(@NonNull List<ReaderState> recent,
-                                  @NonNull List<File> recentFiles) {
+                                  @NonNull List<FileListItem> recentItems) {
         if (activity.recentAdapter != null) {
             activity.recentAdapter.setReadingProgressStates(recent);
             int recentSort = activity.prefs != null
@@ -69,17 +71,17 @@ final class MainRecentFilesController {
                 // BookmarkManager already returns newest first. Avoid DiffUtil
                 // holder reuse here because recent rows carry progress badges.
                 activity.recentAdapter.setSortEnabled(false);
-                activity.recentAdapter.setFilesFastPresorted(recentFiles);
+                activity.recentAdapter.setItemsFastPresorted(recentItems);
             } else {
                 activity.recentAdapter.setSortEnabled(true);
                 activity.recentAdapter.setSortMode(recentSort);
-                activity.recentAdapter.setFiles(recentFiles);
+                activity.recentAdapter.setItems(recentItems);
             }
             activity.recentAdapter.refreshReadingProgress();
             activity.scrollListToTop(activity.recentRecyclerView);
         }
         if (activity.recentEmptyText != null) {
-            activity.recentEmptyText.setVisibility(recentFiles.isEmpty() ? View.VISIBLE : View.GONE);
+            activity.recentEmptyText.setVisibility(recentItems.isEmpty() ? View.VISIBLE : View.GONE);
         }
         if (activity.recentClearAllButton != null) {
             boolean hasAnyRecent = activity.bookmarkManager != null && activity.bookmarkManager.hasRecentFiles();

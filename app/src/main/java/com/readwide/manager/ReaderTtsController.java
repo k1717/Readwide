@@ -424,7 +424,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                     activity.filePath,
                     seg.startChar,
                     activity.getDisplayedCurrentPageNumber(),
-                    continuous);
+                    continuous,
+                    activity.prefs.getTtsSleepTimerMinutes());
         }
         updatePlaybackNotification(false);
     }
@@ -775,7 +776,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                         activity.filePath,
                         segment.startChar,
                         activity.getDisplayedCurrentPageNumber(),
-                        continuous);
+                        continuous,
+                        activity.prefs.getTtsSleepTimerMinutes());
             }
             updatePlaybackNotification(true);
         });
@@ -790,6 +792,9 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             if (continuous && canAdvancePage()) {
                 advanceAndSpeakNextPage(generation);
             } else {
+                // Whole document finished reading aloud — nothing left to resume, so
+                // drop the saved playback state that drives the main-screen prompt.
+                if (activity.prefs != null) activity.prefs.clearTtsLastPlaybackState();
                 stop(false);
                 clearTtsHighlight();
                 TtsPlaybackService.stop(activity.getApplicationContext());

@@ -47,7 +47,7 @@ final class DocumentPageLoadController {
         activity.hideDocumentSearchPanel(false, false);
         activity.clearDocumentSearchState(false);
 
-        activity.executor.execute(() -> {
+        activity.submitDocumentTask(() -> {
             try {
                 resolveLocalFile(intent);
                 activity.filePath = activity.localFile.getAbsolutePath();

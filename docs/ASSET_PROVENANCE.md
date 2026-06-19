@@ -13,7 +13,7 @@ The source reference and checked-in launcher assets are treated as project-owned
 
 ## UI Vector Icons
 
-The project also contains local vector drawable icons for ordinary UI actions such as search, settings, bookmarks, sorting, file actions, and navigation. These are treated separately from the Readwide launcher artwork. If any vector path is replaced with a copied upstream Material Symbols / Material Icons path, preserve the Apache License 2.0 attribution for that source in `THIRD_PARTY_NOTICES.md`.
+The project also contains local vector drawable icons for ordinary UI actions such as search, settings, bookmarks, sorting, file actions, and navigation, plus per-type file icons (`ic_file_*`). These are treated separately from the Readwide launcher artwork. Several of them — including the per-type file icons — are glyph paths adapted from Google's Material Symbols / Material Icons, which are licensed under the Apache License 2.0; that attribution is recorded in `THIRD_PARTY_NOTICES.md`. Any further Material Symbols / Material Icons paths added later are covered by the same attribution.
 
 ## RAR Test Fixtures
 

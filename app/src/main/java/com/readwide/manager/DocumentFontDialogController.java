@@ -34,7 +34,7 @@ import java.util.List;
 import java.util.Locale;
 
 final class DocumentFontDialogController {
-    private static final String LOCAL_HOST = "textview.local";
+    private static final String LOCAL_HOST = "readwide.local";
     private static final String FONT_PREFIX = "/font/";
     private static final String DOCUMENT_FONT_DEFAULT = "document_default";
     private static final String FONT_OPTION_SYSTEM_CURRENT = "system_current";

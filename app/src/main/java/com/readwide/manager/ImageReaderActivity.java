@@ -56,6 +56,8 @@ import com.readwide.manager.util.ImageSequenceState;
 import com.readwide.manager.util.FileSortUtils;
 import com.readwide.manager.util.FileClipboardController;
 import com.readwide.manager.util.FileUtils;
+import com.readwide.manager.model.ReaderState;
+import com.readwide.manager.util.BookmarkManager;
 import com.readwide.manager.util.PrefsManager;
 import com.readwide.manager.util.ReaderKeyMap;
 import com.readwide.manager.view.ZoomImageView;
@@ -156,9 +158,11 @@ public class ImageReaderActivity extends AppCompatActivity {
 
         // Budget the decoded-bitmap cache to a fraction of app heap. Sized by
         // bitmap byte count; evicted bitmaps are recycled unless still on screen.
+        // A larger budget keeps the ±3 prefetch window resident on big comics;
+        // the heap-fraction basis keeps it proportional on low-RAM devices.
         int cacheBudgetBytes = (int) Math.max(
                 8L * 1024L * 1024L,
-                Math.min(64L * 1024L * 1024L, Runtime.getRuntime().maxMemory() / 8L));
+                Math.min(128L * 1024L * 1024L, Runtime.getRuntime().maxMemory() / 5L));
         decodedBitmapCache = new android.util.LruCache<Integer, Bitmap>(cacheBudgetBytes) {
             @Override protected int sizeOf(Integer key, Bitmap value) {
                 return value == null || value.isRecycled() ? 0 : value.getByteCount();
@@ -198,6 +202,20 @@ public class ImageReaderActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        // Persist the latest reading position now. When returning to the main
+        // screen the parent activity's onResume (which reloads the recent list)
+        // runs before this activity's onStop/onDestroy, so saving only in
+        // onDestroy left the recent screen showing stale progress for image
+        // archives. Flush the pending debounced save and write immediately,
+        // matching how the PDF/document/text readers persist in onPause.
+        mainHandler.removeCallbacks(imageProgressSaveRunnable);
+        persistArchiveImageProgress();
+        persistImageReadingProgress();
+    }
+
+    @Override
     protected void onDestroy() {
         destroyed = true;
         mainHandler.removeCallbacksAndMessages(null);
@@ -227,6 +245,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             decodedBitmapCache = null;
         }
         persistArchiveImageProgress();
+        persistImageReadingProgress();
         ViewerRegistry.unregister(this);
         super.onDestroy();
     }
@@ -483,6 +502,11 @@ public class ImageReaderActivity extends AppCompatActivity {
 
         toolbar = new Toolbar(this);
         toolbar.setBackgroundColor(Color.argb(230, 0, 0, 0));
+        // Consume taps on the bar (outside its icons/menu) so they do not fall
+        // through to the image view behind it and page the sequence. The image view
+        // now extends under this bar (its top strip is padding, not a margin); when
+        // the bar is hidden it is GONE and those taps reach the image.
+        toolbar.setClickable(true);
         toolbar.setTitleTextColor(Color.WHITE);
         toolbar.setSubtitleTextColor(Color.rgb(210, 210, 210));
         toolbar.setTitleTextAppearance(this, R.style.TextAppearance_TextView_ImageViewer_Title);
@@ -517,7 +541,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         });
         FrameLayout.LayoutParams toolbarLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                dpToPx(56),
+                dpToPx(48),
                 Gravity.TOP);
         root.addView(toolbar, toolbarLp);
         tintToolbarMenuIcon(toolbar);
@@ -560,7 +584,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             toolbar.setPadding(systemLeftInset, systemTopInset, systemRightInset, 0);
             ViewGroup.LayoutParams raw = toolbar.getLayoutParams();
             if (raw != null) {
-                int targetHeight = dpToPx(56) + systemTopInset;
+                int targetHeight = dpToPx(48) + systemTopInset;
                 if (raw.height != targetHeight) {
                     raw.height = targetHeight;
                     toolbar.setLayoutParams(raw);
@@ -697,25 +721,32 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     private void updateImageViewportBounds() {
         if (imageView == null) return;
-        int top = dpToPx(56) + systemTopInset;
+        int top = dpToPx(48) + systemTopInset;
         int sliderItemCountForBounds = shouldReserveImageSliderSpace()
                 ? Math.max(2, imagePaths.size())
                 : imagePaths.size();
         int bottom = sliderController != null
                 ? sliderController.reservedViewportBottomInset(sliderItemCountForBounds)
                 : systemBottomInset;
-        imageView.setPadding(0, 0, 0, 0);
+        // Reserve the toolbar (top) and slider (bottom) strips as PADDING rather
+        // than margins so the view still reaches the top and bottom screen edges
+        // and receives taps there. The image content stays inset between the bars
+        // exactly as before, but when the chrome is hidden both bars are GONE, so a
+        // tap on either strip now reaches the view for page turning instead of
+        // landing in dead space. While shown, the toolbar and slider each consume
+        // their own touches, so the image underneath is not paged through them.
+        imageView.setPadding(0, top, 0, bottom);
         ViewGroup.LayoutParams raw = imageView.getLayoutParams();
         if (raw instanceof FrameLayout.LayoutParams) {
             FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) raw;
             if (lp.leftMargin != systemLeftInset
-                    || lp.topMargin != top
+                    || lp.topMargin != 0
                     || lp.rightMargin != systemRightInset
-                    || lp.bottomMargin != bottom) {
+                    || lp.bottomMargin != 0) {
                 lp.leftMargin = systemLeftInset;
-                lp.topMargin = top;
+                lp.topMargin = 0;
                 lp.rightMargin = systemRightInset;
-                lp.bottomMargin = bottom;
+                lp.bottomMargin = 0;
                 imageView.setLayoutParams(lp);
             }
         }
@@ -781,12 +812,13 @@ public class ImageReaderActivity extends AppCompatActivity {
         filePath = imagePaths.get(currentIndex);
         fileUri = null;
         persistArchiveImageProgress();
+        scheduleImageReadingProgressSave();
         updateToolbarTitle();
         // Instant path: if this page's bitmap is already decoded and cached, show
         // it immediately without queuing a decode. This is what makes rapid taps
         // feel responsive instead of waiting on the single-thread decode queue.
         if (showCachedBitmapIfAvailable(currentIndex)) {
-            prefetchAdjacentArchiveImages(currentIndex);
+            prefetchAdjacentImages(currentIndex);
             return;
         }
         loadImageAsync();
@@ -855,7 +887,8 @@ public class ImageReaderActivity extends AppCompatActivity {
                     applyLoadedImage(result, false, index, path, entryPath);
                     currentImageDetailLoaded = result.originalQuality;
                     persistArchiveImageProgress();
-                    prefetchAdjacentArchiveImages(index);
+                    scheduleImageReadingProgressSave();
+                    prefetchAdjacentImages(index);
                     setLoading(false, null);
                 } else {
                     discardArchiveImageCacheAfterDecodeFailure(index, path);
@@ -1025,36 +1058,54 @@ public class ImageReaderActivity extends AppCompatActivity {
         verifiedSensitiveArchiveCachePaths.remove(new File(expectedPath).getAbsolutePath());
     }
 
-    private void prefetchAdjacentArchiveImages(int centerIndex) {
-        if (sourceArchivePath == null || sourceArchivePath.trim().isEmpty()) return;
-        if (sourceEntryPaths.isEmpty() || imagePaths.size() <= 1) return;
-        final String archivePathSnapshot = sourceArchivePath;
+    private void prefetchAdjacentImages(int centerIndex) {
+        if (imagePaths.size() <= 1) return;
+        final boolean fromArchive = sourceArchivePath != null
+                && !sourceArchivePath.trim().isEmpty()
+                && !sourceEntryPaths.isEmpty();
         final ArrayList<String> imagePathsSnapshot = new ArrayList<>(imagePaths);
         final ArrayList<String> entryPathsSnapshot = new ArrayList<>(sourceEntryPaths);
+        final int total = imagePathsSnapshot.size();
+        // Prefetch three pages each direction; sequences are usually read in one
+        // direction quickly, so a little depth keeps the next taps instant.
+        // Nearest pages are listed first so they decode before farther ones.
+        final int[] offsets = { 1, -1, 2, -2, 3, -3 };
+
+        if (!fromArchive) {
+            // Plain filesystem images already sit on disk at their listed path, so
+            // there is no archive entry to extract first: decode each neighbor
+            // straight into the cache on the parallel decode pool.
+            for (int off : offsets) {
+                if (destroyed) break;
+                int idx = ImageSequenceNavigationMath.nextIndex(centerIndex, off, total);
+                if (idx == centerIndex) continue;
+                final int decodeIndex = idx;
+                prefetchDecodeExecutor.execute(
+                        () -> prefetchDecodeIntoCache(decodeIndex, imagePathsSnapshot, entryPathsSnapshot));
+            }
+            return;
+        }
+
+        // Archive source: each neighbor must be extracted from the archive before
+        // it can be decoded. Extraction is sequential (it shares archive state), so
+        // run it on the sequence executor and then hand decoding to the parallel
+        // pool so it does not block the next extraction.
+        final String archivePathSnapshot = sourceArchivePath;
         final char[] passwordSnapshot;
         synchronized (archiveExtractLock) {
             passwordSnapshot = PasswordChars.cloneOf(sourceArchivePassword);
         }
-        final int total = imagePathsSnapshot.size();
-        // Prefetch two pages each direction; comics are usually read in one
-        // direction quickly, so a little depth keeps the next taps instant.
-        final int[] offsets = { 1, -1, 2, -2 };
         sequenceExecutor.execute(() -> {
             try {
                 for (int off : offsets) {
                     if (destroyed) break;
                     int idx = ImageSequenceNavigationMath.nextIndex(centerIndex, off, total);
                     if (idx == centerIndex) continue;
-                    // Extract (sequential, shares archive state)...
                     prefetchArchiveImageEntry(archivePathSnapshot, entryPathsSnapshot, imagePathsSnapshot, idx, passwordSnapshot, verifiedSensitiveArchiveCachePaths);
-                    // ...then hand decoding to the parallel pool so it doesn't
-                    // block the next extraction.
                     final int decodeIndex = idx;
-                    final ArrayList<String> pathsRef = imagePathsSnapshot;
-                    final ArrayList<String> entriesRef = entryPathsSnapshot;
                     if (!destroyed) {
                         prefetchDecodeExecutor.execute(
-                                () -> prefetchDecodeIntoCache(decodeIndex, pathsRef, entriesRef));
+                                () -> prefetchDecodeIntoCache(decodeIndex, imagePathsSnapshot, entryPathsSnapshot));
                     }
                 }
             } finally {
@@ -1136,6 +1187,35 @@ public class ImageReaderActivity extends AppCompatActivity {
         String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, currentIndex);
         if (entryPath == null || entryPath.trim().isEmpty()) return;
         prefs.setArchiveLastImageEntryPath(sourceArchivePath, entryPath);
+    }
+
+    // Persist a reading-progress state for the image viewer so the recent list
+    // shows a percent for image archives (and folder image sequences) the same
+    // way it does for PDF/EPUB. Progress is keyed on the archive path when the
+    // images come from one (so the archive entry in Recents gets the badge), and
+    // on the current image path otherwise.
+    // Debounced progress save: rapid page turns coalesce into one disk write,
+    // since persistImageReadingProgress -> saveReadingStates serializes the whole
+    // reading-state map. The final position is also saved immediately in onDestroy.
+    private final Runnable imageProgressSaveRunnable = this::persistImageReadingProgress;
+
+    private void scheduleImageReadingProgressSave() {
+        mainHandler.removeCallbacks(imageProgressSaveRunnable);
+        mainHandler.postDelayed(imageProgressSaveRunnable, 500L);
+    }
+
+    private void persistImageReadingProgress() {
+        int total = imagePaths.size();
+        if (total < 2) return;
+        boolean fromArchive = sourceArchivePath != null && sourceArchivePath.trim().length() > 0;
+        String targetPath = fromArchive ? sourceArchivePath : filePath;
+        if (targetPath == null || targetPath.trim().isEmpty()) return;
+        ReaderState state = new ReaderState(targetPath);
+        state.setPageNumber(currentIndex + 1);
+        state.setTotalPages(total);
+        try {
+            BookmarkManager.getInstance(this).saveReadingState(state);
+        } catch (Exception ignored) {}
     }
 
     private boolean canModifyCurrentLocalFile() {

@@ -320,6 +320,10 @@ public class BookmarkManager {
         try {
             JSONObject root = new JSONObject();
             root.put("appName", "Readwide");
+            // Legacy backup-format identifiers from the TextView Reader lineage, written
+            // into every exported backup. The import path does not match on these strings,
+            // but they are kept stable so backup files retain a consistent format identity
+            // across versions; they were intentionally not renamed during the package rename.
             root.put("backupType", "textview_reader_full_backup");
             root.put("schema", "textview-full-backup-v10");
             root.put("version", FORMAT_VERSION);
@@ -821,7 +825,7 @@ public class BookmarkManager {
                 bookmark.clearPendingPcTextEdit();
                 return;
             } catch (Exception e) {
-                Log.e(TAG, "Failed to apply developer charPosition edit for " + file, e);
+                Log.e(TAG, "Failed to apply developer charPosition edit for " + (file != null ? file.getName() : "?"), e);
             }
         }
 
@@ -973,7 +977,7 @@ public class BookmarkManager {
                     return;
                 }
             } catch (Exception e) {
-                Log.e(TAG, "Failed to apply beginner TXT bookmark edit immediately for " + file, e);
+                Log.e(TAG, "Failed to apply beginner TXT bookmark edit immediately for " + (file != null ? file.getName() : "?"), e);
             }
         }
 
@@ -1097,7 +1101,7 @@ public class BookmarkManager {
             applyPcTextLinePositionFromText(bookmark, text, oneBasedLine);
             bookmark.clearPendingPcTextEdit();
         } catch (Exception e) {
-            Log.e(TAG, "Failed to apply PC-edited bookmark position for " + path, e);
+            Log.e(TAG, "Failed to apply PC-edited bookmark position for " + new File(path).getName(), e);
         }
     }
 
@@ -1219,7 +1223,7 @@ public class BookmarkManager {
             }
             if (changed) saveBookmarks();
         } catch (Exception e) {
-            Log.e(TAG, "Failed to resolve pending PC TXT bookmark edits for " + filePath, e);
+            Log.e(TAG, "Failed to resolve pending PC TXT bookmark edits for " + new File(filePath).getName(), e);
         }
     }
 
@@ -1431,7 +1435,7 @@ public class BookmarkManager {
             }
             return bytesToHex(digest.digest());
         } catch (Exception e) {
-            Log.e(TAG, "Failed to compute quick bookmark fingerprint for " + file, e);
+            Log.e(TAG, "Failed to compute quick bookmark fingerprint for " + (file != null ? file.getName() : "?"), e);
             return "";
         }
     }

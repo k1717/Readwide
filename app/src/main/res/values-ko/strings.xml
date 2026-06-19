@@ -481,7 +481,7 @@
     <string name="remove_selected_from_recent_list">최근 목록에서 지우기</string>
     <string name="selected_recent_files_cleared">최근 항목 %1$d개를 지웠습니다</string>
     <string name="settings_section_updates">업데이트</string>
-    <string name="update_check_description">Check updates at https://github.com/k1717/Readwide/releases</string>
+    <string name="update_check_description">업데이트 확인: https://github.com/k1717/Readwide/releases</string>
     <string name="contact_developer">개발자에게 문의 보내기</string>
     <string name="contact_developer_chooser">개발자에게 문의 보내기</string>
     <string name="contact_developer_subject">Readwide 문의</string>
@@ -586,6 +586,9 @@
     <string name="tts_continuous_started">연속 TTS를 시작했습니다</string>
     <string name="tts_stopped">TTS를 정지했습니다</string>
     <string name="tts_finished">TTS가 끝났습니다</string>
+    <string name="tts_resume_title">이어서 들으시겠어요?</string>
+    <string name="tts_resume_continue">이어서 진행</string>
+    <string name="tts_resume_later">나중에</string>
     <string name="tts_no_text">이 페이지에 읽을 텍스트가 없습니다</string>
     <string name="tts_waiting_for_page">다음 페이지를 기다리는 중입니다</string>
     <string name="tts_engine_unavailable">TTS 엔진을 사용할 수 없습니다</string>

@@ -1202,10 +1202,15 @@ final class TextEncodingDetector {
     /**
      * Read text from a content URI.
      */
+    /** Cap a text read from an external URI (settings/backup JSON import is the only
+     *  caller). Oversized input is rejected, not truncated, so a partial JSON can't be
+     *  silently imported. */
+    private static final long MAX_TEXT_FROM_URI_BYTES = 256L * 1024L * 1024L;
+
     public static String readTextFromUri(Context context, Uri uri) throws IOException {
         try (InputStream is = context.getContentResolver().openInputStream(uri)) {
             if (is == null) throw new IOException("Cannot open URI: " + uri);
-            byte[] data = readAllBytes(is);
+            byte[] data = readAllBytes(is, MAX_TEXT_FROM_URI_BYTES);
             String encoding = detectEncodingResultFromDataAdaptive(data).charsetName;
             return decodeBestEffort(data, encoding);
         }
@@ -1333,6 +1338,23 @@ final class TextEncodingDetector {
             out.write(buffer, 0, n);
         }
 
+        return out.toByteArray();
+    }
+
+    // Bounded variant: aborts (IOException) once more than maxBytes have been read, so
+    // a crafted oversized entry (e.g. an EPUB chapter) can't exhaust memory here.
+    static byte[] readAllBytes(InputStream is, long maxBytes) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[32768];
+        int n;
+        long total = 0L;
+        while ((n = is.read(buffer)) != -1) {
+            total += n;
+            if (total > maxBytes) {
+                throw new IOException("Stream exceeds size limit");
+            }
+            out.write(buffer, 0, n);
+        }
         return out.toByteArray();
     }
 

@@ -2,13 +2,13 @@
 
 Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF, EPUB, Word-family documents, images, comic archives, and common archive workflows.
 
-Readwide is the public successor to TextView Reader. Since 1.0.4 the Android `applicationId` is `com.readwide.manager`, and 1.0.5 is an in-place update over 1.0.4 when signed with the same key. Earlier TextView Reader/Readwide builds used a different application ID and install as a separate app; bookmarks, reading positions, themes, and settings transfer through the in-app JSON backup export/import.
+[![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)]
+[![Downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)]
 
-![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)
-![Total downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)
+Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4. 1.0.6 is signed with a new release key, so it does not update in place over an installed 1.0.4/1.0.5 (which used the previous key) — uninstall the old version, install 1.0.6, then restore bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
 
-- Current public version: **1.0.5**
-- Android metadata: `versionCode 10005`, `versionName "1.0.5"`
+- Current public version: **1.0.6**
+- Android metadata: `versionCode 10006`, `versionName "1.0.6"`
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
 - Release page: `https://github.com/k1717/Readwide/releases`
@@ -22,6 +22,7 @@ The default build is designed for local files.
 - Android Auto Backup is disabled with `android:allowBackup="false"`.
 - Broad storage access is requested because the app is a local reader and file browser for user-selected folders, documents, images, and archives.
 - Opening or sharing a file with another app uses Android's user-triggered intent / `FileProvider` flow; Readwide does not upload the file itself.
+- Files opened *into* Readwide from another app (browser, messenger, file manager, document provider) via `ACTION_VIEW`/`BROWSABLE` are copied into an app-private cache with filename sanitization, a canonical-path containment check, a 2 GB per-file copy limit, and cache pruning; JSON backup import is capped at 256 MB.
 
 See `PRIVACY.md` for the full local-data and cache policy.
 
@@ -61,9 +62,26 @@ This table is a release-summary view. See the archive support matrix and the for
 | RAR/CBR | Limited extraction/read support. libarchive-android is the primary compressed-RAR backend; first-party Java handles covered stored entries, scoped RAR3/RAR4 PPMd cases, RAR5 v5.0 compressed/solid cases, and fixture-verified RAR5 AES visible-header multi-volume cases. No broad encrypted, split, SFX, VM-filtered, or complete RAR support claim. |
 | ALZ/EGG | First-party read/extraction paths for covered Store/Deflate/BZip2/LZMA/AZO cases with CRC checks. Encrypted/split/solid EGG remains unsupported. |
 
+## Quick filter buttons
+
+The file list has quick-filter chips. Each matches by file-name extension (case-insensitive); folders are always shown regardless of the active filter.
+
+| Filter | Matches |
+| --- | --- |
+| All | Every file (no extension filter). |
+| General | Text-like and source/config files **except** plain `.txt`/`.text` and `.svg`: `.log .md .markdown .csv .tsv .ini .cfg .conf .properties .prop .json .jsonl .xml .html .htm .xhtml .css .scss .sass .yaml .yml .toml .sql .srt .vtt .rtf .tex .bib`, common source code (`.java .kt .kts .gradle .groovy .js .mjs .cjs .tsx .jsx .vue .svelte .py .pyw .rb .go .rs .swift .c .cc .cpp .cxx .h .hh .hpp .m .mm .cs .php .pl .pm .r .lua .dart .scala .sc .sh .bash .zsh .fish .bat .cmd .ps1 .psm1`), dotfiles (`.gitignore .gitattributes .editorconfig .env`), and `.manifest .mf .plist`. Extensionless files named `readme`, `license`/`licence`, `copying`, `notice`, `authors`, `contributors`, `changelog`, `changes`, `makefile`, `dockerfile`, `gemfile`, `rakefile`, `podfile`, `procfile` are also matched. |
+| TXT | `.txt .text` |
+| Archive | `.zip .zipx .cbz .rar .cbr .alz .egg .7z .cb7 .tar .cbt .tar.gz .tgz .tar.bz2 .tbz2 .tbz .tar.xz .txz .tar.lzma .tlz .tar.z .taz .gz .bz2 .xz .lzma .z`, plus split-volume parts (RAR `.partN.rar` / old-style `.rNN`, 7z `.7z.NNN`, EGG volumes, and first numeric `.001` split parts). |
+| PDF | `.pdf` |
+| EPUB | `.epub` |
+| Word | `.doc .docx .docm .dotx .dotm` and HWP `.hwp .hwpx` (grouped together under the Word filter). |
+| Image | `.jpg .jpeg .jfif .png .webp .gif .bmp .wbmp .dng .heic .heif .avif` |
+
+The same image extension set is also what the image viewer opens (including images inside archives). Video files (`.mp4 .mkv .webm .avi .mov` and similar) get a video icon in listings but have no dedicated quick-filter chip.
+
 ## FOSS / F-Droid preparation
 
-Readwide 1.0.5 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
+Readwide 1.0.6 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
 
 - First-party code is Apache-2.0.
 - The default build does not bundle Junrar or RARLAB UnRAR-license code.
@@ -92,17 +110,17 @@ On Windows:
 .\gradlew.bat clean testDebugUnitTest assembleRelease
 ```
 
-Release signing is conditional. If the `TEXTVIEW_*` signing environment values are absent, `assembleRelease` builds an unsigned release artifact for source-builder environments instead of requiring a private keystore. See `RELEASE_BUILD.md` for the release build and verification checklist.
+Release signing is conditional. If the `READWIDE_*` (or legacy `TEXTVIEW_*`) signing environment values are absent, `assembleRelease` builds an unsigned release artifact for source-builder environments instead of requiring a private keystore. See `RELEASE_BUILD.md` for the release build and verification checklist.
 
 ## Release documents
 
 - `CHANGELOG.md` — public changelog.
 - `PATCHNOTES.md` — detailed public release notes.
 - `GITHUB_UPLOAD_NOTES.md` — GitHub upload checklist.
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_5.md` — copy-ready GitHub release notes.
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_6.md` — copy-ready GitHub release notes.
 - `docs/FDROID_SUBMISSION.md` — F-Droid submission notes.
 - `docs/TXT_SEARCH_USAGE.md` — reader find-in-page options for TXT and WebView document readers (case sensitive, whole word, regular expression).
 - `docs/FOSS_STATUS.md` — FOSS boundary and caveats.
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — archive compatibility wording source.
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md` — HWP/HWPX scope and license notes.
-- `docs/LICENSE_REPORT_READWIDE_1_0_5.md` and `docs/SBOM_READWIDE_1_0_5.spdx.json` — direct-dependency license/SBOM drafts.
+- `docs/LICENSE_REPORT_READWIDE_1_0_6.md` and `docs/SBOM_READWIDE_1_0_6.spdx.json` — direct-dependency license/SBOM drafts.

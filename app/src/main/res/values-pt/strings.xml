@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">TTS contínuo iniciado</string>
     <string name="tts_stopped">TTS parado</string>
     <string name="tts_finished">TTS concluído</string>
+    <string name="tts_resume_title">Retomar a leitura em voz alta?</string>
+    <string name="tts_resume_continue">Continuar</string>
+    <string name="tts_resume_later">Mais tarde</string>
     <string name="tts_no_text">Nenhum texto legível nesta página</string>
     <string name="tts_waiting_for_page">Aguardando a próxima página</string>
     <string name="tts_engine_unavailable">O mecanismo de conversão de texto em voz não está disponível</string>

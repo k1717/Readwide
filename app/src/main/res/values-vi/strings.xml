@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">Đã bắt đầu TTS liên tục</string>
     <string name="tts_stopped">Đã dừng TTS</string>
     <string name="tts_finished">TTS đã hoàn tất</string>
+    <string name="tts_resume_title">Tiếp tục đọc to?</string>
+    <string name="tts_resume_continue">Tiếp tục</string>
+    <string name="tts_resume_later">Để sau</string>
     <string name="tts_no_text">Không có văn bản đọc được trên trang này</string>
     <string name="tts_waiting_for_page">Đang chờ trang tiếp theo</string>
     <string name="tts_engine_unavailable">Công cụ chuyển văn bản thành giọng nói không khả dụng</string>

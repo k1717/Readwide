@@ -311,8 +311,12 @@ public class ZoomImageView extends AppCompatImageView {
         // to original 1:1, but not below it.
         minScale = ImageZoomScaleMath.minimumPinchScale(defaultScale);
         maxScale = Math.max(Math.max(Math.max(minScale, fitScale), Math.max(defaultScale, 1f)) * 5f, 5f);
-        float dx = getPaddingLeft() + (contentW - bw * defaultScale) * 0.5f;
-        float dy = getPaddingTop() + (contentH - bh * defaultScale) * 0.5f;
+        // ImageView's onDraw already translates the canvas by padding before it
+        // applies this matrix, so center the image within the content box
+        // [0..contentW] x [0..contentH] WITHOUT adding padding again. Adding it here
+        // would double-offset the image (e.g. push it down by paddingTop).
+        float dx = (contentW - bw * defaultScale) * 0.5f;
+        float dy = (contentH - bh * defaultScale) * 0.5f;
         matrix.postScale(defaultScale, defaultScale);
         matrix.postTranslate(dx, dy);
         setImageMatrix(matrix);
@@ -403,8 +407,8 @@ public class ZoomImageView extends AppCompatImageView {
         int contentH = getContentHeight();
         if (contentW <= 0 || contentH <= 0) return false;
 
-        float leftBound = getPaddingLeft();
-        float topBound = getPaddingTop();
+        float leftBound = 0f;
+        float topBound = 0f;
         float rightBound = leftBound + contentW;
         float bottomBound = topBound + contentH;
 
@@ -447,8 +451,8 @@ public class ZoomImageView extends AppCompatImageView {
         Matrix inverse = new Matrix();
         if (matrix.invert(inverse)) {
             float[] center = new float[] {
-                    getPaddingLeft() + getContentWidth() * 0.5f,
-                    getPaddingTop() + getContentHeight() * 0.5f
+                    getContentWidth() * 0.5f,
+                    getContentHeight() * 0.5f
             };
             inverse.mapPoints(center);
             normX = clamp01(center[0] / Math.max(1f, imageWidth));
@@ -463,14 +467,14 @@ public class ZoomImageView extends AppCompatImageView {
         float current = getCurrentScale();
         float target = Math.max(minScale, Math.min(maxScale, defaultScale * oldScaleRatio));
         if (current > 0f && Math.abs(target - current) > 0.001f) {
-            float cx = getPaddingLeft() + getContentWidth() * 0.5f;
-            float cy = getPaddingTop() + getContentHeight() * 0.5f;
+            float cx = getContentWidth() * 0.5f;
+            float cy = getContentHeight() * 0.5f;
             matrix.postScale(target / current, target / current, cx, cy);
         }
         float[] mapped = new float[] { normX * imageWidth, normY * imageHeight };
         matrix.mapPoints(mapped);
-        float desiredX = getPaddingLeft() + getContentWidth() * 0.5f;
-        float desiredY = getPaddingTop() + getContentHeight() * 0.5f;
+        float desiredX = getContentWidth() * 0.5f;
+        float desiredY = getContentHeight() * 0.5f;
         matrix.postTranslate(desiredX - mapped[0], desiredY - mapped[1]);
         applyBounds();
         postInvalidateOnAnimation();
@@ -515,8 +519,8 @@ public class ZoomImageView extends AppCompatImageView {
         if (contentW <= 0 || contentH <= 0) return;
         mapImageRect();
 
-        float leftBound = getPaddingLeft();
-        float topBound = getPaddingTop();
+        float leftBound = 0f;
+        float topBound = 0f;
         float rightBound = leftBound + contentW;
         float bottomBound = topBound + contentH;
         float dx = 0f;

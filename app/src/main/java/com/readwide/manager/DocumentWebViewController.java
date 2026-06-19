@@ -35,7 +35,7 @@ final class DocumentWebViewController {
         activity.webView.setLongClickable(true);
         activity.webView.setHapticFeedbackEnabled(true);
         activity.webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        activity.webView.addJavascriptInterface(activity.new WordSelectionBridge(), "TextViewSelectionBridge");
+        activity.webView.addJavascriptInterface(activity.new WordSelectionBridge(), "ReadwideSelectionBridge");
         activity.webView.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
             if (activity.isMarkdownDocument() && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
                 activity.updateMarkdownVisualPageModel(false);

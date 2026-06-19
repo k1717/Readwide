@@ -111,6 +111,7 @@ public class ReaderActivity extends AppCompatActivity {
     public static final String EXTRA_JUMP_PARTITION_START_LINE = "jump_partition_start_line";
     public static final String EXTRA_JUMP_ANCHOR_BEFORE = "jump_anchor_before";
     public static final String EXTRA_JUMP_ANCHOR_AFTER = "jump_anchor_after";
+    public static final String EXTRA_AUTOSTART_TTS = "autostart_tts";
 
     static final String STATE_RESTORE_FROM_MEMORY = "restore_txt_from_memory";
     static final long BACKGROUND_MEMORY_TRIM_DELAY_MS = 420_000L;
@@ -316,6 +317,10 @@ public class ReaderActivity extends AppCompatActivity {
     }
 
     private ReaderTtsController readerTtsController;
+
+    private boolean pendingAutoStartTts = false;
+    private boolean autoStartTtsConsumed = false;
+    private int autoStartTtsAttempts = 0;
 
     private ReaderTtsController readerTts() {
         if (readerTtsController == null) {
@@ -1002,6 +1007,31 @@ public class ReaderActivity extends AppCompatActivity {
 
     void loadFileFromIntent(@NonNull Intent sourceIntent) {
         fileLoader().loadFileFromIntent(sourceIntent);
+        if (!autoStartTtsConsumed && sourceIntent.getBooleanExtra(EXTRA_AUTOSTART_TTS, false)) {
+            autoStartTtsConsumed = true;
+            pendingAutoStartTts = true;
+            autoStartTtsAttempts = 0;
+            scheduleAutoStartTtsCheck();
+        }
+    }
+
+    // Auto-start TTS for a "continue reading aloud" resume launched from the main
+    // screen. The document loads asynchronously, so poll briefly until the reader
+    // actually has text, then begin playback in the same continuous mode as the
+    // saved state. Gives up quietly after a few seconds if no text appears.
+    private void scheduleAutoStartTtsCheck() {
+        View anchor = readerView != null ? readerView : getWindow().getDecorView();
+        anchor.postDelayed(() -> {
+            if (activityDestroyed || !pendingAutoStartTts) return;
+            if (readerView != null && !TextUtils.isEmpty(readerView.getTextContent())) {
+                pendingAutoStartTts = false;
+                readerTts().start(prefs != null && prefs.getTtsLastContinuous());
+            } else if (++autoStartTtsAttempts <= 40) {
+                scheduleAutoStartTtsCheck();
+            } else {
+                pendingAutoStartTts = false;
+            }
+        }, 150L);
     }
 
     void recordLargeTextCacheAccess(@NonNull File file) {

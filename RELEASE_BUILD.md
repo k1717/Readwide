@@ -1,26 +1,26 @@
 # Public release build checklist
 
-This file is the practical build and verification checklist for Readwide 1.0.5.
+This file is the practical build and verification checklist for Readwide 1.0.6.
 
 ## Version metadata
 
 ```text
 applicationId com.readwide.manager
-versionCode 10005
-versionName 1.0.5
+versionCode 10006
+versionName 1.0.6
 ```
 
-The application ID has been `com.readwide.manager` since 1.0.4, and 1.0.5 is an in-place update over 1.0.4 when signed with the same key. Earlier builds used `com.textview.reader` and install as a separate app; users transfer data with the in-app JSON backup export/import.
+The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switches to a new release signing key (the `readwide` alias), so it does not install over an existing 1.0.4/1.0.5 (signed with the previous `textview`-alias key); uninstall the old version, install 1.0.6, and migrate data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
 
 ## Keystore policy
 
-Do not commit release signing files or passwords. Release signing reads from environment variables first and then Gradle properties:
+Do not commit release signing files or passwords. Release signing reads from environment variables first and then Gradle properties (the legacy `TEXTVIEW_*` names are still accepted):
 
 ```text
-TEXTVIEW_KEYSTORE_PATH=/secure/path/release.keystore
-TEXTVIEW_KEYSTORE_PASSWORD=...
-TEXTVIEW_KEY_ALIAS=textview
-TEXTVIEW_KEY_PASSWORD=...
+READWIDE_KEYSTORE_PATH=/secure/path/release.keystore
+READWIDE_KEYSTORE_PASSWORD=...
+READWIDE_KEY_ALIAS=readwide
+READWIDE_KEY_PASSWORD=...
 ```
 
 If these four values are absent, `assembleRelease` is expected to build an unsigned release artifact instead of failing. This supports F-Droid-style source-builder workflows. Local GitHub APK releases should still be signed with the developer release key outside the source tree.
@@ -42,7 +42,7 @@ Windows:
 Optional source-builder check without private signing values:
 
 ```bash
-unset TEXTVIEW_KEYSTORE_PATH TEXTVIEW_KEYSTORE_PASSWORD TEXTVIEW_KEY_ALIAS TEXTVIEW_KEY_PASSWORD
+unset READWIDE_KEYSTORE_PATH READWIDE_KEYSTORE_PASSWORD READWIDE_KEY_ALIAS READWIDE_KEY_PASSWORD TEXTVIEW_KEYSTORE_PATH TEXTVIEW_KEYSTORE_PASSWORD TEXTVIEW_KEY_ALIAS TEXTVIEW_KEY_PASSWORD
 ./gradlew clean assembleRelease
 ```
 
@@ -55,8 +55,8 @@ Keep these files with source and binary release materials:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_5.md`
-- `docs/SBOM_READWIDE_1_0_5.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_6.md`
+- `docs/SBOM_READWIDE_1_0_6.spdx.json`
 
 ## APK verification
 
@@ -86,7 +86,7 @@ Expected default release baseline:
 ```bash
 find . -type f \( -name "*.jks" -o -name "*.keystore" -o -name "*.p12" -o -name "*.apk" -o -name "*.aab" \)
 
-grep -RIn "C:\\Users\|/Users/\|/home/.*Downloads\|BEGIN PRIVATE KEY\|TEXTVIEW_KEYSTORE_PASSWORD" . \
+grep -RIn "C:\\Users\|/Users/\|/home/.*Downloads\|BEGIN PRIVATE KEY\|TEXTVIEW_KEYSTORE_PASSWORD\|READWIDE_KEYSTORE_PASSWORD" . \
   --exclude-dir=.git --exclude-dir=.gradle --exclude-dir=build
 
 grep -RIn "com.github.junrar\|junrar\|RarJunrarFallback" app docs README.md CHANGELOG.md THIRD_PARTY_NOTICES.md || true
@@ -102,7 +102,7 @@ Expected result:
 
 Before opening an F-Droid Data merge request:
 
-1. Publish a final Git tag, e.g. `v1.0.5`.
+1. Publish a final Git tag, e.g. `v1.0.6`.
 2. Replace the commit placeholder in `fdroid/metadata/com.readwide.manager.yml` with the immutable tag commit.
 3. Confirm `gradle/wrapper/gradle-wrapper.jar` is removed by the F-Droid metadata `rm` rule.
 4. Confirm a no-private-keystore `assembleRelease` build works.

@@ -7,6 +7,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.readwide.manager.model.FileListItem;
+import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.PrefsManager;
 
 import java.io.File;
@@ -24,6 +26,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 final class MainBrowseStateController {
     private static final int MAX_BROWSE_STATE_CACHE_ENTRIES = 24;
+    // Bound the total number of cached FileListItems across all folders, not just
+    // the entry count: a handful of large folders (e.g. Downloads) would otherwise
+    // let the cache grow without limit. Eldest (LRU) entries are evicted until both
+    // bounds hold; the just-saved current folder is always kept.
+    private static final int MAX_TOTAL_CACHED_ITEMS = 30000;
 
     private final MainActivity activity;
     private final LinkedHashMap<String, BrowseFolderSnapshot> folderStateCache =
@@ -52,7 +59,19 @@ final class MainBrowseStateController {
         preserveOnNextResume = true;
         preserveDirectoryPath = activity.currentDirectory.getAbsolutePath();
         preserveOpenedFilePath = openedFile != null ? openedFile.getAbsolutePath() : null;
-        preserveFolderSignature = captureFolderSignature(activity.currentDirectory);
+        // Reuse the signature captured when the folder finished loading rather than
+        // running a synchronous per-file folder stat on the main thread every time a
+        // file is opened (slow in large folders such as Downloads). If no matching
+        // baseline is available, leave it null; shouldPreserveViewerStateOnResume then
+        // falls back to a normal reload on return.
+        if (currentFolderFullyLoaded
+                && currentLoadedSignature != null
+                && currentLoadedPath != null
+                && currentLoadedPath.equals(preserveDirectoryPath)) {
+            preserveFolderSignature = currentLoadedSignature;
+        } else {
+            preserveFolderSignature = null;
+        }
     }
 
     boolean shouldPreserveViewerStateOnResume() {
@@ -69,10 +88,15 @@ final class MainBrowseStateController {
                 && !new File(preserveOpenedFilePath).exists()) {
             return false;
         }
-        String currentSignature = captureFolderSignature(activity.currentDirectory);
-        return preserveFolderSignature != null
-                && currentSignature != null
-                && preserveFolderSignature.equals(currentSignature);
+        if (preserveFolderSignature == null) return false;
+        // Keep the preserved folder view immediately and verify its signature in the
+        // background, rather than running a synchronous per-file folder stat on the
+        // main thread during the viewer-return resume. Deletion of the file that was
+        // opened is already handled above by the cheap exists() check; any other
+        // change made while the viewer was open is caught by validateOptimistic,
+        // which refreshes the folder in place (keeping scroll).
+        validateOptimistic(activity.currentDirectory, preserveFolderSignature);
+        return true;
     }
 
     boolean shouldKeepCurrentStateOnResume() {
@@ -88,17 +112,37 @@ final class MainBrowseStateController {
         if (currentLoadedSortMode != sortMode || currentLoadedShowHidden != showHidden) {
             return false;
         }
-        String currentSignature = captureFolderSignature(activity.currentDirectory);
-        if (currentLoadedSignature == null
-                || currentSignature == null
-                || !currentLoadedSignature.equals(currentSignature)) {
-            remove(activity.currentDirectory);
-            currentFolderFullyLoaded = false;
-            currentLoadedSignature = currentSignature;
-            return false;
-        }
-        save(activity.currentDirectory, activity.fileAdapter.getFilesSnapshot(), sortMode, captureRecyclerViewState());
+        // Without a known baseline signature there is nothing to validate against,
+        // so fall back to a reload.
+        if (currentLoadedSignature == null) return false;
+        // Keep the already-visible folder immediately and re-save the current
+        // snapshot (scroll position + items) under the known signature, then verify
+        // that signature in the background. If the folder changed while the activity
+        // was away, validateOptimistic refreshes it in place (keeping scroll), the
+        // same as restore() and focus-regain. This removes the two synchronous
+        // per-file folder stats this method used to run on the main thread on every
+        // resume: the explicit one here and the one inside the no-signature save().
+        save(activity.currentDirectory, currentLoadedSignature, activity.fileAdapter.getItemsSnapshot(), sortMode, captureRecyclerViewState());
+        validateOptimistic(activity.currentDirectory, currentLoadedSignature);
         return true;
+    }
+
+    /**
+     * If the visible browse folder's on-disk contents differ from what is loaded
+     * (name/size/mtime/count signature), re-read it in place while keeping scroll
+     * position. This is the fallback for changes the FileObserver missed — e.g. a
+     * download written via MediaStore on FUSE storage — triggered when the window
+     * regains focus or the user pulls to refresh. Returns true if a reload started.
+     */
+    void reloadVisibleFolderIfChanged() {
+        if (activity.homeMode || activity.searchMode) return;
+        File directory = activity.currentDirectory;
+        if (directory == null || !directory.isDirectory() || !directory.canRead()) return;
+        if (currentLoadedSignature == null) return;
+        // Verify the signature in the background; validateOptimistic refreshes the
+        // folder only if it actually changed. This keeps the heavy per-file stat
+        // off the main thread on every focus regain in a large folder.
+        validateOptimistic(directory, currentLoadedSignature);
     }
 
     void refreshVisibleStateWithoutReload() {
@@ -133,37 +177,28 @@ final class MainBrowseStateController {
         currentLoadedSignature = null;
     }
 
-    void markLoadComplete(@NonNull File directory, @NonNull List<File> files, int sortMode) {
+    void markLoadComplete(@NonNull File directory, @NonNull List<FileListItem> items, int sortMode,
+                          @Nullable String precomputedSignature) {
         currentFolderFullyLoaded = true;
         currentLoadedPath = directory.getAbsolutePath();
-        currentLoadedSignature = captureFolderSignature(directory);
+        // The signature is computed on the background load thread and passed in. Do
+        // NOT fall back to a synchronous captureFolderSignature() here — that per-file
+        // folder stat on the main thread is exactly the large-folder freeze this load
+        // path exists to avoid. If the background scan produced no signature (e.g. the
+        // directory became unreadable mid-load), skip caching; the next focus/resume
+        // reloads from scratch.
+        currentLoadedSignature = precomputedSignature;
         currentLoadedSortMode = sortMode;
         currentLoadedShowHidden = activity.prefs != null && activity.prefs.getShowHiddenFiles();
-        save(directory, files, sortMode, captureRecyclerViewState());
+        if (precomputedSignature != null) {
+            save(directory, precomputedSignature, items, sortMode, captureRecyclerViewState());
+        }
     }
 
     void markLoadFailed(@Nullable File directory) {
         currentFolderFullyLoaded = false;
         currentLoadedPath = directory != null ? directory.getAbsolutePath() : null;
         currentLoadedSignature = null;
-    }
-
-    void saveCurrentIfComplete() {
-        if (activity.homeMode || activity.searchMode || activity.currentDirectory == null || activity.fileAdapter == null) return;
-        if (!currentFolderFullyLoaded) return;
-        if (currentLoadedPath == null || !currentLoadedPath.equals(activity.currentDirectory.getAbsolutePath())) return;
-
-        String currentSignature = captureFolderSignature(activity.currentDirectory);
-        if (currentSignature == null
-                || currentLoadedSignature == null
-                || !currentLoadedSignature.equals(currentSignature)) {
-            remove(activity.currentDirectory);
-            currentFolderFullyLoaded = false;
-            currentLoadedSignature = currentSignature;
-            return;
-        }
-        int sortMode = activity.prefs != null ? activity.prefs.getSortMode() : currentLoadedSortMode;
-        save(activity.currentDirectory, activity.fileAdapter.getFilesSnapshot(), sortMode, captureRecyclerViewState());
     }
 
     void saveCurrentFastIfComplete() {
@@ -173,7 +208,7 @@ final class MainBrowseStateController {
                 || currentLoadedSignature == null
                 || !currentLoadedPath.equals(activity.currentDirectory.getAbsolutePath())) return;
         int sortMode = activity.prefs != null ? activity.prefs.getSortMode() : currentLoadedSortMode;
-        save(activity.currentDirectory, currentLoadedSignature, activity.fileAdapter.getFilesSnapshot(), sortMode, captureRecyclerViewState());
+        save(activity.currentDirectory, currentLoadedSignature, activity.fileAdapter.getItemsSnapshot(), sortMode, captureRecyclerViewState());
     }
 
     boolean restoreForFilterReturn(@NonNull File directory) {
@@ -191,16 +226,19 @@ final class MainBrowseStateController {
 
         int sortMode = activity.prefs != null ? activity.prefs.getSortMode() : PrefsManager.SORT_NAME_ASC;
         boolean showHidden = activity.prefs != null && activity.prefs.getShowHiddenFiles();
-        String currentSignature = captureFolderSignature(directory);
-        if (currentSignature == null
-                || !snapshot.signature.equals(currentSignature)
-                || snapshot.sortMode != sortMode
-                || snapshot.showHidden != showHidden) {
+        // Sort/hidden are cheap in-memory checks; mismatch means the cached
+        // ordering is wrong, so drop it and force a full reload.
+        if (snapshot.sortMode != sortMode || snapshot.showHidden != showHidden) {
             remove(directory);
             return false;
         }
 
-        apply(directory, snapshot, currentSignature, sortMode, showHidden);
+        // Show the cached snapshot immediately, then verify the (now full/length-
+        // inclusive) signature in the background. If the folder changed, the
+        // validation pass quietly refreshes. This keeps the heavy per-file stat
+        // off the main thread so folder transitions stay fast.
+        apply(directory, snapshot, snapshot.signature, sortMode, showHidden);
+        validateOptimistic(directory, snapshot.signature);
         return true;
     }
 
@@ -234,14 +272,57 @@ final class MainBrowseStateController {
         if (directory == null || !directory.isDirectory()) return null;
         File[] children = directory.listFiles();
         if (children == null) return null;
+        boolean showHidden = activity.prefs != null && activity.prefs.getShowHiddenFiles();
         ArrayList<String> entries = new ArrayList<>();
         for (File child : children) {
             if (child == null) continue;
+            // Match the folder-load filter so this describes the *visible* listing:
+            // hidden (dot) files are excluded unless the user shows them. This makes
+            // the signature comparable to captureSignatureFromItems (built from the
+            // visible items), and means a change to a hidden file does not trigger a
+            // spurious in-place refresh of a list that would not actually change.
+            if (!showHidden && child.getName().startsWith(".")) continue;
+            // Match the folder-load filter for files too: a name that normalizes to an
+            // empty display string (e.g. "   ") is not listed, so exclude it here as
+            // well, otherwise this signature would not match captureSignatureFromItems
+            // (built from the already-filtered visible items) and validation would see
+            // a phantom difference and refresh a list that never actually changed.
+            if (!child.isDirectory() && !FileUtils.isVisibleInAllFilesFilter(child.getName())) continue;
+            // Name + type + size + lastModified. Size is included so in-place content
+            // edits that preserve mtime are still detected.
             StringBuilder builder = new StringBuilder();
             builder.append(child.getName()).append('|');
             builder.append(child.isDirectory() ? 'D' : 'F').append('|');
             builder.append(child.isDirectory() ? 0L : child.length()).append('|');
-            builder.append(child.lastModified());
+            builder.append(Math.max(0L, child.lastModified()));
+            entries.add(builder.toString());
+        }
+        Collections.sort(entries);
+        StringBuilder signature = new StringBuilder();
+        signature.append(directory.getAbsolutePath()).append('|').append(entries.size()).append('\n');
+        for (String entry : entries) {
+            signature.append(entry).append('\n');
+        }
+        return signature.toString();
+    }
+
+    /**
+     * Builds the same signature string as {@link #captureFolderSignature(File)} but
+     * from the already-loaded (visible) FileListItems, so the folder-load path does
+     * not re-scan and re-stat the directory after walking it. The per-entry fields,
+     * the sort, and the format are identical to captureFolderSignature (which also
+     * filters hidden files), so the background validation re-scan compares directly.
+     */
+    @NonNull
+    String captureSignatureFromItems(@NonNull File directory, @NonNull List<FileListItem> items) {
+        ArrayList<String> entries = new ArrayList<>(items.size());
+        for (FileListItem item : items) {
+            if (item == null) continue;
+            StringBuilder builder = new StringBuilder();
+            builder.append(item.getName()).append('|');
+            builder.append(item.isDirectory() ? 'D' : 'F').append('|');
+            builder.append(item.isDirectory() ? 0L : item.getSize()).append('|');
+            builder.append(item.getLastModified());
             entries.add(builder.toString());
         }
         Collections.sort(entries);
@@ -289,11 +370,11 @@ final class MainBrowseStateController {
         if (activity.fileAdapter != null) {
             activity.fileAdapter.setShowFilePath(false);
             activity.fileAdapter.setSortModeSilently(sortMode);
-            activity.fileAdapter.setFilesFastPresorted(new ArrayList<>(snapshot.files));
+            activity.fileAdapter.setItemsFastPresorted(new ArrayList<>(snapshot.items));
             activity.fileAdapter.refreshReadingProgress();
         }
         if (activity.emptyText != null) {
-            activity.emptyText.setVisibility(snapshot.files.isEmpty() ? View.VISIBLE : View.GONE);
+            activity.emptyText.setVisibility(snapshot.items.isEmpty() ? View.VISIBLE : View.GONE);
         }
         activity.updateParentFolderButtonState();
         restoreRecyclerViewState(snapshot.recyclerState);
@@ -304,7 +385,12 @@ final class MainBrowseStateController {
     private void validateOptimistic(@NonNull File directory, @NonNull String expectedSignature) {
         final int generation = validationGeneration.incrementAndGet();
         final String directoryPath = directory.getAbsolutePath();
-        activity.fileSearchExecutor.execute(() -> {
+        activity.submitFolderValidationTask(() -> {
+            // If a newer validation was requested before this task ran, skip the
+            // expensive folder stat entirely. This debounces rapid focus-regains and
+            // folder restores so a burst of them does not pile redundant full scans
+            // onto the validation executor.
+            if (generation != validationGeneration.get()) return;
             String actualSignature = captureFolderSignature(directory);
             activity.fileSearchHandler.post(() -> {
                 if (activity.activityDestroyed || generation != validationGeneration.get()) return;
@@ -318,23 +404,14 @@ final class MainBrowseStateController {
     }
 
     private void save(@NonNull File directory,
-                      @NonNull List<File> files,
-                      int sortMode,
-                      @Nullable Parcelable recyclerState) {
-        String signature = captureFolderSignature(directory);
-        if (signature == null) return;
-        save(directory, signature, files, sortMode, recyclerState);
-    }
-
-    private void save(@NonNull File directory,
                       @NonNull String signature,
-                      @NonNull List<File> files,
+                      @NonNull List<FileListItem> items,
                       int sortMode,
                       @Nullable Parcelable recyclerState) {
         boolean showHidden = activity.prefs != null && activity.prefs.getShowHiddenFiles();
         folderStateCache.put(directory.getAbsolutePath(), new BrowseFolderSnapshot(
                 signature,
-                new ArrayList<>(files),
+                new ArrayList<>(items),
                 recyclerState,
                 sortMode,
                 showHidden));
@@ -343,9 +420,29 @@ final class MainBrowseStateController {
 
     private void trim() {
         while (folderStateCache.size() > MAX_BROWSE_STATE_CACHE_ENTRIES) {
-            String firstKey = folderStateCache.keySet().iterator().next();
-            folderStateCache.remove(firstKey);
+            evictEldestEntry();
         }
+        // Then evict by total item count, but never drop the last (just-saved,
+        // current) folder even if it alone exceeds the item budget.
+        while (folderStateCache.size() > 1 && totalCachedItems() > MAX_TOTAL_CACHED_ITEMS) {
+            evictEldestEntry();
+        }
+    }
+
+    private void evictEldestEntry() {
+        java.util.Iterator<String> it = folderStateCache.keySet().iterator();
+        if (it.hasNext()) {
+            it.next();
+            it.remove();
+        }
+    }
+
+    private int totalCachedItems() {
+        int total = 0;
+        for (BrowseFolderSnapshot snapshot : folderStateCache.values()) {
+            total += snapshot.items.size();
+        }
+        return total;
     }
 
     @Nullable
@@ -366,18 +463,18 @@ final class MainBrowseStateController {
 
     private static final class BrowseFolderSnapshot {
         final String signature;
-        final ArrayList<File> files;
+        final ArrayList<FileListItem> items;
         @Nullable final Parcelable recyclerState;
         final int sortMode;
         final boolean showHidden;
 
         BrowseFolderSnapshot(@NonNull String signature,
-                             @NonNull ArrayList<File> files,
+                             @NonNull ArrayList<FileListItem> items,
                              @Nullable Parcelable recyclerState,
                              int sortMode,
                              boolean showHidden) {
             this.signature = signature;
-            this.files = files;
+            this.items = items;
             this.recyclerState = recyclerState;
             this.sortMode = sortMode;
             this.showHidden = showHidden;

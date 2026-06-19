@@ -127,12 +127,13 @@ final class MainDrawerGestureController {
         if (activity.drawerLayout == null) return false;
         if (activity.drawerLayout.isDrawerOpen(GravityCompat.START)) return true;
 
-        // Only treat a partial drawer as dismissible when our tracked offset says
-        // it is materially on-screen. Do not use isDrawerVisible() or raw view
-        // coordinates here: DrawerLayout can report/lay out the drawer in ways
-        // that look visible even when the user is starting a normal right-swipe
-        // open gesture from the closed state.
-        return drawerView.getVisibility() == View.VISIBLE && activity.drawerSlideOffset >= 0.15f;
+        // Only treat the drawer as dismissible when it is at least half open.
+        // A closed (or only fractionally on-screen) drawer must NOT be dismissible:
+        // otherwise a normal right-swipe to OPEN from the closed state is misrouted
+        // to the dismiss handler and swallowed (the swipe "does nothing" once, then
+        // works on the next try). This was observable on tablets, where DrawerLayout
+        // can transiently report a closed drawer as visible with a small offset.
+        return drawerView.getVisibility() == View.VISIBLE && activity.drawerSlideOffset >= 0.5f;
     }
 
     private boolean isTouchInsideMainBottomControls(@NonNull MotionEvent event) {

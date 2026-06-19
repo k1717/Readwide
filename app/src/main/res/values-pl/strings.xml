@@ -576,6 +576,9 @@ Reguły: %2$d włączonych reguł</string>
     <string name="tts_continuous_started">Ciągły TTS uruchomiony</string>
     <string name="tts_stopped">TTS zatrzymany</string>
     <string name="tts_finished">TTS zakończony</string>
+    <string name="tts_resume_title">Wznowić czytanie na głos?</string>
+    <string name="tts_resume_continue">Kontynuuj</string>
+    <string name="tts_resume_later">Później</string>
     <string name="tts_no_text">Na tej stronie nie ma tekstu do przeczytania</string>
     <string name="tts_waiting_for_page">Oczekiwanie na następną stronę</string>
     <string name="tts_engine_unavailable">Silnik tekstu na mowę jest niedostępny</string>

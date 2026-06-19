@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">Fortlaufendes TTS gestartet</string>
     <string name="tts_stopped">TTS gestoppt</string>
     <string name="tts_finished">TTS abgeschlossen</string>
+    <string name="tts_resume_title">Vorlesen fortsetzen?</string>
+    <string name="tts_resume_continue">Fortsetzen</string>
+    <string name="tts_resume_later">Später</string>
     <string name="tts_no_text">Auf dieser Seite ist kein lesbarer Text vorhanden</string>
     <string name="tts_waiting_for_page">Warten auf die nächste Seite</string>
     <string name="tts_engine_unavailable">Die Text-zu-Sprache-Engine ist nicht verfügbar</string>

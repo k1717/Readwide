@@ -7,19 +7,24 @@ plugins {
 
 // RAR3/RAR4 compressed extraction uses the bundled libarchive-android backend in the normal FOSS APK.
 
-def textviewSecret = { String name, String fallback = "" ->
-    String envValue = System.getenv(name)
-    if (envValue != null && !envValue.isEmpty()) return envValue
-    def propValue = project.findProperty(name)
-    if (propValue != null && !propValue.toString().isEmpty()) return propValue.toString()
+// Read a release-signing secret by suffix: READWIDE_<SUFFIX> first, then the
+// legacy TEXTVIEW_<SUFFIX> name for backward compatibility, checking environment
+// variables before ~/.gradle/gradle.properties.
+def releaseSecret = { String suffix, String fallback = "" ->
+    for (String name : ["READWIDE_" + suffix, "TEXTVIEW_" + suffix]) {
+        String envValue = System.getenv(name)
+        if (envValue != null && !envValue.isEmpty()) return envValue
+        def propValue = project.findProperty(name)
+        if (propValue != null && !propValue.toString().isEmpty()) return propValue.toString()
+    }
     return fallback
 }
 
 def hasReleaseSigning =
-        textviewSecret("TEXTVIEW_KEYSTORE_PATH", "") != "" &&
-        textviewSecret("TEXTVIEW_KEYSTORE_PASSWORD", "") != "" &&
-        textviewSecret("TEXTVIEW_KEY_ALIAS", "") != "" &&
-        textviewSecret("TEXTVIEW_KEY_PASSWORD", "") != ""
+        releaseSecret("KEYSTORE_PATH", "") != "" &&
+        releaseSecret("KEYSTORE_PASSWORD", "") != "" &&
+        releaseSecret("KEY_ALIAS", "") != "" &&
+        releaseSecret("KEY_PASSWORD", "") != ""
 
 android {
     namespace 'com.readwide.manager'
@@ -29,8 +34,8 @@ android {
         applicationId "com.readwide.manager"
         minSdk 24
         targetSdk 35
-        versionCode 10005
-        versionName "1.0.5"
+        versionCode 10006
+        versionName "1.0.6"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         // Release APKs keep Android ARM ABIs only.
@@ -44,10 +49,10 @@ android {
     signingConfigs {
         release {
             if (hasReleaseSigning) {
-                storeFile file(textviewSecret("TEXTVIEW_KEYSTORE_PATH"))
-                storePassword textviewSecret("TEXTVIEW_KEYSTORE_PASSWORD")
-                keyAlias textviewSecret("TEXTVIEW_KEY_ALIAS")
-                keyPassword textviewSecret("TEXTVIEW_KEY_PASSWORD")
+                storeFile file(releaseSecret("KEYSTORE_PATH"))
+                storePassword releaseSecret("KEYSTORE_PASSWORD")
+                keyAlias releaseSecret("KEY_ALIAS")
+                keyPassword releaseSecret("KEY_PASSWORD")
             }
         }
     }
@@ -112,7 +117,9 @@ android {
 // existed in an older working tree. A stale RarJunrarFallback.java would still be
 // compiled and fail because the Junrar dependency is intentionally gone.
 def textviewRemovedLegacySourceFiles = [
-        'src/main/java/com/readwide/manager/archive/RarJunrarFallback.java'
+        'src/main/java/com/readwide/manager/archive/RarJunrarFallback.java',
+        // Moved to app/src/test in the 1.0.6 line (diagnostic/test-only probe).
+        'src/main/java/com/readwide/manager/archive/Rar3PpmdEngineFixtureProbe.java'
 ]
 
 tasks.register('deleteRemovedLegacySourceFiles') {
@@ -145,6 +152,7 @@ dependencies {
     implementation 'androidx.constraintlayout:constraintlayout:2.2.1'
     implementation 'androidx.activity:activity:1.10.1'
     implementation 'androidx.drawerlayout:drawerlayout:1.2.0'
+    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
     implementation 'com.github.albfernandez:juniversalchardet:2.5.0'
     implementation 'org.apache.commons:commons-compress:1.28.0'
     // Android libarchive backend for normal RAR3/RAR4 compressed extraction.

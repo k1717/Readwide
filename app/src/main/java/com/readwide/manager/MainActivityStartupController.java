@@ -55,22 +55,26 @@ final class MainActivityStartupController {
         activity.applyMainReadableTheme(toolbar);
 
         Intent intent = activity.getIntent();
-        if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction())) {
-            Uri uri = intent.getData();
-            if (uri != null) {
-                activity.openFileFromUri(uri);
-                return;
-            }
-        }
+        Uri viewUri = (intent != null && Intent.ACTION_VIEW.equals(intent.getAction()))
+                ? intent.getData() : null;
 
         if (activity.prefs.isLockEnabled() && !activity.lockChecked) {
+            // App lock gates everything, including an external "open with Readwide".
+            // Launch the lock and return WITHOUT preparing the home/recent UI, so it is
+            // not built (and can't flash or appear in the recents snapshot) behind the
+            // lock screen. The unlock callback opens the pending file or initialises the
+            // main UI.
+            activity.pendingExternalUri = viewUri;
             Intent lockIntent = new Intent(activity, LockActivity.class);
             lockIntent.putExtra(LockActivity.EXTRA_MODE, LockActivity.MODE_UNLOCK);
             activity.lockLauncher.launch(lockIntent);
-        } else {
-            activity.checkPermissionsAndInit();
+            return;
         }
-
+        if (viewUri != null) {
+            activity.openFileFromUri(viewUri);
+            return;
+        }
+        activity.checkPermissionsAndInit();
         activity.showInitialMainMode();
     }
 
@@ -119,6 +123,14 @@ final class MainActivityStartupController {
 
     private void bindMainViews() {
         activity.fileRecyclerView = activity.findViewById(R.id.file_list);
+        activity.fileListRefresh = activity.findViewById(R.id.file_list_refresh);
+        if (activity.fileListRefresh != null) {
+            activity.fileListRefresh.setOnRefreshListener(activity::onFileListPullToRefresh);
+            if (activity.prefs != null) {
+                activity.fileListRefresh.setProgressBackgroundColorSchemeColor(activity.prefs.getMainBgColor(activity));
+                activity.fileListRefresh.setColorSchemeColors(activity.prefs.getMainTextColor(activity));
+            }
+        }
         activity.pathBar = activity.findViewById(R.id.path_bar);
         activity.pathText = activity.findViewById(R.id.current_path);
         activity.parentFolderButton = activity.findViewById(R.id.parent_folder_button);

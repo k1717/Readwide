@@ -35,6 +35,9 @@ public class PrefsManager {
     private static final int DEFAULT_READER_TEXT_BOUNDARY_PX = 68;
     private static final String KEY_READER_TEXT_LEFT_OFFSET = "reader_text_left_inset_px";
     private static final String KEY_READER_TEXT_RIGHT_OFFSET = "reader_text_right_inset_px";
+    // Legacy SharedPreferences store name from the TextView Reader lineage. Do NOT rename:
+    // this is the live on-disk preferences key, so changing it would orphan the saved
+    // settings of every existing install. The name is internal and never shown in the UI.
     private static final String PREFS_NAME = "textview_reader_prefs";
     public static final float DEFAULT_FONT_SIZE = 16f;
     public static final float DEFAULT_LINE_SPACING = 1.4f;
@@ -884,12 +887,13 @@ public class PrefsManager {
         prefs.edit().putInt("tts_pitch_percent", Math.max(50, Math.min(200, percent))).apply();
     }
 
-    public void setTtsLastPlaybackState(String filePath, int charPosition, int pageNumber, boolean continuous) {
+    public void setTtsLastPlaybackState(String filePath, int charPosition, int pageNumber, boolean continuous, int sleepTimerMinutes) {
         prefs.edit()
                 .putString("tts_last_file_path", filePath == null ? "" : filePath)
                 .putInt("tts_last_char_position", Math.max(0, charPosition))
                 .putInt("tts_last_page_number", Math.max(1, pageNumber))
                 .putBoolean("tts_last_continuous", continuous)
+                .putInt("tts_last_sleep_timer_min", Math.max(0, sleepTimerMinutes))
                 .putLong("tts_last_timestamp", System.currentTimeMillis())
                 .apply();
     }
@@ -913,6 +917,21 @@ public class PrefsManager {
 
     public long getTtsLastTimestamp() {
         return Math.max(0L, prefs.getLong("tts_last_timestamp", 0L));
+    }
+
+    public int getTtsLastSleepTimerMinutes() {
+        return Math.max(0, prefs.getInt("tts_last_sleep_timer_min", 0));
+    }
+
+    public void clearTtsLastPlaybackState() {
+        prefs.edit()
+                .remove("tts_last_file_path")
+                .remove("tts_last_char_position")
+                .remove("tts_last_page_number")
+                .remove("tts_last_continuous")
+                .remove("tts_last_sleep_timer_min")
+                .remove("tts_last_timestamp")
+                .apply();
     }
 
     /** Sleep-timer duration in minutes of playback time; 0 means off. */

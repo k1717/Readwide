@@ -67,6 +67,7 @@ import com.readwide.manager.adapter.DrawerEntryAdapter;
 import com.readwide.manager.adapter.FileAdapter;
 import com.readwide.manager.archive.ArchiveSupport;
 import com.readwide.manager.model.DrawerEntry;
+import com.readwide.manager.model.FileListItem;
 import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.util.BookmarkManager;
 import com.readwide.manager.util.EdgeToEdgeUtil;
@@ -87,6 +88,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Locale;
 
@@ -109,6 +111,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     DrawerLayout drawerLayout;
     ActionBarDrawerToggle drawerToggle;
     RecyclerView fileRecyclerView;
+    androidx.swiperefreshlayout.widget.SwipeRefreshLayout fileListRefresh;
     FileAdapter fileAdapter;
     View pathBar;
     TextView pathText;
@@ -162,14 +165,57 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     int activeFileFilter = FILTER_ALL;
     final ExecutorService fileSearchExecutor = Executors.newSingleThreadExecutor();
     final ExecutorService fileOperationExecutor = Executors.newSingleThreadExecutor();
+    // Folder-signature validation runs here, off the file-search executor, so a long
+    // validation scan never delays a search/sort and cancelling a stale search/sort
+    // never disturbs validation.
+    final ExecutorService folderValidationExecutor = Executors.newSingleThreadExecutor();
+    @Nullable private Future<?> currentFileSearchFuture;
     final Handler fileSearchHandler = new Handler(Looper.getMainLooper());
     Runnable pendingFileSearchRunnable;
     volatile boolean activityDestroyed = false;
     final AtomicInteger fileSearchGeneration = new AtomicInteger(0);
+
+    // Submit to the search executor defensively: after onDestroy the executor is
+    // shut down, and a late task (e.g. from a delayed callback) would otherwise
+    // throw RejectedExecutionException. Silently dropping it is correct because a
+    // destroyed activity has nothing to update.
+    void submitFileSearchTask(@NonNull Runnable task) {
+        if (activityDestroyed || fileSearchExecutor.isShutdown()) return;
+        try {
+            // Interrupt any still-running search/sort so a long sort on a large list
+            // does not block this newer one on the single-thread executor; the stale
+            // task's result is discarded by fileSearchGeneration regardless. The
+            // wrapper clears any inherited interrupt so this task starts clean.
+            if (currentFileSearchFuture != null) currentFileSearchFuture.cancel(true);
+            currentFileSearchFuture = fileSearchExecutor.submit(() -> {
+                Thread.interrupted();
+                task.run();
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // Executor was shut down between the check and submit; nothing to do.
+        }
+    }
+
+    // Background folder-signature validation, kept off the file-search executor so a
+    // large validation scan never delays a search/sort and is never collaterally
+    // cancelled by a newer search/sort. Stale validations are skipped by their own
+    // generation check rather than by interruption.
+    void submitFolderValidationTask(@NonNull Runnable task) {
+        if (activityDestroyed || folderValidationExecutor.isShutdown()) return;
+        try {
+            folderValidationExecutor.execute(task);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // Executor was shut down between the check and submit; nothing to do.
+        }
+    }
     boolean searchMode = false;
     boolean searchReturnToHome = true;
     File searchReturnDirectory = null;
     File fileTypeFilterActivatedDirectory = null;
+    // Set only when Back clears a filtered search's term (keeping the filter); the
+    // next Back then drops the filter to ALL in place instead of walking folders.
+    // Cleared automatically whenever fresh filtered results render.
+    boolean filterSearchTermJustCleared = false;
     boolean fileSearchAllFolders = false;
 
     float drawerSwipeStartX;
@@ -191,6 +237,9 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     PrefsManager prefs;
     BookmarkManager bookmarkManager;
     boolean lockChecked = false;
+    // An external ACTION_VIEW URI deferred until after a successful unlock, so app lock
+    // gates external "open with Readwide" too instead of being bypassed.
+    @Nullable Uri pendingExternalUri;
     boolean returnToViewerMode = false;
     File initialBrowseDirectory;
     final FileClipboardController fileClipboardController = FileClipboardController.getShared();
@@ -408,7 +457,14 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
             registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
                 if (result.getResultCode() == RESULT_OK) {
                     lockChecked = true;
-                    checkPermissionsAndInit();
+                    if (pendingExternalUri != null) {
+                        Uri u = pendingExternalUri;
+                        pendingExternalUri = null;
+                        openFileFromUri(u);
+                    } else {
+                        checkPermissionsAndInit();
+                        showInitialMainMode();
+                    }
                 } else {
                     finishAffinity();
                 }
@@ -423,6 +479,9 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         prefs.applyDarkMode(prefs.getDarkMode());
         super.onCreate(savedInstanceState);
         startup().onCreateAfterSuper();
+        if (savedInstanceState == null) {
+            getWindow().getDecorView().post(this::maybeShowTtsResumePrompt);
+        }
     }
 
     @Override
@@ -493,6 +552,19 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         syncVisibleFolderChangeObserver();
     }
 
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // Regaining focus without a full onResume (e.g. the notification shade or a
+        // permission/system dialog was dismissed) is a good moment to catch a
+        // download the FileObserver missed on FUSE storage. Cheap: only re-reads
+        // the directory if its on-disk signature actually changed.
+        if (hasFocus && !activityDestroyed && !homeMode && !searchMode) {
+            browseState().reloadVisibleFolderIfChanged();
+        }
+    }
+
+
     void markPreserveBrowseStateForViewerReturn(@Nullable File openedFile) {
         browseState().markPreserveForViewerReturn(openedFile);
     }
@@ -518,17 +590,20 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     void markCurrentBrowseFolderLoadComplete(@NonNull File directory,
-                                             @NonNull List<File> files,
-                                             int sortMode) {
-        browseState().markLoadComplete(directory, files, sortMode);
+                                             @NonNull List<FileListItem> items,
+                                             int sortMode,
+                                             @Nullable String precomputedSignature) {
+        browseState().markLoadComplete(directory, items, sortMode, precomputedSignature);
+    }
+
+    @NonNull
+    String captureBrowseFolderSignatureFromItems(@NonNull File directory,
+                                                 @NonNull List<FileListItem> items) {
+        return browseState().captureSignatureFromItems(directory, items);
     }
 
     void markCurrentBrowseFolderLoadFailed(@Nullable File directory) {
         browseState().markLoadFailed(directory);
-    }
-
-    private void saveCurrentBrowseFolderStateIfComplete() {
-        browseState().saveCurrentIfComplete();
     }
 
     private void saveCurrentBrowseFolderStateFastIfComplete() {
@@ -590,6 +665,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         if (drawerStorageList != null) drawerStorageList.setAdapter(null);
 
         fileSearchExecutor.shutdownNow();
+        folderValidationExecutor.shutdownNow();
         fileOperationExecutor.shutdownNow();
         if (mainFolderLoadController != null) mainFolderLoadController.shutdownNow();
         super.onDestroy();
@@ -690,6 +766,8 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     void runLiveFileSearchNow() { mainSearch().runLiveFileSearchNow(); }
 
     void restorePreSearchLocation() { mainSearch().restorePreSearchLocation(); }
+
+    void clearSearchQueryKeepingFilter() { mainSearch().clearSearchQueryKeepingFilter(); }
 
     void showFilteredCurrentFolder(File dir) { mainSearch().showCurrentFolderFilterResults(dir); }
 
@@ -1250,6 +1328,87 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         return result;
     }
 
+    private void maybeShowTtsResumePrompt() {
+        if (prefs == null) return;
+        final String path = prefs.getTtsLastFilePath();
+        if (path == null || path.trim().isEmpty()) return;
+        final File file = new File(path);
+        if (!file.exists() || !file.isFile()) {
+            prefs.clearTtsLastPlaybackState();
+            return;
+        }
+        showTtsResumeDialog(file.getName(),
+                () -> {
+                    // Continue: restore the timer that was set at the interruption,
+                    // open the file at its saved position, and auto-start playback.
+                    prefs.setTtsSleepTimerMinutes(prefs.getTtsLastSleepTimerMinutes());
+                    Intent it = new Intent(this, ReaderActivity.class);
+                    it.putExtra(ReaderActivity.EXTRA_FILE_PATH, path);
+                    it.putExtra(ReaderActivity.EXTRA_AUTOSTART_TTS, true);
+                    startActivity(it);
+                },
+                () -> prefs.clearTtsLastPlaybackState());
+    }
+
+    private void showTtsResumeDialog(@NonNull String fileName,
+                                     @NonNull Runnable onContinue,
+                                     @NonNull Runnable onLater) {
+        final boolean dark = prefs == null || prefs.shouldUseDarkColors(this);
+        final int bg = prefs != null ? prefs.getMainBgColor(this) : (dark ? Color.rgb(33, 33, 33) : Color.rgb(255, 255, 255));
+        final int panel = prefs != null ? prefs.getMainPanelColor(this) : (dark ? Color.rgb(48, 48, 48) : Color.rgb(245, 245, 245));
+        final int fg = prefs != null ? prefs.getMainTextColor(this) : (dark ? Color.rgb(245, 245, 245) : Color.rgb(32, 33, 36));
+        final int sub = prefs != null ? prefs.getMainSubTextColor(this) : (dark ? Color.rgb(190, 190, 190) : Color.rgb(95, 99, 104));
+        final int line = prefs != null ? prefs.getMainOutlineColor(this) : (dark ? Color.rgb(92, 92, 92) : Color.rgb(210, 210, 210));
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dpToPx(18), dpToPx(16), dpToPx(18), dpToPx(10));
+        GradientDrawable bgShape = new GradientDrawable();
+        bgShape.setColor(bg);
+        bgShape.setCornerRadius(dpToPx(18));
+        bgShape.setStroke(Math.max(1, dpToPx(1)), line);
+        box.setBackground(bgShape);
+
+        TextView title = new TextView(this);
+        title.setText(getString(R.string.tts_resume_title));
+        title.setTextColor(fg);
+        title.setTextSize(21f);
+        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        title.setGravity(Gravity.CENTER);
+        title.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        title.setPadding(dpToPx(6), 0, dpToPx(6), dpToPx(8));
+        box.addView(title, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView message = new TextView(this);
+        message.setText(fileName);
+        message.setTextColor(sub);
+        message.setTextSize(14f);
+        message.setLineSpacing(dpToPx(2), 1.0f);
+        message.setGravity(Gravity.CENTER);
+        message.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        message.setPadding(dpToPx(6), 0, dpToPx(6), dpToPx(14));
+        box.addView(message, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        final android.app.Dialog[] ref = new android.app.Dialog[1];
+        addFileOpsRow(box, getString(R.string.tts_resume_continue), fg, panel, () -> {
+            if (ref[0] != null) ref[0].dismiss();
+            onContinue.run();
+        });
+        addFileOpsRow(box, getString(R.string.tts_resume_later), fg, panel, () -> {
+            if (ref[0] != null) ref[0].dismiss();
+            onLater.run();
+        });
+
+        android.app.Dialog dialog = createStableBottomDialog(box, mainFileTypeAlignedDialogYOffsetPx(), 0.22f);
+        ref[0] = dialog;
+        dialog.setOnCancelListener(d -> onLater.run());
+        dialog.show();
+    }
+
     private void showSimpleDangerDialog(@NonNull String titleText,
                                         @NonNull String messageText,
                                         @NonNull String actionText,
@@ -1324,11 +1483,14 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     void showHomeMode() {
         // Save the visible browse folder before leaving Browse mode so returning
         // to it can reuse the adapter list and RecyclerView position when the
-        // folder contents are unchanged.
-        saveCurrentBrowseFolderStateIfComplete();
+        // folder contents are unchanged. The fast save reuses the cached load
+        // signature (no synchronous re-stat); if the outgoing folder changed on
+        // disk, the optimistic restore re-validates it on return, so a large
+        // outgoing folder never stalls the Home/drawer transition.
+        saveCurrentBrowseFolderStateFastIfComplete();
         exitFileSelectionMode(false);
         cancelPendingFolderLoad();
-        if (fileSearchProgress != null) fileSearchProgress.setVisibility(View.GONE);
+        cancelInFlightFileSearch();
         searchMode = false;
         searchReturnToHome = true;
         searchReturnDirectory = null;
@@ -1350,8 +1512,12 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     void showBrowseMode(@NonNull File dir) {
         // Capture the current browse folder even when switching through Home or
         // drawer shortcuts. This enables A -> B -> A -> B folder-state reuse.
-        saveCurrentBrowseFolderStateIfComplete();
+        // Use the fast save (reuse the cached load signature) so a large outgoing
+        // folder's synchronous re-stat can't stall this navigation; if that folder
+        // changed on disk, the optimistic restore re-validates it on return.
+        saveCurrentBrowseFolderStateFastIfComplete();
         exitFileSelectionMode(false);
+        cancelInFlightFileSearch();
         searchMode = false;
         searchReturnToHome = false;
         searchReturnDirectory = dir;
@@ -1375,6 +1541,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         // restore the target cache optimistically and validate it in the background.
         saveCurrentBrowseFolderStateFastIfComplete();
         exitFileSelectionMode(false);
+        cancelInFlightFileSearch();
         searchMode = false;
         searchReturnToHome = false;
         searchReturnDirectory = dir;
@@ -1484,6 +1651,38 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         mainFolderLoad().cancelPendingFolderLoad();
     }
 
+    // Invalidate any in-flight or scheduled file search. Bumping the generation
+    // makes the background walk stop at its next per-node check (it compares
+    // against fileSearchGeneration) and makes any queued UI callback a no-op;
+    // clearing the debounce drops a not-yet-fired live search. Called when
+    // leaving search via folder navigation so a long all-storage walk does not
+    // keep scanning (and re-applying stale results) after the user moves on.
+    void cancelInFlightFileSearch() {
+        clearSearchDebounce();
+        fileSearchGeneration.incrementAndGet();
+        if (fileSearchProgress != null) fileSearchProgress.setVisibility(View.GONE);
+    }
+
+    // Pull-to-refresh on the file list: force a fresh disk read of the current
+    // folder (or re-run the active search), keeping scroll position. This is the
+    // manual fallback for an external change the FileObserver missed. The reload
+    // runs on a background executor, so the spinner is dismissed once the refresh
+    // has been kicked off rather than blocking on completion.
+    void onFileListPullToRefresh() {
+        if (!homeMode && !searchMode && currentDirectory != null) {
+            refreshCurrentDirectoryWithoutClearing(currentDirectory);
+        } else if (searchMode) {
+            runLiveFileSearchNow();
+        } else {
+            loadRecentFiles();
+        }
+        if (fileListRefresh != null) {
+            fileSearchHandler.post(() -> {
+                if (fileListRefresh != null) fileListRefresh.setRefreshing(false);
+            });
+        }
+    }
+
     void loadDirectory(File dir) {
         if (dir == null) return;
 
@@ -1491,7 +1690,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
                 && !searchMode
                 && isSameBrowseDirectory(currentDirectory, dir);
         if (!activelyBrowsingSameDirectory) {
-            saveCurrentBrowseFolderStateIfComplete();
+            saveCurrentBrowseFolderStateFastIfComplete();
             if (restoreCachedBrowseFolderState(dir)) {
                 return;
             }
@@ -1509,7 +1708,12 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     void executeFolderBackgroundTask(@NonNull Runnable task) {
-        fileOperationExecutor.execute(task);
+        if (activityDestroyed || fileOperationExecutor.isShutdown()) return;
+        try {
+            fileOperationExecutor.execute(task);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // Executor shut down between check and submit; nothing to do.
+        }
     }
 
     @NonNull
@@ -1548,6 +1752,12 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         } else {
             openFile(file);
         }
+    }
+
+    boolean hasFileSearchQuery() {
+        return fileSearchInput != null
+                && fileSearchInput.getText() != null
+                && !fileSearchInput.getText().toString().trim().isEmpty();
     }
 
     private boolean shouldKeepFileTypeFilterForFolderNavigation() {
@@ -1753,6 +1963,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     @NonNull
     private String externalMimeTypeFor(@NonNull File file) {
         if (FileUtils.isVideoFile(file.getName())) return mimeTypeFromExtension(file, "video/*");
+        if (FileUtils.isAudioFile(file.getName())) return mimeTypeFromExtension(file, "audio/*");
         return mimeTypeFromExtension(file, "application/octet-stream");
     }
 
@@ -1769,8 +1980,17 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     void openFileFromUri(Uri uri) {
-        String displayName = FileUtils.getFileNameFromUri(this, uri);
-        String mime = getContentResolver().getType(uri);
+        String displayName;
+        try {
+            displayName = FileUtils.getFileNameFromUri(this, uri);
+        } catch (Exception e) {
+            displayName = FileUtils.normalizeDisplayFileName(uri.getLastPathSegment());
+        }
+        String mime = null;
+        try {
+            mime = getContentResolver().getType(uri);
+        } catch (Exception ignored) {
+        }
         boolean pdf = FileUtils.isPdfFile(displayName) || "application/pdf".equalsIgnoreCase(mime);
         boolean epub = FileUtils.isEpubFile(displayName) || "application/epub+zip".equalsIgnoreCase(mime);
         boolean markdown = FileUtils.isMarkdownFile(displayName)
@@ -2055,7 +2275,22 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         // entered after the filter was already active. At the folder where the
         // filter was turned on, Back clears it and returns to the parent.
         if (activeFileFilter != FILTER_ALL) {
-            if (shouldKeepFileTypeFilterForFolderNavigation()
+            // First Back with a type filter active AND a search term present:
+            // clear only the term, keeping the filter and its results. The next
+            // Back then drops the filter (see filterSearchTermJustCleared below),
+            // rather than snapping straight to ALL in a single press.
+            if (hasFileSearchQuery()) {
+                clearSearchQueryKeepingFilter();
+                return;
+            }
+            // Back right after that term-clear: drop the filter to ALL in place
+            // instead of walking up folders. The flag is set only by the
+            // term-clear, so a plain filtered-folder browse still takes the
+            // folder-navigation path below.
+            boolean dropFilterInPlace = filterSearchTermJustCleared;
+            filterSearchTermJustCleared = false;
+            if (!dropFilterInPlace
+                    && shouldKeepFileTypeFilterForFolderNavigation()
                     && currentDirectory != null
                     && !isRootStorage(currentDirectory)) {
                 File parent = currentDirectory.getParentFile();

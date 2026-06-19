@@ -96,6 +96,19 @@ final class TtsSegmenter {
         return raw.replace('\u00A0', ' ')
                 .replaceAll("[\\t\\x0B\\f\\r]+", " ")
                 .replaceAll("\\n{3,}", "\n\n")
+                // Mute ellipses. The speech engine names consecutive dots ("점" =
+                // "dot"), so it reads "..." / "…" aloud as "점점". Drop runs of 2+
+                // ASCII dots and the "…" character; a lone "." is left untouched
+                // (normal period / decimal point / abbreviation). Collapse the
+                // spaces the removal leaves behind.
+                .replaceAll("(?:\\.{2,}|\u2026)+", " ")
+                // Underscores are often read aloud (e.g. "밑줄"), and a run of them
+                // is just a visual rule — mute to a space so identifiers/URLs read
+                // naturally. Semicolons become a comma: if the engine voices ";"
+                // its name is dropped, while the clause-level pause is preserved.
+                .replace('_', ' ')
+                .replaceAll(";+", ",")
+                .replaceAll(" {2,}", " ")
                 .trim();
     }
 }

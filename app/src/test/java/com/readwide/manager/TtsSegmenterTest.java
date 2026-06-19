@@ -60,4 +60,29 @@ public class TtsSegmenterTest {
         assertEquals("hello world\n\nagain",
                 TtsSegmenter.normalizeForSpeech("  hello\tworld\n\n\n\nagain  "));
     }
+
+    @Test
+    public void normalizeForSpeech_mutesEllipsesButKeepsLoneDots() {
+        // Runs of 2+ dots and the "…" character are muted so the engine does not
+        // read them aloud as "점점"; a lone "." (sentence end, decimal point,
+        // abbreviation) is preserved.
+        assertEquals("He hesitated and left.",
+                TtsSegmenter.normalizeForSpeech("He hesitated... and left."));
+        assertEquals("Wait", TtsSegmenter.normalizeForSpeech("Wait\u2026"));
+        assertEquals("그래 알았어",
+                TtsSegmenter.normalizeForSpeech("그래\u2026 알았어"));
+        assertEquals("version 1.0.6 e.g. ok",
+                TtsSegmenter.normalizeForSpeech("version 1.0.6 e.g. ok"));
+    }
+
+    @Test
+    public void normalizeForSpeech_mutesUnderscoreAndSemicolon() {
+        // Underscores are muted to a space (often voiced as "밑줄"); a semicolon
+        // becomes a comma so any spoken name is dropped but the clause pause stays.
+        assertEquals("snake case word",
+                TtsSegmenter.normalizeForSpeech("snake_case_word"));
+        assertEquals("user id, value",
+                TtsSegmenter.normalizeForSpeech("user_id; value"));
+        assertEquals("a, b, c", TtsSegmenter.normalizeForSpeech("a; b; c"));
+    }
 }

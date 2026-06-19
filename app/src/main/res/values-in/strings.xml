@@ -570,6 +570,9 @@ Aturan: %2$d aturan aktif</string>
     <string name="tts_continuous_started">TTS berkelanjutan dimulai</string>
     <string name="tts_stopped">TTS dihentikan</string>
     <string name="tts_finished">TTS selesai</string>
+    <string name="tts_resume_title">Lanjutkan pembacaan suara?</string>
+    <string name="tts_resume_continue">Lanjutkan</string>
+    <string name="tts_resume_later">Nanti</string>
     <string name="tts_no_text">Tidak ada teks yang dapat dibaca pada halaman ini</string>
     <string name="tts_waiting_for_page">Menunggu halaman berikutnya</string>
     <string name="tts_engine_unavailable">Mesin teks-ke-ucapan tidak tersedia</string>

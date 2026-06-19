@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">Непрерывный TTS запущен</string>
     <string name="tts_stopped">TTS остановлен</string>
     <string name="tts_finished">TTS завершён</string>
+    <string name="tts_resume_title">Продолжить чтение вслух?</string>
+    <string name="tts_resume_continue">Продолжить</string>
+    <string name="tts_resume_later">Позже</string>
     <string name="tts_no_text">На этой странице нет читаемого текста</string>
     <string name="tts_waiting_for_page">Ожидание следующей страницы</string>
     <string name="tts_engine_unavailable">Движок преобразования текста в речь недоступен</string>

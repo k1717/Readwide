@@ -1,11 +1,11 @@
-# Readwide 1.0.5 Build / Release Notes
+# Readwide 1.0.6 Build / Release Notes
 
-This file records source-build notes for the current public package: **Readwide 1.0.5**.
+This file records source-build notes for the current public package: **Readwide 1.0.6**.
 
 ## Version metadata
 
-- Android metadata is `versionCode 10005`, `versionName "1.0.5"`.
-- Since 1.0.4 the Android package/application ID is `com.readwide.manager`, and 1.0.5 is an in-place update over 1.0.4 when signed with the same key. Earlier builds used `com.textview.reader` and install as a separate app; users transfer data with the in-app JSON backup export/import.
+- Android metadata is `versionCode 10006`, `versionName "1.0.6"`.
+- The Android package/application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 is signed with a new release key, so it does not update in place over an installed 1.0.4/1.0.5 (previous key); uninstall first, install 1.0.6, then migrate data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` likewise install as a separate app.
 - The default source package is Junrar-free, UnRAR-license-fallback-free, analytics-free, ads-free, and does not request the `INTERNET` permission.
 
 ## Stale removed-source cleanup
@@ -59,5 +59,5 @@ zstd-jni desktop resource binaries (`win/**`, `darwin/**`, `linux/**`, `freebsd/
 
 - The default source package contains no optional decoder jar under `app/libs`.
 - Release signing is conditional, so source-build review can run `assembleRelease` without a private developer keystore.
-- `fdroid/metadata/com.readwide.manager.yml` is a draft metadata file; confirm it points to the immutable `v1.0.5` tag (or the exact commit hash requested by the reviewer) before F-Droid submission.
+- `fdroid/metadata/com.readwide.manager.yml` is a draft metadata file; confirm it points to the immutable `v1.0.6` tag (or the exact commit hash requested by the reviewer) before F-Droid submission.
 - If any local jar or native binary is added later, re-audit that custom build before describing it as FOSS.

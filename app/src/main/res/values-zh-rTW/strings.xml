@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">已開始連續 TTS</string>
     <string name="tts_stopped">已停止 TTS</string>
     <string name="tts_finished">TTS 已完成</string>
+    <string name="tts_resume_title">繼續朗讀嗎？</string>
+    <string name="tts_resume_continue">繼續</string>
+    <string name="tts_resume_later">稍後</string>
     <string name="tts_no_text">此頁面沒有可朗讀的文字</string>
     <string name="tts_waiting_for_page">正在等待下一頁</string>
     <string name="tts_engine_unavailable">文字轉語音引擎無法使用</string>

@@ -174,11 +174,30 @@ final class DocumentArchiveUtils {
         return result;
     }
 
+    /** Cap a single document text entry (EPUB/HTML/OPF, Word/HWPX XML) so a crafted
+     *  oversized entry can't exhaust memory during page rendering. */
+    private static final long MAX_DOCUMENT_TEXT_ENTRY_BYTES = 32L * 1024L * 1024L;
+
     static String readZipEntryString(ZipFile zip, ZipEntry entry) throws IOException {
         try (InputStream is = zip.getInputStream(entry)) {
-            byte[] data = readAllBytes(is);
+            byte[] data = readAllBytesWithLimit(is, MAX_DOCUMENT_TEXT_ENTRY_BYTES);
             return new String(data, StandardCharsets.UTF_8);
         }
+    }
+
+    static byte[] readAllBytesWithLimit(InputStream is, long maxBytes) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        long total = 0L;
+        while ((n = is.read(buf)) != -1) {
+            total += n;
+            if (total > maxBytes) {
+                throw new IOException("Document text entry exceeds size limit");
+            }
+            out.write(buf, 0, n);
+        }
+        return out.toByteArray();
     }
 
     static String readZipEntryPreviewString(ZipFile zip, ZipEntry entry) throws IOException {
@@ -186,14 +205,6 @@ final class DocumentArchiveUtils {
             byte[] data = readAtMostBytes(is, DETECTION_TEXT_READ_LIMIT_BYTES);
             return new String(data, StandardCharsets.UTF_8);
         }
-    }
-
-    static byte[] readAllBytes(InputStream is) throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] buf = new byte[8192];
-        int n;
-        while ((n = is.read(buf)) != -1) out.write(buf, 0, n);
-        return out.toByteArray();
     }
 
     private static byte[] readAtMostBytes(InputStream is, int maxBytes) throws IOException {

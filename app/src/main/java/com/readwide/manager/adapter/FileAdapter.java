@@ -22,6 +22,7 @@ import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.RecyclerView;
 import com.readwide.manager.R;
+import com.readwide.manager.model.FileListItem;
 import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.util.FileSortUtils;
 import com.readwide.manager.util.FileUtils;
@@ -41,7 +42,7 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
 
     private static final int MAIN_ACTION_SHORT_HOLD_MS = 200;
     private static final int MULTI_SELECT_LONG_PRESS_MS = 800;
-    private static final int MAIN_ROW_TEXT_END_PADDING_DP = 10;
+    private static final int MAIN_ROW_TEXT_END_PADDING_DP = 6;
     private static final Object SELECTION_PAYLOAD = "selection_payload";
 
     public interface OnFileClickListener {
@@ -50,12 +51,17 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
         void onFileMultiSelectLongClick(File file);
     }
 
-    private final List<File> files = new ArrayList<>();
+    private final List<FileListItem> items = new ArrayList<>();
     private final Context context;
     private OnFileClickListener listener;
     private int sortMode = PrefsManager.SORT_NAME_ASC;
     private boolean sortEnabled = true;
     private boolean showFilePath = false;
+    // Canonical search-root paths for the active search; used to show file
+    // locations relative to the searched folder instead of repeating the full
+    // absolute path on every row.
+    private java.util.List<String> searchRootPaths = new java.util.ArrayList<>();
+    private boolean searchSpansMultipleRoots = false;
     private int touchCancelGeneration = 0;
     private boolean showReadingProgress = false;
     private boolean selectionMode = false;
@@ -84,6 +90,75 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
         if (this.showFilePath == enabled) return;
         this.showFilePath = enabled;
         if (getItemCount() > 0) notifyItemRangeChanged(0, getItemCount());
+    }
+
+    /**
+     * Provide the search roots so file locations can be shown relative to the
+     * searched folder. With a single root, a file directly in that root shows no
+     * location; files in subfolders show the path below the root. With multiple
+     * roots (all-storage search) the matched root's name is kept as a prefix so
+     * results from different storages stay distinguishable.
+     */
+    public void setSearchRoots(@Nullable List<File> roots) {
+        searchRootPaths = new java.util.ArrayList<>();
+        if (roots != null) {
+            for (File r : roots) {
+                if (r == null) continue;
+                try {
+                    searchRootPaths.add(r.getCanonicalFile().getAbsolutePath());
+                } catch (Exception e) {
+                    searchRootPaths.add(r.getAbsolutePath());
+                }
+            }
+        }
+        searchSpansMultipleRoots = searchRootPaths.size() > 1;
+    }
+
+    /**
+     * Computes the search-row location label for a file: the canonical parent
+     * folder, expressed relative to the matched search root. Static and pure
+     * (apart from one {@code getCanonicalFile()} resolution) so the file-search
+     * thread can precompute it per result and store it on the FileListItem,
+     * keeping this resolution off the UI thread during bind/scroll. The result
+     * matches what {@link ViewHolder#folderPathFor(File)} produces.
+     */
+    public static String computeLocationLabel(@NonNull File file,
+                                       @Nullable java.util.List<String> canonicalRootPaths,
+                                       boolean spansMultipleRoots) {
+        File parentFile = file.getParentFile();
+        String parent = parentFile != null ? parentFile.getAbsolutePath() : file.getAbsolutePath();
+        try {
+            parent = (parentFile != null ? parentFile.getCanonicalFile() : file.getCanonicalFile()).getAbsolutePath();
+        } catch (Exception ignored) { /* keep absolute */ }
+
+        if (canonicalRootPaths == null || canonicalRootPaths.isEmpty()) {
+            return parent; // not a rooted search; show full parent path
+        }
+
+        // Find the deepest matching root (handles nested roots safely).
+        String bestRoot = null;
+        for (String root : canonicalRootPaths) {
+            if (root == null || root.isEmpty()) continue;
+            if (parent.equals(root) || parent.startsWith(root + "/")) {
+                if (bestRoot == null || root.length() > bestRoot.length()) bestRoot = root;
+            }
+        }
+        if (bestRoot == null) {
+            return parent; // outside known roots; show full path
+        }
+
+        // Path of the parent relative to the matched root ("" if directly in root).
+        String rel = parent.equals(bestRoot) ? "" : parent.substring(bestRoot.length() + 1);
+
+        if (spansMultipleRoots) {
+            // Keep the root's folder name so different storages stay distinct.
+            String rootName = bestRoot.substring(bestRoot.lastIndexOf('/') + 1);
+            if (rootName.isEmpty()) rootName = bestRoot;
+            return rel.isEmpty() ? rootName : rootName + "/" + rel;
+        }
+        // Single root: directly-in-root files show no location; subfolder files
+        // are prefixed with ".../" to read as a path below the root.
+        return rel.isEmpty() ? "" : ".../" + rel;
     }
 
     public void setReadingProgressStates(List<ReaderState> states) {
@@ -125,9 +200,9 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     }
 
     private void notifyPathChanged(@NonNull String path, @Nullable Object payload) {
-        for (int i = 0; i < files.size(); i++) {
-            File file = files.get(i);
-            if (file != null && path.equals(file.getAbsolutePath())) {
+        for (int i = 0; i < items.size(); i++) {
+            FileListItem item = items.get(i);
+            if (item != null && path.equals(item.getAbsolutePath())) {
                 if (payload == null) notifyItemChanged(i); else notifyItemChanged(i, payload);
                 return;
             }
@@ -136,7 +211,21 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
 
     @NonNull
     public ArrayList<File> getFilesSnapshot() {
-        return new ArrayList<>(files);
+        ArrayList<File> out = new ArrayList<>(items.size());
+        for (FileListItem item : items) out.add(item.getFile());
+        return out;
+    }
+
+    /**
+     * Snapshot of the current rows as items, with their metadata already
+     * computed. Unlike {@link #getFilesSnapshot()}, a caller that stores this for
+     * later restoration avoids re-stat-ing every file: the browse-state cache
+     * keeps the items so a back-navigation restore can rebind without touching
+     * the disk on the UI thread.
+     */
+    @NonNull
+    public ArrayList<FileListItem> getItemsSnapshot() {
+        return new ArrayList<>(items);
     }
 
 
@@ -145,7 +234,16 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     }
 
     public void setFiles(List<File> fileList) {
-        replaceFiles(new ArrayList<>(fileList));
+        replaceFiles(toItems(fileList));
+    }
+
+    /**
+     * Item-based equivalent of {@link #setFiles(List)}: sorts (if enabled) and
+     * diff-updates without stat-ing any file on the UI thread. Used by callers
+     * (search, recent) that already built the items off the UI thread.
+     */
+    public void setItems(@NonNull List<FileListItem> itemList) {
+        replaceFiles(new ArrayList<>(itemList));
     }
 
     /**
@@ -154,9 +252,63 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
      * folders can make DiffUtil noticeably block the UI thread.
      */
     public void setFilesFastPresorted(List<File> fileList) {
-        files.clear();
-        files.addAll(fileList);
+        setItemsFastPresorted(toItems(fileList));
+    }
+
+    /** Item-based fast replacement: metadata already computed off the UI thread. */
+    public void setItemsFastPresorted(@NonNull List<FileListItem> itemList) {
+        items.clear();
+        items.addAll(itemList);
         notifyDataSetChanged();
+    }
+
+    /**
+     * Incrementally append already-ordered items (used while a file search is
+     * still running). Only the newly inserted range is notified, so a result
+     * set that grows to many thousands of entries does not re-bind or re-copy
+     * the entire list on every batch. The caller is responsible for ordering;
+     * during search this is discovery order, replaced by a sorted list when the
+     * search finishes.
+     */
+    public void appendFilesPresorted(@NonNull List<File> moreFiles) {
+        if (moreFiles.isEmpty()) return;
+        appendItemsPresorted(toItems(moreFiles));
+    }
+
+    /** Item-based incremental append: metadata already computed off the UI thread. */
+    public void appendItemsPresorted(@NonNull List<FileListItem> moreItems) {
+        if (moreItems.isEmpty()) return;
+        int start = items.size();
+        items.addAll(moreItems);
+        notifyItemRangeInserted(start, moreItems.size());
+    }
+
+    /**
+     * Insert presorted items at a specific position without re-sorting. Used by
+     * progressive folder loading to place newly discovered folders at the
+     * folder/file boundary while files are appended at the end, so the growing
+     * list stays in "folders then files" order without a full list replace.
+     */
+    public void insertItemsPresorted(int index, @NonNull List<FileListItem> moreItems) {
+        if (moreItems.isEmpty()) return;
+        if (index < 0) index = 0;
+        if (index > items.size()) index = items.size();
+        items.addAll(index, moreItems);
+        notifyItemRangeInserted(index, moreItems.size());
+    }
+
+    @NonNull
+    private static List<FileListItem> toItems(@NonNull List<File> fileList) {
+        List<FileListItem> out = new ArrayList<>(fileList.size());
+        for (File f : fileList) {
+            if (f != null) out.add(FileListItem.from(f));
+        }
+        return out;
+    }
+
+    /** Number of items currently held, so a search can append only the delta. */
+    public int getItemCountInternal() {
+        return items.size();
     }
 
     /** Updates the stored sort mode without re-sorting the currently visible list. */
@@ -167,20 +319,20 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     public void setSortMode(int mode) {
         if (this.sortMode == mode) return;
         this.sortMode = mode;
-        replaceFiles(new ArrayList<>(files));
+        replaceFiles(new ArrayList<>(items));
     }
 
     public void setSortEnabled(boolean enabled) {
         if (this.sortEnabled == enabled) return;
         this.sortEnabled = enabled;
-        replaceFiles(new ArrayList<>(files));
+        replaceFiles(new ArrayList<>(items));
     }
 
-    private void replaceFiles(@NonNull List<File> next) {
-        if (sortEnabled) sortFiles(next);
-        if (files.equals(next)) return;
+    private void replaceFiles(@NonNull List<FileListItem> next) {
+        if (sortEnabled) sortItems(next);
+        if (items.equals(next)) return;
 
-        List<File> old = new ArrayList<>(files);
+        List<FileListItem> old = new ArrayList<>(items);
         DiffUtil.DiffResult diff = DiffUtil.calculateDiff(new DiffUtil.Callback() {
             @Override public int getOldListSize() { return old.size(); }
             @Override public int getNewListSize() { return next.size(); }
@@ -191,22 +343,37 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
             }
 
             @Override public boolean areContentsTheSame(int oldItemPosition, int newItemPosition) {
-                File a = old.get(oldItemPosition);
-                File b = next.get(newItemPosition);
+                FileListItem a = old.get(oldItemPosition);
+                FileListItem b = next.get(newItemPosition);
+                // Precomputed metadata only — no filesystem stat on the UI thread.
                 return a.getName().equals(b.getName())
                         && a.isDirectory() == b.isDirectory()
-                        && a.length() == b.length()
-                        && a.lastModified() == b.lastModified();
+                        && a.getSize() == b.getSize()
+                        && a.getLastModified() == b.getLastModified();
             }
         });
 
-        files.clear();
-        files.addAll(next);
+        items.clear();
+        items.addAll(next);
         diff.dispatchUpdatesTo(this);
     }
 
-    private void sortFiles(@NonNull List<File> target) {
-        FileSortUtils.sortMainFiles(context, target, sortMode);
+    private void sortItems(@NonNull List<FileListItem> target) {
+        // Reuse the shared File sorter, then map the items back into the sorted
+        // order. Items wrap Files 1:1 (keyed by absolute path), so we sort the
+        // unwrapped Files and rebuild the item list from a path->item index.
+        ArrayList<File> fileView = new ArrayList<>(target.size());
+        Map<String, FileListItem> byPath = new HashMap<>(target.size() * 2);
+        for (FileListItem item : target) {
+            fileView.add(item.getFile());
+            byPath.put(item.getAbsolutePath(), item);
+        }
+        FileSortUtils.sortMainFiles(context, fileView, sortMode);
+        target.clear();
+        for (File f : fileView) {
+            FileListItem item = byPath.get(f.getAbsolutePath());
+            target.add(item != null ? item : FileListItem.from(f));
+        }
     }
 
     @NonNull
@@ -217,19 +384,19 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     }
 
     @Override
-    public void onBindViewHolder(@NonNull ViewHolder holder, int position) { holder.bind(files.get(position)); }
+    public void onBindViewHolder(@NonNull ViewHolder holder, int position) { holder.bind(items.get(position)); }
 
     @Override
     public void onBindViewHolder(@NonNull ViewHolder holder, int position, @NonNull List<Object> payloads) {
         if (!payloads.isEmpty()) {
-            holder.bindSelectionState(files.get(position));
+            holder.bindSelectionState(items.get(position).getFile());
             return;
         }
         super.onBindViewHolder(holder, position, payloads);
     }
 
     @Override
-    public int getItemCount() { return files.size(); }
+    public int getItemCount() { return items.size(); }
 
     @Override
     public void onViewRecycled(@NonNull ViewHolder holder) {
@@ -251,7 +418,19 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
 
     public void release() {
         listener = null;
-        files.clear();
+        items.clear();
+    }
+
+    private static int iconResForFile(@NonNull String fileName) {
+        if (FileUtils.isPdfFile(fileName)) return R.drawable.ic_file_pdf;
+        if (FileUtils.isEpubFile(fileName)) return R.drawable.ic_file_epub;
+        if (FileUtils.isWordOrHwpFile(fileName)) return R.drawable.ic_file_document;
+        if (FileUtils.isArchiveFile(fileName)) return R.drawable.ic_file_archive;
+        if (FileUtils.isImageFile(fileName)) return R.drawable.ic_file_image;
+        if (FileUtils.isVideoFile(fileName)) return R.drawable.ic_file_video;
+        if (FileUtils.isAudioFile(fileName)) return R.drawable.ic_file_audio;
+        if (FileUtils.isApkFile(fileName)) return R.drawable.ic_file_apk;
+        return R.drawable.ic_text_file;
     }
 
     private static int calculateReadingProgressPercent(@NonNull ReaderState state) {
@@ -273,7 +452,8 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     public class ViewHolder extends RecyclerView.ViewHolder {
         ImageView icon;
         LinearLayout textContainer;
-        TextView name, info, path, progress, selectionMarker;
+        com.readwide.manager.view.ExtensionEllipsisTextView name;
+        TextView info, path, progress, selectionMarker;
 
         private final Handler touchHandler = new Handler(Looper.getMainLooper());
         private float downX;
@@ -330,7 +510,7 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
                                     longPressed = false;
                                     view.setPressed(false);
                                     view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
-                                    listener.onFileMultiSelectLongClick(files.get(pos));
+                                    listener.onFileMultiSelectLongClick(items.get(pos).getFile());
                                 }
                             }
                         };
@@ -361,10 +541,10 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
                                 if (multiSelectPressed) {
                                     return true;
                                 } else if (longPressed) {
-                                    listener.onFileLongClick(files.get(pos));
+                                    listener.onFileLongClick(items.get(pos).getFile());
                                 } else {
                                     view.performClick();
-                                    listener.onFileClick(files.get(pos));
+                                    listener.onFileClick(items.get(pos).getFile());
                                 }
                             }
                         }
@@ -401,28 +581,30 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
             }
         }
 
-        void bind(File file) {
+        void bind(FileListItem item) {
             cancelPendingPress();
+            File file = item.getFile();
             PrefsManager prefs = PrefsManager.getInstance(itemView.getContext());
             boolean dark = prefs.shouldUseDarkColors(itemView.getContext());
             int primaryText = prefs.getMainTextColor(itemView.getContext());
             int secondaryText = prefs.getMainSubTextColor(itemView.getContext());
             int iconTint = dark ? prefs.getMainTextColor(itemView.getContext()) : Color.rgb(72, 76, 82);
 
-            name.setText(file.getName());
-            name.setSingleLine(true);
-            name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-            name.setHorizontallyScrolling(false);
+            name.setMaxLines(2);
             name.setTextColor(primaryText);
+            name.setTailContextChars(20);
+            name.setFullName(item.getName());
             info.setSingleLine(true);
             info.setEllipsize(TextUtils.TruncateAt.END);
             info.setTextColor(secondaryText);
             if (path != null) {
+                String loc = showFilePath ? locationLabelFor(item) : "";
                 path.setSingleLine(true);
                 path.setEllipsize(TextUtils.TruncateAt.MIDDLE);
                 path.setTextColor(secondaryText);
-                path.setVisibility(showFilePath ? View.VISIBLE : View.GONE);
-                path.setText(showFilePath ? folderPathFor(file) : "");
+                boolean showLoc = showFilePath && !loc.isEmpty();
+                path.setVisibility(showLoc ? View.VISIBLE : View.GONE);
+                path.setText(showLoc ? loc : "");
             }
             if (progress != null) {
                 progress.setTextColor(secondaryText);
@@ -430,20 +612,18 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
                 progress.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_END);
             }
 
-            if (file.isDirectory()) {
+            if (item.isDirectory()) {
                 icon.setImageResource(R.drawable.ic_folder);
-                // Avoid file.listFiles() here: it is synchronous disk I/O and was
-                // running on every scroll for every visible directory row, which
-                // hung the UI thread on large storage roots.
+                // Metadata is precomputed off the UI thread; no listFiles()/stat here.
                 info.setText(R.string.folder);
             } else {
-                icon.setImageResource(R.drawable.ic_text_file);
-                String size = FileUtils.formatFileSize(file.length());
-                String date = dateFormat.format(new Date(FileSortUtils.fileSortDate(itemView.getContext(), file)));
-                String type = FileUtils.getReadableFileType(file.getName());
+                icon.setImageResource(iconResForFile(item.getName()));
+                String size = FileUtils.formatFileSize(item.getSize());
+                String date = dateFormat.format(new Date(item.getSortDate()));
+                String type = FileUtils.getReadableFileType(item.getName());
                 info.setText(String.format(Locale.getDefault(), "%s  •  %s  •  %s", type, size, date));
             }
-            updateReadingProgressBadge(file);
+            updateReadingProgressBadge(item);
             icon.setImageTintList(ColorStateList.valueOf(iconTint));
             itemView.setPressed(false);
             itemView.setBackground(makeFileRowBackground(prefs));
@@ -469,10 +649,12 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
             }
         }
 
-        private void updateReadingProgressBadge(@NonNull File file) {
+        private void updateReadingProgressBadge(@NonNull FileListItem item) {
             if (progress == null) return;
-            Integer pct = showReadingProgress && !file.isDirectory()
-                    ? readingProgressByPath.get(file.getAbsolutePath())
+            // Use the precomputed directory flag and path rather than re-stating the
+            // File on the UI thread (item.isDirectory()/getAbsolutePath() are cached).
+            Integer pct = showReadingProgress && !item.isDirectory()
+                    ? readingProgressByPath.get(item.getAbsolutePath())
                     : null;
             if (pct == null) {
                 setTextReserveEnd(0);
@@ -497,7 +679,7 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
             if (layoutParams instanceof ViewGroup.MarginLayoutParams) {
                 marginEnd = ((ViewGroup.MarginLayoutParams) layoutParams).getMarginEnd();
             }
-            int progressReserve = badgeWidth + marginEnd + dpToPx(5);
+            int progressReserve = badgeWidth + marginEnd;
             setTextReserveEnd(progressReserve);
         }
 
@@ -522,9 +704,20 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
         }
 
         @NonNull
+        /**
+         * Resolves the location label for a row, preferring the value the
+         * search thread precomputed onto the item (so search scrolling does no
+         * canonical-path I/O on the UI thread). Falls back to resolving on
+         * demand only for items that carry no precomputed label.
+         */
+        private String locationLabelFor(@NonNull FileListItem item) {
+            String precomputed = item.getDisplayLocation();
+            if (precomputed != null) return precomputed;
+            return folderPathFor(item.getFile());
+        }
+
         private String folderPathFor(@NonNull File file) {
-            File parent = file.getParentFile();
-            return parent != null ? parent.getAbsolutePath() : file.getAbsolutePath();
+            return computeLocationLabel(file, searchRootPaths, searchSpansMultipleRoots);
         }
 
         private int dpToPx(int dp) {

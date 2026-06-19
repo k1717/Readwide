@@ -44,7 +44,7 @@ public class DocumentDocxLayoutExtractorTest {
         }
 
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "fixture.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "fixture.docx", "readwide.local", 28);
             assertEquals("docx", document.sourceFormat);
             assertEquals(1, document.pageCount());
             assertTrue(document.plainText.contains("Proposal"));
@@ -57,7 +57,7 @@ public class DocumentDocxLayoutExtractorTest {
             assertTrue(html.contains("text-decoration:underline"));
             assertTrue(html.contains("color:#cc0000"));
             assertTrue(html.contains("font-size:14pt"));
-            assertTrue(html.contains("src=\"https://textview.local/word/media/image1.png\""));
+            assertTrue(html.contains("src=\"https://readwide.local/word/media/image1.png\""));
             assertTrue(html.contains("colspan=\"2\""));
             assertTrue(html.contains("background-color:#ffeeaa"));
             // Page margins are intentionally responsive: the top margin
@@ -98,7 +98,7 @@ public class DocumentDocxLayoutExtractorTest {
         }
 
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "numbering.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "numbering.docx", "readwide.local", 28);
             String html = FixedHtmlRenderer.render(document);
             assertTrue(html.contains("rw-list-p"));
             assertTrue(html.contains("rw-list-marker"));
@@ -128,7 +128,7 @@ public class DocumentDocxLayoutExtractorTest {
         }
 
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "math.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "math.docx", "readwide.local", 28);
             String html = FixedHtmlRenderer.render(document);
             assertTrue(html.contains("e<sup>-barrier/kT</sup>"));
             assertTrue(html.contains("\u03bd<sub>0</sub>"));
@@ -166,7 +166,7 @@ public class DocumentDocxLayoutExtractorTest {
         }
 
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "table.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "table.docx", "readwide.local", 28);
             String html = FixedHtmlRenderer.render(document);
             assertTrue(html.contains("<colgroup>"));
             assertTrue(html.contains("width:50%"));
@@ -208,7 +208,7 @@ public class DocumentDocxLayoutExtractorTest {
         }
 
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "styles.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "styles.docx", "readwide.local", 28);
             String html = FixedHtmlRenderer.render(document);
             assertTrue(html.contains("Styled Heading"));
             assertTrue(html.contains("text-align:center"));
@@ -256,12 +256,12 @@ public class DocumentDocxLayoutExtractorTest {
         }
 
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "image.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "image.docx", "readwide.local", 28);
             String html = FixedHtmlRenderer.render(document);
-            assertTrue(html.contains("src=\"https://textview.local/word/media/inline.png\""));
+            assertTrue(html.contains("src=\"https://readwide.local/word/media/inline.png\""));
             assertTrue(html.contains("width:72pt"));
             assertTrue(html.contains("height:36pt"));
-            assertTrue(html.contains("src=\"https://textview.local/word/media/floating.png\""));
+            assertTrue(html.contains("src=\"https://readwide.local/word/media/floating.png\""));
             assertTrue(html.contains("rw-floating-downgraded"));
             assertTrue(html.contains("width:144pt"));
             assertTrue(html.contains("height:72pt"));
@@ -295,7 +295,7 @@ public class DocumentDocxLayoutExtractorTest {
         }
 
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "notes.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "notes.docx", "readwide.local", 28);
             String html = FixedHtmlRenderer.render(document);
             assertTrue(html.contains("Main text"));
             assertTrue(html.contains("More text"));
@@ -357,7 +357,7 @@ public class DocumentDocxLayoutExtractorTest {
         }
 
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "header-footer.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "header-footer.docx", "readwide.local", 28);
             String html = FixedHtmlRenderer.render(document);
             assertTrue(html.contains("rw-page-header"));
             assertTrue(html.contains("Header text"));
@@ -368,7 +368,7 @@ public class DocumentDocxLayoutExtractorTest {
             assertTrue(!html.contains("Footers"));
             assertTrue(html.indexOf("Header text") < html.indexOf("Main body"));
             assertTrue(html.indexOf("Footer text") > html.indexOf("Main body"));
-            assertTrue(html.contains("src=\"https://textview.local/word/media/header.png\""));
+            assertTrue(html.contains("src=\"https://readwide.local/word/media/header.png\""));
             assertTrue(html.contains("width:72pt"));
         }
     }
@@ -389,7 +389,7 @@ public class DocumentDocxLayoutExtractorTest {
         }
 
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "page-break.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "page-break.docx", "readwide.local", 28);
             assertEquals(2, document.pageCount());
             String html = FixedHtmlRenderer.render(document);
             assertTrue(html.contains("First page paragraph"));
@@ -418,7 +418,7 @@ public class DocumentDocxLayoutExtractorTest {
         }
 
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "vml-line.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "vml-line.docx", "readwide.local", 28);
             String html = FixedHtmlRenderer.render(document);
             assertTrue(html.contains("제   목"));
             assertTrue(html.contains("귀사의 무궁한 발전"));
@@ -456,7 +456,7 @@ public class DocumentDocxLayoutExtractorTest {
         }
 
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "fixture.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "fixture.docx", "readwide.local", 28);
             String html = FixedHtmlRenderer.render(document);
 
             // The horizontal v:line becomes a sized rw-hr with the stroke weight
@@ -499,7 +499,7 @@ public class DocumentDocxLayoutExtractorTest {
                     "</w:body></w:document>");
         }
         try (ZipFile zip = new ZipFile(docx)) {
-            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "fixture.docx", "textview.local", 28);
+            RenderedDocument document = DocumentDocxLayoutExtractor.extract(zip, "fixture.docx", "readwide.local", 28);
             String html = FixedHtmlRenderer.render(document);
             // Both cells must explicitly suppress the border.
             int first = html.indexOf("border:none");

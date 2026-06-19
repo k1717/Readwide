@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">Η συνεχής λειτουργία TTS ξεκίνησε</string>
     <string name="tts_stopped">Το TTS σταμάτησε</string>
     <string name="tts_finished">Το TTS ολοκληρώθηκε</string>
+    <string name="tts_resume_title">Συνέχιση εκφώνησης;</string>
+    <string name="tts_resume_continue">Συνέχιση</string>
+    <string name="tts_resume_later">Αργότερα</string>
     <string name="tts_no_text">Δεν υπάρχει αναγνώσιμο κείμενο σε αυτή τη σελίδα</string>
     <string name="tts_waiting_for_page">Αναμονή για την επόμενη σελίδα</string>
     <string name="tts_engine_unavailable">Η μηχανή μετατροπής κειμένου σε ομιλία δεν είναι διαθέσιμη</string>

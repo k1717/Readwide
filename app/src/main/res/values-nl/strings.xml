@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">Continue TTS gestart</string>
     <string name="tts_stopped">TTS gestopt</string>
     <string name="tts_finished">TTS voltooid</string>
+    <string name="tts_resume_title">Voorlezen hervatten?</string>
+    <string name="tts_resume_continue">Doorgaan</string>
+    <string name="tts_resume_later">Later</string>
     <string name="tts_no_text">Geen leesbare tekst op deze pagina</string>
     <string name="tts_waiting_for_page">Wachten op de volgende pagina</string>
     <string name="tts_engine_unavailable">De tekst-naar-spraak-engine is niet beschikbaar</string>

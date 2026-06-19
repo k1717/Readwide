@@ -20,6 +20,7 @@ import androidx.core.graphics.drawable.DrawableCompat;
 import androidx.core.view.GravityCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
 
+import com.readwide.manager.model.FileListItem;
 import com.readwide.manager.util.FileTypeFilter;
 
 import java.io.File;
@@ -481,9 +482,11 @@ final class MainSearchFilterController {
         }
 
         boolean allStorage = shouldSearchAllStorage();
-        if (query.isEmpty()
-                && activity.activeFileFilter == MainActivity.FILTER_ALL
-                && (!allStorage || activity.homeMode)) {
+        // Empty text with the ALL filter must never reach startFileSearch(): an
+        // empty needle matches every file, so the list would fill up instead of
+        // clearing. Leave search and restore the underlying view for every scope
+        // (in place for a current-folder search, else the pre-search location).
+        if (query.isEmpty() && activity.activeFileFilter == MainActivity.FILTER_ALL) {
             activity.fileSearchGeneration.incrementAndGet();
             updateFileSearchClearButtonVisibility();
             if (activity.searchMode && !allStorage && activity.currentDirectory != null) {
@@ -514,6 +517,9 @@ final class MainSearchFilterController {
     }
 
     void showCurrentFolderFilterResults(@Nullable File dir) {
+        // A fresh filtered render (filter tap, subfolder step, or re-show) means
+        // any pending "next Back drops the filter" state no longer applies.
+        activity.filterSearchTermJustCleared = false;
         if (dir == null || !dir.exists() || !dir.isDirectory() || !dir.canRead()) {
             startFileSearch("", false);
             return;
@@ -529,7 +535,7 @@ final class MainSearchFilterController {
         setFileSearchLoading(true);
         updateFileSearchClearButtonVisibility();
 
-        activity.fileSearchExecutor.execute(() -> {
+        activity.submitFileSearchTask(() -> {
             List<File> results = new ArrayList<>();
             File[] children = dir.listFiles();
             if (children != null) {
@@ -538,12 +544,16 @@ final class MainSearchFilterController {
                     if (child == null) continue;
                     String name = child.getName();
                     if (!showHidden && name.startsWith(".")) continue;
-                    if (child.isDirectory() || (child.isFile() && FileTypeFilter.matches(name, filter))) {
+                    boolean isDir = child.isDirectory();
+                    boolean isFile = !isDir && child.isFile();
+                    if (isDir || (isFile && FileTypeFilter.matches(name, filter))) {
                         results.add(child);
                     }
                 }
             }
-            com.readwide.manager.util.FileSortUtils.sortMainFiles(activity, results, sortMode);
+            if (!com.readwide.manager.util.FileSortUtils.sortMainFilesCancellable(activity, results, sortMode)) return;
+            final java.util.List<FileListItem> items = toPlainItems(results, generation);
+            if (items == null) return;
 
             activity.runOnUiThread(() -> {
                 if (activity.activityDestroyed || generation != activity.fileSearchGeneration.get()) return;
@@ -564,7 +574,7 @@ final class MainSearchFilterController {
                 }
                 activity.fileAdapter.setShowFilePath(false);
                 activity.fileAdapter.setSortModeSilently(sortMode);
-                activity.fileAdapter.setFilesFastPresorted(results);
+                activity.fileAdapter.setItemsFastPresorted(items);
                 activity.scrollListToTop(activity.fileRecyclerView);
                 activity.emptyText.setVisibility(results.isEmpty() ? View.VISIBLE : View.GONE);
                 if (results.isEmpty()) activity.emptyText.setText(activity.getString(R.string.no_file_search_results));
@@ -579,9 +589,22 @@ final class MainSearchFilterController {
     void restorePreSearchLocation() {
         activity.fileSearchGeneration.incrementAndGet();
         setFileSearchLoading(false);
-        activity.searchMode = false;
+        // Intentionally do NOT clear searchMode here. showBrowseMode()/
+        // showHomeMode() below clear it *after* their own folder-state save, which
+        // is guarded by searchMode. Clearing it now would let that save cache the
+        // current search-result list as the destination folder's browse snapshot,
+        // so reopening the folder would show stale search hits, not its real files.
         activity.activeFileFilter = MainActivity.FILTER_ALL;
         activity.fileTypeFilterActivatedDirectory = null;
+        // Resetting the search must also empty the search box. Leaving the typed
+        // word behind (Back exiting search, an empty-query reset) desyncs the box
+        // from the now-cleared search state. setText("") schedules a debounced
+        // live search, so cancel it right after: we have already left search here.
+        if (activity.fileSearchInput != null && activity.fileSearchInput.length() > 0) {
+            activity.fileSearchInput.setText("");
+        }
+        clearSearchDebounce();
+        updateFileSearchClearButtonVisibility();
         updateFileTypeChips();
 
         File target = activity.searchReturnDirectory;
@@ -596,7 +619,25 @@ final class MainSearchFilterController {
         }
     }
 
+    void clearSearchQueryKeepingFilter() {
+        // Back over a filtered search: empty the search box but keep the active
+        // type filter and re-show its results (the current folder's matching
+        // files, or the all-storage type browse). runLiveFileSearchNow() renders
+        // that filter-only view; arm the flag AFTER it, since the render path
+        // clears the flag, so the next Back drops the filter to ALL in place.
+        if (activity.fileSearchInput != null && activity.fileSearchInput.length() > 0) {
+            activity.fileSearchInput.setText("");
+        }
+        clearSearchDebounce();
+        updateFileSearchClearButtonVisibility();
+        runLiveFileSearchNow();
+        activity.filterSearchTermJustCleared = true;
+    }
+
     private void startFileSearch(@NonNull String query, boolean allStorage) {
+        // A fresh search / all-storage type browse supersedes any pending
+        // "next Back drops the filter" state from a previous term-clear.
+        activity.filterSearchTermJustCleared = false;
         activity.cancelPendingFolderLoad();
         final int generation = activity.fileSearchGeneration.incrementAndGet();
         setFileSearchLoading(true);
@@ -606,35 +647,115 @@ final class MainSearchFilterController {
         updateFileSearchClearButtonVisibility();
 
         List<File> roots = searchRoots.build(allStorage);
+        activity.fileAdapter.setSearchRoots(roots);
+        captureSearchRootLabels(roots);
         final int filter = activity.activeFileFilter;
         final int sortMode = activity.prefs != null
                 ? activity.prefs.getSortMode()
                 : com.readwide.manager.util.PrefsManager.SORT_NAME_ASC;
         prepareFileSearchResultsView(query);
-        activity.fileSearchExecutor.execute(() -> {
+        activity.submitFileSearchTask(() -> {
             if (activity.activityDestroyed || generation != activity.fileSearchGeneration.get()) return;
             List<File> results = new ArrayList<>();
             boolean showHidden = activity.prefs == null || activity.prefs.getShowHiddenFiles();
             searchWalker.search(query, roots, filter, showHidden, generation, results);
             if (activity.activityDestroyed || generation != activity.fileSearchGeneration.get()) return;
 
-            com.readwide.manager.util.FileSortUtils.sortMainFiles(activity, results, sortMode);
+            if (!com.readwide.manager.util.FileSortUtils.sortMainFilesCancellable(activity, results, sortMode)) return;
+            final java.util.List<FileListItem> items = toSearchItems(results, generation);
+            if (items == null) return;
             activity.runOnUiThread(() -> {
                 if (activity.activityDestroyed || generation != activity.fileSearchGeneration.get()) return;
                 setFileSearchLoading(false);
-                showFileSearchResults(query, results, true);
+                showFileSearchResults(query, items, true);
             });
         });
     }
 
+    // Canonical search roots for the in-flight search, captured on the UI thread
+    // when the search starts and read on the search background thread when
+    // building result items. Volatile because the walker thread reads them after
+    // startFileSearch publishes them.
+    private volatile java.util.List<String> searchRootCanonicalPaths = java.util.Collections.emptyList();
+    private volatile boolean searchRootsSpanMultiple = false;
+
+    private void captureSearchRootLabels(@NonNull List<File> roots) {
+        java.util.List<String> canonical = new java.util.ArrayList<>(roots.size());
+        for (File r : roots) {
+            if (r == null) continue;
+            try {
+                canonical.add(r.getCanonicalFile().getAbsolutePath());
+            } catch (Exception e) {
+                canonical.add(r.getAbsolutePath());
+            }
+        }
+        searchRootCanonicalPaths = canonical;
+        searchRootsSpanMultiple = canonical.size() > 1;
+    }
+
+    /**
+     * Builds search-result items off the UI thread, precomputing each row's
+     * location label (parent folder relative to the search root) so the adapter
+     * does no canonical-path resolution while binding/scrolling search rows.
+     */
+    private java.util.List<FileListItem> toSearchItems(@NonNull List<File> files, int generation) {
+        java.util.List<String> roots = searchRootCanonicalPaths;
+        boolean spans = searchRootsSpanMultiple;
+        java.util.List<FileListItem> out = new java.util.ArrayList<>(files.size());
+        for (int i = 0; i < files.size(); i++) {
+            // Building items stats each file and resolves a canonical parent path, so a
+            // superseded search abandons the rest of the list instead of finishing it
+            // behind the newer search. Returns null; the caller then bails.
+            if ((i & 0x3FF) == 0
+                    && (Thread.currentThread().isInterrupted()
+                        || generation != activity.fileSearchGeneration.get())) {
+                return null;
+            }
+            File f = files.get(i);
+            if (f == null) continue;
+            out.add(FileListItem.withLocation(f,
+                    com.readwide.manager.adapter.FileAdapter.computeLocationLabel(f, roots, spans)));
+        }
+        return out;
+    }
+
+    // Like toSearchItems but without location labels (the current-folder filter shows
+    // no path) and generation-aware, so a superseded filter abandons the per-file stat
+    // work instead of finishing the whole list behind the newer search. Returns null
+    // when superseded; the caller then bails.
+    private java.util.List<FileListItem> toPlainItems(@NonNull List<File> files, int generation) {
+        java.util.List<FileListItem> out = new java.util.ArrayList<>(files.size());
+        for (int i = 0; i < files.size(); i++) {
+            if ((i & 0x3FF) == 0
+                    && (Thread.currentThread().isInterrupted()
+                        || generation != activity.fileSearchGeneration.get())) {
+                return null;
+            }
+            File f = files.get(i);
+            if (f != null) out.add(FileListItem.from(f));
+        }
+        return out;
+    }
+
     private void handleSearchProgress(@NonNull String query,
                                       int generation,
-                                      @NonNull List<File> snapshot) {
+                                      @NonNull List<File> delta) {
+        // Build the row items here on the search (background) thread so the UI
+        // thread never stats files or resolves canonical parent paths when the
+        // incremental results are appended.
+        final java.util.List<FileListItem> deltaItems = toSearchItems(delta, generation);
+        if (deltaItems == null) return;
         activity.runOnUiThread(() -> {
             if (activity.activityDestroyed
                     || generation != activity.fileSearchGeneration.get()
                     || !activity.searchMode) return;
-            showFileSearchResults(query, snapshot, false);
+            if (activity.fileAdapter == null) return;
+            activity.fileAdapter.setShowFilePath(true);
+            activity.fileAdapter.appendItemsPresorted(deltaItems);
+            int shown = activity.fileAdapter.getItemCountInternal();
+            activity.pathText.setText(activity.getString(R.string.file_search_results_for,
+                    query.isEmpty() ? filterLabelFor(activity.activeFileFilter) : query, shown));
+            if (shown > 0) activity.emptyText.setVisibility(View.GONE);
         });
     }
 
@@ -661,30 +782,32 @@ final class MainSearchFilterController {
         activity.fileAdapter.setSortModeSilently(activity.prefs != null
                 ? activity.prefs.getSortMode()
                 : com.readwide.manager.util.PrefsManager.SORT_NAME_ASC);
-        activity.fileAdapter.setFilesFastPresorted(new ArrayList<>());
+        activity.fileAdapter.setItemsFastPresorted(new ArrayList<>());
         if (activity.emptyText != null) {
-            activity.emptyText.setVisibility(View.VISIBLE);
-            activity.emptyText.setText(activity.getString(R.string.loading));
+            // The search spinner (fileSearchProgress) is the single loading
+            // indicator; don't also show a "loading" message in the list area.
+            activity.emptyText.setVisibility(View.GONE);
         }
         activity.updateMainOverflowButtonVisibility();
         activity.invalidateOptionsMenu();
     }
 
     private void showFileSearchResults(@NonNull String query,
-                                       @NonNull List<File> results,
+                                       @NonNull List<FileListItem> items,
                                        boolean finalResult) {
         if (!activity.searchMode) prepareFileSearchResultsView(query);
         activity.pathText.setText(activity.getString(R.string.file_search_results_for,
                 query.isEmpty() ? filterLabelFor(activity.activeFileFilter) : query,
-                results.size()));
+                items.size()));
         activity.fileAdapter.setShowFilePath(true);
-        activity.fileAdapter.setFilesFastPresorted(results);
+        activity.fileAdapter.setItemsFastPresorted(items);
         if (finalResult) activity.scrollListToTop(activity.fileRecyclerView);
-        activity.emptyText.setVisibility(results.isEmpty() ? View.VISIBLE : View.GONE);
-        if (results.isEmpty()) {
-            activity.emptyText.setText(activity.getString(finalResult
-                    ? R.string.no_file_search_results
-                    : R.string.loading));
+        // Only show the empty-state message once results are final; while the
+        // search is still running the spinner is the single loading indicator.
+        boolean showEmptyMessage = finalResult && items.isEmpty();
+        activity.emptyText.setVisibility(showEmptyMessage ? View.VISIBLE : View.GONE);
+        if (showEmptyMessage) {
+            activity.emptyText.setText(activity.getString(R.string.no_file_search_results));
         }
         updateFileSearchClearButtonVisibility();
         activity.updateMainOverflowButtonVisibility();

@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">เริ่ม TTS ต่อเนื่องแล้ว</string>
     <string name="tts_stopped">หยุด TTS แล้ว</string>
     <string name="tts_finished">TTS เสร็จแล้ว</string>
+    <string name="tts_resume_title">อ่านออกเสียงต่อหรือไม่?</string>
+    <string name="tts_resume_continue">อ่านต่อ</string>
+    <string name="tts_resume_later">ภายหลัง</string>
     <string name="tts_no_text">ไม่มีข้อความที่อ่านได้ในหน้านี้</string>
     <string name="tts_waiting_for_page">กำลังรอหน้าถัดไป</string>
     <string name="tts_engine_unavailable">เครื่องอ่านข้อความเป็นเสียงใช้ไม่ได้</string>

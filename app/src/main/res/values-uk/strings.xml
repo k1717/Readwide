@@ -576,6 +576,9 @@
     <string name="tts_continuous_started">Безперервний TTS запущено</string>
     <string name="tts_stopped">TTS зупинено</string>
     <string name="tts_finished">TTS завершено</string>
+    <string name="tts_resume_title">Продовжити озвучення?</string>
+    <string name="tts_resume_continue">Продовжити</string>
+    <string name="tts_resume_later">Пізніше</string>
     <string name="tts_no_text">На цій сторінці немає тексту для читання</string>
     <string name="tts_waiting_for_page">Очікування наступної сторінки</string>
     <string name="tts_engine_unavailable">Механізм озвучення тексту недоступний</string>

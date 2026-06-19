@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">Synthèse vocale continue démarrée</string>
     <string name="tts_stopped">Synthèse vocale arrêtée</string>
     <string name="tts_finished">Synthèse vocale terminée</string>
+    <string name="tts_resume_title">Reprendre la lecture à voix haute ?</string>
+    <string name="tts_resume_continue">Continuer</string>
+    <string name="tts_resume_later">Plus tard</string>
     <string name="tts_no_text">Aucun texte lisible sur cette page</string>
     <string name="tts_waiting_for_page">En attente de la page suivante</string>
     <string name="tts_engine_unavailable">Le moteur de synthèse vocale n’est pas disponible</string>

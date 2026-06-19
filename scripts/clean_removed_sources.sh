@@ -3,7 +3,8 @@ set -euo pipefail
 # Deletes stale files that may remain when a new Readwide ZIP is extracted over an older working tree.
 # Run from the repository root.
 for p in \
-  "app/src/main/java/com/readwide/manager/archive/RarJunrarFallback.java"
+  "app/src/main/java/com/readwide/manager/archive/RarJunrarFallback.java" \
+  "app/src/main/java/com/readwide/manager/archive/Rar3PpmdEngineFixtureProbe.java"
 do
   if [ -e "$p" ]; then
     rm -f "$p"

@@ -54,9 +54,11 @@ Opening a file inside an archive may temporarily extract that selected entry int
 
 ## Opening or sharing files with other apps
 
-Some file types that Readwide does not render internally, such as video files, may be handed to another app through Android's normal open-with / viewer intent flow. Sharing also uses Android's normal user-triggered share flow.
+Some file types that Readwide does not render internally, such as video and audio files, may be handed to another app through Android's normal open-with / viewer intent flow. Sharing also uses Android's normal user-triggered share flow.
 
 For these flows, Readwide grants the chosen external app temporary read access to the selected file URI through Android `FileProvider`. Readwide does not upload the file itself. The receiving app decides what it does with the file after the user chooses it.
+
+Readwide also intentionally accepts inbound open requests: it registers an exported `ACTION_VIEW` intent filter, including the `BROWSABLE` category, so a document can be opened in Readwide from a browser, messenger, file manager, or document provider. When a file is opened this way through a `content://` URI, Readwide copies it into an app-private cache (`opened_files`) before rendering. That copy applies display-name sanitization, a canonical-path containment check so the cached file cannot escape the cache directory, a per-file copy limit of 2 GB, and cache pruning before and after the copy (the just-opened file is preserved so a legitimate large document can still be read). The source file is read locally; nothing is uploaded.
 
 ## APK installation behavior
 
@@ -70,7 +72,7 @@ The separate **Edit Actual TXT File** action is user-triggered and can write cha
 
 ## Bookmark/settings export and import
 
-Backup/export uses JSON. The exported JSON can include file paths, file names, reading positions, bookmark labels, excerpts, app settings, layout settings, display rules, and custom reading themes. Treat exported backup files as user data.
+Backup/export uses JSON. The exported JSON can include file paths, file names, reading positions, bookmark labels, excerpts, app settings, layout settings, display rules, and custom reading themes. Treat exported backup files as user data. Backup import accepts JSON files up to 256 MB, which is generous for large reading-history and bookmark exports; oversized input is rejected rather than partially imported.
 
 Lock PIN data is intentionally excluded from the plain JSON backup. New PIN values are stored as salted PBKDF2 verifier strings rather than as a plain PIN. Legacy plain-PIN preferences from older installs are migrated to the verifier format after the first successful PIN verification. The optional PIN lock is still only an app-level convenience lock and is not a substitute for Android device encryption, lock-screen security, or secure storage of sensitive documents.
 

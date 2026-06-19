@@ -570,6 +570,9 @@ Kurallar: %2$d etkin kural</string>
     <string name="tts_continuous_started">Sürekli TTS başladı</string>
     <string name="tts_stopped">TTS durduruldu</string>
     <string name="tts_finished">TTS bitti</string>
+    <string name="tts_resume_title">Sesli okumaya devam edilsin mi?</string>
+    <string name="tts_resume_continue">Devam et</string>
+    <string name="tts_resume_later">Daha sonra</string>
     <string name="tts_no_text">Bu sayfada okunabilir metin yok</string>
     <string name="tts_waiting_for_page">Sonraki sayfa bekleniyor</string>
     <string name="tts_engine_unavailable">Metinden konuşmaya motoru kullanılamıyor</string>

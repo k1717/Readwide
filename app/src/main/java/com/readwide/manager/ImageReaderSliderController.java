@@ -42,6 +42,11 @@ final class ImageReaderSliderController {
         sliderBar.setOrientation(LinearLayout.VERTICAL);
         sliderBar.setGravity(Gravity.CENTER);
         sliderBar.setBackgroundColor(Color.argb(210, 0, 0, 0));
+        // Consume taps that land on the bar (outside the seek thumb) so they do not
+        // fall through to the image view behind it and page the sequence. The image
+        // view now extends under this bar (its bottom strip is padding, not a
+        // margin); when the bar is hidden it is GONE and those taps reach the image.
+        sliderBar.setClickable(true);
         applySystemInsets(0, 0, 0);
 
         imageSliderLabel = new TextView(activity);
@@ -58,9 +63,13 @@ final class ImageReaderSliderController {
         imageSlider.setMax(Math.max(0, itemCount - 1));
         tintImageSlider(imageSlider);
         applySliderLayoutDirection();
-        sliderBar.addView(imageSlider, new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams sliderLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                activity.dpToPx(38)));
+                activity.dpToPx(38));
+        // Pull the slider up toward the page-count label so the gap between them is
+        // tighter (the seek bar reserves empty vertical space above its thumb).
+        sliderLp.topMargin = -activity.dpToPx(6);
+        sliderBar.addView(imageSlider, sliderLp);
         imageSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 if (fromUser) updateLabel(progressToIndex(progress, imageSlider.getMax() + 1), imageSlider.getMax() + 1);

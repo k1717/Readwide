@@ -1,4 +1,4 @@
-# GitHub upload notes for Readwide 1.0.5
+# GitHub upload notes for Readwide 1.0.6
 
 Use this checklist before publishing the public GitHub source and release assets.
 
@@ -6,12 +6,12 @@ Use this checklist before publishing the public GitHub source and release assets
 
 - App name: Readwide
 - Android `applicationId`: `com.readwide.manager`
-- `versionName`: `1.0.5`
-- `versionCode`: `10005`
+- `versionName`: `1.0.6`
+- `versionCode`: `10006`
 - First-party license: Apache-2.0
 - Repository: `https://github.com/k1717/Readwide`
 
-Since 1.0.4 the `applicationId` is `com.readwide.manager`, and 1.0.5 is an in-place update over 1.0.4 when signed with the same key. Earlier TextView Reader/Readwide builds used a different application ID and install as a separate app; existing users transfer data with the in-app JSON backup export/import.
+The `applicationId` has been `com.readwide.manager` since 1.0.4. 1.0.6 is signed with a new release key, so it does not install over an existing 1.0.4/1.0.5 (which used the previous key); uninstall the old version, install 1.0.6, and transfer data with the in-app JSON backup export/import. Older `com.textview.reader` builds also install as a separate app and migrate the same way.
 
 ## Files expected in the source release
 
@@ -27,9 +27,9 @@ Keep these files in the public source package:
 - `CONTRIBUTING.md`
 - `docs/FOSS_STATUS.md`
 - `docs/FDROID_SUBMISSION.md`
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_5.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_5.md`
-- `docs/SBOM_READWIDE_1_0_5.spdx.json`
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_6.md`
+- `docs/LICENSE_REPORT_READWIDE_1_0_6.md`
+- `docs/SBOM_READWIDE_1_0_6.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `docs/TXT_SEARCH_USAGE.md`
@@ -57,7 +57,7 @@ Do not commit or attach private release materials:
 Check the default source package:
 
 ```bash
-grep -RIn "C:\\Users\|/Users/\|/home/.*Downloads\|TEXTVIEW_KEYSTORE_PASSWORD\|BEGIN PRIVATE KEY" . \
+grep -RIn "C:\\Users\|/Users/\|/home/.*Downloads\|TEXTVIEW_KEYSTORE_PASSWORD\|READWIDE_KEYSTORE_PASSWORD\|BEGIN PRIVATE KEY" . \
   --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle
 
 find . -type f \( -name "*.jks" -o -name "*.keystore" -o -name "*.p12" -o -name "*.apk" -o -name "*.aab" \)
@@ -101,8 +101,8 @@ Avoid:
 
 Before opening an F-Droid Data merge request:
 
-1. Tag the exact release commit, e.g. `v1.0.5`.
-2. Confirm `fdroid/metadata/com.readwide.manager.yml` points to the immutable `v1.0.5` release tag, or replace it with the exact commit hash if the F-Droid reviewer requests a hash.
+1. Tag the exact release commit, e.g. `v1.0.6`.
+2. Confirm `fdroid/metadata/com.readwide.manager.yml` points to the immutable `v1.0.6` release tag, or replace it with the exact commit hash if the F-Droid reviewer requests a hash.
 3. Confirm release builds work without private signing environment variables.
 4. Confirm no optional local jars are present under `app/libs`.
 5. Keep broad-storage and no-network privacy rationale in the merge request.

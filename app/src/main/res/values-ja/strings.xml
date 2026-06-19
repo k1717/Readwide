@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">連続読み上げを開始しました</string>
     <string name="tts_stopped">読み上げを停止しました</string>
     <string name="tts_finished">読み上げが完了しました</string>
+    <string name="tts_resume_title">読み上げを再開しますか？</string>
+    <string name="tts_resume_continue">続ける</string>
+    <string name="tts_resume_later">後で</string>
     <string name="tts_no_text">このページに読み上げ可能なテキストがありません</string>
     <string name="tts_waiting_for_page">次のページを待機中</string>
     <string name="tts_engine_unavailable">読み上げエンジンが利用できません</string>

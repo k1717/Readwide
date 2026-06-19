@@ -1,5 +1,97 @@
 # Patch Notes
 
+## Readwide 1.0.6 - 2026-06-19
+
+### Release scope
+
+- Android metadata is `versionCode 10006` and `versionName "1.0.6"`.
+- Keeps the `com.readwide.manager` applicationId from 1.0.4 but changes the release signing key, so 1.0.6 does not install over an existing 1.0.4/1.0.5 (which used the previous key); uninstall the old version first, then migrate via the in-app JSON backup export/import.
+- This release centers on file-list performance, reading-progress for image archives, per-type file icons, folder auto-refresh, image-viewer paging smoothness, text-to-speech refinements, and several browsing fixes.
+
+### Final changes included in this release
+
+**Performance — file listing and sorting**
+
+- Folder listing and sorting no longer issue a MediaStore (ContentResolver) query per file or per scrolled row. Date sorting previously queried MediaStore for each image/video, and each visible row queried again while scrolling, which was slow in large media folders.
+- Folders now sort and display immediately using filesystem timestamps (the newer of last-modified and creation time). When a date sort is active, a background pass batches MediaStore date lookups and re-sorts only if the order actually changes; folder loads and non-date sorts do no MediaStore work at all.
+- Large folders such as Downloads open noticeably faster as a result, with the same set of files shown.
+
+**Performance — file search**
+
+- Removed the 5,000-item cap on file search. The search walk now streams results into the list incrementally (only the new items per step), then applies the final sorted order when the walk finishes, so very large result sets are no longer truncated.
+
+**Performance — image and PDF caches**
+
+- The image viewer now prefetches three pages in each direction instead of two, and its decoded-bitmap cache budget was raised (up to 128 MB, scaled to a fraction of app heap). Rapid continuous paging is less likely to outrun the prefetch window and stall on a decode.
+- The PDF viewer's single-page and continuous-mode bitmap caches were enlarged (cap raised to 96 MB each, still scaled to app heap), for smoother paging and scrolling on large documents.
+
+**Reading progress — image archives**
+
+- Image archives opened in the comic/image viewer (and folder image sequences) now record a reading position and show a progress percent in the recent list, the same as PDF and EPUB. Progress is keyed on the archive so the archive's recent entry gets the badge.
+- Progress is saved with a short debounce as you turn pages (so fast paging does not write to disk every page) and saved immediately when you leave the viewer.
+
+**Files — per-type icons**
+
+- File rows now show a Material icon chosen by type: PDF, EPUB, document (Word/HWP), archive, image, video, audio, app package (APK), or a generic file icon as the fallback. Icons are tinted with the current theme color. Folder icons are unchanged.
+
+**Files — long-name display**
+
+- Long file names now keep their extension and the end of the name visible. When a name does not fit, it is shortened in the middle as "start…<tail><extension>" so the file type and trailing context (for example a resolution or part number) remain readable across two lines. Names that fit are shown in full.
+- The truncation is computed during layout so the final text appears in one pass, without the brief flash that a deferred rewrite produced when re-entering the recent list.
+
+**Files — list layout**
+
+- Reworked the recent/file list row: two-line file names, slightly smaller and tighter secondary text (type, size, date), and more consistent row spacing.
+
+**Files — search result location**
+
+- Search results now display each file's location relative to the searched folder instead of the full absolute path that repeated the search root on every row. A file directly in the searched folder shows no location line at all; a file in a subfolder shows ".../subfolder" so it reads as a path below the searched folder rather than a bare folder name.
+- An all-storage search (which spans multiple roots such as internal storage, Downloads, and SD cards) keeps the matched storage's folder name as a prefix, so results from different storages remain distinguishable. The deepest matching root is used when roots are nested.
+
+**Files — image formats**
+
+- The image filter chip and the image viewer now also recognize `.jfif` (a JPEG container), `.wbmp`, and `.dng`. These were chosen because Android's bitmap decoder can render them, so they both appear under the Image filter and open in the viewer (including when found inside an archive). Formats Android cannot decode by default (such as TIFF and ICO) were intentionally not added.
+
+**Files — recent list**
+
+- The recent list now shows up to 300 recently opened files, so more of your reading history stays visible on the home screen. Entries whose underlying file no longer exists are skipped.
+
+**Files — search and filter loading**
+
+- While a search or file-type filter runs, the file list shows a single loading spinner. The spinner is new in this release; earlier versions showed a "loading" text label, and the spinner now takes its place. The empty-state message appears only once a finished search returns no results.
+
+**Folders — refresh**
+
+- The visible folder is re-read when the app regains window focus, picking up downloads and other external changes that the filesystem watcher can miss on FUSE/MediaStore-routed storage. The re-read keeps scroll position and only happens when the folder's on-disk signature actually changed.
+- Pull down on the file list to refresh the current folder (or re-run the active search) manually.
+
+**Text-to-speech — resume on reopen**
+
+- When a read-aloud session is interrupted — leaving the app, the process being killed in the background, or pausing and navigating away — reopening Readwide shows a prompt on the main screen offering to resume that book. Continuing reopens the file at its saved position, restores the sleep-timer value that was active when playback stopped, and starts reading automatically. "Later" (or dismissing the prompt) clears the saved session, and finishing a book to the end also clears it so it does not prompt again.
+- Resume is page-level: reopening restores the saved reading page and TTS begins from there. Because Android's speech engine has no true mid-sentence pause and the exact paused sentence is not persisted across process death, playback resumes from the start of that page rather than mid-sentence.
+
+**Text-to-speech — speech cleanup**
+
+- Runs of punctuation are no longer read aloud. Ellipses, sequences of two or more periods, and underscores are collapsed to a pause instead of being spoken, and a semicolon is spoken as a short, comma-like pause. Single sentence-ending periods are unaffected.
+
+**Security & stability**
+
+- External open path: files handed to Readwide through `ACTION_VIEW`/`BROWSABLE` (from a browser, messenger, file manager, or document provider) are copied into an app-private `opened_files` cache before rendering. The copy sanitizes the provider-supplied display name, verifies the cached path stays inside the cache directory, keeps each source URI in its own subdirectory, enforces a 2 GB per-file copy limit, and prunes the cache before and after the copy (preserving the just-opened file). A failed, aborted, or over-limit copy deletes its partial file, and provider `query`/`getType` exceptions are caught so a misbehaving provider cannot crash the open.
+- Backup/settings import caps the JSON read at 256 MB and rejects (rather than truncates) anything larger.
+- App lock: launching the lock screen now returns before the home/recent UI is built, so it is not prepared or briefly shown behind the lock; the main UI is set up after a successful unlock.
+- Search and current-folder filtering build their result rows in a generation-aware, cancellable pass and stop promptly when a newer search or folder change supersedes them.
+- Document text entries (EPUB/Word/HWPX), in-document resources, and EPUB chapters each have a read-size cap (32 MB / 64 MB / 32 MB) so a crafted file cannot exhaust memory during rendering.
+
+**Fixes**
+
+- Starting a folder navigation while a file search was still running no longer leaves a stale search screen, stutter, or brief freeze. Navigation now cancels the in-progress search walk cleanly so it stops consuming the search thread.
+- Tapping the navigation drawer's Recent shortcut while a large folder was open no longer delays the drawer from closing. Entering the recent/home view from the drawer now uses the fast state-save path instead of a synchronous folder rescan that could stall the close animation.
+- In fixed-layout EPUBs (including image-based books and comics), a double-tap on the left or right side now turns the page the same way a single side tap does, instead of zooming. Double-tapping the center still zooms, and reflowable EPUBs and other documents are unchanged.
+
+**Internal**
+
+- Background work executors for file search, folder operations, and document loading are guarded so late tasks submitted around viewer teardown do not throw.
+
 ## Readwide 1.0.5 - 2026-06-17
 
 ### Release scope

@@ -3,14 +3,15 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="?attr/selectableItemBackground"
-    android:paddingStart="16dp"
-    android:paddingTop="10dp"
+    android:paddingStart="8dp"
+    android:paddingTop="5dp"
     android:paddingEnd="10dp"
-    android:paddingBottom="10dp">
+    android:paddingBottom="5dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:minHeight="47dp"
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
@@ -18,7 +19,7 @@
             android:id="@+id/file_icon_box"
             android:layout_width="34dp"
             android:layout_height="34dp"
-            android:layout_marginEnd="10dp"
+            android:layout_marginEnd="9dp"
             android:clipChildren="false"
             android:clipToPadding="false">
 
@@ -58,14 +59,15 @@
                 android:clipChildren="true"
                 android:clipToPadding="true">
 
-                <TextView
+                <com.readwide.manager.view.ExtensionEllipsisTextView
                     android:id="@+id/file_name"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:ellipsize="middle"
-                    android:singleLine="true"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:lineSpacingMultiplier="1.05"
                     android:textColor="?attr/colorOnSurface"
-                    android:textSize="15sp" />
+                    android:textSize="12sp" />
 
             </FrameLayout>
 
@@ -73,11 +75,11 @@
                 android:id="@+id/file_info"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
+                android:layout_marginTop="1dp"
                 android:ellipsize="end"
                 android:singleLine="true"
                 android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
 
             <TextView
                 android:id="@+id/file_path"
@@ -93,7 +95,6 @@
         </LinearLayout>
 
     </LinearLayout>
-
 
     <TextView
         android:id="@+id/file_progress"

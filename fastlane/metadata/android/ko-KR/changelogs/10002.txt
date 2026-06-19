@@ -1,10 +1,6 @@
 Readwide 1.0.2
-- 일반 TXT의 정확한 페이지 모델은 유지하면서 Markdown 전용 WebView 리더를 추가했습니다.
-- Apache-2.0 hwplib/hwpxlib 기반의 텍스트 우선 HWP/HWPX 읽기 전용 지원을 추가했습니다.
-- OOXML Word, HWP/HWPX, 인식된 legacy DOC 파일을 짧은 Word 필터 아래에 묶었습니다. legacy DOC 렌더링은 아직 지원하지 않습니다.
-- Markdown, EPUB, Word, HWP/HWPX, PDF 북마크 표시를 본문/텍스트 앵커와 별도 페이지/위치 메타데이터 구조로 통일했습니다.
-- TXT 페이징은 바꾸지 않고 WebView 문서 chrome, compact page label, 하단 툴바 모양, slider 동작, Markdown CSS 격리, Android navigation inset 처리를 정리했습니다.
-- 7z/CB7 split/password 처리, decoded-stream 제한, single-entry 추출 실패 cleanup, solid member drain safety를 보강했습니다.
-- RAR/CBR 지원은 문서화된 무암호 단일 볼륨 decode-only 범위로 제한하며, 완전 RAR/암호화 RAR/광범위 split RAR 지원으로 표현하지 않습니다.
-- 프로젝트 제공 Readwide 런처 아이콘 원본 기준 파일을 갱신했고, 체크인된 Android 런처 PNG 리소스는 그대로 유지했습니다.
-- GitHub/F-Droid용 문서, 개인정보 안내, 서드파티 고지, 라이선스 리포트, SBOM 초안, 릴리스 체크리스트를 1.0.2 기준으로 갱신했습니다.
+- 일반 TXT 페이지 모델은 유지하면서 Markdown 전용 WebView 리더를 추가했습니다.
+- Apache-2.0 hwplib/hwpxlib 기반 텍스트 우선 HWP/HWPX 읽기 전용 지원을 추가하고, Word·인식된 legacy DOC와 함께 Word 필터로 묶었습니다(legacy DOC 렌더링은 미지원).
+- Markdown, EPUB, Word, HWP/HWPX, PDF 북마크를 본문 앵커와 별도 페이지/위치 메타데이터 구조로 통일했습니다.
+- TXT 페이징은 그대로 두고 WebView 문서 chrome를 정리했습니다.
+- 7z/CB7 split/password 처리를 보강하고, RAR/CBR은 무암호 단일 볼륨 decode-only 범위로 제한했습니다.

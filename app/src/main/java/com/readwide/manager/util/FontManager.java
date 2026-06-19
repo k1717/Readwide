@@ -446,7 +446,7 @@ public class FontManager {
                     fontCache.put(path, tf);
                     return tf;
                 } catch (Exception e) {
-                    Log.e(TAG, "Failed to load font: " + path, e);
+                    Log.e(TAG, "Failed to load font: " + new File(path).getName(), e);
                     return Typeface.DEFAULT;
                 }
         }

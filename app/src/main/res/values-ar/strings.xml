@@ -564,6 +564,9 @@
     <string name="tts_continuous_started">تم بدء TTS المستمر</string>
     <string name="tts_stopped">تم إيقاف TTS</string>
     <string name="tts_finished">اكتمل TTS</string>
+    <string name="tts_resume_title">متابعة القراءة الصوتية؟</string>
+    <string name="tts_resume_continue">متابعة</string>
+    <string name="tts_resume_later">لاحقًا</string>
     <string name="tts_no_text">لا يوجد نص قابل للقراءة في هذه الصفحة</string>
     <string name="tts_waiting_for_page">في انتظار الصفحة التالية</string>
     <string name="tts_engine_unavailable">محرك تحويل النص إلى كلام غير متاح</string>
