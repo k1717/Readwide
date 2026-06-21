@@ -1,7 +1,3 @@
-# Draft metadata for an F-Droid Data merge request.
-# Copy this file to fdroiddata/metadata/com.readwide.manager.yml after
-# creating and pushing the immutable v1.0.7 Git tag.
-
 Categories:
   - Reading
 License: Apache-2.0
@@ -10,11 +6,13 @@ AuthorEmail: readwide.kj7w5@addy.io
 SourceCode: https://github.com/k1717/Readwide
 IssueTracker: https://github.com/k1717/Readwide/issues
 Changelog: https://github.com/k1717/Readwide/blob/main/CHANGELOG.md
+
+AutoName: Readwide
 Summary: Local-first reader and file browser
 Description: |-
   Readwide is a local-first Android reader and file browser for TXT,
-  Markdown, PDF, EPUB, Word-family documents, images, comic archives, and
-  common archive workflows.
+  Markdown, PDF, EPUB, DOCX/Word-compatible documents, images, comic archives,
+  and common archive workflows.
 
   It supports local reading, recent files, bookmarks, folder shortcuts,
   search/filtering, shared reader search options, archive browsing,
@@ -45,8 +43,10 @@ Description: |-
   The F-Droid build is signed by F-Droid and does not update over GitHub release
   APKs. When switching channels, export a JSON backup first, install the target
   build fresh, then import the backup.
+
 RepoType: git
 Repo: https://github.com/k1717/Readwide.git
+
 Builds:
   - versionName: '1.0.7'
     versionCode: 10007
@@ -54,9 +54,10 @@ Builds:
     rm:
       - gradle/wrapper/gradle-wrapper.jar
     gradle:
-      - 'yes'
+      - yes
     prebuild:
       - chmod +x gradlew scripts/clean_removed_sources.sh scripts/generate_rar_fixture_reports.sh scripts/generate_archive_fixture_reports.sh
+
 AutoUpdateMode: Version v%v
 UpdateCheckMode: Tags
 CurrentVersion: '1.0.7'
