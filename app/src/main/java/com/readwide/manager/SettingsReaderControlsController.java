@@ -298,6 +298,7 @@ final class SettingsReaderControlsController {
         bindTapZoneModeSpinner();
         setupTapZoneRatioControl();
         bindPagingOverlapSpinner();
+        bindTextAlignmentSpinner();
     }
 
     private void bindSwitch(int switchId, boolean checked, @NonNull BooleanSetter setter) {
@@ -322,6 +323,25 @@ final class SettingsReaderControlsController {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 styleSpinnerText(view);
                 prefs.setPageStatusAlignment(position);
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+    }
+
+    private void bindTextAlignmentSpinner() {
+        Spinner spinner = activity.findViewById(R.id.spinner_text_alignment);
+        if (spinner == null) return;
+        String[] choices = {
+                activity.getString(R.string.page_status_align_left),
+                activity.getString(R.string.page_status_align_center),
+                activity.getString(R.string.page_status_align_right)
+        };
+        spinner.setAdapter(makeSettingsSpinnerAdapter(choices));
+        spinner.setSelection(prefs.getTextAlignment());
+        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                styleSpinnerText(view);
+                prefs.setTextAlignment(position);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });

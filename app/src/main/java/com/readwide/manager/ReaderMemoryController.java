@@ -44,7 +44,7 @@ final class ReaderMemoryController {
         if (activity.activityDestroyed || activity.backgroundTextMemoryReleased || activity.filePath == null || activity.readerView == null) return;
         if (!force && !activity.isFinishing() && !activity.isChangingConfigurations() && activity.hasWindowFocus()) return;
 
-        int currentPosition = Math.max(0, activity.getCurrentCharPosition());
+        int currentPosition = Math.max(0, activity.getBookmarkSaveCharPosition());
         int currentDisplayPage = Math.max(1, activity.getDisplayedCurrentPageNumber());
         int currentTotalPages = Math.max(1, activity.getDisplayedTotalPageCount());
         String anchorBefore = activity.getAnchorTextBefore(currentPosition);
@@ -73,6 +73,10 @@ final class ReaderMemoryController {
         activity.invalidateLargeTextExactPageIndexBuild();
         activity.largeTextSearchGeneration.incrementAndGet();
         activity.largeTextSearchCountGeneration.incrementAndGet();
+        // Snapshot the blank-line collapse policy for this load so background partition
+        // reads use one consistent value instead of re-reading the live preference.
+        activity.largeTextActiveCollapseBlankLines =
+                activity.prefs != null && activity.prefs.isCollapseBlankLinesEnabled();
         activity.handler.removeCallbacks(activity.largeTextRestartIndexingRunnable);
         activity.handler.removeCallbacks(activity.largeTextManualScrollBoundaryHandoffRunnable);
         activity.clearPendingToolbarSeekJump();
@@ -159,14 +163,18 @@ final class ReaderMemoryController {
     void saveReadingState() {
         if (activity.filePath != null && activity.prefs.getAutoSavePosition()) {
             ReaderState state = new ReaderState(activity.filePath);
-            state.setCharPosition(activity.getCurrentCharPosition());
+            int savePosition = activity.getBookmarkSaveCharPosition();
+            state.setCharPosition(savePosition);
             state.setScrollY(activity.readerView != null ? activity.readerView.getReaderScrollY() : 0);
             state.setPageNumber(activity.getDisplayedCurrentPageNumber());
             state.setTotalPages(activity.getDisplayedTotalPageCount());
+            state.setAnchorTextBefore(activity.getAnchorTextBefore(savePosition));
+            state.setAnchorTextAfter(activity.getAnchorTextAfter(savePosition));
             if (activity.filePath != null) {
                 File f = new File(activity.filePath);
                 if (f.exists()) state.setFileLength(f.length());
             }
+            state.setPresentationSignature(activity.readerPageLayoutSignatureForPath(activity.filePath));
             activity.bookmarkManager.saveReadingState(state);
         }
     }

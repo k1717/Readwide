@@ -1,4 +1,4 @@
-# F-Droid submission notes for Readwide 1.0.6
+# F-Droid submission notes for Readwide 1.0.7
 
 This document records the project-side preparation for an F-Droid Data merge request.
 
@@ -6,8 +6,8 @@ This document records the project-side preparation for an F-Droid Data merge req
 
 - App name: Readwide
 - Android application ID: `com.readwide.manager`
-- Version name: `1.0.6`
-- Version code: `10006`
+- Version name: `1.0.7`
+- Version code: `10007`
 - First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
@@ -30,10 +30,10 @@ metadata/com.readwide.manager.yml
 Create and push the immutable release tag before opening the merge request:
 
 ```text
-v1.0.6
+v1.0.7
 ```
 
-The draft metadata uses `commit: v1.0.6`. Confirm that this tag points to the audited source tree before copying `fdroid/metadata/com.readwide.manager.yml` into fdroiddata.
+The draft metadata's current build uses `commit: v1.0.7`. Confirm that this tag points to the audited source tree before copying `fdroid/metadata/com.readwide.manager.yml` into fdroiddata.
 
 ## F-Droid-facing baseline
 
@@ -88,7 +88,7 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These provide title, short description, full description, and versionCode `10006` changelog text.
+These provide title, short description, full description, and versionCode `10007` changelog text.
 
 ## Conservative support wording for review
 
@@ -105,8 +105,8 @@ Use conservative wording in the merge request:
 - `PRIVACY.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_6.md`
-- `docs/SBOM_READWIDE_1_0_6.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_7.md`
+- `docs/SBOM_READWIDE_1_0_7.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `fdroid/metadata/com.readwide.manager.yml`
@@ -123,6 +123,6 @@ All bundled native components are permissive/FOSS-compatible, and no copyleft ob
 ## Remaining submitter tasks
 
 - Confirm a clean network-enabled Gradle build from the tagged source.
-- Confirm the draft metadata points to the immutable `v1.0.6` tag or to an equivalent exact commit hash requested by the reviewer.
+- Confirm the draft metadata points to the immutable `v1.0.7` tag or to an equivalent exact commit hash requested by the reviewer.
 - Confirm no optional local jars are present in `app/libs`.
 - Confirm native dependency notices for `libarchive-android` / libarchive and `zstd-jni` / Zstandard are included with binary release materials if APK assets are published outside F-Droid.

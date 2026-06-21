@@ -717,4 +717,12 @@
     <string name="tts_resume">Retomar</string>
     <string name="tts_floating_drag">Arraste para mover</string>
     <string name="delete_selected_includes_folders_warning">%1$d destes são pastas — todo o conteúdo delas também será excluído.</string>
+    <string name="collapse_blank_lines">Unir linhas em branco repetidas</string>
+    <string name="collapse_blank_lines_description">Apenas exibição: mostra qualquer sequência de duas ou mais linhas em branco como uma única linha em branco. O arquivo original não é alterado. Aplica-se a todos os arquivos de texto abertos no leitor (TXT, log, CSV e similares).</string>
+    <string name="more_section_display">Exibição e estilo</string>
+    <string name="more_section_text">Processamento de texto</string>
+    <string name="more_section_tools">Ferramentas e informações</string>
+    <string name="text_alignment">Alinhamento do texto</string>
+    <string name="settings_appearance_title">Configurações de exibição</string>
+    <string name="settings_open_view_settings">Configurações de exibição (tema, fonte, layout)</string>
 </resources>

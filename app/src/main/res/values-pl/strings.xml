@@ -729,4 +729,12 @@ Reguły: %2$d włączonych reguł</string>
     <string name="tts_resume">Wznów</string>
     <string name="tts_floating_drag">Przeciągnij, aby przenieść</string>
     <string name="delete_selected_includes_folders_warning">%1$d z nich to foldery — cała ich zawartość również zostanie usunięta.</string>
+    <string name="collapse_blank_lines">Scal powtarzające się puste wiersze</string>
+    <string name="collapse_blank_lines_description">Tylko wyświetlanie: pokazuje każdą sekwencję dwóch lub więcej pustych wierszy jako jeden pusty wiersz. Oryginalny plik nie jest zmieniany. Dotyczy wszystkich plików tekstowych otwieranych w czytniku (TXT, log, CSV i podobnych).</string>
+    <string name="more_section_display">Wyświetlanie i styl</string>
+    <string name="more_section_text">Przetwarzanie tekstu</string>
+    <string name="more_section_tools">Narzędzia i informacje</string>
+    <string name="text_alignment">Wyrównanie tekstu</string>
+    <string name="settings_appearance_title">Ustawienia wyświetlania</string>
+    <string name="settings_open_view_settings">Ustawienia wyświetlania (motyw, czcionka, układ)</string>
 </resources>

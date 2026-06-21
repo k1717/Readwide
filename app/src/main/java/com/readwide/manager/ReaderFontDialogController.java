@@ -529,7 +529,7 @@ final class ReaderFontDialogController {
         header.setClipToPadding(true);
 
         TextView title = activity.dialogStyler().makeReaderFontDialogTitle(
-                localizedText("All system fonts", "전체 시스템 글꼴"),
+                localizedText("Add font", "글꼴 추가"),
                 bg,
                 fg);
         title.setBackgroundColor(Color.TRANSPARENT);
@@ -541,8 +541,8 @@ final class ReaderFontDialogController {
 
         TextView hint = activity.dialogStyler().makeReaderDialogLabel(
                 localizedText(
-                        "Select a font found from Android/system font folders.",
-                        "Android/시스템 글꼴 폴더에서 찾은 글꼴을 선택합니다."),
+                        "Pick a .ttf/.otf font file, or choose a font found on your device.",
+                        "기기의 .ttf/.otf 글꼴 파일을 선택하거나, 기기에서 찾은 글꼴을 고르세요."),
                 sub,
                 12f);
         hint.setGravity(Gravity.CENTER);
@@ -593,6 +593,15 @@ final class ReaderFontDialogController {
         preserveFontDialogHeaderBarrier(panel, scrollClip);
 
         String currentFont = normalizeReadingFontValue(activity.prefs.getFontFamily());
+
+        TextView importRow = activity.dialogStyler().makeReaderFontActionRow(
+                localizedText("Add a font file (.ttf/.otf)", "폰트 파일 추가 (.ttf/.otf)"), fg, false);
+        importRow.setOnClickListener(v -> {
+            dialog.dismiss();
+            activity.launchReadingFontImport();
+        });
+        list.addView(importRow);
+
         if (fontNames.isEmpty()) {
             TextView empty = activity.dialogStyler().makeReaderDialogLabel(
                     localizedText("No readable system fonts found.", "읽을 수 있는 시스템 글꼴을 찾지 못했습니다."),

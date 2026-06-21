@@ -92,8 +92,8 @@ final class ReaderFileApplyController {
                                        String loadedFilePath,
                                        String loadedFileName) {
         activity.filePath = loadedFilePath;
-        activity.appliedTextDisplayRuleSignature = TextDisplayRuleManager.getSignature(
-                activity.getApplicationContext(), activity.filePath);
+        activity.appliedTextDisplayRuleSignature =
+                activity.textContentTransformSignatureForPath(activity.filePath);
         activity.fileName = loadedFileName != null
                 ? loadedFileName
                 : activity.getString(R.string.app_name);
@@ -202,12 +202,29 @@ final class ReaderFileApplyController {
         if (activity.activityDestroyed) return;
 
         int restorePosition = resolveInitialRestorePosition(jumpPosition);
+        String resumeAnchorBefore = jumpAnchorBefore;
+        String resumeAnchorAfter = jumpAnchorAfter;
+        // Auto-resume opens carry no explicit anchor. Fall back to the anchor saved with
+        // the reading state so the position is recovered by passage text when the saved
+        // char offset has drifted (collapse toggle, encoding, on-disk edit). The matcher
+        // prefers the occurrence nearest the saved offset and falls back to it when the
+        // anchor is missing, so this never moves an otherwise-exact restore.
+        if (jumpPosition < 0
+                && (resumeAnchorBefore == null || resumeAnchorBefore.isEmpty())
+                && (resumeAnchorAfter == null || resumeAnchorAfter.isEmpty())
+                && activity.prefs.getAutoSavePosition() && activity.filePath != null) {
+            ReaderState resumeState = activity.bookmarkManager.getReadingState(activity.filePath);
+            if (resumeState != null) {
+                resumeAnchorBefore = resumeState.getAnchorTextBefore();
+                resumeAnchorAfter = resumeState.getAnchorTextAfter();
+            }
+        }
         if (restorePosition >= 0 && !restoreLargeTextPreviewPosition(
                 restorePosition,
                 cachedDisplayPage,
                 cachedTotalPages,
-                jumpAnchorBefore,
-                jumpAnchorAfter)) {
+                resumeAnchorBefore,
+                resumeAnchorAfter)) {
             return;
         }
 
@@ -309,7 +326,12 @@ final class ReaderFileApplyController {
             activity.scrollToCharPosition(preservePosition);
         } else if (activity.prefs.getAutoSavePosition()) {
             ReaderState state = activity.bookmarkManager.getReadingState(activity.filePath);
-            if (state != null) activity.scrollToCharPosition(state.getCharPosition());
+            if (state != null) {
+                int resumePosition = activity.resolveAnchoredAbsolutePosition(
+                        activity.fileContent, 0, state.getCharPosition(),
+                        state.getAnchorTextBefore(), state.getAnchorTextAfter());
+                activity.scrollToCharPosition(resumePosition);
+            }
         }
         activity.updatePositionLabel();
         activity.readerView.setAlpha(1f);

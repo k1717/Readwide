@@ -30,16 +30,19 @@ final class ReaderSearchController {
 
     int getCachedLargeTextSearchTotal(@NonNull String query) {
         if (!activity.largeTextEstimateActive || activity.filePath == null || query == null || query.isEmpty()) return -1;
-        return activity.largeTextSearchTotalCache.get(activity.filePath, activity.loadGeneration.get(), query);
+        return activity.largeTextSearchTotalCache.get(activity.filePath, activity.loadGeneration.get(), query,
+                activity.currentSearchOptions().signature());
     }
 
-    void rememberLargeTextSearchTotal(@NonNull String query, int total) {
+    void rememberLargeTextSearchTotal(@NonNull String query, @NonNull String optionsSignature, int total) {
         if (!activity.largeTextEstimateActive || activity.filePath == null || query == null || query.isEmpty() || total < 0) return;
-        activity.largeTextSearchTotalCache.remember(activity.filePath, activity.loadGeneration.get(), query, total);
+        activity.largeTextSearchTotalCache.remember(activity.filePath, activity.loadGeneration.get(), query, optionsSignature, total);
     }
 
     void clearLargeTextSearchTotalCache() {
         activity.largeTextSearchTotalCache.clear();
+        // Invalidate any in-flight count so it cannot repopulate the cleared cache with a stale total.
+        activity.largeTextSearchCountGeneration.incrementAndGet();
     }
 
     void applySearchHighlight() {
@@ -52,7 +55,7 @@ final class ReaderSearchController {
                 highlightIndex = -1;
             }
         }
-        activity.readerView.setSearchHighlight(activity.activeSearchQuery, highlightIndex);
+        activity.readerView.setSearchHighlight(activity.activeSearchQuery, highlightIndex, activity.currentSearchOptions());
     }
 
     void updateLargeTextSearchStatus(@Nullable TextView matchStatus,
@@ -74,18 +77,26 @@ final class ReaderSearchController {
 
         final String expectedPath = activity.filePath;
         final int generation = activity.loadGeneration.get();
-        if (activity.largeTextSearchTotalCache.isInFlight(expectedPath, query, generation)) {
+        final com.readwide.manager.util.SearchOptions countOptions = activity.currentSearchOptions();
+        final String optionsSignature = countOptions.signature();
+        if (activity.largeTextSearchTotalCache.isInFlight(expectedPath, query, generation, optionsSignature)) {
             return;
         }
 
         final int countGeneration = activity.largeTextSearchCountGeneration.incrementAndGet();
-        activity.largeTextSearchTotalCache.markInFlight(expectedPath, query, generation);
+        activity.largeTextSearchTotalCache.markInFlight(expectedPath, query, generation, optionsSignature);
 
         activity.largeTextSearchCountExecutor.execute(() -> {
             int total = -1;
             String error = null;
             try {
-                total = activity.largeTextSearchEngine.countMatches(new File(expectedPath), query, activity.currentSearchOptions());
+                total = activity.largeTextSearchEngine.countMatches(new File(expectedPath), query, countOptions,
+                        activity.largeTextActiveCollapseBlankLines,
+                        () -> activity.activityDestroyed
+                                || generation != activity.loadGeneration.get()
+                                || expectedPath == null
+                                || !expectedPath.equals(activity.filePath)
+                                || countGeneration != activity.largeTextSearchCountGeneration.get());
             } catch (IOException | RuntimeException t) {
                 error = t.getClass().getSimpleName();
             }
@@ -93,7 +104,7 @@ final class ReaderSearchController {
             final int finalTotal = total;
             final String finalError = error;
             activity.handler.post(() -> {
-                activity.largeTextSearchTotalCache.clearInFlightIf(expectedPath, query, generation);
+                activity.largeTextSearchTotalCache.clearInFlightIf(expectedPath, query, generation, optionsSignature);
 
                 if (activity.activityDestroyed
                         || generation != activity.loadGeneration.get()
@@ -107,7 +118,7 @@ final class ReaderSearchController {
                     return;
                 }
 
-                rememberLargeTextSearchTotal(query, finalTotal);
+                rememberLargeTextSearchTotal(query, optionsSignature, finalTotal);
                 updateLargeTextSearchStatus(matchStatus, activity.activeSearchOrdinal, finalTotal);
             });
         });
@@ -211,6 +222,8 @@ final class ReaderSearchController {
         final String expectedPath = activity.filePath;
         final int generation = activity.loadGeneration.get();
         final int searchGeneration = activity.largeTextSearchGeneration.incrementAndGet();
+        final com.readwide.manager.util.SearchOptions searchOptions = activity.currentSearchOptions();
+        final String optionsSignature = searchOptions.signature();
         final int startPosition;
         if (activity.activeSearchIndex >= 0) {
             startPosition = forward
@@ -235,9 +248,15 @@ final class ReaderSearchController {
             String error = null;
             try {
                 File searchFile = new File(expectedPath);
+                final com.readwide.manager.search.LargeTextSearchEngine.CancelSignal cancelSignal =
+                        () -> activity.activityDestroyed
+                                || generation != activity.loadGeneration.get()
+                                || expectedPath == null
+                                || !expectedPath.equals(activity.filePath)
+                                || searchGeneration != activity.largeTextSearchGeneration.get();
                 result = targetOccurrence > 0
-                        ? activity.largeTextSearchEngine.search(searchFile, query, startPosition, forward, targetOccurrence, activity.currentSearchOptions())
-                        : activity.largeTextSearchEngine.searchNearest(searchFile, query, startPosition, forward, activity.currentSearchOptions());
+                        ? activity.largeTextSearchEngine.search(searchFile, query, startPosition, forward, targetOccurrence, searchOptions, activity.largeTextActiveCollapseBlankLines, cancelSignal)
+                        : activity.largeTextSearchEngine.searchNearest(searchFile, query, startPosition, forward, searchOptions, activity.largeTextActiveCollapseBlankLines, cancelSignal);
             } catch (Throwable t) {
                 result = new LargeTextSearchResult(-1, 1, 0, 0);
                 error = t.getClass().getSimpleName();
@@ -261,7 +280,7 @@ final class ReaderSearchController {
                 }
 
                 if (finalResult.totalKnown()) {
-                    rememberLargeTextSearchTotal(query, finalResult.total);
+                    rememberLargeTextSearchTotal(query, optionsSignature, finalResult.total);
                 }
 
                 if (!finalResult.found()) {
@@ -329,9 +348,9 @@ final class ReaderSearchController {
 
     void performTextSearchMove(String rawQuery, boolean forward, TextView matchStatus, int targetOccurrence) {
         if (targetOccurrence == 0) return;
-        String query = rawQuery == null ? "" : rawQuery.trim();
+        String query = rawQuery == null ? "" : rawQuery;
 
-        if (query.isEmpty()) {
+        if (query.trim().isEmpty()) {
             if (activity.prefs != null) activity.prefs.setLastReaderSearchQuery("");
             resetActiveSearchState();
             if (matchStatus != null) matchStatus.setText("0 / 0");

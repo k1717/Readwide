@@ -77,7 +77,22 @@ final class ReaderBookmarkPageModelController {
         int total = Math.max(1, anchors.size());
         for (Bookmark bookmark : currentBookmarks) {
             if (bookmark == null) continue;
-            int page = activity.findExactLargeTextPageForChar(anchors, bookmark.getCharPosition());
+            int rawPosition = bookmark.getCharPosition();
+            int positionForPage = rawPosition;
+            // For bookmarks whose anchor lives in the currently loaded partition body, correct
+            // any coordinate drift (for example after a collapse toggle) by resolving the stored
+            // anchor text against fileContent. Bookmarks outside this partition keep their raw
+            // position: their anchor text is not loaded, so an anchored resolve would only clamp
+            // to a partition edge and store a misleading page.
+            if (activity.isAbsoluteCharPositionInCurrentLargeTextBody(rawPosition)) {
+                positionForPage = activity.resolveAnchoredAbsolutePosition(
+                        activity.fileContent,
+                        activity.largeTextPreviewBaseCharOffset,
+                        rawPosition,
+                        bookmark.getAnchorTextBefore(),
+                        bookmark.getAnchorTextAfter());
+            }
+            int page = activity.findExactLargeTextPageForChar(anchors, positionForPage);
             if (updateBookmarkPageModelFieldsIfChanged(bookmark, page, total, currentSignature)) {
                 changed.add(bookmark);
             }

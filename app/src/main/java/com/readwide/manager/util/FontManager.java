@@ -60,6 +60,8 @@ public class FontManager {
     };
 
     private static final String[] FONT_EXTENSIONS = {".ttf", ".otf", ".ttc"};
+    private static final long MAX_FONT_BYTES = 64L * 1024 * 1024; // reject runaway content-stream copies (large CJK/TTC still fit)
+    private static final int MAX_FONT_FILE_NAME_BYTES = 240; // bound the sanitized font filename in UTF-8 bytes to avoid ENAMETOOLONG (filesystem NAME_MAX is byte-based, ~255)
     private static final int MAX_FONT_SCAN_DEPTH = 8;
     private static final int MAX_FONT_SCAN_FILES_PER_ROOT = 2000;
 
@@ -512,14 +514,39 @@ public class FontManager {
      * Copy a font file to the app's internal font directory.
      */
     public synchronized String importFont(Context context, File sourceFile) {
+        if (context == null || sourceFile == null) return null;
         File fontDir = new File(context.getFilesDir(), "fonts");
-        if (!fontDir.exists()) fontDir.mkdirs();
+        if (!fontDir.exists() && !fontDir.mkdirs()) {
+            Log.e(TAG, "Failed to create font directory");
+            return null;
+        }
 
-        File destFile = new File(fontDir, sourceFile.getName());
+        String safeName = safeFontFileName(sourceFile.getName());
+        File destFile = uniqueFontDestination(fontDir, safeName);
+        // Keep the copied file strictly inside the app font directory.
         try {
-            java.nio.file.Files.copy(sourceFile.toPath(), destFile.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            // Verify and register
+            String dirCanonical = fontDir.getCanonicalPath();
+            String destCanonical = destFile.getCanonicalPath();
+            if (!destCanonical.equals(dirCanonical)
+                    && !destCanonical.startsWith(dirCanonical + File.separator)) {
+                return null;
+            }
+        } catch (Exception e) {
+            return null;
+        }
+        boolean copied = false;
+        try (java.io.FileInputStream in = new java.io.FileInputStream(sourceFile)) {
+            copyBounded(in, destFile, MAX_FONT_BYTES);
+            copied = true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to import font", e);
+        }
+        if (!copied) {
+            deleteQuietly(destFile);
+            return null;
+        }
+
+        try {
             Typeface tf = Typeface.createFromFile(destFile);
             if (tf != null) {
                 String displayName = destFile.getName();
@@ -534,8 +561,232 @@ public class FontManager {
                 return displayName;
             }
         } catch (Exception e) {
-            Log.e(TAG, "Failed to import font", e);
+            Log.e(TAG, "Imported file is not a usable font", e);
         }
+        deleteQuietly(destFile);
         return null;
+    }
+
+    /**
+     * Import a font file selected through SAF/DocumentsUI (a content:// Uri) into
+     * the app internal font directory. The display name is derived from the
+     * document display name and sanitized to a safe .ttf/.otf/.ttc filename. The
+     * font is verified with Typeface before it is registered; an unreadable file is
+     * deleted and null is returned.
+     */
+    public synchronized String importFont(Context context, android.net.Uri uri) {
+        if (context == null || uri == null) return null;
+
+        String requestedName = queryFontDisplayName(context, uri);
+        String safeName = safeFontFileName(requestedName);
+
+        File fontDir = new File(context.getFilesDir(), "fonts");
+        if (!fontDir.exists() && !fontDir.mkdirs()) {
+            Log.e(TAG, "Failed to create font directory");
+            return null;
+        }
+
+        File destFile = uniqueFontDestination(fontDir, safeName);
+        // Keep the copied file strictly inside the app font directory.
+        try {
+            String dirCanonical = fontDir.getCanonicalPath();
+            String destCanonical = destFile.getCanonicalPath();
+            if (!destCanonical.equals(dirCanonical)
+                    && !destCanonical.startsWith(dirCanonical + File.separator)) {
+                return null;
+            }
+        } catch (Exception e) {
+            return null;
+        }
+
+        boolean copied = false;
+        try (java.io.InputStream in = context.getContentResolver().openInputStream(uri)) {
+            if (in == null) return null;
+            copyBounded(in, destFile, MAX_FONT_BYTES);
+            copied = true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to copy imported font", e);
+        }
+        if (!copied) {
+            deleteQuietly(destFile);
+            return null;
+        }
+
+        try {
+            Typeface tf = Typeface.createFromFile(destFile);
+            if (tf != null) {
+                String displayName = destFile.getName();
+                int dotIdx = displayName.lastIndexOf('.');
+                if (dotIdx > 0) displayName = displayName.substring(0, dotIdx);
+                displayName = displayName.replace('-', ' ').replace('_', ' ').trim();
+                if (displayName.isEmpty()) displayName = "Imported font";
+                fontPaths.put(displayName, destFile.getAbsolutePath());
+                fontCache.put(destFile.getAbsolutePath(), tf);
+                if (!userFontNames.contains(displayName)) {
+                    userFontNames.add(displayName);
+                }
+                return displayName;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Imported file is not a usable font", e);
+        }
+
+        // Not a valid/readable font: do not keep the copied file around.
+        deleteQuietly(destFile);
+        return null;
+    }
+
+    private String queryFontDisplayName(Context context, android.net.Uri uri) {
+        String name = null;
+        if ("content".equalsIgnoreCase(uri.getScheme())) {
+            try (android.database.Cursor cursor = context.getContentResolver().query(
+                    uri, new String[] {android.provider.OpenableColumns.DISPLAY_NAME},
+                    null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    int idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                    if (idx >= 0) name = cursor.getString(idx);
+                }
+            } catch (Exception ignored) {
+                // Fall back to the path segment below.
+            }
+        }
+        if (name == null || name.trim().isEmpty()) {
+            name = uri.getLastPathSegment();
+        }
+        return name;
+    }
+
+    /**
+     * Reduce an untrusted document name to a safe font filename that stays inside
+     * the app font directory. Strips path separators and control characters,
+     * collapses parent-directory tokens, and guarantees a .ttf/.otf/.ttc extension.
+     */
+    private String safeFontFileName(String rawName) {
+        String name = rawName != null ? rawName.trim() : "";
+
+        // Keep only the final path component.
+        int slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
+        if (slash >= 0 && slash + 1 <= name.length()) {
+            name = name.substring(slash + 1);
+        }
+        StringBuilder sb = new StringBuilder(name.length());
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (c == '/' || c == '\\' || c == 0) continue;
+            if (c < 0x20) continue;
+            sb.append(c);
+        }
+        name = sb.toString().replace("..", "").trim();
+
+        String lower = name.toLowerCase(java.util.Locale.US);
+        boolean hasFontExt = false;
+        for (String ext : FONT_EXTENSIONS) {
+            if (lower.endsWith(ext)) {
+                hasFontExt = true;
+                break;
+            }
+        }
+        if (name.isEmpty()) {
+            name = "imported_font_" + System.currentTimeMillis() + ".ttf";
+        } else if (!hasFontExt) {
+            name = name + ".ttf";
+        }
+        if (utf8Length(name) > MAX_FONT_FILE_NAME_BYTES) {
+            String ext = ".ttf";
+            String lowerName = name.toLowerCase(java.util.Locale.US);
+            for (String e : FONT_EXTENSIONS) {
+                if (lowerName.endsWith(e)) {
+                    ext = e;
+                    break;
+                }
+            }
+            String base = name.substring(0, name.length() - ext.length());
+            int maxBaseBytes = Math.max(1, MAX_FONT_FILE_NAME_BYTES - utf8Length(ext));
+            base = truncateToUtf8(base, maxBaseBytes);
+            name = base + ext;
+        }
+        return name;
+    }
+
+    /** UTF-8 encoded byte length of a string. */
+    private static int utf8Length(String s) {
+        return s.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+    }
+
+    /**
+     * Truncate to at most maxBytes UTF-8 bytes without splitting a multi-byte
+     * character, so a long non-ASCII name (for example Korean, 3 bytes per glyph)
+     * cannot exceed the filesystem byte limit for a single path component.
+     */
+    private static String truncateToUtf8(String s, int maxBytes) {
+        if (s == null || maxBytes <= 0) return "";
+        if (utf8Length(s) <= maxBytes) return s;
+        int bytes = 0;
+        int i = 0;
+        while (i < s.length()) {
+            int cp = s.codePointAt(i);
+            int cpLen = cp <= 0x7F ? 1 : cp <= 0x7FF ? 2 : cp <= 0xFFFF ? 3 : 4;
+            if (bytes + cpLen > maxBytes) break;
+            bytes += cpLen;
+            i += Character.charCount(cp);
+        }
+        return s.substring(0, i);
+    }
+
+    /**
+     * Copy a stream into the destination file with a hard byte ceiling. Replaces
+     * java.nio.file.Files.copy (which requires API 26) so font import works on the
+     * minSdk 24 baseline, and bounds untrusted content provider streams.
+     */
+    // Package-private so the byte cap can be exercised directly from a unit test.
+    static void copyBounded(java.io.InputStream in, File destFile, long maxBytes)
+            throws java.io.IOException {
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(destFile)) {
+            byte[] buffer = new byte[8192];
+            long total = 0L;
+            int n;
+            while ((n = in.read(buffer)) != -1) {
+                total += n;
+                if (total > maxBytes) {
+                    throw new java.io.IOException("Font file exceeds size limit");
+                }
+                out.write(buffer, 0, n);
+            }
+            out.flush();
+        }
+    }
+
+    /**
+     * Pick a destination that does not clobber an existing font of the same name,
+     * appending a numeric suffix before the extension when needed.
+     */
+    // Package-private so the collision-suffix byte cap can be exercised from a unit test.
+    File uniqueFontDestination(File fontDir, String safeName) {
+        File file = new File(fontDir, safeName);
+        if (!file.exists()) return file;
+
+        int dot = safeName.lastIndexOf('.');
+        String base = dot > 0 ? safeName.substring(0, dot) : safeName;
+        String ext = dot > 0 ? safeName.substring(dot) : ".ttf";
+        for (int i = 2; i < 1000; i++) {
+            String suffix = " (" + i + ")";
+            // Re-truncate the base so the collision-resolved name still fits the byte cap.
+            int maxBaseBytes = Math.max(1, MAX_FONT_FILE_NAME_BYTES - utf8Length(suffix) - utf8Length(ext));
+            File candidate = new File(fontDir, truncateToUtf8(base, maxBaseBytes) + suffix + ext);
+            if (!candidate.exists()) return candidate;
+        }
+        String timestampSuffix = "_" + System.currentTimeMillis();
+        int maxFallbackBaseBytes = Math.max(1, MAX_FONT_FILE_NAME_BYTES - utf8Length(timestampSuffix) - utf8Length(ext));
+        return new File(fontDir, truncateToUtf8(base, maxFallbackBaseBytes) + timestampSuffix + ext);
+    }
+
+    private void deleteQuietly(File file) {
+        try {
+            if (file != null && file.exists()) {
+                file.delete();
+            }
+        } catch (Exception ignored) {
+            // Best-effort cleanup only.
+        }
     }
 }

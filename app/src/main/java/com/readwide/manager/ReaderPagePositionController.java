@@ -96,14 +96,14 @@ final class ReaderPagePositionController {
     void setPageLabels(int currentPage, int totalPages) {
         totalPages = Math.max(1, totalPages);
         currentPage = Math.max(1, Math.min(totalPages, currentPage));
-        String totalText = (activity.largeTextEstimateActive
+        boolean estimating = activity.largeTextEstimateActive
                 && !activity.isLargeTextExactPageIndexReady()
-                && activity.largeTextEstimatedTotalPages > 0)
-                ? "~" + totalPages
-                : String.valueOf(totalPages);
+                && activity.largeTextEstimatedTotalPages > 0;
+        String totalText = estimating ? "~" + totalPages : String.valueOf(totalPages);
+        String currentText = estimating ? "~" + currentPage : String.valueOf(currentPage);
         int lineOffset = activity.getLineOffsetWithinDisplayedPage(currentPage, totalPages);
         String text = activity.formatPageMoveLabel(
-                currentPage,
+                currentText,
                 totalText,
                 Math.max(1, lineOffset));
         if (activity.positionLabel != null) activity.positionLabel.setText(text);

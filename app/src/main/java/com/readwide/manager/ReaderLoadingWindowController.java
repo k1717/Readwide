@@ -13,7 +13,10 @@ import androidx.annotation.NonNull;
  * the same visual behavior.
  */
 final class ReaderLoadingWindowController {
+    private static final long PARTITION_JUMP_LOADING_DELAY_MS = 150L;
+
     private final ReaderActivity activity;
+    private Runnable pendingPartitionJumpShow;
 
     ReaderLoadingWindowController(@NonNull ReaderActivity activity) {
         this.activity = activity;
@@ -78,12 +81,29 @@ final class ReaderLoadingWindowController {
 
     void showLoadingWindowForPartitionJump(int switchGeneration) {
         activity.loadingWindowPartitionJumpGeneration = switchGeneration;
-        showLoadingWindow();
+        // Defer the overlay briefly so fast or cached partition switches - the
+        // common case when stepping through search results across partitions -
+        // finish without flashing a full-screen loading window. Only genuinely
+        // slow loads keep the switch pending past the delay and show it.
+        if (pendingPartitionJumpShow != null) {
+            activity.handler.removeCallbacks(pendingPartitionJumpShow);
+        }
+        pendingPartitionJumpShow = () -> {
+            if (!activity.activityDestroyed
+                    && activity.loadingWindowPartitionJumpGeneration == switchGeneration) {
+                showLoadingWindow();
+            }
+        };
+        activity.handler.postDelayed(pendingPartitionJumpShow, PARTITION_JUMP_LOADING_DELAY_MS);
     }
 
     void hideLoadingWindowForPartitionJumpIfCurrent(boolean shouldHide, int switchGeneration) {
         if (!shouldHide) return;
         if (activity.loadingWindowPartitionJumpGeneration == switchGeneration) {
+            if (pendingPartitionJumpShow != null) {
+                activity.handler.removeCallbacks(pendingPartitionJumpShow);
+                pendingPartitionJumpShow = null;
+            }
             hideLoadingWindow();
         }
     }

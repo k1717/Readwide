@@ -24,12 +24,25 @@ final class ReaderLargeTextPartitionReadController {
         return LargeTextPartitionReader.openReader(file, activity.resolveTextEncodingForFile(file));
     }
 
+    int resolveCharPositionForAnchor(@NonNull File file,
+                                     String anchorBefore,
+                                     String anchorAfter) throws IOException {
+        return LargeTextPartitionReader.findCharPositionForAnchor(
+                activity.getApplicationContext(),
+                file,
+                activity.resolveTextEncodingForFile(file),
+                activity.largeTextActiveCollapseBlankLines,
+                anchorBefore,
+                anchorAfter);
+    }
+
     LargeTextLinePartitionResult readForChar(@NonNull File file,
                                              int targetCharPosition) throws IOException {
         return LargeTextPartitionReader.readPartitionForChar(
                 activity.getApplicationContext(),
                 file,
                 activity.resolveTextEncodingForFile(file),
+                activity.largeTextActiveCollapseBlankLines,
                 targetCharPosition,
                 activity.getLargeTextPartitionLines(),
                 activity.getLargeTextPartitionLookaheadLines(),
@@ -42,6 +55,7 @@ final class ReaderLargeTextPartitionReadController {
                 activity.getApplicationContext(),
                 file,
                 activity.resolveTextEncodingForFile(file),
+                activity.largeTextActiveCollapseBlankLines,
                 requestedStartLine,
                 activity.getLargeTextPartitionLines(),
                 activity.getLargeTextPartitionLookaheadLines(),
@@ -57,6 +71,7 @@ final class ReaderLargeTextPartitionReadController {
                 activity.getApplicationContext(),
                 file,
                 activity.resolveTextEncodingForFile(file),
+                activity.largeTextActiveCollapseBlankLines,
                 requestedStartLine,
                 knownTotalLines,
                 knownTotalChars,

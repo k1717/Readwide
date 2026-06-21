@@ -36,11 +36,22 @@ final class ReaderReloadController {
                 .remove(ReaderActivity.KEY_TXT_ACTUAL_FILE_EDIT_LAST_MODIFIED)
                 .apply();
 
-        int currentPosition = Math.max(0, activity.getCurrentCharPosition());
+        int currentPosition = Math.max(0, activity.getBookmarkSaveCharPosition());
+        String anchorBefore = activity.getAnchorTextBefore(currentPosition);
+        String anchorAfter = activity.getAnchorTextAfter(currentPosition);
         Intent reloadIntent = new Intent(activity.getIntent());
         reloadIntent.putExtra(ReaderActivity.EXTRA_FILE_PATH, currentFile.getAbsolutePath());
         reloadIntent.removeExtra(ReaderActivity.EXTRA_FILE_URI);
         reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_TO_POSITION, currentPosition);
+        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION, true);
+        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE);
+        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_BYTE);
+        if (anchorBefore != null && !anchorBefore.isEmpty()) {
+            reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE, anchorBefore);
+        }
+        if (anchorAfter != null && !anchorAfter.isEmpty()) {
+            reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER, anchorAfter);
+        }
         reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_DISPLAY_PAGE, activity.getDisplayedCurrentPageNumber());
         reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_TOTAL_PAGES, activity.getDisplayedTotalPageCount());
         activity.clearLoadedTextSnapshot();
@@ -80,7 +91,7 @@ final class ReaderReloadController {
             return false;
         }
 
-        int currentPosition = Math.max(0, activity.getCurrentCharPosition());
+        int currentPosition = Math.max(0, activity.getBookmarkSaveCharPosition());
         activity.reloadLargeTextPreviewAround(currentPosition, 0, 0, null, null, -1, true);
         // A partition-mode change alters the global page model, not just the
         // visible runtime partition.  Rebuild the full exact page index under
@@ -93,22 +104,51 @@ final class ReaderReloadController {
 
     void maybeReloadForTextDisplayRuleChange() {
         if (activity.filePath == null || activity.filePath.isEmpty() || activity.readerView == null) return;
-        String current = TextDisplayRuleManager.getSignature(activity.getApplicationContext(), activity.filePath);
+        String current = textContentTransformSignatureForPath(activity.filePath);
         if (current.equals(activity.appliedTextDisplayRuleSignature)) return;
-        int currentPosition = Math.max(0, activity.getCurrentCharPosition());
+        int currentPosition = Math.max(0, activity.getBookmarkSaveCharPosition());
+        String anchorBefore = activity.getAnchorTextBefore(currentPosition);
+        String anchorAfter = activity.getAnchorTextAfter(currentPosition);
         Intent reloadIntent = new Intent(activity.getIntent());
         reloadIntent.putExtra(ReaderActivity.EXTRA_FILE_PATH, activity.filePath);
         reloadIntent.removeExtra(ReaderActivity.EXTRA_FILE_URI);
         reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_TO_POSITION, currentPosition);
+        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION, true);
+        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE);
+        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_BYTE);
+        if (anchorBefore != null && !anchorBefore.isEmpty()) {
+            reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE, anchorBefore);
+        }
+        if (anchorAfter != null && !anchorAfter.isEmpty()) {
+            reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER, anchorAfter);
+        }
         reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_DISPLAY_PAGE, activity.getDisplayedCurrentPageNumber());
         reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_TOTAL_PAGES, activity.getDisplayedTotalPageCount());
+        // A blank-line-collapse change (and, to a lesser degree, a display-rule
+        // change) shifts character positions, line numbers, and the large-TXT
+        // page model, so drop the cached exact page index, partition cache, and
+        // search totals before reloading rather than relying only on signature
+        // mismatch to avoid stale reuse.
         activity.clearLoadedTextSnapshot();
+        activity.resetLargeTextExactPageIndex();
+        activity.clearLargeTextPartitionCache();
+        activity.clearLargeTextSearchTotalCache();
+        activity.clearLargeTextQueuedPageDelta();
+        activity.resetLargeTextPageDirectionTracking();
+        activity.pendingLargeTextCachedDisplayPage = 0;
+        activity.pendingLargeTextCachedTotalPages = 0;
         activity.loadFileFromIntent(reloadIntent);
     }
 
+    String textContentTransformSignatureForPath(String path) {
+        if (path == null || path.isEmpty()) return "none";
+        boolean collapse = activity.prefs != null && activity.prefs.isCollapseBlankLinesEnabled();
+        return TextDisplayRuleManager.getSignature(activity.getApplicationContext(), path)
+                + "|collapseBlank=" + collapse;
+    }
+
     String currentTextDisplayRuleSignature() {
-        if (activity.filePath == null || activity.filePath.isEmpty()) return "none";
-        return TextDisplayRuleManager.getSignature(activity.getApplicationContext(), activity.filePath);
+        return textContentTransformSignatureForPath(activity.filePath);
     }
 
     void requestTextDisplayRuleContentRefreshOnWindowClose() {

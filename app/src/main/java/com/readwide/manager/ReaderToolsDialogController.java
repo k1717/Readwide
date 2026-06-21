@@ -67,15 +67,21 @@ final class ReaderToolsDialogController {
 
         final android.app.Dialog[] ref = new android.app.Dialog[1];
 
+        final int sub = activity.dialogStyler().readerDialogSubTextColor(bg);
+
+        addMoreSectionHeader(list, activity.getString(R.string.more_section_display), sub);
         addMoreActionRow(list, activity.getString(R.string.brightness), fg, panel, activity::showBrightnessDialog, ref);
         addMoreActionRow(list, activity.getString(R.string.font), fg, panel, activity::showFontDialog, ref);
-        addMoreActionRow(list, activity.getString(R.string.increase_font), fg, panel, () -> activity.changeFontSize(2f), ref);
-        addMoreActionRow(list, activity.getString(R.string.decrease_font), fg, panel, () -> activity.changeFontSize(-2f), ref);
-        addMoreActionRow(list, activity.getString(R.string.reset_font_size), fg, panel, activity::resetFontSize, ref);
-        addMoreActionRow(list, activity.getString(R.string.tts_title), fg, panel, activity::showTtsDialog, ref);
+        addMoreFontSizeRow(list, fg, panel);
+
+        addMoreSectionHeader(list, activity.getString(R.string.more_section_text), sub);
         addMoreActionRow(list, activity.getString(R.string.txt_display_rule_quick_add), fg, panel, () -> activity.showQuickTextDisplayRuleDialog("", true), ref);
         addMoreActionRow(list, activity.getString(R.string.txt_display_rule_manage), fg, panel, activity::showReaderTextDisplayRulesManagerDialog, ref);
+        addMoreActionRow(list, activity.getString(R.string.txt_display_rules_actual_file), fg, panel, activity::showEditActualTxtFileDialog, ref);
         addMoreActionRow(list, activity.getString(R.string.text_encoding), fg, panel, this::showTextEncodingDialog, ref);
+
+        addMoreSectionHeader(list, activity.getString(R.string.more_section_tools), sub);
+        addMoreActionRow(list, activity.getString(R.string.tts_title), fg, panel, activity::showTtsDialog, ref);
         addMoreActionRow(list, activity.getString(R.string.file_info), fg, panel, activity::showFileInfoDialog, ref);
 
         outer.addView(scroll, new LinearLayout.LayoutParams(
@@ -489,8 +495,8 @@ final class ReaderToolsDialogController {
                 activity.prefs != null && activity.prefs.getReaderSearchRegex());
 
         Runnable recount = () -> {
-            String q = input.getText().toString().trim();
-            if (q.isEmpty()) { matchStatus.setText("0 / 0"); return; }
+            String q = input.getText() != null ? input.getText().toString() : "";
+            if (q.trim().isEmpty()) { matchStatus.setText("0 / 0"); return; }
             if (activity.largeTextEstimateActive) {
                 // The authoritative total for large files comes from the background
                 // scan during the next Find move. Clear the stale cached total so it
@@ -508,14 +514,19 @@ final class ReaderToolsDialogController {
 
         caseBox.setOnCheckedChangeListener((v, checked) -> {
             if (activity.prefs != null) activity.prefs.setReaderSearchCaseSensitive(checked);
+            // Options changed: drop the previous-option active match so the next Find
+            // restarts under the new options instead of resuming from a stale index.
+            activity.resetActiveSearchState();
             recount.run();
         });
         wholeBox.setOnCheckedChangeListener((v, checked) -> {
             if (activity.prefs != null) activity.prefs.setReaderSearchWholeWord(checked);
+            activity.resetActiveSearchState();
             recount.run();
         });
         regexBox.setOnCheckedChangeListener((v, checked) -> {
             if (activity.prefs != null) activity.prefs.setReaderSearchRegex(checked);
+            activity.resetActiveSearchState();
             recount.run();
         });
 
@@ -682,6 +693,61 @@ final class ReaderToolsDialogController {
             action.run();
         });
         list.addView(row);
+    }
+
+    private void addMoreSectionHeader(LinearLayout list, String label, int subColor) {
+        TextView header = new TextView(activity);
+        header.setText(label);
+        header.setTextColor(subColor);
+        header.setTextSize(12f);
+        header.setTypeface(Typeface.DEFAULT_BOLD);
+        header.setGravity(Gravity.CENTER);
+        header.setPadding(activity.dpToPx(6), activity.dpToPx(10), activity.dpToPx(6), activity.dpToPx(4));
+        list.addView(header);
+    }
+
+    // Single compact row replacing the former three separate font-size rows.
+    // The minus and plus cells step the size and keep the dialog open for
+    // repeated taps; the center cell resets. Symbols need no localization.
+    private void addMoreFontSizeRow(LinearLayout list, int fg, int panel) {
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        GradientDrawable rowBg = new GradientDrawable();
+        rowBg.setColor(panel);
+        rowBg.setCornerRadius(activity.dpToPx(10));
+        row.setBackground(rowBg);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, activity.dpToPx(48));
+        lp.setMargins(0, 0, 0, activity.dpToPx(8));
+        row.setLayoutParams(lp);
+
+        TextView decrease = makeFontSizeCell("\u2212", fg);
+        TextView reset = makeFontSizeCell(activity.getString(R.string.reset_font_size), fg);
+        TextView increase = makeFontSizeCell("+", fg);
+
+        row.addView(decrease, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+        row.addView(reset, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 2f));
+        row.addView(increase, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+
+        decrease.setOnClickListener(v -> activity.changeFontSize(-2f));
+        increase.setOnClickListener(v -> activity.changeFontSize(2f));
+        reset.setOnClickListener(v -> activity.resetFontSize());
+
+        list.addView(row);
+    }
+
+    private TextView makeFontSizeCell(String label, int fg) {
+        TextView cell = new TextView(activity);
+        cell.setText(label);
+        cell.setTextColor(fg);
+        cell.setTextSize(16f);
+        cell.setGravity(Gravity.CENTER);
+        cell.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        cell.setPadding(activity.dpToPx(4), 0, activity.dpToPx(4), 0);
+        return cell;
     }
 
     private int parseSearchOccurrenceTarget(EditText occurrenceInput) {

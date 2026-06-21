@@ -256,15 +256,23 @@ final class ReaderActivityStartupController {
                 });
     }
 
+    private int lastLayoutReindexWidth = -1;
+    private int lastLayoutReindexHeight = -1;
+
     private void bindReaderViewCallbacks() {
         activity.readerView.addOnLayoutChangeListener((v, left, top, right, bottom,
                                                        oldLeft, oldTop, oldRight, oldBottom) -> {
             if (!activity.largeTextEstimateActive) return;
-            boolean widthChanged = (right - left) != (oldRight - oldLeft);
-            boolean heightChanged = (bottom - top) != (oldBottom - oldTop);
-            if (widthChanged || heightChanged) {
-                activity.scheduleLargeTextExactPageIndexingRestart();
-            }
+            int width = right - left;
+            int height = bottom - top;
+            // Returning from the home screen or another app reattaches the view and
+            // reports old bounds of 0, which is not a real geometry change. Only
+            // restart indexing when the size actually differs from the last indexed one.
+            if (width <= 0 || height <= 0) return;
+            if (width == lastLayoutReindexWidth && height == lastLayoutReindexHeight) return;
+            lastLayoutReindexWidth = width;
+            lastLayoutReindexHeight = height;
+            activity.scheduleLargeTextExactPageIndexingRestart();
         });
         activity.readerView.setReaderListener(new CustomReaderView.ReaderListener() {
             @Override public void onSingleTap(float x, float y) {

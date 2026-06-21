@@ -35,6 +35,8 @@ import android.widget.Space;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
@@ -222,6 +224,12 @@ public class DocumentPageActivity extends AppCompatActivity {
     private boolean wordGestureStartedAtRightEdge = true;
     volatile boolean wordSelectionActive = false;
     volatile boolean activityDestroyed = false;
+
+    // SAF picker for importing a custom .ttf/.otf font into the document font list.
+    // The result Uri is handled by importDocumentFontFromUri.
+    private final ActivityResultLauncher<String[]> documentFontImportLauncher =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(),
+                    uri -> { if (uri != null) importDocumentFontFromUri(uri); });
     int loadGeneration = 0;
     File selectedDocumentFontFile = null;
     boolean epubHasDocumentFont = false;
@@ -1524,6 +1532,45 @@ public class DocumentPageActivity extends AppCompatActivity {
 
     private void showDocumentFontDialog() {
         documentFontController().showDocumentFontDialog();
+    }
+
+    void launchDocumentFontImport() {
+        try {
+            documentFontImportLauncher.launch(new String[] {
+                    "font/ttf", "font/otf", "font/sfnt",
+                    "application/x-font-ttf", "application/x-font-otf",
+                    "application/font-sfnt", "application/vnd.ms-opentype",
+                    "application/octet-stream"
+            });
+        } catch (Exception e) {
+            ShortToast.show(this, localizedText(
+                    "Could not open the file picker.",
+                    "파일 선택기를 열 수 없습니다."));
+        }
+    }
+
+    private void importDocumentFontFromUri(Uri uri) {
+        ShortToast.show(this, localizedText("Importing font\u2026", "글꼴 가져오는 중\u2026"));
+        submitDocumentTask(() -> {
+            String imported;
+            try {
+                imported = FontManager.getInstance().importFont(this, uri);
+            } catch (Throwable t) {
+                imported = null;
+            }
+            final String result = imported;
+            runOnUiThread(() -> {
+                if (activityDestroyed) return;
+                if (result != null && !result.trim().isEmpty()) {
+                    documentFontController().applyImportedDocumentFont(result);
+                    ShortToast.show(this, localizedText("Font added", "글꼴을 추가했습니다"));
+                } else {
+                    ShortToast.show(this, localizedText(
+                            "Could not import the font file.",
+                            "글꼴 파일을 가져오지 못했습니다."));
+                }
+            });
+        });
     }
 
     private String buildDocumentFontCss() {

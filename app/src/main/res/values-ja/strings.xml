@@ -717,4 +717,12 @@
     <string name="tts_resume">再開</string>
     <string name="tts_floating_drag">ドラッグして移動</string>
     <string name="delete_selected_includes_folders_warning">このうち %1$d 個はフォルダです。フォルダ内のすべての内容も削除されます。</string>
+    <string name="collapse_blank_lines">連続する空行をまとめる</string>
+    <string name="collapse_blank_lines_description">表示のみ: 2行以上連続する空行を1行の空行として表示します。元のファイルは変更されません。リーダーで開くすべてのテキストファイル（TXT、ログ、CSV など）に適用されます。</string>
+    <string name="more_section_display">表示とスタイル</string>
+    <string name="more_section_text">テキスト処理</string>
+    <string name="more_section_tools">ツールと情報</string>
+    <string name="text_alignment">テキストの配置</string>
+    <string name="settings_appearance_title">表示設定</string>
+    <string name="settings_open_view_settings">表示設定（テーマ、フォント、レイアウト）</string>
 </resources>

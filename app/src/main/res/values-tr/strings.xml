@@ -723,4 +723,12 @@ Kurallar: %2$d etkin kural</string>
     <string name="tts_resume">Sürdür</string>
     <string name="tts_floating_drag">Taşımak için sürükleyin</string>
     <string name="delete_selected_includes_folders_warning">Bunlardan %1$d tanesi klasör — içindeki tüm öğeler de silinecek.</string>
+    <string name="collapse_blank_lines">Tekrarlanan boş satırları birleştir</string>
+    <string name="collapse_blank_lines_description">Yalnızca görüntüleme: iki veya daha fazla boş satırdan oluşan her diziyi tek bir boş satır olarak gösterir. Orijinal dosya değiştirilmez. Okuyucuda açılan tüm metin dosyalarına uygulanır (TXT, log, CSV ve benzeri).</string>
+    <string name="more_section_display">Görünüm ve stil</string>
+    <string name="more_section_text">Metin işleme</string>
+    <string name="more_section_tools">Araçlar ve bilgi</string>
+    <string name="text_alignment">Metin hizalama</string>
+    <string name="settings_appearance_title">Görünüm ayarları</string>
+    <string name="settings_open_view_settings">Görünüm ayarları (tema, yazı tipi, düzen)</string>
 </resources>

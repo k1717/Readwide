@@ -4,6 +4,7 @@ import android.view.View;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.readwide.manager.model.FileListItem;
@@ -34,6 +35,16 @@ final class MainRecentFilesController {
     }
 
     void loadRecentFiles() {
+        loadRecentFiles(false);
+    }
+
+    void loadRecentFiles(boolean preserveScroll) {
+        preserveScrollOnApply = preserveScroll;
+        if (preserveScroll) {
+            captureRecentScrollPosition();
+        } else {
+            savedFirstVisiblePosition = RecyclerView.NO_POSITION;
+        }
         resetRecyclerBeforeReload();
         if (activity.bookmarkManager == null) {
             applyRecentFiles(new ArrayList<>(), new ArrayList<>());
@@ -60,6 +71,44 @@ final class MainRecentFilesController {
 
     private volatile long recentLoadToken = 0;
 
+    private int savedFirstVisiblePosition = RecyclerView.NO_POSITION;
+    private int savedFirstVisibleOffset = 0;
+    private boolean preserveScrollOnApply = false;
+
+    private void captureRecentScrollPosition() {
+        savedFirstVisiblePosition = RecyclerView.NO_POSITION;
+        savedFirstVisibleOffset = 0;
+        if (activity.recentRecyclerView == null) return;
+        RecyclerView.LayoutManager lm = activity.recentRecyclerView.getLayoutManager();
+        if (lm instanceof LinearLayoutManager) {
+            LinearLayoutManager llm = (LinearLayoutManager) lm;
+            int pos = llm.findFirstVisibleItemPosition();
+            if (pos != RecyclerView.NO_POSITION) {
+                savedFirstVisiblePosition = pos;
+                View first = llm.findViewByPosition(pos);
+                savedFirstVisibleOffset = first != null ? first.getTop() : 0;
+            }
+        }
+    }
+
+    // Re-anchor near the row the user was on before opening a file. The opened file
+    // moves to the top of the recent list, so the same offset lands within a row of
+    // the prior spot rather than snapping to the very top.
+    private void restoreRecentScrollPosition(int itemCount) {
+        final int pos = savedFirstVisiblePosition;
+        final int offset = savedFirstVisibleOffset;
+        savedFirstVisiblePosition = RecyclerView.NO_POSITION;
+        if (activity.recentRecyclerView == null || pos < 0 || itemCount <= 0) return;
+        final RecyclerView rv = activity.recentRecyclerView;
+        rv.post(() -> {
+            RecyclerView.LayoutManager lm = rv.getLayoutManager();
+            if (lm instanceof LinearLayoutManager) {
+                int clamped = Math.min(pos, itemCount - 1);
+                ((LinearLayoutManager) lm).scrollToPositionWithOffset(clamped, offset);
+            }
+        });
+    }
+
     private void applyRecentFiles(@NonNull List<ReaderState> recent,
                                   @NonNull List<FileListItem> recentItems) {
         if (activity.recentAdapter != null) {
@@ -78,7 +127,11 @@ final class MainRecentFilesController {
                 activity.recentAdapter.setItems(recentItems);
             }
             activity.recentAdapter.refreshReadingProgress();
-            activity.scrollListToTop(activity.recentRecyclerView);
+            if (preserveScrollOnApply && savedFirstVisiblePosition != RecyclerView.NO_POSITION) {
+                restoreRecentScrollPosition(recentItems.size());
+            } else {
+                activity.scrollListToTop(activity.recentRecyclerView);
+            }
         }
         if (activity.recentEmptyText != null) {
             activity.recentEmptyText.setVisibility(recentItems.isEmpty() ? View.VISIBLE : View.GONE);

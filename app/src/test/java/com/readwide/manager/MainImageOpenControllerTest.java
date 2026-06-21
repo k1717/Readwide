@@ -5,6 +5,8 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import com.readwide.manager.model.FileListItem;
+
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -19,7 +21,9 @@ public class MainImageOpenControllerTest {
         File jpg002 = new File("/tmp/book/002.jpg");
         File txt = new File("/tmp/book/readme.txt");
         File webp001 = new File("/tmp/book/001.webp");
-        ArrayList<File> visible = new ArrayList<>(Arrays.asList(png010, jpg002, txt, webp001));
+        ArrayList<FileListItem> visible = new ArrayList<>(Arrays.asList(
+                FileListItem.from(png010), FileListItem.from(jpg002),
+                FileListItem.from(txt), FileListItem.from(webp001)));
 
         ArrayList<String> paths = MainImageOpenController.buildVisibleImageResultPaths(
                 jpg002.getAbsolutePath(),
@@ -34,9 +38,9 @@ public class MainImageOpenControllerTest {
 
     @Test
     public void visibleImageSequenceReturnsEmptyWhenSelectedImageIsNotVisible() {
-        ArrayList<File> visible = new ArrayList<>(Arrays.asList(
-                new File("/tmp/book/001.jpg"),
-                new File("/tmp/book/002.jpg")
+        ArrayList<FileListItem> visible = new ArrayList<>(Arrays.asList(
+                FileListItem.from(new File("/tmp/book/001.jpg")),
+                FileListItem.from(new File("/tmp/book/002.jpg"))
         ));
 
         ArrayList<String> paths = MainImageOpenController.buildVisibleImageResultPaths(

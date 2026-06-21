@@ -538,7 +538,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
 
         final boolean restoreViewerBrowseState = shouldPreserveBrowseStateOnResume();
         final boolean keepVisibleBrowseState = !restoreViewerBrowseState && shouldKeepCurrentBrowseStateOnResume();
-        loadRecentFiles();
+        loadRecentFiles(true);
         rebuildDrawerStorageEntries();
         if (!homeMode && !searchMode && currentDirectory != null) {
             if (restoreViewerBrowseState || keepVisibleBrowseState) {
@@ -1734,6 +1734,10 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
 
     void loadRecentFiles() {
         mainRecentFiles().loadRecentFiles();
+    }
+
+    void loadRecentFiles(boolean preserveScroll) {
+        mainRecentFiles().loadRecentFiles(preserveScroll);
     }
 
     @Override public void onFileClick(@NonNull File file) {

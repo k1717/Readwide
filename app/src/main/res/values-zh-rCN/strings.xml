@@ -717,4 +717,12 @@
     <string name="tts_resume">继续</string>
     <string name="tts_floating_drag">拖动以移动</string>
     <string name="delete_selected_includes_folders_warning">其中 %1$d 个是文件夹 — 其中的所有内容也会被删除。</string>
+    <string name="collapse_blank_lines">合并重复的空行</string>
+    <string name="collapse_blank_lines_description">仅显示：将连续两行或更多空行显示为一行空行。不会更改原始文件。适用于在阅读器中打开的所有文本文件（TXT、日志、CSV 等）。</string>
+    <string name="more_section_display">显示与样式</string>
+    <string name="more_section_text">文本处理</string>
+    <string name="more_section_tools">工具与信息</string>
+    <string name="text_alignment">文本对齐</string>
+    <string name="settings_appearance_title">显示设置</string>
+    <string name="settings_open_view_settings">显示设置（主题、字体、布局）</string>
 </resources>

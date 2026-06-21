@@ -717,4 +717,12 @@
     <string name="tts_resume">Продолжить</string>
     <string name="tts_floating_drag">Перетащите, чтобы переместить</string>
     <string name="delete_selected_includes_folders_warning">Из них %1$d — папки: всё их содержимое также будет удалено.</string>
+    <string name="collapse_blank_lines">Объединять повторяющиеся пустые строки</string>
+    <string name="collapse_blank_lines_description">Только отображение: показывает любую последовательность из двух и более пустых строк как одну пустую строку. Исходный файл не изменяется. Применяется ко всем текстовым файлам, открытым в программе чтения (TXT, журналы, CSV и подобные).</string>
+    <string name="more_section_display">Отображение и стиль</string>
+    <string name="more_section_text">Обработка текста</string>
+    <string name="more_section_tools">Инструменты и сведения</string>
+    <string name="text_alignment">Выравнивание текста</string>
+    <string name="settings_appearance_title">Настройки отображения</string>
+    <string name="settings_open_view_settings">Настройки отображения (тема, шрифт, макет)</string>
 </resources>

@@ -25,6 +25,7 @@ final class ReaderPreferencesController {
     private int appliedRightTextInsetPx = Integer.MIN_VALUE;
     private int appliedPagingOverlapLines = Integer.MIN_VALUE;
     private Typeface appliedTypeface = null;
+    private int appliedTextAlignment = Integer.MIN_VALUE;
 
     ReaderPreferencesController(@NonNull ReaderActivity activity) {
         this.activity = activity;
@@ -103,6 +104,14 @@ final class ReaderPreferencesController {
             }
         }
 
+        // Horizontal alignment does not change line breaks or layout height, so the
+        // page model is identical across alignments. Apply on change, never reindex.
+        int textAlignment = activity.prefs.getTextAlignment();
+        if (appliedTextAlignment != textAlignment) {
+            activity.readerView.setReaderTextAlignment(textAlignment);
+            appliedTextAlignment = textAlignment;
+        }
+
         if (appliedTopTextZoneOffsetPx != topTextZoneOffsetPx
                 || appliedBottomTextZoneOffsetPx != bottomTextZoneOffsetPx
                 || appliedLeftTextInsetPx != leftTextInsetPx
@@ -118,13 +127,14 @@ final class ReaderPreferencesController {
             appliedRightTextInsetPx = rightTextInsetPx;
         }
 
-        boolean styleChanged = Float.compare(appliedFontSize, fontSize) != 0
+        boolean geometryChanged = Float.compare(appliedFontSize, fontSize) != 0
                 || Float.compare(appliedLineSpacing, lineSpacing) != 0
-                || appliedTextColor != textColor
-                || appliedBackgroundColor != bgColor
                 || appliedMarginHorizontalPx != marginH
                 || appliedMarginVerticalPx != marginV
                 || appliedTypeface != tf;
+        boolean styleChanged = geometryChanged
+                || appliedTextColor != textColor
+                || appliedBackgroundColor != bgColor;
 
         if (styleChanged) {
             activity.readerView.setReaderStyle(fontSize, lineSpacing, textColor, bgColor, marginH, marginV, tf);
@@ -135,7 +145,9 @@ final class ReaderPreferencesController {
             appliedMarginHorizontalPx = marginH;
             appliedMarginVerticalPx = marginV;
             appliedTypeface = tf;
-            if (activity.largeTextEstimateActive) {
+            // Colors do not affect pagination geometry, so a color-only change
+            // re-renders via setReaderStyle but must not restart page indexing.
+            if (activity.largeTextEstimateActive && geometryChanged) {
                 activity.scheduleLargeTextExactPageIndexingRestart();
             }
         }

@@ -717,4 +717,12 @@
     <string name="tts_resume">जारी रखें</string>
     <string name="tts_floating_drag">ले जाने के लिए खींचें</string>
     <string name="delete_selected_includes_folders_warning">इनमें से %1$d फ़ोल्डर हैं — उनकी सारी सामग्री भी हटा दी जाएगी.</string>
+    <string name="collapse_blank_lines">दोहराई गई खाली पंक्तियाँ मिलाएँ</string>
+    <string name="collapse_blank_lines_description">केवल प्रदर्शन: दो या अधिक खाली पंक्तियों के किसी भी क्रम को एक ही खाली पंक्ति के रूप में दिखाता है। मूल फ़ाइल नहीं बदली जाती। रीडर में खोली गई सभी टेक्स्ट फ़ाइलों (TXT, log, CSV और समान) पर लागू होता है।</string>
+    <string name="more_section_display">प्रदर्शन और शैली</string>
+    <string name="more_section_text">टेक्स्ट प्रोसेसिंग</string>
+    <string name="more_section_tools">उपकरण और जानकारी</string>
+    <string name="text_alignment">टेक्स्ट संरेखण</string>
+    <string name="settings_appearance_title">डिस्प्ले सेटिंग्स</string>
+    <string name="settings_open_view_settings">डिस्प्ले सेटिंग्स (थीम, फ़ॉन्ट, लेआउट)</string>
 </resources>

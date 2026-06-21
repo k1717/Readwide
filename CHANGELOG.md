@@ -1,5 +1,34 @@
 # Changelog
 
+## Readwide 1.0.7 - 2026-06-20
+
+### Release scope
+
+- Android metadata is `versionCode 10007` and `versionName "1.0.7"`.
+- Keeps the `com.readwide.manager` applicationId and the `readwide` release signing key introduced in 1.0.6, so 1.0.7 updates in place over 1.0.6. Updating from 1.0.4/1.0.5 (previous key) still requires uninstalling first, then migrating via the in-app JSON backup export/import.
+- This release adds an optional blank-line collapsing display setting, makes text reading-position restore more reliable, improves large-file bookmark page accuracy, preserves the recent list's scroll position, refines find-in-page behavior when its options change, and fixes a find-in-page crash.
+
+### Reading
+
+- Added an optional **Collapse repeated blank lines** display setting for the text reader (Display settings, under the large-TXT options). When enabled, any run of two or more consecutive blank lines is shown as a single blank line; a lone blank line is left as-is and the original file is never modified. It applies to all text files the reader opens (TXT, log, CSV, and similar), both small and large, treats whitespace-only lines as blank, and is applied consistently to the page model, large-file partition/exact-page index, and in-text search so page numbers, bookmarks, and search positions stay aligned. Toggling it reloads the open file, and the collapse state is folded into the page-layout signature so the page model is recomputed instead of reusing a stale one. Legacy bookmarks from before this version stay compatible while the option is off. Default off.
+- Reopening a text file restores the reading position more reliably. The saved position now carries short before/after text anchors and a page-layout signature, so the reader re-finds the right spot even when the page layout would otherwise differ, instead of falling back to an approximate page. The restored position also stays correct after the system recreates the reader and when scrolling back through a large file. If the file changed on disk since it was last opened, the reader reloads the current contents instead of restoring the earlier cached view.
+- Large-file bookmarks resolve by their surrounding text, so they land on the correct page even after the page layout changes (for example a different font size or margin).
+
+### Settings and display rules
+
+- Settings are reorganized: display and reading-layout options (theme, reading theme, text layout, EPUB layout) now live in a dedicated **Display settings** screen reached from Settings, separate from the general app settings (behavior, button order, security, backup). The general Settings screen no longer mixes display options with app-wide options.
+- **Edit actual TXT file**: enabled TXT display rules can now be permanently applied to the current text file from the reader's **More** menu, either fixing the original in place or writing a separate `_edited` copy. The flow keeps the rule-order, overwrite, and large-file warnings and a final confirmation step; display-only rules still never modify the file. This replaces the previous entry point under the TXT layout settings, so it now always runs with the open file in context.
+
+### Files
+
+- Returning to the app after opening a file from the recent list no longer forces the list to the top; it stays near the row you opened from.
+
+### Fixes
+
+- Fixed a crash that could occur when an invalid regular expression was the active find-in-page query.
+- Changing the find-in-page options (case-sensitive, whole-word, or regular expression) now restarts the search under the new options, so the next match uses the new settings instead of continuing from the previous result.
+- When the system recreates the reader from memory, large-file exact page numbering is rebuilt instead of remaining on the estimate.
+
 ## Readwide 1.0.6 - 2026-06-19
 
 ### Release scope

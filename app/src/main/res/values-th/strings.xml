@@ -717,4 +717,12 @@
     <string name="tts_resume">เล่นต่อ</string>
     <string name="tts_floating_drag">ลากเพื่อย้าย</string>
     <string name="delete_selected_includes_folders_warning">%1$d รายการเป็นโฟลเดอร์ — เนื้อหาทั้งหมดข้างในจะถูกลบด้วย</string>
+    <string name="collapse_blank_lines">รวมบรรทัดว่างที่ซ้ำกัน</string>
+    <string name="collapse_blank_lines_description">แสดงผลเท่านั้น: แสดงบรรทัดว่างตั้งแต่สองบรรทัดขึ้นไปที่ติดกันเป็นบรรทัดว่างเดียว ไฟล์ต้นฉบับจะไม่ถูกเปลี่ยนแปลง ใช้กับไฟล์ข้อความทั้งหมดที่เปิดในโปรแกรมอ่าน (TXT, log, CSV และอื่น ๆ ที่คล้ายกัน)</string>
+    <string name="more_section_display">การแสดงผลและสไตล์</string>
+    <string name="more_section_text">การประมวลผลข้อความ</string>
+    <string name="more_section_tools">เครื่องมือและข้อมูล</string>
+    <string name="text_alignment">การจัดแนวข้อความ</string>
+    <string name="settings_appearance_title">การตั้งค่าการแสดงผล</string>
+    <string name="settings_open_view_settings">การตั้งค่าการแสดงผล (ธีม ฟอนต์ เลย์เอาต์)</string>
 </resources>

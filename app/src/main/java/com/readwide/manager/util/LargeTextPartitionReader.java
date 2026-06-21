@@ -34,6 +34,10 @@ import java.util.List;
 public final class LargeTextPartitionReader {
     private LargeTextPartitionReader() {}
 
+    // Minimum trimmed length of an anchor line fragment that is specific enough to
+    // locate a unique partition. Shorter fragments fall back to char-offset.
+    private static final int MIN_ANCHOR_LINE_NEEDLE = 16;
+
     public static float estimateBytesPerChar(@NonNull File file,
                                              int previewBytes) {
         try {
@@ -55,6 +59,7 @@ public final class LargeTextPartitionReader {
     public static LargeTextLineStats scanLineStats(@NonNull Context context,
                                                    @NonNull File file,
                                                    @NonNull String encoding,
+                                                   boolean collapseBlankLines,
                                                    int targetCharPosition) throws IOException {
         int targetChar = Math.max(0, targetCharPosition);
         long charCount = 0L;
@@ -64,12 +69,16 @@ public final class LargeTextPartitionReader {
 
         List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
                 context.getApplicationContext(), file.getAbsolutePath());
+        TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
         try (BufferedReader reader = openReader(file, encoding)) {
             String lineText;
             while ((lineText = reader.readLine()) != null) {
                 sawAnyLine = true;
                 String normalized = FileUtils.enforceTextPresentationSelectors(lineText);
                 normalized = TextDisplayRuleManager.apply(normalized, activeRules);
+                String emitted = collapseFilter.accept(normalized);
+                if (emitted == null) continue;
+                normalized = emitted;
                 int lineChars = normalized.length() + 1; // TextView normalizes line breaks to '\n'.
                 if (targetLine < 0 && targetChar >= charCount && targetChar < charCount + lineChars) {
                     targetLine = line;
@@ -85,51 +94,130 @@ public final class LargeTextPartitionReader {
                 (int) Math.max(0L, Math.min(Integer.MAX_VALUE, charCount)));
     }
 
+    /**
+     * Resolve the absolute character position (in the current display coordinate
+     * space) of a saved anchor. Used to pick the correct large-text partition and
+     * the exact restore position after a blank-line-collapse or display-rule
+     * change, when the saved character offset belongs to the previous coordinate
+     * space and can no longer be trusted.
+     *
+     * The cursor line text is collapse-invariant because blank-line collapsing
+     * never rewrites a non-blank line, so it matches in either coordinate space.
+     * Returns a 0-based absolute character offset (cursor mid-line), or -1 when no
+     * sufficiently specific anchor line can be located (the caller then falls back
+     * to the saved char offset).
+     */
+    public static int findCharPositionForAnchor(@NonNull Context context,
+                                                @NonNull File file,
+                                                @NonNull String encoding,
+                                                boolean collapseBlankLines,
+                                                String anchorBefore,
+                                                String anchorAfter) throws IOException {
+        String before = anchorBefore != null ? anchorBefore : "";
+        String after = anchorAfter != null ? anchorAfter : "";
+
+        int lastBreak = before.lastIndexOf('\n');
+        String beforeTail = lastBreak >= 0 ? before.substring(lastBreak + 1) : before;
+        int firstBreak = after.indexOf('\n');
+        String afterHead = firstBreak >= 0 ? after.substring(0, firstBreak) : after;
+
+        String needle;
+        int cursorInNeedle;
+        String currentLine = beforeTail + afterHead;
+        if (currentLine.trim().length() >= MIN_ANCHOR_LINE_NEEDLE) {
+            needle = currentLine;
+            cursorInNeedle = beforeTail.length();
+        } else {
+            needle = firstLongLine(after);
+            cursorInNeedle = 0;
+            if (needle == null) return -1;
+        }
+
+        List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
+                context.getApplicationContext(), file.getAbsolutePath());
+        TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
+        long charCount = 0L;
+        try (BufferedReader reader = openReader(file, encoding)) {
+            String lineText;
+            while ((lineText = reader.readLine()) != null) {
+                String normalized = FileUtils.enforceTextPresentationSelectors(lineText);
+                normalized = TextDisplayRuleManager.apply(normalized, activeRules);
+                String emitted = collapseFilter.accept(normalized);
+                if (emitted == null) continue;
+                int hit = emitted.indexOf(needle);
+                if (hit >= 0) {
+                    long pos = charCount + hit + cursorInNeedle;
+                    return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, pos));
+                }
+                charCount += emitted.length() + 1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * First upcoming display line whose trimmed length is specific enough to match
+     * safely. Used when the cursor sits on a blank or very short line. Returns null
+     * when none is found.
+     */
+    private static String firstLongLine(String text) {
+        for (String candidate : text.split("\n", -1)) {
+            if (candidate.trim().length() >= MIN_ANCHOR_LINE_NEEDLE) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
     public static LargeTextLinePartitionResult readPartitionForChar(@NonNull Context context,
                                                                      @NonNull File file,
                                                                      @NonNull String encoding,
+                                                                     boolean collapseBlankLines,
                                                                      int targetCharPosition,
                                                                      int partitionLines,
                                                                      int lookaheadLines,
                                                                      int lookbehindLines) throws IOException {
-        LargeTextLineStats stats = scanLineStats(context, file, encoding, targetCharPosition);
+        LargeTextLineStats stats = scanLineStats(context, file, encoding, collapseBlankLines, targetCharPosition);
         int startLine = LargeTextContinuityMath.partitionStartLineForLine(stats.targetLine, partitionLines);
-        return readPartitionAtStartLine(context, file, encoding, startLine, stats.totalLines, stats.totalChars,
+        return readPartitionAtStartLine(context, file, encoding, collapseBlankLines, startLine, stats.totalLines, stats.totalChars,
                 partitionLines, lookaheadLines, lookbehindLines, false);
     }
 
     public static LargeTextLinePartitionResult readPartitionAtStartLine(@NonNull Context context,
                                                                          @NonNull File file,
                                                                          @NonNull String encoding,
+                                                                         boolean collapseBlankLines,
                                                                          int requestedStartLine,
                                                                          int partitionLines,
                                                                          int lookaheadLines,
                                                                          int lookbehindLines) throws IOException {
-        LargeTextLineStats stats = scanLineStats(context, file, encoding, 0);
+        LargeTextLineStats stats = scanLineStats(context, file, encoding, collapseBlankLines, 0);
         int startLine = LargeTextContinuityMath.partitionStartLineForLine(requestedStartLine, partitionLines);
         if (startLine > stats.totalLines) {
             startLine = LargeTextContinuityMath.partitionStartLineForLine(stats.totalLines, partitionLines);
         }
-        return readPartitionAtStartLine(context, file, encoding, startLine, stats.totalLines, stats.totalChars,
+        return readPartitionAtStartLine(context, file, encoding, collapseBlankLines, startLine, stats.totalLines, stats.totalChars,
                 partitionLines, lookaheadLines, lookbehindLines, false);
     }
 
     public static LargeTextLinePartitionResult readPartitionAtStartLine(@NonNull Context context,
                                                                          @NonNull File file,
                                                                          @NonNull String encoding,
+                                                                         boolean collapseBlankLines,
                                                                          int requestedStartLine,
                                                                          int knownTotalLines,
                                                                          int knownTotalChars,
                                                                          int partitionLines,
                                                                          int lookaheadLines,
                                                                          int lookbehindLines) throws IOException {
-        return readPartitionAtStartLine(context, file, encoding, requestedStartLine, knownTotalLines, knownTotalChars,
+        return readPartitionAtStartLine(context, file, encoding, collapseBlankLines, requestedStartLine, knownTotalLines, knownTotalChars,
                 partitionLines, lookaheadLines, lookbehindLines, false);
     }
 
     public static LargeTextLinePartitionResult readPartitionAtStartLine(@NonNull Context context,
                                                                          @NonNull File file,
                                                                          @NonNull String encoding,
+                                                                         boolean collapseBlankLines,
                                                                          int requestedStartLine,
                                                                          int knownTotalLines,
                                                                          int knownTotalChars,
@@ -159,12 +247,16 @@ public final class LargeTextPartitionReader {
 
         List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
                 context.getApplicationContext(), file.getAbsolutePath());
+        TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
         try (BufferedReader reader = openReader(file, encoding)) {
             String lineText;
             boolean firstCapturedLine = true;
             while ((lineText = reader.readLine()) != null) {
                 String normalized = FileUtils.enforceTextPresentationSelectors(lineText);
                 normalized = TextDisplayRuleManager.apply(normalized, activeRules);
+                String emitted = collapseFilter.accept(normalized);
+                if (emitted == null) continue;
+                normalized = emitted;
                 int lineChars = normalized.length() + 1;
 
                 if (line < windowStartLine) {

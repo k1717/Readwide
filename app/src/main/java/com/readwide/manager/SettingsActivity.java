@@ -67,12 +67,6 @@ public class SettingsActivity extends AppCompatActivity {
 
     private static final String RELEASES_URL = "https://github.com/k1717/Readwide/releases";
     private static final String DEVELOPER_CONTACT_EMAIL = "readwide.kj7w5@addy.io";
-    private static final String TXT_ACTUAL_FILE_EDIT_PREFS = "txt_actual_file_edit";
-    private static final String KEY_TXT_ACTUAL_FILE_EDIT_PATH = "modified_path";
-    private static final String KEY_TXT_ACTUAL_FILE_EDIT_TOKEN = "modified_token";
-    private static final String KEY_TXT_ACTUAL_FILE_EDIT_LENGTH = "modified_length";
-    private static final String KEY_TXT_ACTUAL_FILE_EDIT_LAST_MODIFIED = "modified_last_modified";
-    private static final long TXT_ACTUAL_FILE_EDIT_LARGE_WARNING_BYTES = 32L * 1024L * 1024L;
 
     PrefsManager prefs;
     private BookmarkManager bookmarkManager;
@@ -93,6 +87,13 @@ public class SettingsActivity extends AppCompatActivity {
                 }
             });
 
+    public static final String EXTRA_MODE = "settings_mode";
+    public static final String MODE_APPEARANCE = "appearance";
+    public static final String MODE_GENERAL = "general";
+    // True when this screen was opened as the View settings (appearance/style) entry.
+    // The collapsible-section controller reads this to show only the matching group.
+    boolean appearanceSettingsMode = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         prefs = PrefsManager.getInstance(this);
@@ -101,6 +102,10 @@ public class SettingsActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_settings);
 
+        appearanceSettingsMode = MODE_APPEARANCE.equals(
+                getIntent() != null ? getIntent().getStringExtra(EXTRA_MODE) : null);
+        currentTxtFilePath = getIntent() != null ? getIntent().getStringExtra("txt_file_path") : null;
+
         EdgeToEdgeUtil.applyStandardInsets(this, findViewById(R.id.settings_root),
                 findViewById(R.id.settings_appbar), findViewById(R.id.settings_scroll));
 
@@ -108,13 +113,13 @@ public class SettingsActivity extends AppCompatActivity {
         setSupportActionBar(toolbar);
         if (getSupportActionBar() != null) {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
-            getSupportActionBar().setTitle(getString(R.string.title_settings));
+            getSupportActionBar().setTitle(getString(
+                    appearanceSettingsMode ? R.string.settings_appearance_title : R.string.title_settings));
         }
         tintToolbarNavigation(toolbar);
 
         bookmarkManager = BookmarkManager.getInstance(this);
         themeManager = ThemeManager.getInstance(this);
-        currentTxtFilePath = getIntent() != null ? getIntent().getStringExtra("txt_file_path") : null;
 
         setupLanguage();
         suppressLanguageRadioEffects();
@@ -123,7 +128,7 @@ public class SettingsActivity extends AppCompatActivity {
         setupReaderControls();
         setupButtonOrderSettings();
         setupTextDisplayRules();
-        setupTextDisplayRulesActualFile();
+        setupCollapseBlankLines();
         setupLock();
         setupExportImport();
         setupResetSettings();
@@ -136,6 +141,23 @@ public class SettingsActivity extends AppCompatActivity {
         suppressLanguageRadioEffects();
         renderReadingThemeRows();
         refreshMainCustomHexFieldPreviews();
+        setupCollapsibleSections();
+        setupOpenViewSettingsLink();
+    }
+
+    private void setupOpenViewSettingsLink() {
+        View link = findViewById(R.id.settings_open_view_settings);
+        if (link == null) return;
+        if (appearanceSettingsMode) {
+            link.setVisibility(View.GONE);
+            return;
+        }
+        link.setVisibility(View.VISIBLE);
+        link.setOnClickListener(v -> {
+            Intent intent = new Intent(this, SettingsActivity.class);
+            intent.putExtra(EXTRA_MODE, MODE_APPEARANCE);
+            startActivity(intent);
+        });
     }
 
     @Override
@@ -399,6 +421,10 @@ public class SettingsActivity extends AppCompatActivity {
         new SettingsReaderControlsController(this).setupReaderControls();
     }
 
+    private void setupCollapsibleSections() {
+        new SettingsCollapsibleSectionController(this).setup();
+    }
+
     private void setupButtonOrderSettings() {
         new SettingsButtonOrderController(this).setupButtonOrderSettings();
     }
@@ -407,314 +433,6 @@ public class SettingsActivity extends AppCompatActivity {
         View button = findViewById(R.id.btn_txt_display_rules);
         if (button == null) return;
         button.setOnClickListener(v -> showTextDisplayRulesDialog());
-    }
-
-    private void setupTextDisplayRulesActualFile() {
-        View button = findViewById(R.id.btn_txt_display_rules_actual_file);
-        if (button == null) return;
-        button.setOnClickListener(v -> {
-            if (currentTxtFilePath == null || currentTxtFilePath.isEmpty()) {
-                ShortToast.show(this, R.string.txt_display_rules_actual_file_unavailable);
-                return;
-            }
-            showTextDisplayRulesActualFileDialog();
-        });
-    }
-
-    private void showTextDisplayRulesActualFileDialog() {
-        File sourceFile = getCurrentTxtFileOrShowError();
-        if (sourceFile == null) return;
-
-        List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(this, sourceFile.getAbsolutePath());
-        if (activeRules.isEmpty()) {
-            ShortToast.show(this, R.string.txt_display_rules_actual_file_no_rules);
-            return;
-        }
-
-        final android.app.Dialog dialog = createRoundedSettingsDialog();
-        LinearLayout panel = createRoundedSettingsDialogPanel();
-
-        int text = dialogTextColor();
-        int sub = dialogSubTextColor();
-        int outline = dialogOutlineColor();
-
-        panel.addView(makeSettingsDialogTitle(getString(R.string.txt_display_rules_actual_file_title), text));
-
-        TextView message = makeSettingsDialogMessage(
-                getString(R.string.txt_display_rules_actual_file_message, sourceFile.getName()), sub);
-        message.setGravity(Gravity.CENTER);
-        panel.addView(message);
-
-        File copyTarget = makeActualRuleCopyFile(this, sourceFile);
-        TextView sequenceWarning = makeSettingsDialogWarningBox(
-                getString(R.string.txt_display_rules_actual_file_sequence_warning, activeRules.size()), false);
-        panel.addView(sequenceWarning);
-
-        TextView overwriteWarning = makeSettingsDialogWarningBox(
-                getString(R.string.txt_display_rules_actual_file_overwrite_warning, copyTarget.getName()), true);
-        LinearLayout.LayoutParams overwriteWarningLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        overwriteWarningLp.setMargins(0, dpToPx(6), 0, dpToPx(8));
-        overwriteWarning.setLayoutParams(overwriteWarningLp);
-        panel.addView(overwriteWarning);
-
-        if (sourceFile.length() >= TXT_ACTUAL_FILE_EDIT_LARGE_WARNING_BYTES) {
-            TextView largeWarning = makeSettingsDialogWarningBox(
-                    getString(R.string.txt_display_rules_actual_file_large_warning,
-                            FileUtils.formatFileSize(sourceFile.length())), false);
-            LinearLayout.LayoutParams largeWarningLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            largeWarningLp.setMargins(0, 0, 0, dpToPx(8));
-            largeWarning.setLayoutParams(largeWarningLp);
-            panel.addView(largeWarning);
-        }
-
-        MaterialButton original = makeTextRuleDialogButton(
-                getString(R.string.txt_display_rules_actual_file_original), text);
-        original.setOnClickListener(v -> {
-            dialog.dismiss();
-            showTextDisplayRulesActualFileConfirmDialog(true, sourceFile, copyTarget, activeRules.size());
-        });
-        panel.addView(original);
-
-        MaterialButton copy = makeTextRuleDialogButton(
-                getString(R.string.txt_display_rules_actual_file_copy), text);
-        copy.setOnClickListener(v -> {
-            dialog.dismiss();
-            showTextDisplayRulesActualFileConfirmDialog(false, sourceFile, copyTarget, activeRules.size());
-        });
-        panel.addView(copy);
-
-        MaterialButton cancel = makeTextRuleDialogButton(getString(R.string.cancel), text);
-        cancel.setOnClickListener(v -> dialog.dismiss());
-        panel.addView(cancel);
-
-        showRoundedSettingsDialog(dialog, panel, true, 0.72f, 280);
-    }
-
-    private CharSequence makeActualFileConfirmMergedWarning(boolean editOriginal, @NonNull String targetName) {
-        String overwriteText = getString(editOriginal
-                ? R.string.txt_display_rules_actual_file_confirm_original_warning
-                : R.string.txt_display_rules_actual_file_confirm_copy_warning, targetName);
-        String noTurningBackText = getString(R.string.txt_display_rules_actual_file_no_turning_back);
-        SpannableStringBuilder builder = new SpannableStringBuilder();
-        builder.append(overwriteText);
-        builder.append("\n\n");
-        int start = builder.length();
-        builder.append(noTurningBackText);
-        int end = builder.length();
-        builder.setSpan(new StyleSpan(android.graphics.Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        builder.setSpan(new RelativeSizeSpan(1.28f), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        return builder;
-    }
-
-    private void showTextDisplayRulesActualFileConfirmDialog(boolean editOriginal,
-                                                            @NonNull File sourceFile,
-                                                            @NonNull File copyTarget,
-                                                            int ruleCount) {
-        final android.app.Dialog dialog = createRoundedSettingsDialog();
-        LinearLayout panel = createRoundedSettingsDialogPanel();
-
-        int text = dialogTextColor();
-        int sub = dialogSubTextColor();
-        int outline = dialogOutlineColor();
-
-        panel.addView(makeSettingsDialogTitle(getString(R.string.txt_display_rules_actual_file_confirm_title), text));
-
-        String targetName = editOriginal ? sourceFile.getName() : copyTarget.getName();
-        TextView message = makeSettingsDialogMessage(
-                getString(editOriginal
-                                ? R.string.txt_display_rules_actual_file_confirm_original_message
-                                : R.string.txt_display_rules_actual_file_confirm_copy_message,
-                        targetName, ruleCount), sub);
-        message.setGravity(Gravity.CENTER);
-        panel.addView(message);
-
-        TextView overwriteWarning = makeSettingsDialogWarningBox(
-                makeActualFileConfirmMergedWarning(editOriginal, targetName), true);
-        LinearLayout.LayoutParams overwriteWarningLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        overwriteWarningLp.setMargins(0, dpToPx(6), 0, dpToPx(8));
-        overwriteWarning.setLayoutParams(overwriteWarningLp);
-        panel.addView(overwriteWarning);
-
-        if (sourceFile.length() >= TXT_ACTUAL_FILE_EDIT_LARGE_WARNING_BYTES) {
-            TextView largeWarning = makeSettingsDialogWarningBox(
-                    getString(R.string.txt_display_rules_actual_file_large_warning,
-                            FileUtils.formatFileSize(sourceFile.length())), false);
-            LinearLayout.LayoutParams largeWarningLp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            largeWarningLp.setMargins(0, 0, 0, dpToPx(8));
-            largeWarning.setLayoutParams(largeWarningLp);
-            panel.addView(largeWarning);
-        }
-
-        MaterialButton apply = makeTextRuleDialogButton(
-                getString(editOriginal
-                        ? R.string.txt_display_rules_actual_file_confirm_original_button
-                        : R.string.txt_display_rules_actual_file_confirm_copy_button), text);
-        apply.setOnClickListener(v -> {
-            dialog.dismiss();
-            applyTextDisplayRulesToActualFile(editOriginal);
-        });
-        panel.addView(apply);
-
-        MaterialButton cancel = makeTextRuleDialogButton(getString(R.string.cancel), text);
-        cancel.setOnClickListener(v -> dialog.dismiss());
-        panel.addView(cancel);
-
-        showRoundedSettingsDialog(dialog, panel, true, 0.72f, 280);
-    }
-
-    private File getCurrentTxtFileOrShowError() {
-        if (currentTxtFilePath == null || currentTxtFilePath.isEmpty()) {
-            ShortToast.show(this, R.string.txt_display_rules_actual_file_unavailable);
-            return null;
-        }
-        File sourceFile = new File(currentTxtFilePath);
-        if (!sourceFile.exists() || !sourceFile.isFile()) {
-            ShortToast.show(this, R.string.txt_display_rules_actual_file_unavailable);
-            return null;
-        }
-        return sourceFile.getAbsoluteFile();
-    }
-
-    private void applyTextDisplayRulesToActualFile(boolean editOriginal) {
-        final File sourceFile = getCurrentTxtFileOrShowError();
-        if (sourceFile == null) return;
-
-        final Context appContext = getApplicationContext();
-        final Handler mainHandler = new Handler(Looper.getMainLooper());
-        final ArrayList<TextDisplayRule> activeRules = new ArrayList<>(
-                TextDisplayRuleManager.getActiveRules(appContext, sourceFile.getAbsolutePath()));
-        if (activeRules.isEmpty()) {
-            ShortToast.show(appContext, R.string.txt_display_rules_actual_file_no_rules);
-            return;
-        }
-
-        ShortToast.show(appContext, R.string.txt_display_rules_actual_file_applying);
-        new Thread(() -> {
-            try {
-                String encoding = FileUtils.detectEncoding(sourceFile);
-                String originalText = FileUtils.readTextFile(sourceFile, encoding);
-                String fixedText = TextDisplayRuleManager.apply(originalText, activeRules);
-                if (originalText.equals(fixedText)) {
-                    mainHandler.post(() -> ShortToast.show(
-                            appContext,
-                            R.string.txt_display_rules_actual_file_no_changes));
-                    return;
-                }
-
-                File outputFile = editOriginal ? sourceFile : makeActualRuleCopyFile(appContext, sourceFile);
-                writeTextWithEncodingSafely(outputFile, fixedText, encoding);
-                if (editOriginal) {
-                    markOriginalTxtFilePhysicallyModified(appContext, outputFile);
-                }
-
-                final String successMessage = editOriginal
-                        ? appContext.getString(R.string.txt_display_rules_actual_file_original_done)
-                        : appContext.getString(R.string.txt_display_rules_actual_file_copy_done, outputFile.getName());
-                mainHandler.post(() -> Toast.makeText(
-                        appContext,
-                        successMessage,
-                        Toast.LENGTH_LONG).show());
-            } catch (OutOfMemoryError oom) {
-                mainHandler.post(() -> Toast.makeText(
-                        appContext,
-                        appContext.getString(R.string.txt_display_rules_actual_file_failed,
-                                appContext.getString(R.string.txt_display_rules_actual_file_too_large_runtime)),
-                        Toast.LENGTH_LONG).show());
-            } catch (Exception e) {
-                String message = e.getMessage();
-                if (message == null || message.trim().isEmpty()) {
-                    message = e.getClass().getSimpleName();
-                }
-                final String finalMessage = message;
-                mainHandler.post(() -> Toast.makeText(
-                        appContext,
-                        appContext.getString(R.string.txt_display_rules_actual_file_failed, finalMessage),
-                        Toast.LENGTH_LONG).show());
-            }
-        }, "txt-display-rules-actual-file").start();
-    }
-
-    private static void markOriginalTxtFilePhysicallyModified(@NonNull Context context, @NonNull File file) {
-        context.getSharedPreferences(TXT_ACTUAL_FILE_EDIT_PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putString(KEY_TXT_ACTUAL_FILE_EDIT_PATH, file.getAbsolutePath())
-                .putLong(KEY_TXT_ACTUAL_FILE_EDIT_TOKEN, System.currentTimeMillis())
-                .putLong(KEY_TXT_ACTUAL_FILE_EDIT_LENGTH, file.length())
-                .putLong(KEY_TXT_ACTUAL_FILE_EDIT_LAST_MODIFIED, file.lastModified())
-                .apply();
-    }
-
-    private static File makeActualRuleCopyFile(@NonNull Context context, @NonNull File sourceFile) {
-        File parent = sourceFile.getParentFile();
-        if (parent == null) parent = context.getFilesDir();
-        String name = sourceFile.getName();
-        String base = name;
-        String ext = "";
-        int dot = name.lastIndexOf('.');
-        if (dot > 0) {
-            base = name.substring(0, dot);
-            ext = name.substring(dot);
-        }
-        return new File(parent, base + "_edited" + ext);
-    }
-
-    private static void writeTextWithEncodingSafely(@NonNull File outputFile,
-                                                    @NonNull String text,
-                                                    String encoding) throws IOException {
-        Charset charset;
-        try {
-            charset = (encoding != null && !encoding.trim().isEmpty())
-                    ? Charset.forName(encoding)
-                    : StandardCharsets.UTF_8;
-        } catch (Exception ignored) {
-            charset = StandardCharsets.UTF_8;
-        }
-
-        File target = outputFile.getAbsoluteFile();
-        File parent = target.getParentFile();
-        if (parent != null && !parent.exists() && !parent.mkdirs()) {
-            throw new IOException("Cannot create folder: " + parent.getAbsolutePath());
-        }
-        if (parent == null) {
-            throw new IOException("Cannot resolve output folder");
-        }
-
-        File temp = File.createTempFile(target.getName() + ".", ".tmp", parent);
-        boolean moved = false;
-        try (FileOutputStream fos = new FileOutputStream(temp, false);
-             OutputStreamWriter writer = new OutputStreamWriter(fos, charset)) {
-            writer.write(text);
-            writer.flush();
-            fos.getFD().sync();
-        }
-
-        try {
-            try {
-                // Same-directory POSIX rename replaces the target atomically on Android's
-                // Linux-backed file systems, so a crash is much less likely to leave the
-                // original file half-written.
-                Os.rename(temp.getAbsolutePath(), target.getAbsolutePath());
-                moved = true;
-            } catch (ErrnoException errno) {
-                // Conservative fallback for unusual storage providers/filesystems.
-                if (temp.renameTo(target)) {
-                    moved = true;
-                } else {
-                    throw new IOException("Cannot replace output file safely", errno);
-                }
-            }
-        } finally {
-            if (!moved && temp.exists()) {
-                // Best-effort cleanup.  If deletion fails, the temp file is harmless and
-                // keeps the original target untouched.
-                //noinspection ResultOfMethodCallIgnored
-                temp.delete();
-            }
-        }
     }
 
     private void showTextDisplayRulesDialog() {
@@ -797,7 +515,8 @@ public class SettingsActivity extends AppCompatActivity {
         Spinner tapZoneSpinner = findViewById(R.id.spinner_tap_zone_mode);
         Spinner largeTxtModeSpinner = findViewById(R.id.spinner_large_txt_partition_mode);
         Spinner epubDirectionSpinner = findViewById(R.id.spinner_epub_page_direction);
-        Spinner[] spinners = new Spinner[]{overlapSpinner, tapZoneSpinner, largeTxtModeSpinner, epubDirectionSpinner};
+        Spinner textAlignSpinner = findViewById(R.id.spinner_text_alignment);
+        Spinner[] spinners = new Spinner[]{overlapSpinner, tapZoneSpinner, largeTxtModeSpinner, epubDirectionSpinner, textAlignSpinner};
         for (Spinner spinner : spinners) {
             if (spinner == null) continue;
             spinner.setBackgroundColor(bg);
@@ -949,6 +668,14 @@ public class SettingsActivity extends AppCompatActivity {
                 ShortToast.show(this, getString(R.string.enable_lock_first));
             }
         });
+    }
+
+    private void setupCollapseBlankLines() {
+        Switch collapseSwitch = findViewById(R.id.switch_collapse_blank_lines);
+        if (collapseSwitch == null) return;
+        collapseSwitch.setChecked(prefs.isCollapseBlankLinesEnabled());
+        collapseSwitch.setOnCheckedChangeListener((v, checked) ->
+                prefs.setCollapseBlankLinesEnabled(checked));
     }
 
     private void setupExportImport() {

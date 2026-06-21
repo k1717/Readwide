@@ -33,6 +33,7 @@
         android:fillViewport="true">
 
         <LinearLayout
+            android:id="@+id/settings_content_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
@@ -43,6 +44,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_language"
+                android:visibility="gone"
                 android:text="@string/settings_section_language"
                 android:textColor="?attr/colorPrimary"
                 android:textSize="14sp"
@@ -52,21 +55,37 @@
                 android:id="@+id/language_current_value"
                 android:layout_width="match_parent"
                 android:layout_height="52dp"
-                android:layout_marginBottom="24dp"
+                android:layout_marginBottom="8dp"
                 android:background="?attr/selectableItemBackground"
                 android:gravity="center_vertical"
                 android:paddingStart="14dp"
                 android:paddingEnd="14dp"
                 android:textColor="?attr/colorOnSurface"
-                android:textSize="16sp" />
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/settings_open_view_settings"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/selectableItemBackground"
+                android:gravity="center_vertical"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:text="@string/settings_open_view_settings"
+                android:textColor="?attr/colorPrimary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_theme"
                 android:text="@string/settings_section_theme"
                 android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
+                android:textSize="16sp"
                 android:textStyle="bold" />
 
             <RadioGroup
@@ -428,6 +447,11 @@
                     android:text="@string/apply_custom_main_theme" />
             </LinearLayout>
 
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="?attr/colorOutline" />
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -450,14 +474,20 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:layout_marginBottom="24dp"
+                android:layout_marginBottom="0dp"
                 android:text="@string/create_custom_reading_theme" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="15dp"
+                android:layout_marginBottom="15dp"
+                android:background="?attr/colorOutline" />
 
             <TextView
                 android:id="@+id/font_size_label"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
                 android:text="@string/font_size_default"
                 android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="14sp" />
@@ -487,9 +517,10 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
                 android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_txt_layout"
                 android:text="@string/settings_section_txt_layout"
                 android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
+                android:textSize="16sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -563,6 +594,29 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="4dp"
+                android:text="@string/text_alignment"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="14sp" />
+
+            <Spinner
+                android:id="@+id/spinner_text_alignment"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:layout_marginBottom="0dp"
+                android:background="@android:color/transparent"
+                android:popupBackground="?attr/colorSurface" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="8dp"
+                android:background="?attr/colorOutline" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp"
                 android:text="@string/large_txt_partition_mode"
                 android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="14sp" />
@@ -583,6 +637,28 @@
                 android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="13sp" />
 
+            <Switch
+                android:id="@+id/switch_collapse_blank_lines"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:text="@string/collapse_blank_lines"
+                android:textColor="?attr/colorOnSurface"
+                android:textSize="16sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:text="@string/collapse_blank_lines_description"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="13sp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginBottom="14dp"
+                android:background="?attr/colorOutline" />
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -597,33 +673,18 @@
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="8dp"
-                android:text="@string/txt_display_rules" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="6dp"
-                android:text="@string/txt_display_rules_actual_file_description"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="13sp" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btn_txt_display_rules_actual_file"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
                 android:layout_marginBottom="22dp"
-                android:text="@string/txt_display_rules_actual_file" />
+                android:text="@string/txt_display_rules" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
                 android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_epub_layout"
                 android:text="@string/settings_section_epub_layout"
                 android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
+                android:textSize="16sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -711,9 +772,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_behavior"
                 android:text="@string/settings_section_behavior"
                 android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
+                android:textSize="16sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -746,9 +808,11 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_button_order"
                 android:text="@string/settings_section_button_order"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="14sp" />
+                android:textColor="?attr/colorPrimary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
 
             <Button
                 android:id="@+id/button_order_main_filters"
@@ -910,9 +974,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_security"
                 android:text="@string/settings_section_security"
                 android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
+                android:textSize="16sp"
                 android:textStyle="bold" />
 
             <Switch
@@ -935,9 +1000,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_backup"
                 android:text="@string/settings_section_backup"
                 android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
+                android:textSize="16sp"
                 android:textStyle="bold" />
 
             <TextView
@@ -986,6 +1052,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="24dp"
                 android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_updates"
+                android:visibility="gone"
                 android:text="@string/settings_section_updates"
                 android:textColor="?attr/colorPrimary"
                 android:textSize="14sp"
@@ -995,6 +1063,7 @@
                 android:id="@+id/update_release_link"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="32dp"
                 android:layout_marginBottom="8dp"
                 android:clickable="true"
                 android:focusable="true"

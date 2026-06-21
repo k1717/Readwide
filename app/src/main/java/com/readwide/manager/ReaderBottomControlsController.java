@@ -265,4 +265,21 @@ final class ReaderBottomControlsController {
                 safeLine);
     }
 
+    // Variant allowing a string current-page token (e.g. "~123" while the exact
+    // page index is still computing). The format mirrors page_move_label_with_line,
+    // which is identical and purely symbolic across all locales.
+    String formatPageMoveLabel(String pageText, String totalPagesText, int lineNumber) {
+        int safeLine = Math.max(1, lineNumber);
+        String safeTotal = (totalPagesText == null || totalPagesText.trim().isEmpty())
+                ? "1"
+                : totalPagesText;
+        String safePage = (pageText == null || pageText.trim().isEmpty())
+                ? "1"
+                : pageText;
+        if (safeLine <= 1) {
+            return safePage + " / " + safeTotal;
+        }
+        return safePage + " (" + safeLine + ") / " + safeTotal;
+    }
+
 }

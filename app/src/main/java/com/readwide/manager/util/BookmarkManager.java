@@ -344,7 +344,7 @@ public class BookmarkManager {
             beginnerGuideEn.put("lineOrPage", "Change lineOrPage when you know the target line or page number. For TXT, this means logical line, not displayed page.");
             beginnerGuideEn.put("moveBy", "Use moveBy for small corrections. Positive numbers move later; negative numbers move earlier.");
             beginnerGuideEn.put("txtFindText", "For TXT files, use findText when you know a sentence but do not know the line number. Leave findText empty when you are not using text search.");
-            beginnerGuideEn.put("txtPageModel", "TXT pageNumber/totalPages are cached display metadata from the selected large-TXT partition mode. They may differ between Standard 4000/400 and High-buffer 12000/600, so normal bookmark edits should use setLine, moveByLines, or findText instead.");
+            beginnerGuideEn.put("txtPageModel", "TXT pageNumber/totalPages are cached display metadata. They depend on the large-TXT partition mode, the blank-line collapse setting, display rules, font/line-spacing/layout, and device layout, so normal bookmark edits should use setLine, moveByLines, or findText instead. When blank-line collapse is on, line-based targets use the displayed logical line number, not the original physical file line.");
             beginnerGuideEn.put("txtCachedPageStatus", "Each TXT edit row includes largeTxtPartitionPageModelState. If cachedPageModelMatchesCurrentPartitionMode is false, the cached Page X/Y was made under another or unknown partition mode, or has not yet been recalculated for the export mode. The bookmark location is still preserved by character/line/anchor data and Page X/Y refreshes after that file is opened and exact page anchors rebuild.");
             beginnerGuideEn.put("simpleRule", "Usually change only one thing: memo, lineOrPage, moveBy, or findText. Keeping the rest unchanged is safest.");
             editGuide.put("beginnerGuide_EN", beginnerGuideEn);
@@ -355,7 +355,7 @@ public class BookmarkManager {
             beginnerGuideKo.put("lineOrPage", "목표 줄 번호나 페이지 번호를 알면 lineOrPage를 수정하세요. TXT에서는 표시 페이지가 아니라 논리 줄 번호를 뜻합니다.");
             beginnerGuideKo.put("moveBy", "조금만 위치를 보정하려면 moveBy를 쓰세요. 양수는 뒤쪽, 음수는 앞쪽으로 이동합니다.");
             beginnerGuideKo.put("txtFindText", "TXT 파일에서 줄 번호는 모르지만 문장을 알고 있으면 findText를 쓰세요. 문장 검색을 쓰지 않을 때는 findText를 빈칸으로 두면 됩니다.");
-            beginnerGuideKo.put("txtPageModel", "TXT pageNumber/totalPages는 선택된 대용량 TXT 파티션 모드에서 나온 표시용 캐시입니다. 기본 4000/400과 고버퍼 12000/600 사이에서 달라질 수 있으므로, 일반 북마크 수정은 setLine, moveByLines, findText를 사용하세요.");
+            beginnerGuideKo.put("txtPageModel", "TXT pageNumber/totalPages는 표시용 캐시 메타데이터입니다. 대용량 TXT 파티션 모드, 연속 빈 줄 접기 설정, 표시규칙, 글꼴/줄간격/레이아웃, 기기 화면 구성에 따라 달라지므로, 일반 북마크 수정은 setLine, moveByLines, findText를 사용하세요. 연속 빈 줄 접기가 켜져 있으면 줄 기반 대상은 원본 파일의 물리적 줄이 아니라 화면에 표시되는 논리 줄 번호를 기준으로 합니다.");
             beginnerGuideKo.put("txtCachedPageStatus", "각 TXT 수정 행에는 largeTxtPartitionPageModelState가 포함됩니다. cachedPageModelMatchesCurrentPartitionMode가 false이면 캐시된 Page X/Y가 다른 모드 또는 알 수 없는 모드에서 만들어졌거나, 백업 시점의 모드로 아직 재계산되지 않은 값입니다. 북마크 위치 자체는 문자/줄/앵커 정보로 유지되고, 해당 파일을 열어 exact page anchor가 다시 만들어지면 Page X/Y가 갱신됩니다.");
             beginnerGuideKo.put("simpleRule", "보통은 memo, lineOrPage, moveBy, findText 중 하나만 바꾸는 것이 가장 안전합니다. 나머지는 그대로 두세요.");
             editGuide.put("beginnerGuide_KO", beginnerGuideKo);
@@ -363,7 +363,7 @@ public class BookmarkManager {
             JSONObject developerGuideEn = new JSONObject();
             developerGuideEn.put("whereToEdit", "Use bookmarkEdits.developer only for manual recovery, migration, or precise repair.");
             developerGuideEn.put("preferredRepair", "Prefer lineOrPage, setLine, setPage, or setPageOrSection before editing raw charPosition.");
-            developerGuideEn.put("txtPageModel", "For TXT, pageNumber, totalPages, and pageLayoutSignature describe the cached page model that produced the displayed page label. Treat them as metadata unless you are repairing the page-model cache deliberately.");
+            developerGuideEn.put("txtPageModel", "For TXT, pageNumber, totalPages, and pageLayoutSignature describe the cached page model that produced the displayed page label; that model depends on the partition mode, blank-line collapse, display rules, and font/layout. Treat them as metadata unless you are repairing the page-model cache deliberately.");
             developerGuideEn.put("charPositionWarning", "charPosition is powerful but easy to break. Edit it only when you intentionally want raw internal positioning.");
             developerGuideEn.put("anchors", "anchorTextBefore and anchorTextAfter help TXT bookmarks recover after layout changes. Avoid editing them unless you are repairing anchors deliberately.");
             developerGuideEn.put("previewRefresh", "TXT preview and anchors are refreshed after import when the local file is available, or later after the file is rebound.");
@@ -372,7 +372,7 @@ public class BookmarkManager {
             JSONObject developerGuideKo = new JSONObject();
             developerGuideKo.put("whereToEdit", "bookmarkEdits.developer는 수동 복구, 마이그레이션, 정밀 수정을 할 때만 사용하세요.");
             developerGuideKo.put("preferredRepair", "raw charPosition을 직접 고치기 전에 lineOrPage, setLine, setPage, setPageOrSection 수정을 먼저 권장합니다.");
-            developerGuideKo.put("txtPageModel", "TXT의 pageNumber, totalPages, pageLayoutSignature는 표시 페이지 라벨을 만든 캐시 페이지 모델을 설명하는 메타데이터입니다. 페이지 모델 캐시를 의도적으로 복구하는 경우가 아니라면 수정하지 마세요.");
+            developerGuideKo.put("txtPageModel", "TXT의 pageNumber, totalPages, pageLayoutSignature는 표시 페이지 라벨을 만든 캐시 페이지 모델을 설명하는 메타데이터입니다. 이 모델은 파티션 모드, 연속 빈 줄 접기, 표시규칙, 글꼴/레이아웃에 따라 달라집니다. 페이지 모델 캐시를 의도적으로 복구하는 경우가 아니라면 수정하지 마세요.");
             developerGuideKo.put("charPositionWarning", "charPosition은 강력하지만 잘못 수정하기 쉽습니다. 내부 위치값을 직접 지정해야 할 때만 수정하세요.");
             developerGuideKo.put("anchors", "anchorTextBefore와 anchorTextAfter는 TXT 북마크가 레이아웃 변경 후에도 복구되도록 돕습니다. 앵커를 의도적으로 복구하는 경우가 아니면 수정하지 않는 것이 좋습니다.");
             developerGuideKo.put("previewRefresh", "TXT 미리보기와 앵커는 가져오기 시 로컬 파일을 찾을 수 있거나 나중에 파일이 다시 연결되면 새 위치 기준으로 갱신됩니다.");
@@ -545,11 +545,19 @@ public class BookmarkManager {
         int buffer = prefs != null
                 ? prefs.getLargeTextPartitionBufferLines()
                 : PrefsManager.LARGE_TEXT_PARTITION_BUFFER_LINES_STANDARD;
+        boolean collapseBlank = prefs != null && prefs.isCollapseBlankLinesEnabled();
         String savedSignature = bookmark.getPageLayoutSignature();
-        return savedSignature != null
-                && savedSignature.contains("|partitionMode=" + mode)
+        if (savedSignature == null) return false;
+        // Legacy 1.0.6 large-TXT signatures predate the collapseBlank field. With
+        // collapsing off (the default), treat a signature that has no collapseBlank
+        // marker as compatible so upgraded bookmarks keep their cached page model;
+        // require an explicit match only once collapsing is on.
+        boolean collapseMatches = savedSignature.contains("|collapseBlank=" + collapseBlank)
+                || (!collapseBlank && !savedSignature.contains("|collapseBlank="));
+        return savedSignature.contains("|partitionMode=" + mode)
                 && savedSignature.contains("|partitionLines=" + lines)
-                && savedSignature.contains("|partitionBuffer=" + buffer);
+                && savedSignature.contains("|partitionBuffer=" + buffer)
+                && collapseMatches;
     }
 
     private String currentLargeTextPartitionModeName(PrefsManager prefs) {

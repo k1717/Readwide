@@ -193,8 +193,8 @@ final class DocumentFontDialogController {
 
         TextView hint = makeDocumentDialogLabel(
                 localizedText(
-                        "Select a font found from Android/system font folders.",
-                        "Android/시스템 글꼴 폴더에서 찾은 글꼴을 선택합니다."),
+                        "Pick a .ttf/.otf file, or select a font found from Android/system font folders.",
+                        "(.ttf/.otf) 파일을 고르거나, Android/시스템 글꼴 폴더에서 찾은 글꼴을 선택합니다."),
                 sub,
                 12f);
         hint.setGravity(Gravity.CENTER);
@@ -247,6 +247,15 @@ final class DocumentFontDialogController {
         preserveFontDialogHeaderBarrier(panel, scrollClip);
 
         String currentFont = currentDocumentFontSelection();
+
+        TextView importRow = makeDocumentFontActionRow(
+                localizedText("Add font file (.ttf/.otf)", "폰트 파일 추가 (.ttf/.otf)"), fg, false);
+        importRow.setOnClickListener(v -> {
+            dialog.dismiss();
+            activity.launchDocumentFontImport();
+        });
+        list.addView(importRow);
+
         if (fontNames.isEmpty()) {
             TextView empty = makeDocumentDialogLabel(
                     localizedText("No readable system fonts found.", "읽을 수 있는 시스템 글꼴을 찾지 못했습니다."),
@@ -396,6 +405,16 @@ final class DocumentFontDialogController {
             if (activity.prefs != null) activity.prefs.setFontFamily(normalized);
         }
         refreshCurrentDocumentFont();
+    }
+
+    void applyImportedDocumentFont(@NonNull String importedName) {
+        try {
+            FontManager.getInstance().addUserFont(activity, importedName);
+        } catch (Throwable ignored) {
+            // The font is still usable even when the picker shortcut fails to persist.
+        }
+        setDocumentFontSelection(importedName);
+        showDocumentFontDialog();
     }
 
     private void constrainDialogScrollArea(@NonNull View scrollContainer, @NonNull ViewGroup contentList) {

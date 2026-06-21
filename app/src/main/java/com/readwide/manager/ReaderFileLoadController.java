@@ -10,7 +10,9 @@ import com.readwide.manager.model.CachedRestoreTarget;
 import com.readwide.manager.model.LargeTextLinePartitionResult;
 import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.util.FileUtils;
+import com.readwide.manager.util.PrefsManager;
 import com.readwide.manager.util.TextDisplayRuleManager;
+import com.readwide.manager.util.TxtBlankLineCollapser;
 
 import java.io.File;
 import java.util.Locale;
@@ -31,6 +33,11 @@ final class ReaderFileLoadController {
 
         final int generation = activity.loadGeneration.incrementAndGet();
         activity.largeTextPartitionSwitchGeneration.incrementAndGet();
+        // Fix the blank-line collapse policy for this load so the large-text partition
+        // reader uses one consistent value (matching the small-text path and
+        // trimReaderMemoryForBackground) instead of a stale or default field.
+        activity.largeTextActiveCollapseBlankLines =
+                activity.prefs != null && activity.prefs.isCollapseBlankLinesEnabled();
         activity.loadingWindowPartitionJumpGeneration = -1;
         activity.clearLargeTextPartitionCache();
         activity.activityDestroyed = false;
@@ -50,6 +57,8 @@ final class ReaderFileLoadController {
                 sourceIntent.getIntExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE, -1);
         String jumpAnchorBefore = sourceIntent.getStringExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE);
         String jumpAnchorAfter = sourceIntent.getStringExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER);
+        boolean preferAnchorPartition =
+                sourceIntent.getBooleanExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION, false);
         final android.content.Context appContext = activity.getApplicationContext();
 
         activity.executor.execute(() -> {
@@ -61,7 +70,7 @@ final class ReaderFileLoadController {
                 final String finalFileName = target.name;
                 final boolean useLargeTextFastOpen = activity.shouldUseLargeTextFastOpen(fileToRead);
                 if (useLargeTextFastOpen) {
-                    activity.recordLargeTextCacheAccess(fileToRead);
+                    activity.recordLargeTextCacheAccess(fileToRead, finalFilePath);
                     openLargeTextPreview(
                             fileToRead,
                             finalFilePath,
@@ -73,7 +82,8 @@ final class ReaderFileLoadController {
                             requestedPartitionStartByte,
                             requestedPartitionStartLine,
                             jumpAnchorBefore,
-                            jumpAnchorAfter);
+                            jumpAnchorAfter,
+                            preferAnchorPartition);
                     return;
                 }
 
@@ -94,9 +104,8 @@ final class ReaderFileLoadController {
 
     private void clearViewerStateForLoad(String path, boolean samePathReload) {
         activity.fileContent = "";
-        activity.appliedTextDisplayRuleSignature = TextDisplayRuleManager.getSignature(
-                activity.getApplicationContext(),
-                path != null ? new File(path).getAbsolutePath() : activity.filePath);
+        String sigPath = path != null ? new File(path).getAbsolutePath() : activity.filePath;
+        activity.appliedTextDisplayRuleSignature = activity.textContentTransformSignatureForPath(sigPath);
         activity.activeSearchQuery = "";
         activity.activeSearchIndex = -1;
         activity.activeSearchOrdinal = 0;
@@ -158,15 +167,56 @@ final class ReaderFileLoadController {
                                       long requestedPartitionStartByte,
                                       int requestedPartitionStartLine,
                                       String jumpAnchorBefore,
-                                      String jumpAnchorAfter) throws Exception {
+                                      String jumpAnchorAfter,
+                                      boolean preferAnchorPartition) throws Exception {
         CachedRestoreTarget restoreTarget = resolveInitialRestoreTarget(
                 finalFilePath, jumpPosition, jumpDisplayPage, jumpTotalPages, fileToRead.length());
         int initialRestorePosition = restoreTarget.charPosition;
+        // Auto-resume carries no intent anchors; fall back to the saved ReaderState anchors, and
+        // prefer the anchor only when the saved offset is in a stale coordinate space (length or
+        // presentation signature changed), so an unchanged resume keeps the cheap char-offset path.
+        final boolean effectivePreferAnchor = preferAnchorPartition || restoreTarget.preferAnchorPartition;
+        final String effectiveAnchorBefore =
+                (jumpAnchorBefore != null && !jumpAnchorBefore.isEmpty())
+                        ? jumpAnchorBefore : restoreTarget.anchorTextBefore;
+        final String effectiveAnchorAfter =
+                (jumpAnchorAfter != null && !jumpAnchorAfter.isEmpty())
+                        ? jumpAnchorAfter : restoreTarget.anchorTextAfter;
         float estimatedBytesPerChar = activity.estimateBytesPerChar(fileToRead);
         long fullByteLength = Math.max(1L, fileToRead.length());
-        LargeTextLinePartitionResult partition = requestedPartitionStartLine > 0
-                ? activity.readLargeTextLinePartitionAtStartLine(fileToRead, requestedPartitionStartLine)
-                : activity.readLargeTextLinePartitionForChar(fileToRead, initialRestorePosition);
+        int effectiveRestorePosition = jumpPosition;
+        LargeTextLinePartitionResult partition;
+        if (requestedPartitionStartLine > 0) {
+            partition = activity.readLargeTextLinePartitionAtStartLine(fileToRead, requestedPartitionStartLine);
+        } else {
+            int anchorCharPosition = -1;
+            // Only consult the anchor when the saved character offset belongs to a
+            // previous coordinate space (collapse/display-rule/disk-edit reload).
+            // Other openings keep char-offset selection so bookmark/restore opens do
+            // not pay an extra full-file scan.
+            if (effectivePreferAnchor
+                    && ((effectiveAnchorBefore != null && !effectiveAnchorBefore.isEmpty())
+                        || (effectiveAnchorAfter != null && !effectiveAnchorAfter.isEmpty()))) {
+                try {
+                    anchorCharPosition = activity.resolveLargeTextCharPositionForAnchor(
+                            fileToRead, effectiveAnchorBefore, effectiveAnchorAfter);
+                } catch (Exception ignored) {
+                    anchorCharPosition = -1;
+                }
+            }
+            if (anchorCharPosition >= 0) {
+                // The saved offset belongs to the previous coordinate space. Re-resolve
+                // the cursor to an exact offset in the current space and use it for both
+                // partition selection and restore, so the loaded partition contains the
+                // restore position (no boundary-handoff loop) and the cursor lands
+                // mid-line rather than at the line start.
+                partition = activity.readLargeTextLinePartitionForChar(fileToRead, anchorCharPosition);
+                effectiveRestorePosition = anchorCharPosition;
+            } else {
+                partition = activity.readLargeTextLinePartitionForChar(fileToRead, initialRestorePosition);
+            }
+        }
+        final int restorePositionForApply = effectiveRestorePosition;
 
         String previewContent = partition.content;
         int previewLineCount = partition.lineCount;
@@ -181,12 +231,12 @@ final class ReaderFileLoadController {
         activity.handler.post(() -> {
             if (!activity.activityDestroyed && generation == activity.loadGeneration.get()) {
                 activity.fileApplier().onLargeTextPreviewLoaded(previewContent, previewLineCount,
-                        finalFilePath, finalFileName, jumpPosition,
+                        finalFilePath, finalFileName, restorePositionForApply,
                         fullByteLength,
                         previewStartByte, partitionEndByte, previewBaseCharOffset,
                         estimatedTotalChars, true,
                         restoreTarget.displayPage, restoreTarget.totalPages,
-                        jumpAnchorBefore, jumpAnchorAfter,
+                        effectiveAnchorBefore, effectiveAnchorAfter,
                         estimatedBytesPerChar, partitionBodyStartCharCount, partitionBodyCharCount,
                         partition.windowStartLine, partition.startLine, partition.endLine, partition.totalLines);
             }
@@ -207,7 +257,11 @@ final class ReaderFileLoadController {
         } else {
             rawContent = FileUtils.readReadableFile(appContext, fileToRead);
         }
-        final String content = TextDisplayRuleManager.apply(appContext, rawContent, finalFilePath);
+        String processedContent = TextDisplayRuleManager.apply(appContext, rawContent, finalFilePath);
+        if (activity.largeTextActiveCollapseBlankLines) {
+            processedContent = TxtBlankLineCollapser.collapse(processedContent);
+        }
+        final String content = processedContent;
         final int lineCount = activity.countLines(content);
 
         activity.handler.post(() -> {
@@ -244,9 +298,17 @@ final class ReaderFileLoadController {
                 boolean sameLength = state.getFileLength() <= 0L
                         || fileLength <= 0L
                         || state.getFileLength() == fileLength;
-                int page = sameLength ? state.getPageNumber() : 0;
-                int total = sameLength ? state.getTotalPages() : 0;
-                return new CachedRestoreTarget(state.getCharPosition(), page, total);
+                String savedSignature = state.getPresentationSignature();
+                // An empty signature means the state predates signature tracking; keep the
+                // old length-only behavior for it rather than discarding its page cache.
+                boolean sameSignature = savedSignature == null
+                        || savedSignature.isEmpty()
+                        || savedSignature.equals(activity.readerPageLayoutSignatureForPath(loadedFilePath));
+                boolean cacheUsable = sameLength && sameSignature;
+                int page = cacheUsable ? state.getPageNumber() : 0;
+                int total = cacheUsable ? state.getTotalPages() : 0;
+                return new CachedRestoreTarget(state.getCharPosition(), page, total,
+                        state.getAnchorTextBefore(), state.getAnchorTextAfter(), !cacheUsable);
             }
         }
 

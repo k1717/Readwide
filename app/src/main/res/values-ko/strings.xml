@@ -288,6 +288,9 @@
     <string name="merge">합치기</string>
     <string name="merge_or_replace">기존 데이터/설정과 합칠까요, 아니면 백업 항목으로 바꿀까요?</string>
     <string name="more">더보기</string>
+    <string name="more_section_display">표시·스타일</string>
+    <string name="more_section_text">텍스트 처리</string>
+    <string name="more_section_tools">도구·정보</string>
     <string name="new_folder">새 폴더</string>
     <string name="parent_folder">상위 폴더로</string>
     <string name="parent_folder_short">← 상위 폴더로</string>
@@ -320,6 +323,8 @@
     <string name="search_text_hint">검색할 텍스트...</string>
     <string name="select_font">글꼴 선택</string>
     <string name="settings">설정</string>
+    <string name="settings_appearance_title">보기 설정</string>
+    <string name="settings_open_view_settings">보기 설정 (테마·글꼴·레이아웃)</string>
     <string name="settings_section_backup">백업</string>
     <string name="settings_section_behavior">동작</string>
     <string name="settings_section_language">언어</string>
@@ -369,6 +374,8 @@
     <string name="large_txt_partition_mode_standard">기본 — 4,000 / 400줄</string>
     <string name="large_txt_partition_mode_high_buffer">고버퍼 — 12,000 / 600줄</string>
     <string name="large_txt_partition_mode_description">대용량 TXT의 공식 파티션 크기를 정합니다. 기본 모드는 안정성을 우선하고, 고버퍼 모드는 매우 큰 파일에서 전환 구간을 더 넓게 잡습니다.</string>
+    <string name="collapse_blank_lines">연속된 빈 줄 한 줄로 합치기</string>
+    <string name="collapse_blank_lines_description">표시 전용입니다. 빈 줄이 두 줄 이상 연속되면 한 줄로 보여줍니다. 원본 파일은 바뀌지 않습니다. 리더에서 여는 모든 텍스트 파일(TXT, log, CSV 등)에 적용됩니다.</string>
 
     <string name="epub_page_direction">EPUB 페이지 넘김 방향</string>
     <string name="epub_page_direction_ltr">왼쪽에서 오른쪽 / 국내·서양 서적</string>
@@ -455,6 +462,7 @@
     <string name="page_status_align_left">왼쪽</string>
     <string name="page_status_align_center">가운데</string>
     <string name="page_status_align_right">오른쪽</string>
+    <string name="text_alignment">텍스트 정렬</string>
     <string name="add_shortcut">바로가기 추가</string>
     <string name="remove_shortcut">바로가기 제거</string>
     <string name="shortcut_added">바로가기를 추가했습니다</string>

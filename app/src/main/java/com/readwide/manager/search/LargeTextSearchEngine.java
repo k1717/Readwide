@@ -3,12 +3,15 @@ package com.readwide.manager.search;
 import android.content.Context;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import com.readwide.manager.util.FileUtils;
+import com.readwide.manager.util.PrefsManager;
 import com.readwide.manager.util.SearchMatcher;
 import com.readwide.manager.util.SearchOptions;
 import com.readwide.manager.util.TextDisplayRule;
 import com.readwide.manager.util.TextDisplayRuleManager;
+import com.readwide.manager.util.TxtBlankLineCollapser;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -26,6 +29,15 @@ import java.util.List;
 public final class LargeTextSearchEngine {
     public interface ReaderOpener {
         BufferedReader open(@NonNull File file) throws IOException;
+    }
+
+    /**
+     * Cooperative cancellation hook polled during full-file scans so a search or
+     * count that has been superseded (newer query/options) or whose activity is
+     * gone stops scanning instead of running the whole file to completion.
+     */
+    public interface CancelSignal {
+        boolean isCancelled();
     }
 
     private final Context appContext;
@@ -56,6 +68,17 @@ public final class LargeTextSearchEngine {
                                                int startPosition,
                                                boolean forward,
                                                @NonNull SearchOptions options) throws IOException {
+        return searchNearest(file, query, startPosition, forward, options,
+                PrefsManager.getInstance(appContext).isCollapseBlankLinesEnabled(), null);
+    }
+
+    public LargeTextSearchResult searchNearest(@NonNull File file,
+                                               @NonNull String query,
+                                               int startPosition,
+                                               boolean forward,
+                                               @NonNull SearchOptions options,
+                                               boolean collapseBlankLines,
+                                               @Nullable CancelSignal cancel) throws IOException {
         SearchMatcher matcher = SearchMatcher.compile(query, options);
         if (matcher == null) return new LargeTextSearchResult(-1, 1, 0, 0);
 
@@ -77,11 +100,19 @@ public final class LargeTextSearchEngine {
         long charCount = 0L;
         int line = 1;
         List<TextDisplayRule> activeRules = getActiveRules(file);
+        TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
 
         try (BufferedReader reader = readerOpener.open(file)) {
             String lineText;
+            long scanned = 0L;
             while ((lineText = reader.readLine()) != null) {
+                if (cancel != null && (++scanned & 0x3FFL) == 0L && cancel.isCancelled()) {
+                    return new LargeTextSearchResult(-1, 1, 0, 0);
+                }
                 String normalized = normalizeLine(lineText, activeRules);
+                String emitted = collapseFilter.accept(normalized);
+                if (emitted == null) continue;
+                normalized = emitted;
 
                 final long lineBaseChar = charCount;
                 final int curLine = line;
@@ -139,8 +170,17 @@ public final class LargeTextSearchEngine {
     public int countMatches(@NonNull File file,
                             @NonNull String query,
                             @NonNull SearchOptions options) throws IOException {
+        return countMatches(file, query, options,
+                PrefsManager.getInstance(appContext).isCollapseBlankLinesEnabled(), null);
+    }
+
+    public int countMatches(@NonNull File file,
+                            @NonNull String query,
+                            @NonNull SearchOptions options,
+                            boolean collapseBlankLines,
+                            @Nullable CancelSignal cancel) throws IOException {
         if (query.isEmpty()) return 0;
-        return search(file, query, 0, true, Integer.MAX_VALUE, options).total;
+        return search(file, query, 0, true, Integer.MAX_VALUE, options, collapseBlankLines, cancel).total;
     }
 
     public LargeTextSearchResult search(@NonNull File file,
@@ -157,6 +197,18 @@ public final class LargeTextSearchEngine {
                                         boolean forward,
                                         int targetOccurrence,
                                         @NonNull SearchOptions options) throws IOException {
+        return search(file, query, startPosition, forward, targetOccurrence, options,
+                PrefsManager.getInstance(appContext).isCollapseBlankLinesEnabled(), null);
+    }
+
+    public LargeTextSearchResult search(@NonNull File file,
+                                        @NonNull String query,
+                                        int startPosition,
+                                        boolean forward,
+                                        int targetOccurrence,
+                                        @NonNull SearchOptions options,
+                                        boolean collapseBlankLines,
+                                        @Nullable CancelSignal cancel) throws IOException {
         SearchMatcher matcher = SearchMatcher.compile(query, options);
         if (matcher == null) return new LargeTextSearchResult(-1, 1, 0, 0);
 
@@ -178,11 +230,19 @@ public final class LargeTextSearchEngine {
         long charCount = 0L;
         int line = 1;
         List<TextDisplayRule> activeRules = getActiveRules(file);
+        TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
 
         try (BufferedReader reader = readerOpener.open(file)) {
             String lineText;
+            long scanned = 0L;
             while ((lineText = reader.readLine()) != null) {
+                if (cancel != null && (++scanned & 0x3FFL) == 0L && cancel.isCancelled()) {
+                    return new LargeTextSearchResult(-1, 1, 0, 0);
+                }
                 String normalized = normalizeLine(lineText, activeRules);
+                String emitted = collapseFilter.accept(normalized);
+                if (emitted == null) continue;
+                normalized = emitted;
 
                 final long lineBaseChar = charCount;
                 final int curLine = line;

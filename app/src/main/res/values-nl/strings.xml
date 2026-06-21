@@ -717,4 +717,12 @@
     <string name="tts_resume">Hervatten</string>
     <string name="tts_floating_drag">Sleep om te verplaatsen</string>
     <string name="delete_selected_includes_folders_warning">%1$d hiervan zijn mappen — al hun inhoud wordt ook verwijderd.</string>
+    <string name="collapse_blank_lines">Herhaalde lege regels samenvoegen</string>
+    <string name="collapse_blank_lines_description">Alleen weergave: toont elke reeks van twee of meer lege regels als één lege regel. Het originele bestand wordt niet gewijzigd. Geldt voor alle tekstbestanden die in de lezer worden geopend (TXT, log, CSV en dergelijke).</string>
+    <string name="more_section_display">Weergave &amp; stijl</string>
+    <string name="more_section_text">Tekstverwerking</string>
+    <string name="more_section_tools">Hulpmiddelen &amp; info</string>
+    <string name="text_alignment">Tekstuitlijning</string>
+    <string name="settings_appearance_title">Weergave-instellingen</string>
+    <string name="settings_open_view_settings">Weergave-instellingen (thema, lettertype, lay-out)</string>
 </resources>

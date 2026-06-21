@@ -723,4 +723,12 @@ Aturan: %2$d aturan aktif</string>
     <string name="tts_resume">Lanjutkan</string>
     <string name="tts_floating_drag">Seret untuk memindahkan</string>
     <string name="delete_selected_includes_folders_warning">%1$d di antaranya adalah folder — semua isinya juga akan dihapus.</string>
+    <string name="collapse_blank_lines">Gabungkan baris kosong berulang</string>
+    <string name="collapse_blank_lines_description">Hanya tampilan: menampilkan rangkaian dua baris kosong atau lebih sebagai satu baris kosong. File asli tidak diubah. Berlaku untuk semua file teks yang dibuka di pembaca (TXT, log, CSV, dan sejenisnya).</string>
+    <string name="more_section_display">Tampilan &amp; gaya</string>
+    <string name="more_section_text">Pemrosesan teks</string>
+    <string name="more_section_tools">Alat &amp; info</string>
+    <string name="text_alignment">Perataan teks</string>
+    <string name="settings_appearance_title">Pengaturan tampilan</string>
+    <string name="settings_open_view_settings">Pengaturan tampilan (tema, font, tata letak)</string>
 </resources>

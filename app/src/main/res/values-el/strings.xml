@@ -717,4 +717,12 @@
     <string name="tts_resume">Συνέχιση</string>
     <string name="tts_floating_drag">Σύρετε για μετακίνηση</string>
     <string name="delete_selected_includes_folders_warning">%1$d από αυτά είναι φάκελοι — θα διαγραφούν και όλα τα περιεχόμενά τους.</string>
+    <string name="collapse_blank_lines">Σύμπτυξη επαναλαμβανόμενων κενών γραμμών</string>
+    <string name="collapse_blank_lines_description">Μόνο εμφάνιση: εμφανίζει κάθε ακολουθία δύο ή περισσότερων κενών γραμμών ως μία κενή γραμμή. Το αρχικό αρχείο δεν τροποποιείται. Ισχύει για όλα τα αρχεία κειμένου που ανοίγουν στην εφαρμογή ανάγνωσης (TXT, log, CSV και παρόμοια).</string>
+    <string name="more_section_display">Εμφάνιση και στυλ</string>
+    <string name="more_section_text">Επεξεργασία κειμένου</string>
+    <string name="more_section_tools">Εργαλεία και πληροφορίες</string>
+    <string name="text_alignment">Στοίχιση κειμένου</string>
+    <string name="settings_appearance_title">Ρυθμίσεις εμφάνισης</string>
+    <string name="settings_open_view_settings">Ρυθμίσεις εμφάνισης (θέμα, γραμματοσειρά, διάταξη)</string>
 </resources>

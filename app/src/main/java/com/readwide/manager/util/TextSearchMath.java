@@ -131,7 +131,120 @@ public final class TextSearchMath {
             if (bestIndex >= 0) return bestIndex;
         }
 
+        // Collapse-tolerant fallback: the "collapse repeated blank lines" reader
+        // option changes how many newlines sit between paragraphs, so an anchor
+        // captured in one collapse state will not match verbatim in the other.
+        // Re-try on a blank-run-normalized view of both sides and map the hit back
+        // to a real content offset. This only runs after the exact passes fail, so
+        // it never changes behavior when no blank-line collapse is involved.
+        if (after.length() >= 8 || before.length() >= 8) {
+            int[] srcMap = new int[content.length() + 2];
+            String cContent = collapseBlankRunsWithMap(content, srcMap);
+            String cAfter = collapseBlankRuns(after);
+            String cBefore = collapseBlankRuns(before);
+            if (cAfter.length() >= 8) {
+                int bestIndex = -1;
+                long bestScore = Long.MAX_VALUE;
+                int searchFrom = 0;
+                while (searchFrom <= cContent.length()) {
+                    int idx = cContent.indexOf(cAfter, searchFrom);
+                    if (idx < 0) break;
+                    int realIdx = srcMap[idx];
+                    long score = Math.abs((long) realIdx - fallbackLocalPosition);
+                    if (!cBefore.isEmpty()) {
+                        int beforeStart = Math.max(0, idx - cBefore.length());
+                        if (cContent.substring(beforeStart, idx).equals(cBefore)) {
+                            score -= 1_000_000L;
+                        }
+                    }
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestIndex = idx;
+                    }
+                    searchFrom = idx + Math.max(1, cAfter.length());
+                }
+                if (bestIndex >= 0) return srcMap[bestIndex];
+            }
+            if (cBefore.length() >= 8) {
+                int bestIndex = -1;
+                long bestScore = Long.MAX_VALUE;
+                int searchFrom = 0;
+                while (searchFrom <= cContent.length()) {
+                    int idx = cContent.indexOf(cBefore, searchFrom);
+                    if (idx < 0) break;
+                    int candidate = Math.min(cContent.length(), idx + cBefore.length());
+                    int realIdx = srcMap[candidate];
+                    long score = Math.abs((long) realIdx - fallbackLocalPosition);
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestIndex = candidate;
+                    }
+                    searchFrom = idx + Math.max(1, cBefore.length());
+                }
+                if (bestIndex >= 0) return srcMap[bestIndex];
+            }
+        }
+
         return -1;
+    }
+
+    /**
+     * Blank-run-normalizes {@code s} (runs of two or more blank/whitespace-only
+     * lines become a single blank line, mirroring the reader's collapse option)
+     * and records, for each character index in the normalized result, the source
+     * index in {@code s}. {@code srcMap} must be at least {@code s.length() + 2}
+     * entries long. Returns the normalized text.
+     */
+    static String collapseBlankRunsWithMap(String s, int[] srcMap) {
+        int n = s.length();
+        StringBuilder out = new StringBuilder(n);
+        boolean firstEmitted = false;
+        boolean blankEmittedInRun = false;
+        int i = 0;
+        while (i <= n) {
+            int lineStart = i;
+            int j = i;
+            while (j < n && s.charAt(j) != '\n') j++;
+            boolean blank = isBlankLineRange(s, lineStart, j);
+            boolean isLast = j >= n;
+            if (blank) {
+                if (!blankEmittedInRun) {
+                    if (firstEmitted) {
+                        srcMap[out.length()] = lineStart;
+                        out.append('\n');
+                    }
+                    firstEmitted = true;
+                    blankEmittedInRun = true;
+                }
+            } else {
+                if (firstEmitted) {
+                    srcMap[out.length()] = lineStart;
+                    out.append('\n');
+                }
+                for (int k = lineStart; k < j; k++) {
+                    srcMap[out.length()] = k;
+                    out.append(s.charAt(k));
+                }
+                firstEmitted = true;
+                blankEmittedInRun = false;
+            }
+            if (isLast) break;
+            i = j + 1;
+        }
+        srcMap[out.length()] = n;
+        return out.toString();
+    }
+
+    private static String collapseBlankRuns(String s) {
+        if (s == null || s.isEmpty()) return "";
+        return collapseBlankRunsWithMap(s, new int[s.length() + 2]);
+    }
+
+    private static boolean isBlankLineRange(String s, int start, int end) {
+        for (int k = start; k < end; k++) {
+            if (!Character.isWhitespace(s.charAt(k))) return false;
+        }
+        return true;
     }
 
     public static String lastChars(String value, int count) {

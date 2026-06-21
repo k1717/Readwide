@@ -22,7 +22,21 @@ import com.readwide.manager.util.TextDisplayRule;
 import com.readwide.manager.util.TextDisplayRuleManager;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.List;
+
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.system.ErrnoException;
+import android.system.Os;
+
+import com.readwide.manager.util.FileUtils;
 
 final class ReaderTextDisplayRuleDialogController {
     private static final int TXT_TOOLBAR_POPUP_Y_DP = 74;
@@ -632,5 +646,296 @@ final class ReaderTextDisplayRuleDialogController {
         if (value == null) return "";
         String oneLine = value.replace('\n', ' ').replace('\r', ' ');
         return oneLine.length() > 24 ? oneLine.substring(0, 24) + "…" : oneLine;
+    }
+
+    // ---- Edit Actual TXT File ----------------------------------------------
+    // Moved here from Settings so it lives in the reader (where the current TXT
+    // file is always known) and is reachable from the TXT More dialog.  The
+    // marker prefs reuse ReaderActivity constants so ReaderReloadController keeps
+    // detecting the physical edit and reloads on reopen.
+
+    private static final long ACTUAL_FILE_LARGE_WARNING_BYTES = 32L * 1024L * 1024L;
+
+    private TextView makeActualFileWarning(String textValue, int color) {
+        TextView w = new TextView(activity);
+        w.setText(textValue);
+        w.setTextColor(color);
+        w.setTextSize(13f);
+        w.setLineSpacing(0f, 1.12f);
+        w.setPadding(0, dpToPx(6), 0, 0);
+        return w;
+    }
+
+    void showEditActualTxtFileDialog() {
+        String path = activity.filePath;
+        if (path == null || path.isEmpty()) {
+            Toast.makeText(activity, R.string.txt_display_rules_actual_file_unavailable, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        File candidate = new File(path);
+        if (!candidate.exists() || !candidate.isFile()) {
+            Toast.makeText(activity, R.string.txt_display_rules_actual_file_unavailable, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final File source = candidate.getAbsoluteFile();
+
+        List<TextDisplayRule> activeRules =
+                TextDisplayRuleManager.getActiveRules(getApplicationContext(), source.getAbsolutePath());
+        if (activeRules.isEmpty()) {
+            Toast.makeText(activity, R.string.txt_display_rules_actual_file_no_rules, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final int ruleCount = activeRules.size();
+
+        syncReaderDialogThemeSnapshot();
+        final int bg = readerDialogBgColor();
+        final int fg = readerDialogTextColor(bg);
+        final int sub = readerDialogSubTextColor(bg);
+        final File copyTarget = makeActualRuleCopyFile(getApplicationContext(), source);
+
+        LinearLayout panel = new LinearLayout(activity);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(Color.TRANSPARENT);
+
+        panel.addView(makeReaderDialogTitle(getString(R.string.txt_display_rules_actual_file_title), bg, fg),
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        int pad = dpToPx(16);
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackgroundColor(Color.TRANSPARENT);
+        box.setPadding(pad, dpToPx(8), pad, dpToPx(8));
+
+        TextView message = new TextView(activity);
+        message.setText(getString(R.string.txt_display_rules_actual_file_message, source.getName()));
+        message.setTextColor(fg);
+        message.setTextSize(14f);
+        message.setLineSpacing(0f, 1.15f);
+        box.addView(message, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        box.addView(makeActualFileWarning(
+                getString(R.string.txt_display_rules_actual_file_sequence_warning, ruleCount), sub));
+        box.addView(makeActualFileWarning(
+                getString(R.string.txt_display_rules_actual_file_overwrite_warning, copyTarget.getName()), sub));
+        if (source.length() >= ACTUAL_FILE_LARGE_WARNING_BYTES) {
+            box.addView(makeActualFileWarning(
+                    getString(R.string.txt_display_rules_actual_file_large_warning,
+                            FileUtils.formatFileSize(source.length())), sub));
+        }
+
+        TextView original = makeReaderCenteredActionButton(
+                getString(R.string.txt_display_rules_actual_file_original), fg);
+        TextView copy = makeReaderCenteredActionButton(
+                getString(R.string.txt_display_rules_actual_file_copy), fg);
+        TextView cancel = makeReaderCenteredActionButton(getString(R.string.cancel), sub);
+        LinearLayout.LayoutParams firstButtonLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48));
+        firstButtonLp.setMargins(0, dpToPx(10), 0, dpToPx(8));
+        box.addView(original, firstButtonLp);
+        box.addView(copy);
+        box.addView(cancel);
+        panel.addView(box, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        final android.app.Dialog dialog = createNarrowPositionedReaderDialog(panel, bg,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, TXT_TOOLBAR_POPUP_Y_DP, 0.80f, 420, true);
+        original.setOnClickListener(v -> {
+            dialog.dismiss();
+            showEditActualTxtFileConfirmDialog(true, source, copyTarget, ruleCount);
+        });
+        copy.setOnClickListener(v -> {
+            dialog.dismiss();
+            showEditActualTxtFileConfirmDialog(false, source, copyTarget, ruleCount);
+        });
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        dialog.show();
+    }
+
+    private void showEditActualTxtFileConfirmDialog(boolean editOriginal, @NonNull File source,
+                                                    @NonNull File copyTarget, int ruleCount) {
+        syncReaderDialogThemeSnapshot();
+        final int bg = readerDialogBgColor();
+        final int fg = readerDialogTextColor(bg);
+        final int sub = readerDialogSubTextColor(bg);
+        final int danger = isLightColor(bg) ? Color.rgb(95, 35, 35) : Color.rgb(255, 170, 170);
+        final String targetName = editOriginal ? source.getName() : copyTarget.getName();
+
+        LinearLayout panel = new LinearLayout(activity);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(Color.TRANSPARENT);
+
+        panel.addView(makeReaderDialogTitle(getString(R.string.txt_display_rules_actual_file_confirm_title), bg, fg),
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        int pad = dpToPx(16);
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackgroundColor(Color.TRANSPARENT);
+        box.setPadding(pad, dpToPx(8), pad, dpToPx(8));
+
+        TextView message = new TextView(activity);
+        message.setText(getString(editOriginal
+                        ? R.string.txt_display_rules_actual_file_confirm_original_message
+                        : R.string.txt_display_rules_actual_file_confirm_copy_message,
+                targetName, ruleCount));
+        message.setTextColor(fg);
+        message.setTextSize(14f);
+        message.setLineSpacing(0f, 1.15f);
+        box.addView(message, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        box.addView(makeActualFileWarning(getString(editOriginal
+                        ? R.string.txt_display_rules_actual_file_confirm_original_warning
+                        : R.string.txt_display_rules_actual_file_confirm_copy_warning, targetName), danger));
+        box.addView(makeActualFileWarning(
+                getString(R.string.txt_display_rules_actual_file_no_turning_back), danger));
+        if (source.length() >= ACTUAL_FILE_LARGE_WARNING_BYTES) {
+            box.addView(makeActualFileWarning(
+                    getString(R.string.txt_display_rules_actual_file_large_warning,
+                            FileUtils.formatFileSize(source.length())), sub));
+        }
+
+        TextView apply = makeReaderCenteredActionButton(getString(editOriginal
+                ? R.string.txt_display_rules_actual_file_confirm_original_button
+                : R.string.txt_display_rules_actual_file_confirm_copy_button), danger);
+        TextView cancel = makeReaderCenteredActionButton(getString(R.string.cancel), sub);
+        LinearLayout.LayoutParams firstButtonLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48));
+        firstButtonLp.setMargins(0, dpToPx(10), 0, dpToPx(8));
+        box.addView(apply, firstButtonLp);
+        box.addView(cancel);
+        panel.addView(box, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        final android.app.Dialog dialog = createNarrowPositionedReaderDialog(panel, bg,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, TXT_TOOLBAR_POPUP_Y_DP, 0.80f, 420, true);
+        apply.setOnClickListener(v -> {
+            dialog.dismiss();
+            applyTextDisplayRulesToActualFile(editOriginal, source);
+        });
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        dialog.show();
+    }
+
+    private void applyTextDisplayRulesToActualFile(boolean editOriginal, @NonNull File sourceFile) {
+        final Context appContext = getApplicationContext();
+        final Handler mainHandler = new Handler(Looper.getMainLooper());
+        final ArrayList<TextDisplayRule> activeRules = new ArrayList<>(
+                TextDisplayRuleManager.getActiveRules(appContext, sourceFile.getAbsolutePath()));
+        if (activeRules.isEmpty()) {
+            Toast.makeText(appContext, R.string.txt_display_rules_actual_file_no_rules, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Toast.makeText(appContext, R.string.txt_display_rules_actual_file_applying, Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                String encoding = FileUtils.detectEncoding(sourceFile);
+                String originalText = FileUtils.readTextFile(sourceFile, encoding);
+                String fixedText = TextDisplayRuleManager.apply(originalText, activeRules);
+                if (originalText.equals(fixedText)) {
+                    mainHandler.post(() -> Toast.makeText(
+                            appContext, R.string.txt_display_rules_actual_file_no_changes, Toast.LENGTH_SHORT).show());
+                    return;
+                }
+
+                File outputFile = editOriginal ? sourceFile : makeActualRuleCopyFile(appContext, sourceFile);
+                writeTextWithEncodingSafely(outputFile, fixedText, encoding);
+                if (editOriginal) {
+                    markOriginalTxtFilePhysicallyModified(appContext, outputFile);
+                }
+
+                final String successMessage = editOriginal
+                        ? appContext.getString(R.string.txt_display_rules_actual_file_original_done)
+                        : appContext.getString(R.string.txt_display_rules_actual_file_copy_done, outputFile.getName());
+                mainHandler.post(() -> Toast.makeText(appContext, successMessage, Toast.LENGTH_LONG).show());
+            } catch (OutOfMemoryError oom) {
+                mainHandler.post(() -> Toast.makeText(appContext,
+                        appContext.getString(R.string.txt_display_rules_actual_file_failed,
+                                appContext.getString(R.string.txt_display_rules_actual_file_too_large_runtime)),
+                        Toast.LENGTH_LONG).show());
+            } catch (Exception e) {
+                String m = e.getMessage();
+                if (m == null || m.trim().isEmpty()) m = e.getClass().getSimpleName();
+                final String finalMessage = m;
+                mainHandler.post(() -> Toast.makeText(appContext,
+                        appContext.getString(R.string.txt_display_rules_actual_file_failed, finalMessage),
+                        Toast.LENGTH_LONG).show());
+            }
+        }, "txt-display-rules-actual-file").start();
+    }
+
+    private static void markOriginalTxtFilePhysicallyModified(@NonNull Context context, @NonNull File file) {
+        context.getSharedPreferences(ReaderActivity.TXT_ACTUAL_FILE_EDIT_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(ReaderActivity.KEY_TXT_ACTUAL_FILE_EDIT_PATH, file.getAbsolutePath())
+                .putLong(ReaderActivity.KEY_TXT_ACTUAL_FILE_EDIT_TOKEN, System.currentTimeMillis())
+                .putLong(ReaderActivity.KEY_TXT_ACTUAL_FILE_EDIT_LENGTH, file.length())
+                .putLong(ReaderActivity.KEY_TXT_ACTUAL_FILE_EDIT_LAST_MODIFIED, file.lastModified())
+                .apply();
+    }
+
+    private static File makeActualRuleCopyFile(@NonNull Context context, @NonNull File sourceFile) {
+        File parent = sourceFile.getParentFile();
+        if (parent == null) parent = context.getFilesDir();
+        String name = sourceFile.getName();
+        String base = name;
+        String ext = "";
+        int dot = name.lastIndexOf('.');
+        if (dot > 0) {
+            base = name.substring(0, dot);
+            ext = name.substring(dot);
+        }
+        return new File(parent, base + "_edited" + ext);
+    }
+
+    private static void writeTextWithEncodingSafely(@NonNull File outputFile, @NonNull String text, String encoding)
+            throws IOException {
+        Charset charset;
+        try {
+            charset = (encoding != null && !encoding.trim().isEmpty())
+                    ? Charset.forName(encoding) : StandardCharsets.UTF_8;
+        } catch (Exception ignored) {
+            charset = StandardCharsets.UTF_8;
+        }
+
+        File target = outputFile.getAbsoluteFile();
+        File parent = target.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("Cannot create folder: " + parent.getAbsolutePath());
+        }
+        if (parent == null) {
+            throw new IOException("Cannot resolve output folder");
+        }
+
+        File temp = File.createTempFile(target.getName() + ".", ".tmp", parent);
+        boolean moved = false;
+        try (FileOutputStream fos = new FileOutputStream(temp, false);
+             OutputStreamWriter writer = new OutputStreamWriter(fos, charset)) {
+            writer.write(text);
+            writer.flush();
+            fos.getFD().sync();
+        }
+
+        try {
+            try {
+                Os.rename(temp.getAbsolutePath(), target.getAbsolutePath());
+                moved = true;
+            } catch (ErrnoException errno) {
+                if (temp.renameTo(target)) {
+                    moved = true;
+                } else {
+                    throw new IOException("Cannot replace output file safely", errno);
+                }
+            }
+        } finally {
+            if (!moved && temp.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                temp.delete();
+            }
+        }
     }
 }

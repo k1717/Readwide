@@ -26,6 +26,8 @@ import android.widget.OverScroller;
 import androidx.annotation.Nullable;
 
 import com.readwide.manager.util.FileUtils;
+import com.readwide.manager.util.SearchMatcher;
+import com.readwide.manager.util.SearchOptions;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -265,12 +267,14 @@ public class CustomReaderView extends View {
     private int marginHorizontalPx = 24;
     private int marginVerticalPx = 16;
     private int overlapLines = 0;
+    private int readerTextAlignment = 0;
     private int topTextZoneOffsetPx = 0;
     private int bottomTextZoneOffsetPx = 0;
     private int leftTextInsetPx = 0;
     private int rightTextInsetPx = 0;
     private Typeface typeface = Typeface.DEFAULT;
     private String searchQuery = "";
+    private SearchOptions searchOptions = SearchOptions.literal();
     private int activeSearchIndex = -1;
     private int ttsHighlightStart = -1;
     private int ttsHighlightEnd = -1;
@@ -474,6 +478,20 @@ public class CustomReaderView extends View {
         notifyScrollChanged();
     }
 
+    public void setReaderTextAlignment(int alignment) {
+        int next = (alignment == 1 || alignment == 2) ? alignment : 0;
+        if (this.readerTextAlignment == next) return;
+        this.readerTextAlignment = next;
+        rebuildLayout();
+        invalidate();
+    }
+
+    private Layout.Alignment resolveLayoutAlignment() {
+        if (readerTextAlignment == 1) return Layout.Alignment.ALIGN_CENTER;
+        if (readerTextAlignment == 2) return Layout.Alignment.ALIGN_OPPOSITE;
+        return Layout.Alignment.ALIGN_NORMAL;
+    }
+
     public void setTextZoneAdjustments(int topOffsetPx, int bottomOffsetPx, int leftInsetPx, int rightInsetPx) {
         int nextTopOffset = Math.max(0, Math.min(240, topOffsetPx));
         int nextBottomOffset = Math.max(0, Math.min(240, bottomOffsetPx));
@@ -503,8 +521,9 @@ public class CustomReaderView extends View {
         notifyScrollChanged();
     }
 
-    public void setSearchHighlight(String query, int activeSearchIndex) {
+    public void setSearchHighlight(String query, int activeSearchIndex, SearchOptions options) {
         this.searchQuery = query != null ? query : "";
+        this.searchOptions = options != null ? options : SearchOptions.literal();
         this.activeSearchIndex = this.searchQuery.isEmpty() ? -1 : activeSearchIndex;
         invalidate();
     }
@@ -596,7 +615,7 @@ public class CustomReaderView extends View {
 
         layout = StaticLayout.Builder
                 .obtain(layoutText, 0, layoutText.length(), paint, width)
-                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setAlignment(resolveLayoutAlignment())
                 .setLineSpacing(0f, lineSpacingMultiplier)
                 .setIncludePad(true)
                 .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
@@ -714,6 +733,10 @@ public class CustomReaderView extends View {
     private void drawSearchHighlights(Canvas canvas) {
         if (layout == null || text.isEmpty() || searchQuery == null || searchQuery.isEmpty()) return;
 
+        SearchMatcher matcher = SearchMatcher.compile(searchQuery,
+                searchOptions != null ? searchOptions : SearchOptions.literal());
+        if (matcher == null || !matcher.isValid()) return;
+
         int lineCount = layout.getLineCount();
         if (lineCount <= 0) return;
 
@@ -724,22 +747,20 @@ public class CustomReaderView extends View {
         int startLine = Math.max(0, layout.getLineForVertical(layoutTopY) - 1);
         int endLine = Math.min(lineCount - 1, layout.getLineForVertical(Math.max(0, layoutBottomY - 1)) + 1);
 
-        int startChar = Math.max(0, layout.getLineStart(startLine) - Math.max(0, searchQuery.length() - 1));
-        int endChar = Math.min(text.length(), layout.getLineEnd(endLine) + Math.max(0, searchQuery.length() - 1));
-        int step = Math.max(1, searchQuery.length());
+        // Scan only the visible line band (one line of slack above/below, with the
+        // canvas clip hiding the overscan). Matching uses the active SearchOptions
+        // so case-insensitive, whole-word, and regex hits are highlighted exactly
+        // where the engine found them, instead of a literal substring scan.
+        int scanFrom = layout.getLineStart(startLine);
+        int scanTo = Math.min(text.length(), layout.getLineEnd(endLine));
 
-        int index = text.indexOf(searchQuery, startChar);
-        while (index >= 0 && index < endChar) {
-            int matchEnd = Math.min(text.length(), index + searchQuery.length());
-            if (matchEnd > startChar) {
-                searchHighlightPath.reset();
-                layout.getSelectionPath(index, matchEnd, searchHighlightPath);
-                canvas.drawPath(searchHighlightPath,
-                        index == activeSearchIndex ? activeSearchHighlightPaint : searchHighlightPaint);
-            }
-            int nextStart = Math.max(index + step, index + 1);
-            index = text.indexOf(searchQuery, nextStart);
-        }
+        matcher.forEachMatchInRange(text, scanFrom, scanTo, (start, end) -> {
+            searchHighlightPath.reset();
+            layout.getSelectionPath(start, Math.min(end, text.length()), searchHighlightPath);
+            canvas.drawPath(searchHighlightPath,
+                    start == activeSearchIndex ? activeSearchHighlightPaint : searchHighlightPaint);
+            return true;
+        });
     }
 
     @Override

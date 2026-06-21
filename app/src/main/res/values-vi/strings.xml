@@ -717,4 +717,12 @@
     <string name="tts_resume">Tiếp tục</string>
     <string name="tts_floating_drag">Kéo để di chuyển</string>
     <string name="delete_selected_includes_folders_warning">%1$d trong số này là thư mục — toàn bộ nội dung bên trong cũng sẽ bị xóa.</string>
+    <string name="collapse_blank_lines">Gộp các dòng trống lặp lại</string>
+    <string name="collapse_blank_lines_description">Chỉ hiển thị: hiển thị mọi chuỗi từ hai dòng trống trở lên thành một dòng trống duy nhất. Tệp gốc không bị thay đổi. Áp dụng cho tất cả tệp văn bản được mở trong trình đọc (TXT, log, CSV và tương tự).</string>
+    <string name="more_section_display">Hiển thị và kiểu</string>
+    <string name="more_section_text">Xử lý văn bản</string>
+    <string name="more_section_tools">Công cụ và thông tin</string>
+    <string name="text_alignment">Căn chỉnh văn bản</string>
+    <string name="settings_appearance_title">Cài đặt hiển thị</string>
+    <string name="settings_open_view_settings">Cài đặt hiển thị (chủ đề, phông chữ, bố cục)</string>
 </resources>

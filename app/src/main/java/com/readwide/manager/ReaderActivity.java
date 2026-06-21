@@ -53,6 +53,8 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.appcompat.widget.SwitchCompat;
 import androidx.core.graphics.Insets;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -111,6 +113,7 @@ public class ReaderActivity extends AppCompatActivity {
     public static final String EXTRA_JUMP_PARTITION_START_LINE = "jump_partition_start_line";
     public static final String EXTRA_JUMP_ANCHOR_BEFORE = "jump_anchor_before";
     public static final String EXTRA_JUMP_ANCHOR_AFTER = "jump_anchor_after";
+    public static final String EXTRA_JUMP_PREFER_ANCHOR_PARTITION = "jump_prefer_anchor_partition";
     public static final String EXTRA_AUTOSTART_TTS = "autostart_tts";
 
     static final String STATE_RESTORE_FROM_MEMORY = "restore_txt_from_memory";
@@ -492,6 +495,9 @@ public class ReaderActivity extends AppCompatActivity {
     final ExecutorService largeTextSearchExecutor = Executors.newSingleThreadExecutor();
     final ExecutorService largeTextSearchCountExecutor = Executors.newSingleThreadExecutor();
     volatile boolean activityDestroyed = false;
+    private final ActivityResultLauncher<String[]> readingFontImportLauncher =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(),
+                    uri -> { if (uri != null) importReadingFontFromUri(uri); });
     final AtomicInteger loadGeneration = new AtomicInteger(0);
     final AtomicInteger largeTextSearchGeneration = new AtomicInteger(0);
     final AtomicInteger largeTextSearchCountGeneration = new AtomicInteger(0);
@@ -516,6 +522,9 @@ public class ReaderActivity extends AppCompatActivity {
     int largeTextPartitionBodyCharCount = 0;
     int largeTextPartitionWindowStartLine = 1;
     boolean largeTextActivePartitionUsesLookbehind = false;
+    // Blank-line collapse policy captured when the current file load began; background
+    // partition reads use this instead of re-reading the live preference mid-operation.
+    boolean largeTextActiveCollapseBlankLines = false;
     int largeTextPartitionStartLine = 1;
     int largeTextPartitionEndLine = 1;
     int largeTextTotalLogicalLines = 1;
@@ -549,6 +558,10 @@ public class ReaderActivity extends AppCompatActivity {
 
     boolean maybeReloadForLargeTextPartitionModeChange() {
         return readerReload().maybeReloadForLargeTextPartitionModeChange();
+    }
+
+    String textContentTransformSignatureForPath(String path) {
+        return readerReload().textContentTransformSignatureForPath(path);
     }
 
     void maybeReloadForTextDisplayRuleChange() {
@@ -601,8 +614,13 @@ public class ReaderActivity extends AppCompatActivity {
         if (readerSeekController != null) readerSeekController.clearPendingToolbarSeekJump();
     }
 
+    private ReaderPreferencesController preferencesController;
+
     void applyPreferences() {
-        new ReaderPreferencesController(this).applyPreferences();
+        if (preferencesController == null) {
+            preferencesController = new ReaderPreferencesController(this);
+        }
+        preferencesController.applyPreferences();
     }
 
     void applyStatusBarVisibilityPreference() {
@@ -783,6 +801,10 @@ public class ReaderActivity extends AppCompatActivity {
         return bottomControls().formatPageMoveLabel(page, totalPagesText, lineOffset);
     }
 
+    String formatPageMoveLabel(String page, String totalPagesText, int lineOffset) {
+        return bottomControls().formatPageMoveLabel(page, totalPagesText, lineOffset);
+    }
+
     void showMoreDialog() {
         new ReaderToolsDialogController(this).showMoreDialog();
     }
@@ -934,6 +956,10 @@ public class ReaderActivity extends AppCompatActivity {
         new ReaderTextDisplayRuleDialogController(this).showReaderTextDisplayRulesManagerDialog();
     }
 
+    void showEditActualTxtFileDialog() {
+        new ReaderTextDisplayRuleDialogController(this).showEditActualTxtFileDialog();
+    }
+
     void showAutoPageTurnDialog() {
         new ReaderToolsDialogController(this).showAutoPageTurnDialog();
     }
@@ -1034,8 +1060,8 @@ public class ReaderActivity extends AppCompatActivity {
         }, 150L);
     }
 
-    void recordLargeTextCacheAccess(@NonNull File file) {
-        largeTextCaches().recordFileAccess(file);
+    void recordLargeTextCacheAccess(@NonNull File file, @NonNull String loadedFilePath) {
+        largeTextCaches().recordFileAccess(file, loadedFilePath);
     }
 
     boolean shouldUseLargeTextFastOpen(@NonNull File file) {
@@ -1175,6 +1201,12 @@ public class ReaderActivity extends AppCompatActivity {
         return partitionReader().readForChar(file, targetCharPosition);
     }
 
+    int resolveLargeTextCharPositionForAnchor(@NonNull File file,
+                                              String anchorBefore,
+                                              String anchorAfter) throws IOException {
+        return partitionReader().resolveCharPositionForAnchor(file, anchorBefore, anchorAfter);
+    }
+
     LargeTextLinePartitionResult readLargeTextLinePartitionAtStartLine(@NonNull File file,
                                                                                int requestedStartLine) throws IOException {
         return partitionReader().readAtStartLine(file, requestedStartLine);
@@ -1270,6 +1302,20 @@ public class ReaderActivity extends AppCompatActivity {
                                                 int partitionStartLine,
                                                 boolean showLoadingForAsyncPartitionJump,
                                                 boolean useManualLookbehind) {
+        switchLargeTextPartitionInPlace(charPosition, displayPage, totalPages, anchorBefore,
+                anchorAfter, partitionStartLine, showLoadingForAsyncPartitionJump,
+                useManualLookbehind, false);
+    }
+
+    void switchLargeTextPartitionInPlace(int charPosition,
+                                                int displayPage,
+                                                int totalPages,
+                                                String anchorBefore,
+                                                String anchorAfter,
+                                                int partitionStartLine,
+                                                boolean showLoadingForAsyncPartitionJump,
+                                                boolean useManualLookbehind,
+                                                boolean preferAnchorPartition) {
         largeTextPartitionNavigator().switchInPlace(
                 charPosition,
                 displayPage,
@@ -1278,7 +1324,8 @@ public class ReaderActivity extends AppCompatActivity {
                 anchorAfter,
                 partitionStartLine,
                 showLoadingForAsyncPartitionJump,
-                useManualLookbehind);
+                useManualLookbehind,
+                preferAnchorPartition);
     }
 
     void applyLargeTextPartitionInPlace(@NonNull LargeTextLinePartitionResult partition,
@@ -1396,7 +1443,19 @@ public class ReaderActivity extends AppCompatActivity {
                                             boolean showLoadingForAsyncPartitionJump) {
         largeTextJumps().jumpToAbsoluteCharPosition(
                 charPosition, displayPage, totalPages, anchorBefore, anchorAfter,
-                showLoadingForAsyncPartitionJump);
+                showLoadingForAsyncPartitionJump, false);
+    }
+
+    void jumpToAbsoluteCharPosition(int charPosition,
+                                            int displayPage,
+                                            int totalPages,
+                                            String anchorBefore,
+                                            String anchorAfter,
+                                            boolean showLoadingForAsyncPartitionJump,
+                                            boolean preferAnchorPartition) {
+        largeTextJumps().jumpToAbsoluteCharPosition(
+                charPosition, displayPage, totalPages, anchorBefore, anchorAfter,
+                showLoadingForAsyncPartitionJump, preferAnchorPartition);
     }
 
     boolean isAbsoluteCharPositionInCurrentLargeTextBody(int absolutePosition) {
@@ -1414,6 +1473,7 @@ public class ReaderActivity extends AppCompatActivity {
                 totalPages,
                 anchorBefore,
                 anchorAfter,
+                false,
                 false);
     }
 
@@ -1456,6 +1516,18 @@ public class ReaderActivity extends AppCompatActivity {
                                               String anchorAfter,
                                               int partitionStartLine,
                                               boolean showLoadingForAsyncPartitionJump) {
+        reloadLargeTextPreviewAround(charPosition, displayPage, totalPages, anchorBefore,
+                anchorAfter, partitionStartLine, showLoadingForAsyncPartitionJump, false);
+    }
+
+    void reloadLargeTextPreviewAround(int charPosition,
+                                              int displayPage,
+                                              int totalPages,
+                                              String anchorBefore,
+                                              String anchorAfter,
+                                              int partitionStartLine,
+                                              boolean showLoadingForAsyncPartitionJump,
+                                              boolean preferAnchorPartition) {
         largeTextJumps().reloadLargeTextPreviewAround(
                 charPosition,
                 displayPage,
@@ -1463,7 +1535,8 @@ public class ReaderActivity extends AppCompatActivity {
                 anchorBefore,
                 anchorAfter,
                 partitionStartLine,
-                showLoadingForAsyncPartitionJump);
+                showLoadingForAsyncPartitionJump,
+                preferAnchorPartition);
     }
 
     void applySearchHighlight() {
@@ -1503,6 +1576,34 @@ public class ReaderActivity extends AppCompatActivity {
 
     int getBookmarkSaveCharPosition() {
         return textLocator().getBookmarkSaveCharPosition();
+    }
+
+    /**
+     * Compact deterministic snapshot of the layout-affecting reader preferences plus
+     * the file display-rule signature. Stored with each ReaderState. On restore, a
+     * mismatch means the cached page and scroll figures were produced under a
+     * different layout or display-rule set, so they are dropped and the position is
+     * recomputed from the character offset instead. Viewport and markdown changes are
+     * deliberately excluded here (they are not reliably readable before the view is
+     * laid out at restore time, and the exact-page index already rebuilds on them).
+     */
+    String readerPageLayoutSignatureForPath(String path) {
+        if (prefs == null) return "";
+        StringBuilder sb = new StringBuilder(160);
+        sb.append("ff=").append(prefs.getFontFamily());
+        sb.append("|fs=").append(prefs.getFontSize());
+        sb.append("|ls=").append(prefs.getLineSpacing());
+        sb.append("|mh=").append(prefs.getMarginHorizontal());
+        sb.append("|mv=").append(prefs.getMarginVertical());
+        sb.append("|to=").append(prefs.getReaderTextTopOffsetPx());
+        sb.append("|bo=").append(prefs.getReaderTextBottomOffsetPx());
+        sb.append("|li=").append(prefs.getReaderTextLeftInsetPx());
+        sb.append("|ri=").append(prefs.getReaderTextRightInsetPx());
+        sb.append("|al=").append(prefs.getTextAlignment());
+        sb.append("|pm=").append(prefs.getLargeTextPartitionMode());
+        sb.append("|cb=").append(prefs.isCollapseBlankLinesEnabled());
+        sb.append("|dr=").append(textContentTransformSignatureForPath(path));
+        return sb.toString();
     }
 
     String getExcerpt(int charPosition) {
@@ -1627,6 +1728,61 @@ public class ReaderActivity extends AppCompatActivity {
 
     void showFontDialog() {
         new ReaderFontDialogController(this).showFontDialog();
+    }
+
+    /**
+     * Open DocumentsUI so the user can pick a .ttf/.otf font file to add to the
+     * reading-font list. The result Uri is handled by importReadingFontFromUri.
+     */
+    void launchReadingFontImport() {
+        try {
+            readingFontImportLauncher.launch(new String[] {
+                    "font/ttf", "font/otf", "font/sfnt",
+                    "application/x-font-ttf", "application/x-font-otf",
+                    "application/font-sfnt", "application/vnd.ms-opentype",
+                    "application/octet-stream"
+            });
+        } catch (Exception e) {
+            ShortToast.show(this, fontMsg(
+                    "Could not open the file picker.",
+                    "파일 선택기를 열 수 없습니다."));
+        }
+    }
+
+    private void importReadingFontFromUri(Uri uri) {
+        ShortToast.show(this, fontMsg("Importing font\u2026", "글꼴 가져오는 중\u2026"));
+        executor.execute(() -> {
+            String imported;
+            try {
+                imported = FontManager.getInstance().importFont(this, uri);
+            } catch (Throwable t) {
+                imported = null;
+            }
+            final String result = imported;
+            handler.post(() -> {
+                if (activityDestroyed) return;
+                if (result != null && !result.trim().isEmpty()) {
+                    try {
+                        FontManager.getInstance().addUserFont(this, result);
+                    } catch (Throwable ignored) {
+                        // The font is still usable even when the picker shortcut fails to persist.
+                    }
+                    if (prefs != null) prefs.setFontFamily(result);
+                    applyPreferences();
+                    updatePositionLabel();
+                    ShortToast.show(this, fontMsg("Font added", "글꼴을 추가했습니다"));
+                    showFontDialog();
+                } else {
+                    ShortToast.show(this, fontMsg(
+                            "Could not import the font file.",
+                            "글꼴 파일을 가져오지 못했습니다."));
+                }
+            });
+        });
+    }
+
+    private String fontMsg(String english, String korean) {
+        return "ko".equalsIgnoreCase(java.util.Locale.getDefault().getLanguage()) ? korean : english;
     }
 
     // --- Go To / Search ---

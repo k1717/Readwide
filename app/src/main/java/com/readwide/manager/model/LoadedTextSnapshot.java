@@ -35,6 +35,12 @@ public final class LoadedTextSnapshot {
     public final int largeTextPartitionStartLine;
     public final int largeTextPartitionEndLine;
     public final int largeTextTotalLogicalLines;
+    public final String textContentTransformSignature;
+    public final String searchOptionsSignature;
+    public final int activeSearchOrdinal;
+    public final long sourceFileLength;
+    public final long sourceLastModified;
+    public final boolean largeTextActivePartitionUsesLookbehind;
 
     public LoadedTextSnapshot(String sourcePath,
                               String sourceUri,
@@ -64,7 +70,13 @@ public final class LoadedTextSnapshot {
                               int largeTextPartitionWindowStartLine,
                               int largeTextPartitionStartLine,
                               int largeTextPartitionEndLine,
-                              int largeTextTotalLogicalLines) {
+                              int largeTextTotalLogicalLines,
+                              String textContentTransformSignature,
+                              String searchOptionsSignature,
+                              int activeSearchOrdinal,
+                              long sourceFileLength,
+                              long sourceLastModified,
+                              boolean largeTextActivePartitionUsesLookbehind) {
         this.sourcePath = sourcePath;
         this.sourceUri = sourceUri;
         this.filePath = filePath;
@@ -94,6 +106,12 @@ public final class LoadedTextSnapshot {
         this.largeTextPartitionStartLine = Math.max(1, largeTextPartitionStartLine);
         this.largeTextPartitionEndLine = Math.max(this.largeTextPartitionStartLine, largeTextPartitionEndLine);
         this.largeTextTotalLogicalLines = Math.max(1, largeTextTotalLogicalLines);
+        this.textContentTransformSignature = textContentTransformSignature != null ? textContentTransformSignature : "";
+        this.searchOptionsSignature = searchOptionsSignature != null ? searchOptionsSignature : "";
+        this.activeSearchOrdinal = Math.max(0, activeSearchOrdinal);
+        this.sourceFileLength = sourceFileLength;
+        this.sourceLastModified = sourceLastModified;
+        this.largeTextActivePartitionUsesLookbehind = largeTextActivePartitionUsesLookbehind;
     }
 
     public boolean matches(@NonNull Intent intent,

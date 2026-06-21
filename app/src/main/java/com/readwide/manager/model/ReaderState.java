@@ -17,6 +17,9 @@ public class ReaderState {
     private long lastReadAt;
     private String encoding;    // detected encoding
     private String contentAnchorJson; // optional portable content anchor for rendered document/PDF restore
+    private String presentationSignature; // layout params snapshot (font/margins/insets/alignment/partition/collapse) when saved; used to invalidate a stale page cache
+    private String anchorTextBefore; // text immediately before charPosition for robust TXT resume after a coordinate-space change
+    private String anchorTextAfter;  // text immediately after charPosition for robust TXT resume after a coordinate-space change
 
     public ReaderState() {}
 
@@ -37,6 +40,9 @@ public class ReaderState {
         obj.put("lastReadAt", lastReadAt);
         obj.put("encoding", encoding != null ? encoding : "UTF-8");
         obj.put("contentAnchorJson", contentAnchorJson != null ? contentAnchorJson : "");
+        obj.put("presentationSignature", presentationSignature != null ? presentationSignature : "");
+        obj.put("anchorTextBefore", anchorTextBefore != null ? anchorTextBefore : "");
+        obj.put("anchorTextAfter", anchorTextAfter != null ? anchorTextAfter : "");
         return obj;
     }
 
@@ -51,6 +57,9 @@ public class ReaderState {
         s.lastReadAt = obj.optLong("lastReadAt", 0);
         s.encoding = obj.optString("encoding", "UTF-8");
         s.contentAnchorJson = obj.optString("contentAnchorJson", "");
+        s.presentationSignature = obj.optString("presentationSignature", "");
+        s.anchorTextBefore = obj.optString("anchorTextBefore", "");
+        s.anchorTextAfter = obj.optString("anchorTextAfter", "");
         return s;
     }
 
@@ -81,4 +90,13 @@ public class ReaderState {
 
     public String getContentAnchorJson() { return contentAnchorJson; }
     public void setContentAnchorJson(String contentAnchorJson) { this.contentAnchorJson = contentAnchorJson; }
+
+    public String getPresentationSignature() { return presentationSignature; }
+    public void setPresentationSignature(String presentationSignature) { this.presentationSignature = presentationSignature; }
+
+    public String getAnchorTextBefore() { return anchorTextBefore; }
+    public void setAnchorTextBefore(String anchorTextBefore) { this.anchorTextBefore = anchorTextBefore; }
+
+    public String getAnchorTextAfter() { return anchorTextAfter; }
+    public void setAnchorTextAfter(String anchorTextAfter) { this.anchorTextAfter = anchorTextAfter; }
 }

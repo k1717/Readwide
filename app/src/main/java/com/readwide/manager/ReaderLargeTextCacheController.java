@@ -16,10 +16,10 @@ final class ReaderLargeTextCacheController {
         this.activity = activity;
     }
 
-    void recordFileAccess(@NonNull File file) {
+    void recordFileAccess(@NonNull File file, @NonNull String loadedFilePath) {
         try {
             PageIndexCacheManager.getInstance(activity)
-                    .recordFileAccess(file, buildTextPageCacheLayoutSignature());
+                    .recordFileAccess(file, buildTextPageCacheLayoutSignature(loadedFilePath));
         } catch (RuntimeException ignored) {
             // Cache bookkeeping is best-effort and must never break file opening.
         }
@@ -73,7 +73,7 @@ final class ReaderLargeTextCacheController {
                 startLine, activity.getLargeTextPartitionLines());
     }
 
-    private String buildTextPageCacheLayoutSignature() {
+    private String buildTextPageCacheLayoutSignature(@NonNull String loadedFilePath) {
         if (activity.prefs == null) return "unknown";
 
         android.util.DisplayMetrics dm = activity.getResources().getDisplayMetrics();
@@ -98,9 +98,10 @@ final class ReaderLargeTextCacheController {
                 + "|partitionMode=" + activity.getLargeTextPartitionMode()
                 + "|partitionLines=" + activity.getLargeTextPartitionLines()
                 + "|partitionBuffer=" + activity.getLargeTextPartitionBufferLines()
+                + "|collapseBlank=" + activity.prefs.isCollapseBlankLinesEnabled()
                 + "|font=" + fontName
                 + "|displayRules=" + TextDisplayRuleManager.getSignature(
-                        activity.getApplicationContext(), activity.filePath)
+                        activity.getApplicationContext(), loadedFilePath)
                 + "|screen=" + dm.widthPixels + "x" + dm.heightPixels;
     }
 }

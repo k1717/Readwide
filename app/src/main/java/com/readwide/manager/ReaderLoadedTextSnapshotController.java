@@ -5,8 +5,12 @@ import android.os.Bundle;
 
 import androidx.annotation.NonNull;
 
+import com.readwide.manager.model.LargeTextLinePartitionResult;
 import com.readwide.manager.model.LoadedTextSnapshot;
+import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.TextDisplayRuleManager;
+
+import java.io.File;
 
 final class ReaderLoadedTextSnapshotController {
     private static volatile LoadedTextSnapshot lastLoadedTextSnapshot;
@@ -26,6 +30,9 @@ final class ReaderLoadedTextSnapshotController {
         }
 
         Intent intent = activity.getIntent();
+        File sourceFile = new File(activity.filePath);
+        long sourceFileLength = sourceFile.isFile() ? sourceFile.length() : -1L;
+        long sourceLastModified = sourceFile.isFile() ? sourceFile.lastModified() : -1L;
         lastLoadedTextSnapshot = new LoadedTextSnapshot(
                 intent != null ? intent.getStringExtra(ReaderActivity.EXTRA_FILE_PATH) : null,
                 intent != null ? intent.getStringExtra(ReaderActivity.EXTRA_FILE_URI) : null,
@@ -34,7 +41,7 @@ final class ReaderLoadedTextSnapshotController {
                 activity.fileContent,
                 activity.totalChars,
                 activity.totalLines,
-                activity.getCurrentCharPosition(),
+                activity.getBookmarkSaveCharPosition(),
                 activity.activeSearchQuery,
                 activity.activeSearchIndex,
                 activity.largeTextEstimateActive,
@@ -55,7 +62,13 @@ final class ReaderLoadedTextSnapshotController {
                 activity.largeTextPartitionWindowStartLine,
                 activity.largeTextPartitionStartLine,
                 activity.largeTextPartitionEndLine,
-                activity.largeTextTotalLogicalLines);
+                activity.largeTextTotalLogicalLines,
+                activity.textContentTransformSignatureForPath(activity.filePath),
+                activity.currentSearchOptions().signature(),
+                activity.activeSearchOrdinal,
+                sourceFileLength,
+                sourceLastModified,
+                activity.largeTextActivePartitionUsesLookbehind);
     }
 
     void clearLoadedTextSnapshot() {
@@ -77,21 +90,47 @@ final class ReaderLoadedTextSnapshotController {
                 || !snapshot.matches(intent, ReaderActivity.EXTRA_FILE_PATH, ReaderActivity.EXTRA_FILE_URI)) {
             return false;
         }
+        // Only reuse the cached content if it was produced under the same content-transform
+        // (display rules + blank-line collapse). Otherwise the cached fileContent is stale, so
+        // fall through to a fresh load that rebuilds it under the current settings.
+        String currentContentSignature =
+                activity.textContentTransformSignatureForPath(snapshot.filePath);
+        if (!currentContentSignature.equals(snapshot.textContentTransformSignature)) {
+            return false;
+        }
+        // Also drop the cached content if the underlying file changed on disk (size or mtime)
+        // while the activity was gone, so an external edit is not masked by the static snapshot.
+        File snapshotFile = snapshot.filePath != null ? new File(snapshot.filePath) : null;
+        if (snapshotFile != null && snapshotFile.isFile()) {
+            if (snapshot.sourceFileLength >= 0 && snapshotFile.length() != snapshot.sourceFileLength) {
+                return false;
+            }
+            if (snapshot.sourceLastModified > 0 && snapshotFile.lastModified() != snapshot.sourceLastModified) {
+                return false;
+            }
+        }
 
         activity.activityDestroyed = false;
         activity.hideLoadingWindow();
 
         activity.filePath = snapshot.filePath;
-        activity.appliedTextDisplayRuleSignature = TextDisplayRuleManager.getSignature(
-                activity.getApplicationContext(), activity.filePath);
+        activity.appliedTextDisplayRuleSignature =
+                activity.textContentTransformSignatureForPath(activity.filePath);
         activity.fileName = snapshot.fileName != null
                 ? snapshot.fileName
                 : activity.getString(R.string.app_name);
         activity.fileContent = snapshot.fileContent;
         activity.totalChars = snapshot.totalChars;
         activity.totalLines = snapshot.totalLines;
-        activity.activeSearchQuery = snapshot.activeSearchQuery;
-        activity.activeSearchIndex = snapshot.activeSearchIndex;
+        if (activity.currentSearchOptions().signature().equals(snapshot.searchOptionsSignature)) {
+            activity.activeSearchQuery = snapshot.activeSearchQuery;
+            activity.activeSearchIndex = snapshot.activeSearchIndex;
+            activity.activeSearchOrdinal = snapshot.activeSearchOrdinal;
+        } else {
+            activity.activeSearchQuery = "";
+            activity.activeSearchIndex = -1;
+            activity.activeSearchOrdinal = 0;
+        }
         activity.largeTextEstimateActive = snapshot.largeTextEstimateActive;
         activity.largeTextEstimatedTotalPages = snapshot.largeTextEstimatedTotalPages;
         activity.pendingLargeTextRestorePosition = snapshot.pendingLargeTextRestorePosition;
@@ -106,6 +145,7 @@ final class ReaderLoadedTextSnapshotController {
         activity.largeTextFileByteLength = snapshot.largeTextFileByteLength;
         activity.largeTextEstimatedBytesPerChar = snapshot.largeTextEstimatedBytesPerChar;
         activity.largeTextPartitionBodyStartCharCount = snapshot.largeTextPartitionBodyStartCharCount;
+        activity.largeTextActivePartitionUsesLookbehind = snapshot.largeTextActivePartitionUsesLookbehind;
         activity.largeTextPartitionBodyCharCount = snapshot.largeTextPartitionBodyCharCount;
         activity.largeTextPartitionWindowStartLine = snapshot.largeTextPartitionWindowStartLine;
         activity.largeTextPartitionStartLine = snapshot.largeTextPartitionStartLine;
@@ -117,6 +157,14 @@ final class ReaderLoadedTextSnapshotController {
             activity.getSupportActionBar().setTitle(activity.fileName);
         }
 
+        // The normal load path configures the reader view by file type; this restore bypasses
+        // it, so reapply paging overlap and markdown highlighting before setting the content.
+        activity.readerView.setOverlapLines(activity.prefs.getPagingOverlapLines());
+        String restoredName = activity.filePath != null && !activity.filePath.isEmpty()
+                ? activity.filePath
+                : activity.fileName;
+        activity.readerView.setMarkdownHighlightingEnabled(FileUtils.isMarkdownFile(restoredName));
+
         activity.readerView.setTextContent(activity.fileContent);
         activity.applySearchHighlight();
         activity.readerView.post(() -> {
@@ -124,6 +172,26 @@ final class ReaderLoadedTextSnapshotController {
             activity.scrollToCharPosition(snapshot.charPosition);
             activity.updatePositionLabel();
         });
+        // A normal open registers the active partition, schedules exact-page indexing, and
+        // prefetches neighbors during load; this restore bypasses that path, so mirror the
+        // initial load-apply mapping here, or large-file page labels stay on the estimate and
+        // navigating right after a restore misses the partition cache.
+        if (activity.largeTextEstimateActive) {
+            activity.cacheLargeTextPartition(new LargeTextLinePartitionResult(
+                    activity.fileContent,
+                    activity.totalLines,
+                    activity.largeTextPartitionStartLine,
+                    activity.largeTextPartitionEndLine,
+                    activity.largeTextTotalLogicalLines,
+                    activity.largeTextPreviewBaseCharOffset,
+                    activity.largeTextPartitionBodyStartCharCount,
+                    activity.largeTextPartitionBodyCharCount,
+                    activity.largeTextPartitionWindowStartLine,
+                    activity.largeTextActivePartitionUsesLookbehind,
+                    activity.largeTextEstimatedTotalChars));
+            activity.scheduleLargeTextExactPageIndexingRestart();
+            activity.prefetchNeighborLargeTextPartitions();
+        }
         return true;
     }
 }

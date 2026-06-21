@@ -74,6 +74,8 @@ The separate **Edit Actual TXT File** action is user-triggered and can write cha
 
 Backup/export uses JSON. The exported JSON can include file paths, file names, reading positions, bookmark labels, excerpts, app settings, layout settings, display rules, and custom reading themes. Treat exported backup files as user data. Backup import accepts JSON files up to 256 MB, which is generous for large reading-history and bookmark exports; oversized input is rejected rather than partially imported.
 
+Imported reader font files are stored only in app-private storage (see "Data stored locally") and are not included in the JSON backup. The backup may record the selected font name, but not the font file itself or the imported-font list, so an imported font must be re-imported after reinstalling the app or switching distribution channels.
+
 Lock PIN data is intentionally excluded from the plain JSON backup. New PIN values are stored as salted PBKDF2 verifier strings rather than as a plain PIN. Legacy plain-PIN preferences from older installs are migrated to the verifier format after the first successful PIN verification. The optional PIN lock is still only an app-level convenience lock and is not a substitute for Android device encryption, lock-screen security, or secure storage of sensitive documents.
 
 ## Manual update link

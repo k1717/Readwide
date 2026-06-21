@@ -1,11 +1,11 @@
-# Readwide 1.0.6 Build / Release Notes
+# Readwide 1.0.7 Build / Release Notes
 
-This file records source-build notes for the current public package: **Readwide 1.0.6**.
+This file records source-build notes for the current public package: **Readwide 1.0.7**.
 
 ## Version metadata
 
-- Android metadata is `versionCode 10006`, `versionName "1.0.6"`.
-- The Android package/application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 is signed with a new release key, so it does not update in place over an installed 1.0.4/1.0.5 (previous key); uninstall first, install 1.0.6, then migrate data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` likewise install as a separate app.
+- Android metadata is `versionCode 10007`, `versionName "1.0.7"`.
+- The Android package/application ID has been `com.readwide.manager` since 1.0.4. 1.0.7 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.6. Updating from 1.0.4/1.0.5 (previous key) still requires uninstalling first, installing 1.0.7, then migrating data with the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Earlier builds using `com.textview.reader` likewise install as a separate app.
 - The default source package is Junrar-free, UnRAR-license-fallback-free, analytics-free, ads-free, and does not request the `INTERNET` permission.
 
 ## Stale removed-source cleanup
@@ -59,5 +59,5 @@ zstd-jni desktop resource binaries (`win/**`, `darwin/**`, `linux/**`, `freebsd/
 
 - The default source package contains no optional decoder jar under `app/libs`.
 - Release signing is conditional, so source-build review can run `assembleRelease` without a private developer keystore.
-- `fdroid/metadata/com.readwide.manager.yml` is a draft metadata file; confirm it points to the immutable `v1.0.6` tag (or the exact commit hash requested by the reviewer) before F-Droid submission.
+- `fdroid/metadata/com.readwide.manager.yml` is a draft metadata file; confirm it points to the immutable `v1.0.7` tag (or the exact commit hash requested by the reviewer) before F-Droid submission.
 - If any local jar or native binary is added later, re-audit that custom build before describing it as FOSS.

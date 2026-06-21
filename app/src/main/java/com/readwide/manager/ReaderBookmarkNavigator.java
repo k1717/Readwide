@@ -23,6 +23,7 @@ final class ReaderBookmarkNavigator {
                     pageTarget[1],
                     bookmark.getAnchorTextBefore(),
                     bookmark.getAnchorTextAfter(),
+                    true,
                     true);
             return;
         }

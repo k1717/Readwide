@@ -83,6 +83,9 @@ public class PrefsManager {
     public static final int PAGE_STATUS_ALIGN_CENTER = 1;
     public static final int PAGE_STATUS_ALIGN_RIGHT = 2;
     public static final int PAGE_STATUS_ALIGN_HIDDEN = 3;
+    public static final int TEXT_ALIGN_LEFT = 0;
+    public static final int TEXT_ALIGN_CENTER = 1;
+    public static final int TEXT_ALIGN_RIGHT = 2;
     public static final int EPUB_PAGE_DIRECTION_LTR = 0;
     public static final int EPUB_PAGE_DIRECTION_RTL = 1;
     public static final int EPUB_PAGE_EFFECT_SLIDE = 0;
@@ -389,7 +392,11 @@ public class PrefsManager {
                 "button_order_main_filters",
                 "button_order_txt_reader",
                 "button_order_document_viewer",
-                "button_order_pdf_viewer"
+                "button_order_pdf_viewer",
+                "txt_collapse_blank_lines",
+                "reader_search_case_sensitive",
+                "reader_search_whole_word",
+                "reader_search_regex"
         };
         for (String key : keys) editor.remove(key);
         editor.commit();
@@ -845,6 +852,16 @@ public class PrefsManager {
                 || alignment == PAGE_STATUS_ALIGN_HIDDEN) return alignment;
         return PAGE_STATUS_ALIGN_CENTER;
     }
+    public int getTextAlignment() {
+        return normalizeTextAlignment(prefs.getInt("text_alignment", TEXT_ALIGN_LEFT));
+    }
+    public void setTextAlignment(int alignment) {
+        prefs.edit().putInt("text_alignment", normalizeTextAlignment(alignment)).apply();
+    }
+    private int normalizeTextAlignment(int alignment) {
+        if (alignment == TEXT_ALIGN_CENTER || alignment == TEXT_ALIGN_RIGHT) return alignment;
+        return TEXT_ALIGN_LEFT;
+    }
     public boolean getAutoSavePosition() { return prefs.getBoolean("auto_save_position", true); }
     public void setAutoSavePosition(boolean v) { prefs.edit().putBoolean("auto_save_position", v).apply(); }
     public int getAutoPageTurnIntervalSeconds() {
@@ -973,6 +990,14 @@ public class PrefsManager {
         prefs.edit().putInt("large_text_partition_mode", normalizeLargeTextPartitionMode(mode)).apply();
     }
 
+    public boolean isCollapseBlankLinesEnabled() {
+        return prefs.getBoolean("txt_collapse_blank_lines", false);
+    }
+
+    public void setCollapseBlankLinesEnabled(boolean enabled) {
+        prefs.edit().putBoolean("txt_collapse_blank_lines", enabled).apply();
+    }
+
     public int getLargeTextPartitionLines() {
         return getLargeTextPartitionMode() == LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
                 ? LARGE_TEXT_PARTITION_LINES_HIGH_BUFFER
@@ -1009,7 +1034,7 @@ public class PrefsManager {
 
     public String getLastReaderSearchQuery() { return prefs.getString("last_reader_search_query", ""); }
     public void setLastReaderSearchQuery(String query) {
-        prefs.edit().putString("last_reader_search_query", query == null ? "" : query.trim()).apply();
+        prefs.edit().putString("last_reader_search_query", query == null ? "" : query).apply();
     }
 
     // TXT find-in-page options. Unicode normalization is always applied by the

@@ -729,4 +729,12 @@
     <string name="tts_resume">Продовжити</string>
     <string name="tts_floating_drag">Перетягніть, щоб перемістити</string>
     <string name="delete_selected_includes_folders_warning">%1$d з них — папки: увесь їхній вміст також буде видалено.</string>
+    <string name="collapse_blank_lines">Об\'єднувати повторювані порожні рядки</string>
+    <string name="collapse_blank_lines_description">Лише відображення: показує будь-яку послідовність із двох або більше порожніх рядків як один порожній рядок. Початковий файл не змінюється. Застосовується до всіх текстових файлів, відкритих у читачі (TXT, журнали, CSV тощо).</string>
+    <string name="more_section_display">Відображення та стиль</string>
+    <string name="more_section_text">Обробка тексту</string>
+    <string name="more_section_tools">Інструменти та відомості</string>
+    <string name="text_alignment">Вирівнювання тексту</string>
+    <string name="settings_appearance_title">Налаштування відображення</string>
+    <string name="settings_open_view_settings">Налаштування відображення (тема, шрифт, макет)</string>
 </resources>

@@ -171,6 +171,23 @@ public final class SearchMatcher {
         }
     }
 
+    /**
+     * Like {@link #forEachMatch} but limited to matches whose start is below
+     * {@code toExclusive}, beginning the scan at {@code from}. The comparison
+     * view / regex engine is still prepared only once. Used by the renderer to
+     * highlight matches near the visible region without rescanning the whole
+     * buffer on every frame.
+     */
+    public void forEachMatchInRange(String text, int from, int toExclusive, MatchConsumer consumer) {
+        if (text == null || text.isEmpty() || consumer == null) return;
+        Object ctx = prepare(text);
+        Match m = firstPrepared(ctx, text, Math.max(0, from));
+        while (m != null && m.start < toExclusive) {
+            if (!consumer.accept(m.start, m.end)) return;
+            m = firstPrepared(ctx, text, nextStart(m));
+        }
+    }
+
 
     /**
      * Precomputes the per-text scan context once so repeated match stepping does

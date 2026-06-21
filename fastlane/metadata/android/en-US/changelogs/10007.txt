@@ -1,0 +1,7 @@
+Readwide 1.0.7
+- New "Collapse repeated blank lines" reader option (off by default).
+- More reliable text position restore, incl. files changed on disk.
+- Recent list keeps its scroll position.
+- Find-in-page: option changes restart the search; invalid-regex crash fixed.
+- Settings reorganized: theme/layout moved to a Display settings screen.
+- Edit actual TXT file: apply display rules to the file from the More menu.

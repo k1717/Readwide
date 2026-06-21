@@ -296,6 +296,9 @@
     <string name="merge">Merge</string>
     <string name="merge_or_replace">Merge with existing data/settings or replace backed-up items?</string>
     <string name="more">More</string>
+    <string name="more_section_display">Display &amp; style</string>
+    <string name="more_section_text">Text processing</string>
+    <string name="more_section_tools">Tools &amp; info</string>
     <string name="new_folder">New Folder</string>
     <string name="parent_folder">Parent folder</string>
     <string name="parent_folder_short">← Parent folder</string>
@@ -328,6 +331,8 @@
     <string name="search_text_hint">Search text...</string>
     <string name="select_font">Select Font</string>
     <string name="settings">Settings</string>
+    <string name="settings_appearance_title">View settings</string>
+    <string name="settings_open_view_settings">View settings (theme, font, layout)</string>
     <string name="settings_section_backup">Backup</string>
     <string name="settings_section_behavior">Behavior</string>
     <string name="settings_section_language">Language</string>
@@ -377,6 +382,8 @@
     <string name="large_txt_partition_mode_standard">Standard — 4,000 / 400 lines</string>
     <string name="large_txt_partition_mode_high_buffer">High buffer — 12,000 / 600 lines</string>
     <string name="large_txt_partition_mode_description">Controls the canonical partition size for large TXT files. Standard is the default stable model; High buffer uses wider runtime windows for smoother very-large-file handoff.</string>
+    <string name="collapse_blank_lines">Collapse repeated blank lines</string>
+    <string name="collapse_blank_lines_description">Display only: shows any run of two or more blank lines as a single blank line. The original file is not changed. Applies to all text files opened in the reader (TXT, log, CSV, and similar).</string>
 
     <string name="epub_page_direction">EPUB page direction</string>
     <string name="epub_page_direction_ltr">Left-to-right / Korean-Western books</string>
@@ -463,6 +470,7 @@ Open a text, PDF, EPUB, or Word file to get started.</string>
     <string name="page_status_align_left">Left</string>
     <string name="page_status_align_center">Middle</string>
     <string name="page_status_align_right">Right</string>
+    <string name="text_alignment">Text alignment</string>
     <string name="add_shortcut">Add shortcut</string>
     <string name="remove_shortcut">Remove shortcut</string>
     <string name="shortcut_added">Shortcut added</string>

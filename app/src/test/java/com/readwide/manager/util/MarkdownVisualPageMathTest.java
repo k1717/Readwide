@@ -108,8 +108,11 @@ public class MarkdownVisualPageMathTest {
         assertEquals(VIEWPORT, MarkdownVisualPageMath.targetScrollYForPage(1, VIEWPORT, max, total));
         assertEquals(2 * VIEWPORT, MarkdownVisualPageMath.targetScrollYForPage(2, VIEWPORT, max, total));
         assertEquals(max, MarkdownVisualPageMath.targetScrollYForPage(3, VIEWPORT, max, total));
-        assertEquals(0, MarkdownVisualPageMath.currentPageIndex(VIEWPORT - 1, VIEWPORT, total, max));
-        assertEquals(1, MarkdownVisualPageMath.currentPageIndex(VIEWPORT, VIEWPORT, total, max));
+        // Interior page boundary sits at the half-step midpoint between adjacent
+        // anchors (round-to-nearest), consistent with finalPageUsesMidpointToPreviousAnchor.
+        // Just below the page-0/1 midpoint stays on page 0; at the midpoint it is page 1.
+        assertEquals(0, MarkdownVisualPageMath.currentPageIndex(VIEWPORT / 2 - 1, VIEWPORT, total, max));
+        assertEquals(1, MarkdownVisualPageMath.currentPageIndex(VIEWPORT / 2, VIEWPORT, total, max));
     }
 
     @Test

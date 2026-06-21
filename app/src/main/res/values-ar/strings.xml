@@ -717,4 +717,12 @@
     <string name="tts_resume">استئناف</string>
     <string name="tts_floating_drag">اسحب للتحريك</string>
     <string name="delete_selected_includes_folders_warning">%1$d من هذه العناصر مجلدات — سيتم حذف كل محتوياتها أيضًا.</string>
+    <string name="collapse_blank_lines">دمج الأسطر الفارغة المتكررة</string>
+    <string name="collapse_blank_lines_description">العرض فقط: يعرض أي تتابع من سطرين فارغين أو أكثر كسطر فارغ واحد. لا يتم تغيير الملف الأصلي. ينطبق على جميع الملفات النصية المفتوحة في القارئ (TXT وLog وCSV وما شابه).</string>
+    <string name="more_section_display">العرض والنمط</string>
+    <string name="more_section_text">معالجة النص</string>
+    <string name="more_section_tools">الأدوات والمعلومات</string>
+    <string name="text_alignment">محاذاة النص</string>
+    <string name="settings_appearance_title">إعدادات العرض</string>
+    <string name="settings_open_view_settings">إعدادات العرض (السمة، الخط، التخطيط)</string>
 </resources>

@@ -9,6 +9,7 @@ import com.readwide.manager.util.LargeTextExactAnchorBuilder;
 import com.readwide.manager.util.LargeTextPartitionReader;
 import com.readwide.manager.util.TextDisplayRule;
 import com.readwide.manager.util.TextDisplayRuleManager;
+import com.readwide.manager.util.TxtBlankLineCollapser;
 import com.readwide.manager.view.CustomReaderView;
 
 import java.io.BufferedReader;
@@ -39,7 +40,8 @@ final class ReaderLargeTextExactAnchorBuildController {
                                                             int expectedTotalChars,
                                                             int partitionLines,
                                                             int lookaheadLines,
-                                                            int indexGeneration) throws IOException {
+                                                            int indexGeneration,
+                                                            boolean collapseBlankLines) throws IOException {
         ArrayList<CustomReaderView.PageTextAnchor> result = new ArrayList<>();
         partitionLines = Math.max(1, partitionLines);
         lookaheadLines = Math.max(0, lookaheadLines);
@@ -54,6 +56,8 @@ final class ReaderLargeTextExactAnchorBuildController {
                 TextDisplayRuleManager.getActiveRules(activity.getApplicationContext(), loadedFilePath);
         TextDisplayRuleManager.CompiledRules compiledRules =
                 TextDisplayRuleManager.compile(activeRules);
+        TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(
+                collapseBlankLines);
         try (BufferedReader reader = LargeTextPartitionReader.openReader(
                 source, activity.resolveTextEncodingForFile(source))) {
             String lineText;
@@ -63,6 +67,9 @@ final class ReaderLargeTextExactAnchorBuildController {
                 sawAnyLine = true;
                 String normalized = FileUtils.enforceTextPresentationSelectors(lineText);
                 normalized = TextDisplayRuleManager.apply(normalized, compiledRules);
+                String emitted = collapseFilter.accept(normalized);
+                if (emitted == null) continue;
+                normalized = emitted;
                 windowStarts.add(globalChar);
                 windowLines.add(normalized);
                 globalChar += normalized.length() + 1;

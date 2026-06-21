@@ -39,4 +39,16 @@ public final class SearchOptions {
                 && regex == other.regex
                 && normalizeUnicode == other.normalizeUnicode;
     }
+
+    /**
+     * Stable key for cache/identity comparisons. Distinct option sets produce
+     * distinct strings so a cached match total is not reused after the user
+     * toggles case sensitivity, whole-word, regex, or Unicode normalization.
+     */
+    public String signature() {
+        return (caseSensitive ? "C" : "c")
+                + (wholeWord ? "W" : "w")
+                + (regex ? "R" : "r")
+                + (normalizeUnicode ? "N" : "n");
+    }
 }

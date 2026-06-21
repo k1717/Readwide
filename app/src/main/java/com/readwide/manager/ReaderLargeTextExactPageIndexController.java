@@ -96,7 +96,8 @@ final class ReaderLargeTextExactPageIndexController {
                 activity.readerView.getReaderTextColorForIndex(),
                 activity.readerView.getReaderBackgroundColorForIndex(),
                 activity.getLargeTextPartitionLines(),
-                activity.getLargeTextPartitionBufferLines());
+                activity.getLargeTextPartitionBufferLines(),
+                activity.largeTextActiveCollapseBlankLines);
     }
 
     void handleRestartIndexingTick() {
@@ -185,7 +186,8 @@ final class ReaderLargeTextExactPageIndexController {
                                   int readerTextColor,
                                   int readerBackgroundColor,
                                   int partitionLines,
-                                  int partitionBufferLines) {
+                                  int partitionBufferLines,
+                                  boolean collapseBlankLines) {
         File source = new File(loadedFilePath);
         String stableTypefaceKey;
         try {
@@ -207,6 +209,7 @@ final class ReaderLargeTextExactPageIndexController {
                 + "|partitionMode=" + activity.getLargeTextPartitionMode()
                 + "|partitionLines=" + Math.max(1, partitionLines)
                 + "|partitionBuffer=" + Math.max(0, partitionBufferLines)
+                + "|collapseBlank=" + collapseBlankLines
                 + "|ls=" + quantizeFloatForSignature(lineSpacing)
                 + "|ts=" + quantizeFloatForSignature(paintSnapshot.getTextSize())
                 + "|sx=" + quantizeFloatForSignature(paintSnapshot.getTextScaleX())
@@ -235,10 +238,14 @@ final class ReaderLargeTextExactPageIndexController {
         final int partitionBufferLines = activity.getLargeTextPartitionBufferLines();
         final int lookaheadLines = partitionBufferLines;
         final File source = new File(loadedFilePath);
+        // Build and sign the exact page index against the collapse basis captured for the
+        // loaded content, not live prefs, so the index anchors match the displayed text and
+        // the stored signature stays consistent with buildCurrentSignature.
+        final boolean collapseBlankLines = activity.largeTextActiveCollapseBlankLines;
         final String indexSignature = buildSignature(
                 loadedFilePath, layoutWidth, viewportHeight, marginVertical, overlap, lineSpacing, paintSnapshot,
                 markdownHighlightingEnabled, readerTextColor, readerBackgroundColor,
-                partitionLines, partitionBufferLines);
+                partitionLines, partitionBufferLines, collapseBlankLines);
         final int indexGeneration = activity.largeTextExactPageIndexState.beginBuild(indexSignature);
         if (indexGeneration < 0) return;
 
@@ -266,7 +273,8 @@ final class ReaderLargeTextExactPageIndexController {
                         expectedTotalChars,
                         partitionLines,
                         lookaheadLines,
-                        indexGeneration);
+                        indexGeneration,
+                        collapseBlankLines);
             } catch (Throwable t) {
                 buildFailed = true;
                 failureReason = t.getClass().getSimpleName();

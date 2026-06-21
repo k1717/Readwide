@@ -18,7 +18,8 @@ final class ReaderLargeTextJumpController {
                                     int totalPages,
                                     String anchorBefore,
                                     String anchorAfter,
-                                    boolean showLoadingForAsyncPartitionJump) {
+                                    boolean showLoadingForAsyncPartitionJump,
+                                    boolean preferAnchorPartition) {
         if (!activity.largeTextEstimateActive) {
             activity.scrollToCharPosition(charPosition);
             return;
@@ -26,8 +27,8 @@ final class ReaderLargeTextJumpController {
 
         if (activity.largeTextActivePartitionUsesLookbehind) {
             activity.reloadLargeTextPreviewAround(
-                    charPosition, displayPage, totalPages, anchorBefore, anchorAfter,
-                    showLoadingForAsyncPartitionJump);
+                    charPosition, displayPage, totalPages, anchorBefore, anchorAfter, -1,
+                    showLoadingForAsyncPartitionJump, preferAnchorPartition);
             return;
         }
 
@@ -41,8 +42,8 @@ final class ReaderLargeTextJumpController {
 
             if (!isAbsoluteCharPositionInCurrentLargeTextBody(resolvedPosition)) {
                 activity.reloadLargeTextPreviewAround(
-                        resolvedPosition, displayPage, totalPages, anchorBefore, anchorAfter,
-                        showLoadingForAsyncPartitionJump);
+                        resolvedPosition, displayPage, totalPages, anchorBefore, anchorAfter, -1,
+                        showLoadingForAsyncPartitionJump, preferAnchorPartition);
                 return;
             }
 
@@ -57,8 +58,8 @@ final class ReaderLargeTextJumpController {
         }
 
         activity.reloadLargeTextPreviewAround(
-                charPosition, displayPage, totalPages, anchorBefore, anchorAfter,
-                showLoadingForAsyncPartitionJump);
+                charPosition, displayPage, totalPages, anchorBefore, anchorAfter, -1,
+                showLoadingForAsyncPartitionJump, preferAnchorPartition);
     }
 
     boolean isAbsoluteCharPositionInCurrentLargeTextBody(int absolutePosition) {
@@ -78,7 +79,8 @@ final class ReaderLargeTextJumpController {
                                       String anchorBefore,
                                       String anchorAfter,
                                       int partitionStartLine,
-                                      boolean showLoadingForAsyncPartitionJump) {
+                                      boolean showLoadingForAsyncPartitionJump,
+                                      boolean preferAnchorPartition) {
         if (activity.filePath == null) return;
         if (activity.largeTextEstimateActive) {
             activity.switchLargeTextPartitionInPlace(
@@ -89,7 +91,8 @@ final class ReaderLargeTextJumpController {
                     anchorAfter,
                     partitionStartLine,
                     showLoadingForAsyncPartitionJump,
-                    false);
+                    false,
+                    preferAnchorPartition);
             return;
         }
 
@@ -106,6 +109,9 @@ final class ReaderLargeTextJumpController {
         }
         if (anchorAfter != null) {
             intent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER, anchorAfter);
+        }
+        if (preferAnchorPartition) {
+            intent.putExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION, true);
         }
         activity.loadFileFromIntent(intent);
     }
