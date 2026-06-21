@@ -16,7 +16,7 @@
 
 - Reopening a text file restores the reading position more reliably. The saved position now carries short before/after text anchors and a page-layout signature, so the reader re-finds the original spot even when the page layout would otherwise differ (for example after a display-setting change), instead of falling back to an approximate page. The restored position also stays correct after the system recreates the reader and when scrolling back through a large file.
 - If a text file changed on disk since it was last opened, reopening it reloads the current contents instead of restoring the earlier cached view and position.
-- Large-file bookmarks resolve by their surrounding text, so they land on the correct page even after the page layout changes (for example a different font size or margin).
+- Large-file bookmark jumps now prefer surrounding-text anchors when resolving the destination, improving landing accuracy after a layout or display change (for example a different font size or margin).
 
 ### Settings and display rules
 
