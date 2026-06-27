@@ -15,7 +15,7 @@ Readwide 1.0.8 is a hotfix over 1.0.7. It fixes a regression that could turn a d
 ## Verifying the APK signature
 
 ```
-apksigner verify --print-certs Readwide-1.0.8-github-universal.apk
+apksigner verify --print-certs Readwide-1.0.8.apk
 ```
 
 Expected signing certificate:
