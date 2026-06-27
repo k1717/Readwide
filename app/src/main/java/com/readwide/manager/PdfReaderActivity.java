@@ -3240,8 +3240,10 @@ public class PdfReaderActivity extends AppCompatActivity {
         super.onTrimMemory(level);
         if (level == android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
             schedulePdfBackgroundMemoryTrim();
-        } else if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
-                || level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+        } else if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+            // TRIM_MEMORY_RUNNING_LOW / RUNNING_CRITICAL fire while the app is still
+            // foregrounded; only trim once it is actually backgrounded so we never
+            // blank the PDF page the user is currently viewing.
             cancelPdfBackgroundMemoryTrim();
             trimPdfBitmapsForBackground(true);
         }

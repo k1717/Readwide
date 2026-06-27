@@ -1,0 +1,2 @@
+Readwide 1.0.8
+- Fixed a regression where a large text or PDF document could suddenly turn blank while reading. Under memory pressure the reader was clearing the visible page even while the app was in the foreground; it now releases that memory only when the app is actually in the background. Affects both the text and PDF readers.

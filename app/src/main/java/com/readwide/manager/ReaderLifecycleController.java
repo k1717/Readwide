@@ -44,8 +44,12 @@ final class ReaderLifecycleController {
         }
         if (level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
             activity.scheduleBackgroundMemoryTrim();
-        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
-                || level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+            // Only drop the reader's text and caches when the app is actually in the
+            // background LRU list. TRIM_MEMORY_RUNNING_LOW / RUNNING_CRITICAL arrive
+            // while the app is still foregrounded; force-trimming there blanks the
+            // page the user is reading, and nothing restores it because no onResume
+            // follows while foregrounded. Foreground memory pressure must not trim.
             activity.cancelBackgroundMemoryTrim();
             activity.trimReaderMemoryForBackground(true);
         }

@@ -1,5 +1,16 @@
 # Patch Notes
 
+## Readwide 1.0.8 - 2026-06-26
+
+### Release scope
+
+- Android metadata is `versionCode 10008` and `versionName "1.0.8"`. This is a hotfix over 1.0.7 and keeps the `com.readwide.manager` applicationId and the `readwide` release signing key, so 1.0.8 installs in place over 1.0.7 and 1.0.6 as a normal update.
+
+### Fixes — blank document while reading
+
+- Fixed a regression where a large text or PDF document could suddenly become a blank document while you were reading it, at random: sometimes right after opening, sometimes after reading for a while, and again after reopening, which made it hard to get back to your place. The cause was the reader's memory-trim handler. Under system memory-pressure signals it released the on-screen text whenever the level reached `TRIM_MEMORY_RUNNING_LOW`, but those `RUNNING_*` levels are delivered while the app is still in the foreground. Clearing the text there blanked the page the user was reading, and nothing restored it because the restore only runs when you return to the app. The trim now happens only when the app is actually in the background (`TRIM_MEMORY_BACKGROUND` and above); foreground memory pressure no longer clears the page. This applies to both the text reader and the PDF reader.
+- Hardened reading-position autosave so it no longer writes a position while the reader content is temporarily released for a background memory trim. In that released window the derived char position is 0, and a later pause could otherwise persist it over the real saved position (which is why, before this, closing the app from the reset state lost the place while merely backgrounding and returning recovered it). The autosave now skips that state, so the correct position survives even if the app is closed from it.
+
 ## Readwide 1.0.7 - 2026-06-20
 
 ### Release scope

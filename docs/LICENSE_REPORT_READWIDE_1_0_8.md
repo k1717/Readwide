@@ -1,6 +1,6 @@
-# Readwide 1.0.5 direct dependency license report
+# Readwide 1.0.8 direct dependency license report
 
-This report is generated from the dependencies declared in `app/build.gradle` plus source-bundled notices that are relevant to the default Readwide 1.0.5 build.
+This report is generated from the dependencies declared in `app/build.gradle` plus source-bundled notices that are relevant to the default Readwide 1.0.8 build.
 
 It is a **direct-dependency/source-declared report**, not a fully resolved transitive SBOM. For strict repository submission, regenerate a resolved Gradle dependency report/SBOM from a clean, network-enabled build environment.
 
@@ -10,8 +10,8 @@ It is a **direct-dependency/source-declared report**, not a fully resolved trans
 | --- | --- |
 | App name | Readwide |
 | Android applicationId | `com.readwide.manager` |
-| Version name | `1.0.5` |
-| Version code | `10005` |
+| Version name | `1.0.8` |
+| Version code | `10008` |
 | First-party license | Apache-2.0 |
 
 ## Runtime dependencies declared in `app/build.gradle`
@@ -24,11 +24,12 @@ It is a **direct-dependency/source-declared report**, not a fully resolved trans
 | `androidx.constraintlayout:constraintlayout:2.2.1` | ConstraintLayout UI layouts | Apache-2.0 |
 | `androidx.activity:activity:1.10.1` | AndroidX Activity APIs | Apache-2.0 |
 | `androidx.drawerlayout:drawerlayout:1.2.0` | DrawerLayout UI | Apache-2.0 |
+| `androidx.swiperefreshlayout:swiperefreshlayout:1.1.0` | Pull-to-refresh for the file list | Apache-2.0 |
 | `com.github.albfernandez:juniversalchardet:2.5.0` | Text encoding detection | MPL-1.1 option from upstream tri-license |
 | `org.apache.commons:commons-compress:1.28.0` | TAR/7z/stream archive support and ZIP method fallback | Apache-2.0 |
-| `me.zhanghai.android.libarchive:library:1.1.6` | Android libarchive backend for RAR/backend-dependent archive paths | Apache-2.0 for Android artifact plus permissive BSD-style native libarchive notices |
+| `me.zhanghai.android.libarchive:library:1.1.6` | Android libarchive backend for RAR/backend-dependent archive paths | Apache-2.0 (Android wrapper); bundles native libarchive (BSD-2-Clause) with zlib/bzip2/xz/lz4/Zstandard/Mbed TLS codecs, all permissive FOSS |
 | `org.tukaani:xz:1.12` | XZ/LZMA/LZMA2 codec support | 0BSD |
-| `com.github.luben:zstd-jni:1.5.7-9` | Zstandard codec used by Commons Compress | BSD-family licensing path recorded in notices |
+| `com.github.luben:zstd-jni:1.5.7-9` | Zstandard codec used by Commons Compress | BSD-2-Clause (wrapper); bundles Zstandard (BSD-3-Clause OR GPLv2 dual; used under BSD-3-Clause) |
 | `net.lingala.zip4j:zip4j:2.11.6` | ZIP/CBZ listing/extraction/password/split support | Apache-2.0 |
 | `kr.dogfoot:hwplib:1.1.10` | HWP 5.x text extraction backend | Apache-2.0 |
 | `kr.dogfoot:hwpxlib:1.0.9` | HWPX text extraction backend | Apache-2.0 |
@@ -70,7 +71,7 @@ It is a **direct-dependency/source-declared report**, not a fully resolved trans
 
 Before publishing source or APK release materials:
 
-1. Include `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `PRIVACY.md`, `docs/FOSS_STATUS.md`, this report, and `docs/SBOM_READWIDE_1_0_5.spdx.json`.
+1. Include `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `PRIVACY.md`, `docs/FOSS_STATUS.md`, this report, and `docs/SBOM_READWIDE_1_0_7.spdx.json`.
 2. Confirm `app/libs` is absent or contains no optional local jars.
 3. Confirm no Junrar/UnRAR-license code or jar is bundled in the default source/APK.
 4. Confirm native dependency notices for libarchive-android/libarchive and zstd-jni/Zstandard are kept with binary release materials.

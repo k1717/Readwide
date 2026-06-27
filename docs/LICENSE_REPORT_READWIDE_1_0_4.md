@@ -62,7 +62,7 @@ It is a **direct-dependency/source-declared report**, not a fully resolved trans
 ## F-Droid / strict repository caveats
 
 - The default source package does not include optional local jars under `app/libs`.
-- The GitHub source package keeps `gradle/wrapper/gradle-wrapper.jar` for normal developer builds; the draft F-Droid metadata removes it before review.
+- The GitHub source package keeps the standard `gradle/wrapper/gradle-wrapper.jar`; F-Droid verifies it against the known-good hashes of official Gradle releases and builds with its own Gradle, so the metadata does not remove it.
 - `libarchive-android` and `zstd-jni` involve native binaries in normal Maven-resolved Android builds. Their licenses are recorded as permissive/FOSS-compatible here, but a strict source-only repository reviewer may still ask for a build-from-source/native dependency handling explanation.
 - This report is not a full transitive Gradle resolution. Regenerate a resolved dependency tree and SBOM before a strict repository submission.
 

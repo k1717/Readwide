@@ -1,4 +1,4 @@
-# F-Droid submission notes for Readwide 1.0.7
+# F-Droid submission notes for Readwide 1.0.8
 
 This document records the project-side preparation for an F-Droid Data merge request.
 
@@ -6,12 +6,12 @@ This document records the project-side preparation for an F-Droid Data merge req
 
 - App name: Readwide
 - Android application ID: `com.readwide.manager`
-- Version name: `1.0.7`
-- Version code: `10007`
+- Version name: `1.0.8`
+- Version code: `10008`
 - First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
-The Android application ID is `com.readwide.manager` (since 1.0.4). This is the first F-Droid submission; the F-Droid build is compiled from source and signed with F-Droid's key, so it does not install over a self-installed GitHub-release APK (signed with the project's own key) or an older `com.textview.reader` build — install the F-Droid build fresh and transfer data with the in-app JSON backup export/import.
+The Android application ID is `com.readwide.manager` (since 1.0.4). The F-Droid build is compiled from source and signed with F-Droid's key, so it does not install over a self-installed GitHub-release APK (signed with the project's own key) or an older `com.textview.reader` build — install the F-Droid build fresh and transfer data with the in-app JSON backup export/import.
 
 ## Draft metadata
 
@@ -30,10 +30,10 @@ metadata/com.readwide.manager.yml
 Create and push the immutable release tag before opening the merge request:
 
 ```text
-v1.0.7
+v1.0.8
 ```
 
-The draft metadata's current build uses `commit: v1.0.7`. Confirm that this tag points to the audited source tree before copying `fdroid/metadata/com.readwide.manager.yml` into fdroiddata.
+The metadata pins each release build by the tag's commit hash. Confirm that the `v1.0.8` tag points to the audited source tree, then set the `1.0.8` build's `commit` in `fdroid/metadata/com.readwide.manager.yml` to that commit before copying it into fdroiddata. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the new tag and add the build entry automatically.
 
 ## F-Droid-facing baseline
 
@@ -52,20 +52,16 @@ The default build is intended to be reviewed as a local-first FOSS app:
 
 ## Gradle wrapper jar handling
 
-The GitHub source keeps normal Gradle wrapper files for developer convenience. The draft F-Droid metadata removes the wrapper jar before build scanning:
-
-```yaml
-rm:
-  - gradle/wrapper/gradle-wrapper.jar
-```
+The source keeps the standard Gradle wrapper files. F-Droid's build verifies `gradle/wrapper/gradle-wrapper.jar` against the known-good hashes of official Gradle releases and builds with its own trusted Gradle, so the metadata does not need an `rm` rule for it. (1.0.7 built and published on F-Droid from this metadata without removing the wrapper jar.)
 
 ## Build command
 
-The draft metadata uses the normal Gradle release build:
+The metadata builds from the `app` module with the normal Gradle release build:
 
 ```yaml
+subdir: app
 gradle:
-  - 'yes'
+  - yes
 ```
 
 Manual local check for the no-private-keystore path:
@@ -88,7 +84,7 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These provide title, short description, full description, and versionCode `10007` changelog text.
+These provide title, short description, full description, and versionCode `10008` changelog text.
 
 ## Conservative support wording for review
 
@@ -105,8 +101,8 @@ Use conservative wording in the merge request:
 - `PRIVACY.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_7.md`
-- `docs/SBOM_READWIDE_1_0_7.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_8.md`
+- `docs/SBOM_READWIDE_1_0_8.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `fdroid/metadata/com.readwide.manager.yml`
@@ -123,6 +119,6 @@ All bundled native components are permissive/FOSS-compatible, and no copyleft ob
 ## Remaining submitter tasks
 
 - Confirm a clean network-enabled Gradle build from the tagged source.
-- Confirm the draft metadata points to the immutable `v1.0.7` tag or to an equivalent exact commit hash requested by the reviewer.
+- Confirm the metadata points to the immutable `v1.0.8` tag or to an equivalent exact commit hash requested by the reviewer.
 - Confirm no optional local jars are present in `app/libs`.
 - Confirm native dependency notices for `libarchive-android` / libarchive and `zstd-jni` / Zstandard are included with binary release materials if APK assets are published outside F-Droid.

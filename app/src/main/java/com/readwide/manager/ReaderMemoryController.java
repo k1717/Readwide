@@ -161,6 +161,13 @@ final class ReaderMemoryController {
     }
 
     void saveReadingState() {
+        // Do not persist position while the reader content is released for a
+        // background memory trim. In that window fileContent is empty, so the
+        // derived char position would collapse to 0 and overwrite the real
+        // saved position. The correct position was already saved by the trim
+        // itself just before it cleared the content, and the in-memory restore
+        // intent recovers it on the next return to the reader.
+        if (activity.backgroundTextMemoryReleased) return;
         if (activity.filePath != null && activity.prefs.getAutoSavePosition()) {
             ReaderState state = new ReaderState(activity.filePath);
             int savePosition = activity.getBookmarkSaveCharPosition();

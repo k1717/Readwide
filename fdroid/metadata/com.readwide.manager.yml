@@ -1,5 +1,5 @@
 Categories:
-  - Reading
+  - Ebook Reader
 License: Apache-2.0
 AuthorName: k1717
 AuthorEmail: readwide.kj7w5@addy.io
@@ -8,57 +8,25 @@ IssueTracker: https://github.com/k1717/Readwide/issues
 Changelog: https://github.com/k1717/Readwide/blob/main/CHANGELOG.md
 
 AutoName: Readwide
-Summary: Local-first reader and file browser
-Description: |-
-  Readwide is a local-first Android reader and file browser for TXT,
-  Markdown, PDF, EPUB, DOCX/Word-compatible documents, images, comic archives,
-  and common archive workflows.
-
-  It supports local reading, recent files, bookmarks, folder shortcuts,
-  search/filtering, shared reader search options, archive browsing,
-  archive-backed image viewing, and local copy/move/delete/extract/compress
-  queues.
-
-  The default build does not request INTERNET permission and does not include
-  ads, analytics, telemetry SDKs, Firebase, Google Play Services, an account
-  system, cloud sync, or a developer-operated upload backend. Android Auto
-  Backup is disabled.
-
-  Broad file access is requested because Readwide is a local file browser and
-  reader for user-selected folders, documents, images, and archives. Files
-  opened into Readwide from other apps are copied into an app-private cache
-  with filename sanitization, a path check, and a 2 GB per-file limit, and
-  JSON backup import is capped at 256 MB.
-
-  HWP/HWPX support is text-first and read-only through Apache-2.0 Java
-  libraries. RAR/CBR support is limited and does not claim complete RAR,
-  encrypted RAR, broad split RAR, or SFX compatibility.
-
-  Readwide uses the Android applicationId com.readwide.manager and is the
-  successor to the older TextView Reader app, which used com.textview.reader
-  and installs as a separate app rather than updating in place. Existing users
-  can carry bookmarks, reading positions, themes, and settings across with the
-  in-app JSON backup export/import.
-
-  The F-Droid build is signed by F-Droid and does not update over GitHub release
-  APKs. When switching channels, export a JSON backup first, install the target
-  build fresh, then import the backup.
 
 RepoType: git
 Repo: https://github.com/k1717/Readwide.git
 
 Builds:
-  - versionName: '1.0.7'
+  - versionName: 1.0.7
     versionCode: 10007
-    commit: v1.0.7
-    rm:
-      - gradle/wrapper/gradle-wrapper.jar
+    commit: 19d221a0ebfa4a455739009a16e98a1d6bf6e051
+    subdir: app
     gradle:
       - yes
-    prebuild:
-      - chmod +x gradlew scripts/clean_removed_sources.sh scripts/generate_rar_fixture_reports.sh scripts/generate_archive_fixture_reports.sh
+  - versionName: 1.0.8
+    versionCode: 10008
+    commit: REPLACE_WITH_v1.0.8_RELEASE_COMMIT
+    subdir: app
+    gradle:
+      - yes
 
-AutoUpdateMode: Version v%v
+AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: '1.0.7'
-CurrentVersionCode: 10007
+CurrentVersion: 1.0.8
+CurrentVersionCode: 10008

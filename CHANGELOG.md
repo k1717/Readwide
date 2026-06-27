@@ -1,5 +1,15 @@
 # Changelog
 
+## Readwide 1.0.8 - 2026-06-26
+
+### Release scope
+
+- Android metadata is `versionCode 10008` and `versionName "1.0.8"`. This is a hotfix over 1.0.7 and keeps the `com.readwide.manager` applicationId and the `readwide` release signing key, so 1.0.8 updates in place over 1.0.7 and 1.0.6.
+
+### Fixes
+
+- Fixed a regression where a large text or PDF document could suddenly turn blank while it was being read. Under system memory pressure the reader released its on-screen text even while the app was still in the foreground; because that content is only restored when you return to the app (which does not happen while you are already reading), the page went blank at random and the reading position was lost. The reader now releases that memory only when the app is actually in the background.
+
 ## Readwide 1.0.7 - 2026-06-20
 
 ### Release scope

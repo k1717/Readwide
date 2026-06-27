@@ -2,11 +2,11 @@
 
 Readwide first-party source code is licensed under the Apache License 2.0. Keep this file with source releases and with binary release materials such as APK/AAB release assets.
 
-This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.7 build. It does not replace a fully resolved transitive dependency report.
+This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.8 build. It does not replace a fully resolved transitive dependency report.
 
 ## Default build boundary
 
-The default Readwide 1.0.7 package is the FOSS-oriented public line:
+The default Readwide 1.0.8 package is the FOSS-oriented public line:
 
 - first-party source: Apache-2.0;
 - no Junrar or RARLAB UnRAR-license code bundled;
