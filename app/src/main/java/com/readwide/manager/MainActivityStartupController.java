@@ -172,6 +172,7 @@ final class MainActivityStartupController {
                 activity.recentAdapter,
                 activity.recentFastScrollRail,
                 activity.recentFastScrollThumb);
+        activity.attachRecentSwipeToDismiss();
     }
 
     private void installFastScrollIfReady(RecyclerView recyclerView,

@@ -1,16 +1,16 @@
 # Public release build checklist
 
-This file is the practical build and verification checklist for Readwide 1.0.8.
+This file is the practical build and verification checklist for Readwide 1.0.9.
 
 ## Version metadata
 
 ```text
 applicationId com.readwide.manager
-versionCode 10008
-versionName 1.0.8
+versionCode 10009
+versionName 1.0.9
 ```
 
-The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.8 keeps that key, so it installs in place over 1.0.7 and 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.8, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
+The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.9 keeps that key, so it installs in place over 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.9, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
 
 ## Keystore policy
 
@@ -102,8 +102,8 @@ Expected result:
 
 Before opening an F-Droid Data merge request:
 
-1. Publish a final Git tag, e.g. `v1.0.8`.
-2. Replace the commit placeholder in `fdroid/metadata/com.readwide.manager.yml` with the immutable tag commit.
+1. Publish a final Git tag, e.g. `v1.0.9`.
+2. Replace the commit placeholder in `fdroid/metadata/com.readwide.manager.yml` with the full 40-character commit hash that the `v1.0.9` tag points to (this app's F-Droid maintainer requires a full commit hash, not the tag name).
 3. The standard `gradle/wrapper/gradle-wrapper.jar` is kept; F-Droid verifies it against official Gradle hashes and builds with its own Gradle, so no `rm` rule is needed.
 4. Confirm a no-private-keystore `assembleRelease` build works.
 5. Keep RAR and HWP/HWPX support wording conservative.

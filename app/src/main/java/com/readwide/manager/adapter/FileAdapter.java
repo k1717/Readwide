@@ -228,6 +228,25 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
         return new ArrayList<>(items);
     }
 
+    /** Item at a binding-adapter position, or null if out of range. */
+    @Nullable
+    public FileListItem getItemAt(int position) {
+        if (position < 0 || position >= items.size()) return null;
+        return items.get(position);
+    }
+
+    /**
+     * Remove a single row in place (swipe-to-dismiss on the recent list).
+     * Deleting the backing store entry is the caller's responsibility; this
+     * only updates the adapter so the swiped row animates out without a full
+     * rebind. Safe because items is a stable list mutated in place everywhere.
+     */
+    public void removeItemAt(int position) {
+        if (position < 0 || position >= items.size()) return;
+        items.remove(position);
+        notifyItemRemoved(position);
+    }
+
 
     public void cancelPendingPresses() {
         touchCancelGeneration++;

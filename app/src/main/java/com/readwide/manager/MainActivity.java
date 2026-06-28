@@ -1740,6 +1740,18 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         mainRecentFiles().loadRecentFiles(preserveScroll);
     }
 
+    void applyRecentSearch(String query) {
+        mainRecentFiles().applyRecentSearch(query);
+    }
+
+    void clearRecentSearch() {
+        mainRecentFiles().clearRecentSearch();
+    }
+
+    void attachRecentSwipeToDismiss() {
+        mainRecentFiles().attachSwipeToDismiss();
+    }
+
     @Override public void onFileClick(@NonNull File file) {
         if (drawerLayout != null && drawerLayout.isDrawerVisible(GravityCompat.START)) {
             closeDrawerAfterSelection();
@@ -2272,6 +2284,17 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         // 2. If the drawer is open, close it.
         if (drawerLayout != null && drawerLayout.isDrawerOpen(GravityCompat.START)) {
             drawerLayout.closeDrawer(GravityCompat.START);
+            return;
+        }
+
+        // 2.5. Recent (home) list search: Back clears the search term first,
+        // restoring the recent list and hiding the search banner (any active
+        // file-type filter is kept; a later Back drops it). Without this, a Back
+        // during a recent search would fall through to the exit handler, since
+        // the recent search stays in home mode rather than search mode.
+        if (homeMode && !searchMode && hasFileSearchQuery()) {
+            if (fileSearchInput != null) fileSearchInput.setText("");
+            clearRecentSearch();
             return;
         }
 

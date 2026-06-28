@@ -1,5 +1,40 @@
 # Changelog
 
+## Readwide 1.0.9 - 2026-06-28
+
+### Release scope
+
+- Android metadata is `versionCode 10009` and `versionName "1.0.9"`. It keeps the `com.readwide.manager` applicationId and the `readwide` release signing key, so 1.0.9 updates in place over 1.0.8, 1.0.7, and 1.0.6.
+- This release adds in-document text find to the PDF reader for digital (text-based) PDFs, speeds up image page-flipping inside large archives, and reworks the recent-files list: it now searches your reading history (with a result banner), keeps your full history and shows up to 5000 entries, combines with the file-type filters, and supports swipe-to-remove. It also matches the archive preview's row styling to the main file list. It adds one new runtime dependency, PdfBox-Android (Apache-2.0), used only for PDF text extraction; the recent-list, archive-styling, and archive-image changes are internal and add no dependency.
+
+### Reading - PDF in-document find
+
+- Added a **Find** action to the PDF reader that searches for text inside the open PDF. Matches are highlighted on the page (the highlights track zoom and pan), previous/next step through them, and a current/total match count is shown. The find dialog matches the search dialog used by the other viewers.
+- Find covers the whole document, not just the current page. Previous/next move through matches across pages and jump to the page where each match is.
+- When you move to a match, the page shifts as needed so the current match stays visible above the find dialog instead of being hidden behind it.
+- This works on digital (text-based) PDFs only. Scanned or image-only PDFs have no text layer to extract, so they are not searched; OCR is intentionally not included.
+- PDF pages continue to be rendered by the platform `PdfRenderer`. The new dependency is used only to read the text and its on-page positions, not to render pages, so rendering, zoom, pan, and the single-page/continuous modes are unchanged.
+
+### Images - faster page-flipping in large archives
+
+- Paging to the next or previous image inside an archive (a ZIP/CBZ comic) is faster, especially on the first pass through a large archive such as a comic with around two thousand images. The reader now caches each archive's parsed entry index, so showing each image is a direct lookup instead of re-reading the whole archive directory every time. This applies to both unencrypted and password-protected archives; for an encrypted archive the password is used only during extraction and is not retained.
+
+### Files - recent list search and management
+
+- The search box on the home screen now searches your recently-read files (your reading history) as you type, instead of walking device storage. Matches come from your full history, and a banner under the **Recently Read** header shows the query and how many recent files match. Searching while browsing a folder still searches storage as before.
+- The recent list keeps your entire reading history and shows up to 5000 entries (previously a few hundred), so older reads stay listed and remain reachable through search.
+- The file-type filter chips (All, General, TXT, Archive, PDF, EPUB, Word, Image) now combine with the recent search: the chip narrows the list first, then the search runs within the filtered set. Changing the chip while searching re-applies the search on top of the new filter.
+- Swipe a recent row to the left to remove it from the list. The card follows your finger and is removed once dragged past about 45% of its width; a shorter swipe slides back without removing. Removing a row also clears that file's saved reading position.
+- Back now clears an active recent search first (restoring the list and hiding the banner) before dropping any active file-type filter or leaving the home screen.
+
+### Archive viewer
+
+- File rows inside the archive (ZIP/CBZ) preview now use the same font sizes and spacing as the main file list, so the two lists look consistent.
+
+### Dependencies
+
+- Added `com.tom-roush:pdfbox-android:2.0.27.0` (Apache-2.0, pure Java) for PDF text extraction. A proguard/R8 rule ignores its optional, unbundled JPEG2000 (JP2) decoder; JPX images are unaffected because find only uses extracted text.
+
 ## Readwide 1.0.8 - 2026-06-26
 
 ### Release scope

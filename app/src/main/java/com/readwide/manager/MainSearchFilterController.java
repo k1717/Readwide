@@ -266,6 +266,17 @@ final class MainSearchFilterController {
                     ? activity.fileSearchInput.getText().toString().trim()
                     : "";
 
+            // Recent search active (home screen, non-empty query): apply the new
+            // file-type filter to the recent list first, then the live search
+            // re-applies on top. loadRecentFiles rebuilds the full history for the
+            // new filter and re-runs the search from the live box.
+            if (!query.isEmpty() && activity.homeMode && !activity.searchMode) {
+                activity.activeFileFilter = filter;
+                updateFileTypeChips();
+                activity.loadRecentFiles();
+                return;
+            }
+
             if (query.isEmpty() && (activity.homeMode || (activity.searchMode && activity.searchReturnToHome))) {
                 activity.activeFileFilter = filter;
                 clearSearchDebounce();
@@ -467,6 +478,21 @@ final class MainSearchFilterController {
         clearSearchDebounce();
         if (activity.activityDestroyed || activity.fileSearchInput == null) return;
         String query = activity.fileSearchInput.getText().toString().trim();
+
+        // Home screen: the search box filters the in-memory recent read-history
+        // list rather than walking the filesystem. Stay in home mode and swap the
+        // recent adapter contents; an empty query restores the capped display.
+        if (activity.homeMode && !activity.searchMode) {
+            activity.fileSearchGeneration.incrementAndGet();
+            setFileSearchLoading(false);
+            updateFileSearchClearButtonVisibility();
+            if (query.isEmpty()) {
+                activity.clearRecentSearch();
+            } else {
+                activity.applyRecentSearch(query);
+            }
+            return;
+        }
 
         if (query.isEmpty() && activity.homeMode) {
             activity.fileSearchGeneration.incrementAndGet();

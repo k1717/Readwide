@@ -1,5 +1,41 @@
 # Patch Notes
 
+## Readwide 1.0.9 - 2026-06-28
+
+### Release scope
+
+- Android metadata is `versionCode 10009` and `versionName "1.0.9"`. It keeps the `com.readwide.manager` applicationId and the `readwide` release signing key, so 1.0.9 installs in place over 1.0.8, 1.0.7, and 1.0.6 as a normal update.
+- This release adds in-document text find to the PDF reader for digital (text-based) PDFs, speeds up image page-flipping inside large archives, and reworks the recent-files list: it now searches your reading history (with a result banner), keeps your full history and shows up to 5000 entries, combines with the file-type filters, and supports swipe-to-remove. It also matches the archive preview's row styling to the main file list. It adds one new runtime dependency, PdfBox-Android (Apache-2.0), used only for PDF text extraction; the recent-list, archive-styling, and archive-image changes are internal and add no dependency.
+
+### Reading - PDF in-document find
+
+- The PDF reader now has a **Find** action. Enter text and the reader searches the whole PDF, highlights matches on the page, and lets you step through them with previous/next while showing a current/total match count. The highlights track zoom and pan, and the find dialog is consistent with the search dialog used by the other viewers (title and match count on one row, equal-width controls).
+- Find covers every page of the document. Previous/next walk through all matches in order and jump to the page of each match, so matches on other pages are reachable, not just the ones on the current page.
+- When you move to a match that would sit behind the find dialog, the page shifts up so the current match stays visible above the dialog.
+- It works on digital (text-based) PDFs that carry a real text layer. Scanned or image-only PDFs have no extractable text and are not searched; OCR is intentionally not included, to keep the app lean and fully local.
+- Page rendering is unchanged: PDF pages are still drawn by the platform `PdfRenderer`. PdfBox-Android is used only to extract the page text and the on-page position of each glyph (so highlights land on the right words); it does not render pages. Page text is extracted in a single pass over the document the first time you search, then reused.
+
+### Images - faster page-flipping in large archives
+
+- Moving to the next or previous image inside an archive (a ZIP/CBZ comic) is faster, most noticeably on the first pass through a large archive such as a comic with around two thousand images. Each image used to be extracted by re-opening the archive and re-parsing its entire entry directory and then scanning that for the entry, which is work proportional to the number of entries for every single image. The reader now caches each archive's parsed index (keyed by path, size, and modified time), so showing each image is a direct lookup plus the decode; the existing neighbour-prefetch and decoded-image cache then keep up while you flip quickly.
+- This applies to password-protected archives as well. For an encrypted archive the password is attached to the cached archive handle only while a single image is being extracted and is cleared immediately afterward, so it is never kept in the shared cache between pages.
+
+### Files - recent list search and management
+
+- The home-screen search box now searches your recently-read files (your reading history) as you type, rather than walking device storage. Results are filtered from your full history, and a banner just under the **Recently Read** header shows the current query and the number of matching recent files. Searching while you are browsing a folder still searches storage, unchanged.
+- The recent list now keeps your whole reading history and shows up to 5000 entries (it was capped at a few hundred), so reads that previously dropped off the bottom stay listed and are reachable through the search.
+- The file-type filter chips and the recent search now compose: the chip filters the recent list first, and the search then runs only within that filtered set. Switching chips while a search is active re-applies the search over the new filter, so the two no longer override each other.
+- Swipe a recent row left to remove it. The card tracks your finger and commits the removal once it passes about 45% of the row width; a shorter swipe snaps back and keeps the row. Removing a row deletes that file's saved reading position (the same effect as clearing it individually).
+- Back clears an active recent search first - it empties the search box, hides the banner, and restores the list - before it drops any active file-type filter or leaves the home screen. Previously a recent search left Back going straight to the exit prompt, because the recent search stays on the home screen rather than entering the separate search screen.
+
+### Archive viewer
+
+- File rows inside the archive (ZIP/CBZ) preview now match the main file list's row metrics - name and detail text sizes, line spacing, icon size, and row padding - so the archive listing looks the same as the main file browser instead of using a larger, looser row.
+
+### Dependencies
+
+- Added `com.tom-roush:pdfbox-android:2.0.27.0` (Apache-2.0, pure Java) for PDF text extraction with glyph positions. The optional JP2/JPEG2000 image decoder (`com.gemalto.jp2`) it can reference is not bundled; a proguard/R8 `-dontwarn` keeps the release build from failing on that optional class. JPX images are not affected because find only uses extracted text. See `THIRD_PARTY_NOTICES.md`, `docs/LICENSE_REPORT_READWIDE_1_0_9.md`, and `docs/SBOM_READWIDE_1_0_9.spdx.json`.
+
 ## Readwide 1.0.8 - 2026-06-26
 
 ### Release scope

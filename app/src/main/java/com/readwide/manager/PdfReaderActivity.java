@@ -187,6 +187,7 @@ public class PdfReaderActivity extends AppCompatActivity {
     private final ExecutorService prefetchExecutor = Executors.newSingleThreadExecutor();
     volatile boolean activityDestroyed = false;
     com.readwide.manager.controller.ReaderToolbarController pdfToolbarController;
+    PdfSearchController pdfSearchController;
     final Object rendererLock = new Object();
     // A second, independent PdfRenderer over the same file, used only by the
     // prefetch thread. PdfRenderer can't render two pages concurrently on one
@@ -1361,7 +1362,8 @@ public class PdfReaderActivity extends AppCompatActivity {
         updateLoadingIndicatorTheme();
 
         TextView[] buttons = {prevButton, nextButton, slideModeButton, pageButton, bookmarkButton,
-                findViewById(R.id.pdf_screen_rotation), findViewById(R.id.pdf_settings), zoomMoreButton};
+                findViewById(R.id.pdf_find), findViewById(R.id.pdf_screen_rotation),
+                findViewById(R.id.pdf_settings), zoomMoreButton};
         for (TextView b : buttons) {
             if (b == null) continue;
             b.setTextColor(readerFg);
@@ -1397,6 +1399,10 @@ public class PdfReaderActivity extends AppCompatActivity {
                     startActivity(new android.content.Intent(this, SettingsActivity.class)));
         }
         if (zoomMoreButton != null) zoomMoreButton.setOnClickListener(v -> showMoreDialog());
+        View pdfFindButton = findViewById(R.id.pdf_find);
+        if (pdfFindButton != null) {
+            pdfFindButton.setOnClickListener(v -> showPdfSearchDialog());
+        }
         setupPdfPageSeekBar();
     }
 
@@ -1889,6 +1895,208 @@ public class PdfReaderActivity extends AppCompatActivity {
         dialogRef[0].show();
     }
 
+    private void ensurePdfSearchController() {
+        if (pdfSearchController != null) return;
+        pdfSearchController = new PdfSearchController(this, new PdfSearchController.Host() {
+            @Override public void goToPage(int pageIndex) {
+                PdfReaderActivity.this.goToPage(pageIndex, Integer.compare(pageIndex, currentPage));
+            }
+            @Override public int currentPage() { return currentPage; }
+            @Override public PdfPageView pageView() { return pdfPageMatrixView; }
+            @Override public void runOnUi(Runnable r) { runOnUiThread(r); }
+        });
+        pdfSearchController.setSource(filePath, pageCount);
+    }
+
+    private void showPdfSearchDialog() {
+        if (pageCount <= 0) return;
+        ensurePdfSearchController();
+
+        final int bg = dialogBg();
+        final int fg = dialogFg();
+        final int sub = dialogSub();
+
+        android.widget.FrameLayout titleBox = new android.widget.FrameLayout(this);
+        titleBox.setPadding(dpToPx(22), dpToPx(18), dpToPx(22), dpToPx(8));
+        TextView title = new TextView(this);
+        title.setText(getString(R.string.find_in_text));
+        title.setTextColor(fg);
+        title.setTextSize(20f);
+        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        title.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        title.setIncludeFontPadding(false);
+        android.widget.FrameLayout.LayoutParams titleLp = new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER_VERTICAL | Gravity.START);
+        titleLp.setMarginEnd(dpToPx(96));
+        titleBox.addView(title, titleLp);
+
+        final TextView status = new TextView(this);
+        status.setText("0 / 0");
+        status.setTextColor(sub);
+        status.setTextSize(12f);
+        status.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        status.setIncludeFontPadding(false);
+        status.setMinWidth(dpToPx(80));
+        titleBox.addView(status, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER_VERTICAL | Gravity.END));
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dpToPx(24), dpToPx(12), dpToPx(24), dpToPx(8));
+
+        final EditText input = makeDialogInput(getString(R.string.search_text_hint));
+        input.setSingleLine(true);
+        box.addView(input, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(52)));
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        buttons.setGravity(Gravity.CENTER);
+        buttons.setPadding(0, dpToPx(8), 0, 0);
+        TextView prevButton = makePdfDialogButton(getString(R.string.find_previous), fg);
+        TextView nextButton = makePdfDialogButton(getString(R.string.find_next), fg);
+        TextView closeButton = makePdfDialogButton(getString(R.string.close), fg);
+        buttons.addView(prevButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        buttons.addView(nextButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        buttons.addView(closeButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        box.addView(buttons, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable panelBg = new GradientDrawable();
+        panelBg.setColor(bg);
+        panelBg.setCornerRadius(dpToPx(14));
+        panelBg.setStroke(Math.max(1, dpToPx(1)), readerLine);
+        panel.setBackground(panelBg);
+        panel.setClipToOutline(true);
+        panel.addView(titleBox, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        panel.addView(box, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        final android.app.Dialog dialog =
+                createStablePositionedDialog(panel, PDF_TOOLBAR_POPUP_Y_DP, true, false);
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void afterTextChanged(android.text.Editable e) {
+                pdfSearchController.startQuery(e.toString());
+            }
+        });
+        prevButton.setOnClickListener(v -> pdfSearchController.move(false));
+        nextButton.setOnClickListener(v -> pdfSearchController.move(true));
+        closeButton.setOnClickListener(v -> dialog.dismiss());
+        input.setOnEditorActionListener((v, actionId, event) -> {
+            pdfSearchController.move(true);
+            return true;
+        });
+
+        pdfSearchController.setStatusListener((ordinal, total) ->
+                status.setText(total == 0 ? "0 / 0" : (ordinal + " / " + total)));
+        pdfSearchController.setActive(true);
+        dialog.setOnDismissListener(d -> {
+            pdfSearchController.setStatusListener(null);
+            pdfSearchController.setActive(false);
+            if (pdfPageMatrixView != null) pdfPageMatrixView.setSearchSafeBottom(0);
+        });
+        dialog.show();
+        // Once the dialog is laid out, tell the page view where the dialog's top
+        // edge falls so a current match in the lower page can be lifted above it.
+        // The dialog sits at the screen bottom, so its top obscures lower content.
+        // decor height/position is not final the instant show() returns, so retry
+        // a couple of times until the measurement lands. Measure against the panel
+        // we built (its on-screen top is unambiguous).
+        schedulePdfSearchSafeBottomMeasure(dialog, panel, 0);
+    }
+
+    private TextView makePdfDialogButton(String label, int fg) {
+        TextView button = new TextView(this);
+        button.setText(label);
+        button.setTextColor(fg);
+        button.setTextSize(13f);
+        button.setGravity(Gravity.CENTER);
+        button.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        button.setIncludeFontPadding(false);
+        button.setMinHeight(dpToPx(44));
+        button.setPadding(dpToPx(4), dpToPx(8), dpToPx(4), dpToPx(8));
+        button.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        return button;
+    }
+
+    /**
+     * Measure the find dialog's top edge in the page view's own pixel space and
+     * hand it to the view, so a current search match sitting behind the dialog
+     * (which is docked at the screen bottom) is lifted above it. Safe to call any
+     * time the dialog is showing; a non-positive measurement disables the lift.
+     * Returns true once a usable measurement was applied.
+     */
+    private boolean updatePdfSearchSafeBottom(@NonNull android.app.Dialog dialog, @Nullable View panel) {
+        if (activityDestroyed || pdfPageMatrixView == null) return false;
+        int safeBottom = pdfSearchDialogTopInPageViewPx(dialog, panel);
+        if (safeBottom > 0) {
+            pdfPageMatrixView.setSearchSafeBottom(safeBottom);
+            return true;
+        }
+        return false;
+    }
+
+    /** Retry the safe-bottom measurement until the dialog has settled (or we give up). */
+    private void schedulePdfSearchSafeBottomMeasure(@NonNull android.app.Dialog dialog,
+                                                    @Nullable View panel, int attempt) {
+        if (activityDestroyed) return;
+        Runnable measure = () -> {
+            if (activityDestroyed || !dialog.isShowing()) return;
+            if (!updatePdfSearchSafeBottom(dialog, panel) && attempt < 5) {
+                schedulePdfSearchSafeBottomMeasure(dialog, panel, attempt + 1);
+            }
+        };
+        View anchor = panel != null ? panel
+                : (dialog.getWindow() != null ? dialog.getWindow().getDecorView() : null);
+        if (anchor != null && attempt == 0) {
+            anchor.post(measure);
+        } else {
+            handler.postDelayed(measure, 70L * Math.max(1, attempt));
+        }
+    }
+
+    private int pdfSearchDialogTopInPageViewPx(@Nullable android.app.Dialog dialog, @Nullable View panel) {
+        if (pdfPageMatrixView == null) return -1;
+        int viewHeight = pdfPageMatrixView.getHeight();
+        if (viewHeight <= 0) return -1;
+        try {
+            int[] viewLoc = new int[2];
+            pdfPageMatrixView.getLocationOnScreen(viewLoc);
+            // Prefer the panel (the content view we handed the dialog): its top on
+            // screen is unambiguous. Fall back to the dialog window's decor top.
+            // The window is WRAP_CONTENT with bottom gravity, so both should agree,
+            // but decor measurement is fuzzier across OEMs.
+            int panelTopOnScreen = -1;
+            if (panel != null && panel.getHeight() > 0 && panel.isShown()) {
+                int[] panelLoc = new int[2];
+                panel.getLocationOnScreen(panelLoc);
+                panelTopOnScreen = panelLoc[1];
+            } else if (dialog != null && dialog.isShowing() && dialog.getWindow() != null) {
+                View decor = dialog.getWindow().getDecorView();
+                if (decor != null && decor.getHeight() > 0) {
+                    int[] decorLoc = new int[2];
+                    decor.getLocationOnScreen(decorLoc);
+                    panelTopOnScreen = decorLoc[1];
+                }
+            }
+            if (panelTopOnScreen < 0) return -1;
+            int top = panelTopOnScreen - viewLoc[1];
+            if (top > 0 && top < viewHeight) return top;
+        } catch (Throwable ignored) {
+            // If the dialog top can't be measured, leave the lift disabled.
+        }
+        return -1;
+    }
+
     private int txtReaderDialogWidthPx() {
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
         return Math.max(dpToPx(220), Math.min(Math.round(screenWidth * 0.85f), dpToPx(460)));
@@ -2307,6 +2515,10 @@ public class PdfReaderActivity extends AppCompatActivity {
                     lastRenderedPageWidthPts, lastRenderedPageHeightPts, newPage);
             showMatrixPageView();
             updatePageStatus();
+            if (pdfSearchController != null) {
+                pdfSearchController.onPageShown(currentPage,
+                        lastRenderedPageWidthPts, lastRenderedPageHeightPts);
+            }
             if (old != null && old != cached && !old.isRecycled()
                     && !isBitmapInSinglePageCache(old)) {
                 old.recycle();
@@ -2762,6 +2974,10 @@ public class PdfReaderActivity extends AppCompatActivity {
                         pdfPageMatrixView.setFitBitmap(finalBitmap, PDF_SUPERSAMPLE,
                                 lastRenderedPageWidthPts, lastRenderedPageHeightPts, newPage);
                         showMatrixPageView();
+                        if (pdfSearchController != null) {
+                            pdfSearchController.onPageShown(currentPage,
+                                    lastRenderedPageWidthPts, lastRenderedPageHeightPts);
+                        }
                     }
                     runPageSlideInAnimation();
                     // Don't recycle the previous page if the cache still owns it.
@@ -3308,6 +3524,10 @@ public class PdfReaderActivity extends AppCompatActivity {
         if (pdfToolbarController != null) {
             pdfToolbarController.release();
             pdfToolbarController = null;
+        }
+        if (pdfSearchController != null) {
+            pdfSearchController.close();
+            pdfSearchController = null;
         }
         executor.shutdownNow();
         prefetchExecutor.shutdownNow();

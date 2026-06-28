@@ -148,6 +148,14 @@ final class MainThemeController {
         }
         if (activity.emptyText != null) activity.emptyText.setTextColor(sub);
         if (activity.recentEmptyText != null) activity.recentEmptyText.setTextColor(sub);
+        // Recent search banner mirrors the path bar surface (panel) so it follows
+        // the runtime theme instead of the base ?attr/colorSurfaceVariant (which
+        // is near-black under the navy theme).
+        View recentSearchBanner = activity.findViewById(R.id.recent_search_banner);
+        if (recentSearchBanner instanceof TextView) {
+            recentSearchBanner.setBackgroundColor(panel);
+            ((TextView) recentSearchBanner).setTextColor(sub);
+        }
 
         if (appbar != null) appbar.setBackgroundColor(bar);
         if (toolbar != null) {

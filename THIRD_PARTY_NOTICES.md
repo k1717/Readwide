@@ -2,20 +2,21 @@
 
 Readwide first-party source code is licensed under the Apache License 2.0. Keep this file with source releases and with binary release materials such as APK/AAB release assets.
 
-This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.8 build. It does not replace a fully resolved transitive dependency report.
+This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.9 build. It does not replace a fully resolved transitive dependency report.
 
 ## Default build boundary
 
-The default Readwide 1.0.8 package is the FOSS-oriented public line:
+The default Readwide 1.0.9 package is the FOSS-oriented public line:
 
 - first-party source: Apache-2.0;
 - no Junrar or RARLAB UnRAR-license code bundled;
 - no optional local decoder jar required under `app/libs`;
 - HWP/HWPX support through Apache-2.0 dogfoot Java libraries;
+- PDF text extraction through an Apache-2.0 pure-Java library (PdfBox-Android), with PDF page rendering still on the platform PdfRenderer;
 - no Hancom proprietary SDK, LibreOffice bundle, or server conversion service;
 - no ads, analytics, telemetry SDK, account system, or network update checker in the default app.
 
-See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_7.md`, and `docs/SBOM_READWIDE_1_0_7.spdx.json`.
+See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_9.md`, and `docs/SBOM_READWIDE_1_0_9.spdx.json`.
 
 ## Runtime dependencies
 
@@ -90,6 +91,14 @@ License: Apache License 2.0.
 - License: Apache License 2.0.
 - Boundary: Readwide uses it for read-only text extraction. Readwide does not claim HWPX editing/writing, layout-compatible rendering, or cloud/server conversion.
 
+### PdfBox-Android
+
+- Artifact: `com.tom-roush:pdfbox-android:2.0.27.0`
+- Project: `https://github.com/TomRoush/PdfBox-Android`
+- Purpose: PDF text extraction with glyph positions, used for in-document find in the PDF reader. Rendering still uses the platform `PdfRenderer`; PdfBox is not used to render pages.
+- License: Apache License 2.0.
+- Boundary: Readwide uses it for read-only text extraction and search only. The optional JP2/JPEG2000 image decoder (`com.gemalto.jp2`) is not bundled, so JPX images are ignored; this does not affect text search.
+
 ## Test dependencies
 
 - `junit:junit:4.13.2` — JVM unit tests — Eclipse Public License 1.0.
@@ -149,5 +158,5 @@ The Gradle packaging block may exclude duplicate dependency `META-INF/LICENSE*` 
 - `LICENSE`
 - `NOTICE`
 - `THIRD_PARTY_NOTICES.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_7.md`
-- `docs/SBOM_READWIDE_1_0_7.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_9.md`
+- `docs/SBOM_READWIDE_1_0_9.spdx.json`

@@ -128,6 +128,21 @@
 
             </LinearLayout>
 
+            <TextView
+                android:id="@+id/recent_search_banner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="?attr/colorSurfaceVariant"
+                android:ellipsize="end"
+                android:paddingStart="16dp"
+                android:paddingTop="6dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="6dp"
+                android:singleLine="true"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
             <FrameLayout
                 android:id="@+id/recent_content_container"
                 android:layout_width="match_parent"

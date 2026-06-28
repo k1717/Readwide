@@ -3,6 +3,7 @@ package com.readwide.manager;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.RectF;
@@ -16,6 +17,8 @@ import android.view.View;
 import android.widget.OverScroller;
 
 import androidx.annotation.Nullable;
+
+import java.util.List;
 
 /**
  * Single-page PDF view driven entirely by an image {@link Matrix}.
@@ -66,6 +69,29 @@ public class PdfPageView extends View {
     @Nullable private Bitmap sharpPatch;
     private final RectF sharpPatchPageRect = new RectF(); // normalized [0..1]
 
+    // Search highlights, in page-normalized rects [0..1]; the active match is
+    // drawn with stronger emphasis. Set by the host once it has the matches for
+    // the current page (see PdfTextSearchEngine).
+    @Nullable private List<RectF> highlightRects;
+    @Nullable private RectF currentHighlightRect;
+    private final Paint highlightFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint highlightStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint currentHighlightFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF tmpHighlight = new RectF();
+
+    // Search-reveal: when the find dialog covers the lower part of the page, the
+    // current match can sit behind it. searchSafeBottomPx is the y (in this
+    // view's pixels) below which content is obscured by the dialog; 0 disables.
+    // revealLiftPx is the extra upward shift clampMatrix is allowed to apply so a
+    // fit page (normally centered) can lift its lower region above the dialog.
+    // A manual pan/zoom clears the lift so the user stays in control.
+    private int searchSafeBottomPx = 0;
+    private float revealLiftPx = 0f;
+    // Set when the user pans/zooms after a reveal, so the deferred recompute (and
+    // any later highlight refresh on the same match) won't re-lift against their
+    // wishes. Cleared when a new match arrives via setHighlights.
+    private boolean revealSuppressedByUser = false;
+
     private final Matrix matrix = new Matrix();
     private final Matrix tmpMatrix = new Matrix();
     private final float[] matrixVals = new float[9];
@@ -101,6 +127,12 @@ public class PdfPageView extends View {
         gestureDetector = new GestureDetector(c, new GestureListener());
         setClickable(true);
         setFocusable(true);
+        float density = getResources().getDisplayMetrics().density;
+        highlightFillPaint.setColor(Color.argb(70, 255, 213, 0));
+        currentHighlightFillPaint.setColor(Color.argb(130, 255, 140, 0));
+        highlightStrokePaint.setStyle(Paint.Style.STROKE);
+        highlightStrokePaint.setStrokeWidth(1.5f * density);
+        highlightStrokePaint.setColor(Color.argb(150, 205, 140, 0));
     }
 
     public void setSharpenRequestListener(@Nullable SharpenRequestListener l) { sharpenListener = l; }
@@ -109,6 +141,98 @@ public class PdfPageView extends View {
     public void setTapZoneQuery(@Nullable TapZoneQuery q) { tapZoneQuery = q; }
 
     public void setMaxScale(float m) { maxScale = Math.max(1.5f, m); }
+
+    /**
+     * Set search highlights for the current page. Rectangles are page-normalized
+     * [0..1]; the host converts from PDF point space using the page point size.
+     * currentNormRect, if non-null, is the active match and is emphasized.
+     */
+    public void setHighlights(@Nullable List<RectF> normRects, @Nullable RectF currentNormRect) {
+        this.highlightRects = normRects;
+        this.currentHighlightRect = currentNormRect;
+        // A new current match (or refreshed page) — allow revealing again even if
+        // the user had panned away from the previous one.
+        revealSuppressedByUser = false;
+        // A new current match may sit behind the find dialog; lift it into view.
+        // Compute now (works when the matrix is already settled, e.g. same page),
+        // and once more on the next frame to catch the case where this arrives
+        // right after setFitBitmap deferred its resetToFit (new page).
+        recomputeRevealLift();
+        post(this::recomputeRevealLift);
+        invalidate();
+    }
+
+    /** Remove all search highlights. */
+    public void clearHighlights() {
+        boolean had = highlightRects != null || currentHighlightRect != null || revealLiftPx != 0f;
+        highlightRects = null;
+        currentHighlightRect = null;
+        if (revealLiftPx != 0f) {
+            revealLiftPx = 0f;
+            clampMatrix(); // settle the page back to its centered fit position
+        }
+        if (had) invalidate();
+    }
+
+    /**
+     * Set the y (in this view's pixels) below which the find dialog covers the
+     * page, so the current match can be lifted above it. Pass 0 to disable.
+     * Called by the host when the search dialog opens/closes or resizes.
+     */
+    public void setSearchSafeBottom(int safeBottomPx) {
+        int v = Math.max(0, safeBottomPx);
+        if (v == 0) revealSuppressedByUser = false; // dialog closed; reset for next time
+        if (v == searchSafeBottomPx) return;
+        searchSafeBottomPx = v;
+        recomputeRevealLift();
+        invalidate();
+    }
+
+    /**
+     * Recompute how far the page must lift so the current match clears the find
+     * dialog. Only fit (or near-fit) pages are nudged; when the user has zoomed
+     * in, the page is already pannable and we leave their position alone. The
+     * lift is realized through clampMatrix so it composes with the centering and
+     * bounds logic rather than fighting it.
+     */
+    private void recomputeRevealLift() {
+        float previous = revealLiftPx;
+        revealLiftPx = 0f;
+        if (!revealSuppressedByUser
+                && searchSafeBottomPx > 0 && currentHighlightRect != null
+                && fitBitmap != null && !fitBitmap.isRecycled() && getHeight() > 0) {
+            float bmpW = fitBitmap.getWidth();
+            float bmpH = fitBitmap.getHeight();
+            tmpHighlight.set(currentHighlightRect.left * bmpW, currentHighlightRect.top * bmpH,
+                    currentHighlightRect.right * bmpW, currentHighlightRect.bottom * bmpH);
+            matrix.mapRect(tmpHighlight);
+            // tmpHighlight is in current (possibly already-lifted) screen space.
+            // Add back the lift currently applied so we measure against the page's
+            // unlifted position; otherwise repeated recomputes would shrink the
+            // lift toward zero as the match keeps "already clearing".
+            float unliftedTop = tmpHighlight.top + previous;
+            float unliftedBottom = tmpHighlight.bottom + previous;
+            // Only lift a page that is essentially at fit height. A zoomed page is
+            // already freely pannable, so we leave the user's position alone.
+            float scale = currentScale();
+            float drawnH = bmpH * scale;
+            boolean fitHeight = drawnH <= getHeight() + 1;
+            float margin = getResources().getDisplayMetrics().density * 28f;
+            float overlap = unliftedBottom - (searchSafeBottomPx - margin);
+            if (fitHeight && overlap > 0) {
+                // Cap: never lift so far that the match's own top would rise above
+                // a small guard band under the top chrome. Lifting the page top off
+                // the screen is fine and expected; lifting the match off-screen is
+                // not. (unliftedTop - lift) must stay >= topGuard.
+                float topGuard = getResources().getDisplayMetrics().density * 8f;
+                float maxLift = Math.max(0f, unliftedTop - topGuard);
+                revealLiftPx = Math.min(overlap, maxLift);
+            }
+        }
+        if (revealLiftPx != previous) {
+            clampMatrix();
+        }
+    }
 
     /**
      * Provide the base fit bitmap for a page.
@@ -127,6 +251,7 @@ public class PdfPageView extends View {
         this.pageHeightPts = Math.max(1, pageHeightPts);
         clearSharpPatch();
         if (resetView) {
+            clearHighlights();
             post(this::resetToFit);
         } else if (getWidth() > 0) {
             resetToFit();
@@ -148,6 +273,7 @@ public class PdfPageView extends View {
     public void detachBitmaps() {
         handler.removeCallbacks(sharpenRunnable);
         clearSharpPatch();
+        clearHighlights();
         fitBitmap = null;
         invalidate();
     }
@@ -211,8 +337,19 @@ public class PdfPageView extends View {
             else if (tx < vw - drawnW) newTx = vw - drawnW;
         }
         if (drawnH <= vh) {
-            newTy = (vh - drawnH) / 2f;            // center vertically
+            // Normally center vertically. When a search match needs to clear the
+            // find dialog, lift the page upward by revealLiftPx. The page top
+            // going off the top of the screen is fine and expected here — the
+            // match we are revealing is near the bottom and the empty top is what
+            // we trade away. revealLiftPx is already capped (in recomputeRevealLift)
+            // so the match's own top stays on screen.
+            float centered = (vh - drawnH) / 2f;
+            float lift = revealLiftPx > 0f ? revealLiftPx : 0f;
+            newTy = centered - lift;
         } else {
+            // Page taller than the viewport: it's freely pannable, so honor the
+            // current pan but never expose a gutter. (Reveal-lift only applies to
+            // fit-height pages; a taller page can already scroll to any match.)
             if (ty > 0) newTy = 0;
             else if (ty < vh - drawnH) newTy = vh - drawnH;
         }
@@ -238,6 +375,36 @@ public class PdfPageView extends View {
                     sharpPatchPageRect.bottom * bmpH);
             matrix.mapRect(dst);
             canvas.drawBitmap(sharpPatch, null, dst, bitmapPaint);
+        }
+
+        drawHighlights(canvas);
+    }
+
+    /**
+     * Draw search highlights. Each normalized rect is mapped page-normalized ->
+     * bitmap pixels -> view through the same matrix used for the page bitmap, so
+     * highlights track zoom and pan exactly (the sharp-patch path does the same).
+     */
+    private void drawHighlights(Canvas canvas) {
+        if (fitBitmap == null || fitBitmap.isRecycled()) return;
+        if (highlightRects == null && currentHighlightRect == null) return;
+        float bmpW = fitBitmap.getWidth();
+        float bmpH = fitBitmap.getHeight();
+        if (highlightRects != null) {
+            for (RectF n : highlightRects) {
+                if (n == currentHighlightRect) continue; // drawn emphasized below
+                tmpHighlight.set(n.left * bmpW, n.top * bmpH, n.right * bmpW, n.bottom * bmpH);
+                matrix.mapRect(tmpHighlight);
+                canvas.drawRect(tmpHighlight, highlightFillPaint);
+                canvas.drawRect(tmpHighlight, highlightStrokePaint);
+            }
+        }
+        if (currentHighlightRect != null) {
+            tmpHighlight.set(currentHighlightRect.left * bmpW, currentHighlightRect.top * bmpH,
+                    currentHighlightRect.right * bmpW, currentHighlightRect.bottom * bmpH);
+            matrix.mapRect(tmpHighlight);
+            canvas.drawRect(tmpHighlight, currentHighlightFillPaint);
+            canvas.drawRect(tmpHighlight, highlightStrokePaint);
         }
     }
 
@@ -335,6 +502,16 @@ public class PdfPageView extends View {
 
     private static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
 
+    /**
+     * Drop any active search-reveal lift because the user is now driving the
+     * page directly (pan/pinch/double-tap/fling). Without this, clampMatrix would
+     * keep yanking a fit page back up to the revealed position after each drag.
+     */
+    private void releaseRevealLift() {
+        revealSuppressedByUser = true;
+        revealLiftPx = 0f;
+    }
+
     @Override
     public void computeScroll() {
         if (scroller.computeScrollOffset()) {
@@ -353,6 +530,7 @@ public class PdfPageView extends View {
     private class ScaleListener extends ScaleGestureDetector.SimpleOnScaleGestureListener {
         @Override public boolean onScaleBegin(ScaleGestureDetector d) {
             scaling = true;
+            releaseRevealLift();
             scroller.forceFinished(true);
             handler.removeCallbacks(sharpenRunnable);
             clearSharpPatch(); // crisp patch is stale once we start zooming
@@ -412,6 +590,7 @@ public class PdfPageView extends View {
                 return true;
             }
             clearSharpPatch();
+            releaseRevealLift();
             float scale = currentScale();
             boolean zoomedIn = scale > minScale * 1.08f;
             float targetScale = zoomedIn ? minScale : Math.min(maxScale, minScale * 2.5f);
@@ -444,6 +623,7 @@ public class PdfPageView extends View {
                 return false; // host handles swipe via its own detector (stage 2)
             }
             dragging = true;
+            releaseRevealLift();
             handler.removeCallbacks(sharpenRunnable);
             float appliedDx = canPanX ? -dx : 0;
             float appliedDy = canPanY ? -dy : 0;
@@ -455,6 +635,7 @@ public class PdfPageView extends View {
 
         @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vx, float vy) {
             if (fitBitmap == null || scaling) return false;
+            releaseRevealLift();
             matrix.getValues(matrixVals);
             float scale = matrixVals[Matrix.MSCALE_X];
             float tx = matrixVals[Matrix.MTRANS_X];

@@ -1,0 +1,5 @@
+Readwide 1.0.9
+- PDF reader: in-document Find for digital (text-based) PDFs — whole-document search, previous/next, match count, on-page highlights. No OCR, so scanned PDFs aren't searched.
+- Faster image flipping in large comic archives (ZIP/CBZ).
+- Recent list now searches your reading history (not storage) with a match count, keeps your full history (up to 5000), combines with the file-type filters, and supports swipe-to-remove.
+- Archive preview rows now match the main file list's sizing.

@@ -44,3 +44,9 @@
 -dontwarn kr.dogfoot.hwplib.**
 -dontwarn kr.dogfoot.hwpxlib.**
 -dontwarn javax.xml.bind.**
+
+# PdfBox-Android (PDF text extraction for in-document Find). The optional
+# JP2/JPEG2000 image decoder (com.gemalto.jp2) is not bundled; JPX images are
+# ignored at runtime, so tell R8 to ignore the missing optional class instead of
+# failing the release build. PdfBox itself is pure Java and can be shrunk.
+-dontwarn com.gemalto.jp2.**

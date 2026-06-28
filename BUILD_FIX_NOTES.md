@@ -59,5 +59,5 @@ zstd-jni desktop resource binaries (`win/**`, `darwin/**`, `linux/**`, `freebsd/
 
 - The default source package contains no optional decoder jar under `app/libs`.
 - Release signing is conditional, so source-build review can run `assembleRelease` without a private developer keystore.
-- `fdroid/metadata/com.readwide.manager.yml` is a draft metadata file; confirm it points to the immutable `v1.0.8` tag (or the exact commit hash requested by the reviewer) before F-Droid submission.
+- `fdroid/metadata/com.readwide.manager.yml` is a draft metadata file; before F-Droid submission, set its `commit` field to the full 40-character commit hash of the `v1.0.9` release tag (this app's maintainer requires a full commit hash, not the tag name).
 - If any local jar or native binary is added later, re-audit that custom build before describing it as FOSS.

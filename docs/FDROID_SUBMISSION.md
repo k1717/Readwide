@@ -1,4 +1,4 @@
-# F-Droid submission notes for Readwide 1.0.8
+# F-Droid submission notes for Readwide 1.0.9
 
 This document records the project-side preparation for an F-Droid Data merge request.
 
@@ -6,8 +6,8 @@ This document records the project-side preparation for an F-Droid Data merge req
 
 - App name: Readwide
 - Android application ID: `com.readwide.manager`
-- Version name: `1.0.8`
-- Version code: `10008`
+- Version name: `1.0.9`
+- Version code: `10009`
 - First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
@@ -30,10 +30,10 @@ metadata/com.readwide.manager.yml
 Create and push the immutable release tag before opening the merge request:
 
 ```text
-v1.0.8
+v1.0.9
 ```
 
-The metadata pins each release build by the tag's commit hash. Confirm that the `v1.0.8` tag points to the audited source tree, then set the `1.0.8` build's `commit` in `fdroid/metadata/com.readwide.manager.yml` to that commit before copying it into fdroiddata. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the new tag and add the build entry automatically.
+The metadata pins each release build by the tag's commit hash. Confirm that the `v1.0.9` tag points to the audited source tree, then set the `1.0.9` build's `commit` in `fdroid/metadata/com.readwide.manager.yml` to that commit before copying it into fdroiddata. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the new tag and add the build entry automatically.
 
 ## F-Droid-facing baseline
 
@@ -84,7 +84,7 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These provide title, short description, full description, and versionCode `10008` changelog text.
+These provide title, short description, full description, and versionCode `10009` changelog text.
 
 ## Conservative support wording for review
 
@@ -101,8 +101,8 @@ Use conservative wording in the merge request:
 - `PRIVACY.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_8.md`
-- `docs/SBOM_READWIDE_1_0_8.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_9.md`
+- `docs/SBOM_READWIDE_1_0_9.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `fdroid/metadata/com.readwide.manager.yml`
@@ -119,6 +119,6 @@ All bundled native components are permissive/FOSS-compatible, and no copyleft ob
 ## Remaining submitter tasks
 
 - Confirm a clean network-enabled Gradle build from the tagged source.
-- Confirm the metadata points to the immutable `v1.0.8` tag or to an equivalent exact commit hash requested by the reviewer.
+- Confirm the metadata `commit` field is the full 40-character commit hash of the `v1.0.9` release tag (this app's maintainer requires a full commit hash, not the tag name).
 - Confirm no optional local jars are present in `app/libs`.
 - Confirm native dependency notices for `libarchive-android` / libarchive and `zstd-jni` / Zstandard are included with binary release materials if APK assets are published outside F-Droid.

@@ -63,6 +63,15 @@ public final class ArchiveSupport {
         }
     };
 
+    private static final int ZIP_INDEX_CACHE_MAX_ENTRIES = 3;
+    private static final Map<String, CachedZipIndex> ZIP_INDEX_CACHE = new LinkedHashMap<String, CachedZipIndex>(
+            ZIP_INDEX_CACHE_MAX_ENTRIES, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, CachedZipIndex> eldest) {
+            return size() > ZIP_INDEX_CACHE_MAX_ENTRIES;
+        }
+    };
+
     public enum Type {
         ZIP,
         TAR,
@@ -1702,32 +1711,96 @@ public final class ArchiveSupport {
         return sawEntry;
     }
 
+    /**
+     * Parsed zip central-directory index, cached per archive (keyed by path, size,
+     * and mtime, like the raw-name cache). Sequential single-entry extraction -- the
+     * archive image viewer paging through one image after another -- would otherwise
+     * re-open the zip and re-parse the entire central directory on every image,
+     * which is O(entries) per image and O(entries^2) over a large comic. With the
+     * cached index each extraction is an O(1) header lookup plus the inflate.
+     * zip4j ZipFile keeps no persistent OS handle (it opens a RandomAccessFile per
+     * getInputStream), so a cached instance only holds the parsed headers in memory;
+     * eviction just drops them. Encrypted archives are cached too, but the
+     * password is set on the ZipFile only for the duration of one extraction
+     * (under the index lock) and cleared immediately afterward, so the static
+     * cache never retains a password between extractions.
+     */
+    private static final class CachedZipIndex {
+        final ZipFile zip;
+        final Map<String, FileHeader> byPath;
+        final boolean encrypted;
+        final Object lock = new Object();
+
+        CachedZipIndex(@NonNull ZipFile zip, @NonNull Map<String, FileHeader> byPath, boolean encrypted) {
+            this.zip = zip;
+            this.byPath = byPath;
+            this.encrypted = encrypted;
+        }
+    }
+
+    @NonNull
+    private static CachedZipIndex getZipIndex(@NonNull File archive) throws ZipException {
+        String key = zipRawNameCacheKey(archive);
+        synchronized (ZIP_INDEX_CACHE) {
+            CachedZipIndex cached = ZIP_INDEX_CACHE.get(key);
+            if (cached != null) return cached;
+        }
+        CachedZipIndex built = buildZipIndex(archive);
+        synchronized (ZIP_INDEX_CACHE) {
+            CachedZipIndex existing = ZIP_INDEX_CACHE.get(key);
+            if (existing != null) return existing;
+            ZIP_INDEX_CACHE.put(key, built);
+            return built;
+        }
+    }
+
+    @NonNull
+    private static CachedZipIndex buildZipIndex(@NonNull File archive) throws ZipException {
+        ZipFile zip = new ZipFile(archive);
+        boolean encrypted = zip.isEncrypted();
+        List<FileHeader> headers = zip.getFileHeaders();
+        List<ZipRawName> rawNames = getZipRawNames(archive);
+        if (rawNames.size() != headers.size()) rawNames = Collections.emptyList();
+        Map<String, FileHeader> byPath = new java.util.HashMap<>(Math.max(16, headers.size() * 2));
+        for (int i = 0; i < headers.size(); i++) {
+            FileHeader header = headers.get(i);
+            if (header == null || header.isDirectory()) continue;
+            String displayName = zipDisplayName(rawNames, i, header.getFileName());
+            String path = sanitizeEntryPathForList(displayName);
+            String zip4jPath = sanitizeEntryPathForList(header.getFileName());
+            // First header wins for a given key, matching the old linear scan.
+            if (path != null && !byPath.containsKey(path)) byPath.put(path, header);
+            if (zip4jPath != null && !byPath.containsKey(zip4jPath)) byPath.put(zip4jPath, header);
+        }
+        return new CachedZipIndex(zip, byPath, encrypted);
+    }
+
     private static boolean extractSingleZipEntry(@NonNull File archive,
                                                  @NonNull String entryPath,
                                                  @NonNull File outFile,
                                                  @Nullable char[] password) throws IOException {
         try {
-            ZipFile zip = new ZipFile(archive);
-            if (zip.isEncrypted()) {
-                if (password == null || password.length == 0) throw new PasswordRequiredException();
-                zip.setPassword(password);
-            }
-            @SuppressWarnings("unchecked")
-            List<FileHeader> headers = zip.getFileHeaders();
-            List<ZipRawName> rawNames = getZipRawNames(archive);
-            if (rawNames.size() != headers.size()) rawNames = Collections.emptyList();
-            for (int i = 0; i < headers.size(); i++) {
-                FileHeader header = headers.get(i);
-                if (header == null || header.isDirectory()) continue;
-                String displayName = zipDisplayName(rawNames, i, header.getFileName());
-                String path = sanitizeEntryPathForList(displayName);
-                String zip4jPath = sanitizeEntryPathForList(header.getFileName());
-                if (!entryPath.equals(path) && !entryPath.equals(zip4jPath)) continue;
-                try (InputStream in = zip.getInputStream(header)) {
-                    return writeArchiveEntryStream(in, outFile);
+            CachedZipIndex index = getZipIndex(archive);
+            synchronized (index.lock) {
+                if (index.encrypted && (password == null || password.length == 0)) {
+                    throw new PasswordRequiredException();
+                }
+                FileHeader header = index.byPath.get(entryPath);
+                if (header == null) return false;
+                if (index.encrypted) {
+                    index.zip.setPassword(password);
+                }
+                try {
+                    try (InputStream in = index.zip.getInputStream(header)) {
+                        return writeArchiveEntryStream(in, outFile);
+                    }
+                } finally {
+                    // Never leave the caller's password attached to the cached ZipFile.
+                    if (index.encrypted) {
+                        index.zip.setPassword((char[]) null);
+                    }
                 }
             }
-            return false;
         } catch (ZipException e) {
             if (isUnknownZipCompression(e) && (password == null || password.length == 0)
                     && !hasZipEncryptedHeaderSignature(archive)) {

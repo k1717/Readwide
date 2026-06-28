@@ -1421,8 +1421,10 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
             LinearLayout row = new LinearLayout(parent.getContext());
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dpToPx(14), dpToPx(10), dpToPx(14), dpToPx(10));
-            row.setMinimumHeight(dpToPx(62));
+            // Match item_file.xml metrics: outer padding 8/5/10/5 and an
+            // effective min row height of 57dp (inner 47dp + 5+5 padding).
+            row.setPadding(dpToPx(8), dpToPx(5), dpToPx(10), dpToPx(5));
+            row.setMinimumHeight(dpToPx(57));
             row.setClickable(true);
             row.setFocusable(true);
             row.setBackground(makeArchiveRowBackground(pressedColor));
@@ -1451,26 +1453,37 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                 super(itemView);
                 LinearLayout row = (LinearLayout) itemView;
                 icon = new ImageView(itemView.getContext());
-                row.addView(icon, new LinearLayout.LayoutParams(dpToPx(32), dpToPx(32)));
+                // 28dp glyph centered like item_file's 34dp box (3dp lead) with a
+                // 12dp gap to the text, so the icon column lines up with normal rows.
+                LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(dpToPx(28), dpToPx(28));
+                iconLp.setMarginStart(dpToPx(3));
+                iconLp.setMarginEnd(dpToPx(12));
+                row.addView(icon, iconLp);
 
                 LinearLayout texts = new LinearLayout(itemView.getContext());
                 texts.setOrientation(LinearLayout.VERTICAL);
-                texts.setPadding(dpToPx(14), 0, 0, 0);
                 row.addView(texts, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-                name = new TextView(itemView.getContext());
-                name.setSingleLine(true);
-                name.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-                name.setTextColor(fg);
-                name.setTextSize(16f);
+                // Same name view/metrics as item_file.xml: extension-aware ellipsis,
+                // two lines at 12sp with 1.05 line spacing.
+                com.readwide.manager.view.ExtensionEllipsisTextView nameView =
+                        new com.readwide.manager.view.ExtensionEllipsisTextView(itemView.getContext());
+                nameView.setMaxLines(2);
+                nameView.setLineSpacing(0f, 1.05f);
+                nameView.setTextColor(fg);
+                nameView.setTextSize(12f);
+                name = nameView;
                 texts.addView(name, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
                 info = new TextView(itemView.getContext());
                 info.setSingleLine(true);
                 info.setEllipsize(TextUtils.TruncateAt.END);
                 info.setTextColor(sub);
-                info.setTextSize(13f);
-                texts.addView(info, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                info.setTextSize(11f);
+                LinearLayout.LayoutParams infoLp = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                infoLp.topMargin = dpToPx(1);
+                texts.addView(info, infoLp);
 
                 itemView.setOnClickListener(v -> {
                     int pos = getBindingAdapterPosition();

@@ -71,6 +71,7 @@ final class ButtonOrderManager {
             case GROUP_PDF_VIEWER:
                 items.add(new Item("prev", R.string.previous_page, R.id.pdf_prev));
                 items.add(new Item("next", R.string.next_page, R.id.pdf_next));
+                items.add(new Item("find", R.string.find, R.id.pdf_find));
                 items.add(new Item("mode", R.string.viewer_mode, R.id.pdf_slide_toggle));
                 items.add(new Item("page", R.string.bottom_page, R.id.pdf_page));
                 items.add(new Item("bookmark", R.string.bookmark, R.id.pdf_bookmark));
