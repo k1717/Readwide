@@ -55,8 +55,8 @@ Keep these files with source and binary release materials:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_7.md`
-- `docs/SBOM_READWIDE_1_0_7.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_10.md`
+- `docs/SBOM_READWIDE_1_0_10.spdx.json`
 
 ## APK verification
 
