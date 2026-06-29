@@ -101,8 +101,8 @@ Use conservative wording in the merge request:
 - `PRIVACY.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_9.md`
-- `docs/SBOM_READWIDE_1_0_9.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_10.md`
+- `docs/SBOM_READWIDE_1_0_10.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `fdroid/metadata/com.readwide.manager.yml`
