@@ -27,9 +27,9 @@ Keep these files in the public source package:
 - `CONTRIBUTING.md`
 - `docs/FOSS_STATUS.md`
 - `docs/FDROID_SUBMISSION.md`
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_7.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_7.md`
-- `docs/SBOM_READWIDE_1_0_7.spdx.json`
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_10.md`
+- `docs/LICENSE_REPORT_READWIDE_1_0_10.md`
+- `docs/SBOM_READWIDE_1_0_10.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `docs/TXT_SEARCH_USAGE.md`
