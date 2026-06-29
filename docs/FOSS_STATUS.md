@@ -32,7 +32,7 @@ The default Readwide 1.0.10 source package is intended to remain FOSS-friendly:
 | PdfBox-Android | PDF text extraction for in-document find (rendering stays on the platform PdfRenderer) | Apache-2.0 |
 | xunazo-derived AZO port | EGG AZO extraction | zlib license notice retained in source |
 
-See `docs/LICENSE_REPORT_READWIDE_1_0_9.md`, `docs/SBOM_READWIDE_1_0_9.spdx.json`, and `THIRD_PARTY_NOTICES.md` for detail.
+See `docs/LICENSE_REPORT_READWIDE_1_0_10.md`, `docs/SBOM_READWIDE_1_0_10.spdx.json`, and `THIRD_PARTY_NOTICES.md` for detail.
 
 ## RAR / CBR boundary
 
@@ -84,14 +84,14 @@ When distributing APK/AAB files, keep these alongside the binary release assets:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_9.md`
-- `docs/SBOM_READWIDE_1_0_9.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_10.md`
+- `docs/SBOM_READWIDE_1_0_10.spdx.json`
 
 The Android packaging block excludes duplicate dependency `META-INF/LICENSE*` / `META-INF/NOTICE*` resources to avoid resource merge conflicts. That does not remove the obligation to provide project-level and third-party notices with source and binary release materials.
 
 ## Caveats
 
-- `docs/LICENSE_REPORT_READWIDE_1_0_9.md` and `docs/SBOM_READWIDE_1_0_9.spdx.json` are direct-dependency/source-declared drafts, not a fully resolved transitive Gradle SBOM.
+- `docs/LICENSE_REPORT_READWIDE_1_0_10.md` and `docs/SBOM_READWIDE_1_0_10.spdx.json` are direct-dependency/source-declared drafts, not a fully resolved transitive Gradle SBOM.
 - A strict repository submission should regenerate a resolved dependency report/SBOM from a clean, network-enabled build environment.
 - Native Maven dependencies such as libarchive-android and zstd-jni may require additional explanation or source-build handling for strict source-only repositories.
 - Archive compatibility claims must follow `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`.
