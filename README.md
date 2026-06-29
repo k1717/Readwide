@@ -118,10 +118,10 @@ Release signing is conditional. If the `READWIDE_*` (or legacy `TEXTVIEW_*`) sig
 - `CHANGELOG.md` — public changelog.
 - `PATCHNOTES.md` — detailed public release notes.
 - `GITHUB_UPLOAD_NOTES.md` — GitHub upload checklist.
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_7.md` — copy-ready GitHub release notes.
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_10.md` — copy-ready GitHub release notes.
 - `docs/FDROID_SUBMISSION.md` — F-Droid submission notes.
 - `docs/TXT_SEARCH_USAGE.md` — reader find-in-page options for TXT and WebView document readers (case sensitive, whole word, regular expression).
 - `docs/FOSS_STATUS.md` — FOSS boundary and caveats.
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — archive compatibility wording source.
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md` — HWP/HWPX scope and license notes.
-- `docs/LICENSE_REPORT_READWIDE_1_0_9.md` and `docs/SBOM_READWIDE_1_0_9.spdx.json` — direct-dependency license/SBOM drafts.
+- `docs/LICENSE_REPORT_READWIDE_1_0_10.md` and `docs/SBOM_READWIDE_1_0_10.spdx.json` — direct-dependency license/SBOM drafts.
