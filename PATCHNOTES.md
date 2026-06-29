@@ -62,7 +62,7 @@
 
 ### Dependencies
 
-- Added `com.tom-roush:pdfbox-android:2.0.27.0` (Apache-2.0, pure Java) for PDF text extraction with glyph positions. The optional JP2/JPEG2000 image decoder (`com.gemalto.jp2`) it can reference is not bundled; a proguard/R8 `-dontwarn` keeps the release build from failing on that optional class. JPX images are not affected because find only uses extracted text. See `THIRD_PARTY_NOTICES.md`, `docs/LICENSE_REPORT_READWIDE_1_0_9.md`, and `docs/SBOM_READWIDE_1_0_9.spdx.json`.
+- Added `com.tom-roush:pdfbox-android:2.0.27.0` (Apache-2.0, pure Java) for PDF text extraction with glyph positions. The optional JP2/JPEG2000 image decoder (`com.gemalto.jp2`) it can reference is not bundled; a proguard/R8 `-dontwarn` keeps the release build from failing on that optional class. JPX images are not affected because find only uses extracted text. See `THIRD_PARTY_NOTICES.md`, `docs/LICENSE_REPORT_READWIDE_1_0_10.md`, and `docs/SBOM_READWIDE_1_0_10.spdx.json`.
 
 ## Readwide 1.0.8 - 2026-06-26
 
