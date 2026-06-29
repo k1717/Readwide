@@ -16,7 +16,7 @@ The default Readwide 1.0.10 package is the FOSS-oriented public line:
 - no Hancom proprietary SDK, LibreOffice bundle, or server conversion service;
 - no ads, analytics, telemetry SDK, account system, or network update checker in the default app.
 
-See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_9.md`, and `docs/SBOM_READWIDE_1_0_9.spdx.json`.
+See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_10.md`, and `docs/SBOM_READWIDE_1_0_10.spdx.json`.
 
 ## Runtime dependencies
 
@@ -158,5 +158,5 @@ The Gradle packaging block may exclude duplicate dependency `META-INF/LICENSE*` 
 - `LICENSE`
 - `NOTICE`
 - `THIRD_PARTY_NOTICES.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_9.md`
-- `docs/SBOM_READWIDE_1_0_9.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_10.md`
+- `docs/SBOM_READWIDE_1_0_10.spdx.json`
