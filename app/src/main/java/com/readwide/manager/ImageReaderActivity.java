@@ -56,6 +56,7 @@ import com.readwide.manager.util.ImageSequenceState;
 import com.readwide.manager.util.FileSortUtils;
 import com.readwide.manager.util.FileClipboardController;
 import com.readwide.manager.util.FileUtils;
+import com.readwide.manager.archive.ArchiveSupport;
 import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.util.BookmarkManager;
 import com.readwide.manager.util.PrefsManager;
@@ -105,6 +106,17 @@ public class ImageReaderActivity extends AppCompatActivity {
     private final ArrayList<String> sourceDisplayNames = new ArrayList<>();
     private final ArrayList<String> sourceEntryPaths = new ArrayList<>();
     private final Set<String> verifiedSensitiveArchiveCachePaths = ConcurrentHashMap.newKeySet();
+    private final Object sequentialReaderLock = new Object();
+    private SequentialArchiveImageReader sequentialImageReader;
+    private boolean sequentialReaderClosed;
+    // Raised while an on-demand extraction (the page the user is on, or its detail
+    // pass) is using the shared forward reader. Sequential prefetch checks this and
+    // yields, so a background read-ahead never delays the page the user asked for.
+    private final java.util.concurrent.atomic.AtomicInteger onDemandReaderWaiters =
+            new java.util.concurrent.atomic.AtomicInteger();
+    // Memoized "is the source a solid/sequential (forward-readable) archive", so
+    // page turns do not re-read the archive signature every time.
+    private volatile Boolean sourceArchiveForwardReadable;
 
     private PrefsManager prefs;
     private ImageDialogStyleController dialogStyle;
@@ -236,6 +248,15 @@ public class ImageReaderActivity extends AppCompatActivity {
         sequenceExecutor.shutdownNow();
         detailExecutor.shutdownNow();
         prefetchDecodeExecutor.shutdownNow();
+        SequentialArchiveImageReader readerToClose;
+        synchronized (sequentialReaderLock) {
+            sequentialReaderClosed = true;
+            readerToClose = sequentialImageReader;
+            sequentialImageReader = null;
+        }
+        if (readerToClose != null) {
+            readerToClose.close();
+        }
         if (currentDrawable instanceof AnimatedImageDrawable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             ((AnimatedImageDrawable) currentDrawable).stop();
         }
@@ -423,6 +444,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         // of forcing archive-entry extraction with an empty entry-path list.
         if (sourceArchivePath != null && sourceArchivePath.trim().length() > 0) {
             sourceArchivePath = null;
+            sourceArchiveForwardReadable = null;
             synchronized (archiveExtractLock) {
                 PasswordChars.clear(sourceArchivePassword);
                 sourceArchivePassword = null;
@@ -1034,17 +1056,58 @@ public class ImageReaderActivity extends AppCompatActivity {
         synchronized (archiveExtractLock) {
             passwordSnapshot = PasswordChars.cloneOf(sourceArchivePassword);
         }
+        boolean forwardReadable = isSourceArchiveForwardReadable();
+        if (forwardReadable) onDemandReaderWaiters.incrementAndGet();
         try {
             boolean sensitiveCache = PasswordChars.hasPassword(passwordSnapshot);
-            return ArchiveImageEntryCache.ensureReady(
+            SequentialArchiveImageReader reader = ensureSequentialReader(archive);
+            return SequentialArchiveImageReader.ensureImageReady(
+                    getApplicationContext(),
                     archive,
                     entryPath,
                     outFile,
                     passwordSnapshot,
                     sensitiveCache,
-                    verifiedSensitiveArchiveCachePaths).success;
+                    verifiedSensitiveArchiveCachePaths,
+                    reader).success;
         } finally {
+            if (forwardReadable) onDemandReaderWaiters.decrementAndGet();
             PasswordChars.clear(passwordSnapshot);
+        }
+    }
+
+    /** Memoized: is the source archive a solid/sequential forward-readable type? */
+    private boolean isSourceArchiveForwardReadable() {
+        Boolean cached = sourceArchiveForwardReadable;
+        if (cached != null) return cached;
+        boolean result = sourceArchivePath != null && !sourceArchivePath.trim().isEmpty()
+                && ArchiveSupport.isForwardImageReadableType(new File(sourceArchivePath));
+        sourceArchiveForwardReadable = result;
+        return result;
+    }
+
+    @Nullable
+    private SequentialArchiveImageReader ensureSequentialReader(File archive) {
+        synchronized (sequentialReaderLock) {
+            if (sequentialReaderClosed) return null;
+            if (sequentialImageReader != null) return sequentialImageReader;
+            if (!isSourceArchiveForwardReadable()) return null;
+            char[] passwordSnapshot;
+            synchronized (archiveExtractLock) {
+                passwordSnapshot = PasswordChars.cloneOf(sourceArchivePassword);
+            }
+            try {
+                boolean sensitiveCache = PasswordChars.hasPassword(passwordSnapshot);
+                sequentialImageReader = SequentialArchiveImageReader.openIfSupported(
+                        getApplicationContext(),
+                        archive,
+                        passwordSnapshot,
+                        sensitiveCache,
+                        verifiedSensitiveArchiveCachePaths);
+            } finally {
+                PasswordChars.clear(passwordSnapshot);
+            }
+            return sequentialImageReader;
         }
     }
 
@@ -1091,6 +1154,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         // run it on the sequence executor and then hand decoding to the parallel
         // pool so it does not block the next extraction.
         final String archivePathSnapshot = sourceArchivePath;
+        final boolean forwardSequential = isSourceArchiveForwardReadable();
         final char[] passwordSnapshot;
         synchronized (archiveExtractLock) {
             passwordSnapshot = PasswordChars.cloneOf(sourceArchivePassword);
@@ -1099,6 +1163,11 @@ public class ImageReaderActivity extends AppCompatActivity {
             try {
                 for (int off : offsets) {
                     if (destroyed) break;
+                    // For a solid/sequential archive the read-ahead and the page the
+                    // user asked for share one forward reader; pause read-ahead the
+                    // moment an on-demand extraction is waiting so it gets the reader
+                    // first. Prefetch resumes after the next page settles.
+                    if (forwardSequential && onDemandReaderWaiters.get() > 0) break;
                     int idx = ImageSequenceNavigationMath.nextIndex(centerIndex, off, total);
                     if (idx == centerIndex) continue;
                     prefetchArchiveImageEntry(archivePathSnapshot, entryPathsSnapshot, imagePathsSnapshot, idx, passwordSnapshot, verifiedSensitiveArchiveCachePaths);
@@ -1153,12 +1222,12 @@ public class ImageReaderActivity extends AppCompatActivity {
         }
     }
 
-    private static void prefetchArchiveImageEntry(@NonNull String archivePath,
-                                                  @NonNull ArrayList<String> entryPaths,
-                                                  @NonNull ArrayList<String> imagePaths,
-                                                  int index,
-                                                  @Nullable char[] password,
-                                                  @Nullable Set<String> verifiedSensitivePaths) {
+    private void prefetchArchiveImageEntry(@NonNull String archivePath,
+                                           @NonNull ArrayList<String> entryPaths,
+                                           @NonNull ArrayList<String> imagePaths,
+                                           int index,
+                                           @Nullable char[] password,
+                                           @Nullable Set<String> verifiedSensitivePaths) {
         if (index < 0 || index >= imagePaths.size() || index >= entryPaths.size()) return;
         String expectedPath = imagePaths.get(index);
         String entryPath = ImageSequenceState.entryPathAt(entryPaths, index);
@@ -1166,10 +1235,26 @@ public class ImageReaderActivity extends AppCompatActivity {
                 || entryPath == null || entryPath.trim().isEmpty()) return;
         File archive = new File(archivePath);
         if (!archive.exists() || !archive.isFile()) return;
+        File outFile = new File(expectedPath);
+        // Cheap cache-hit check first; applies whether or not this is a sequential archive.
+        if (ArchiveImageEntryCache.isReadyImageFileForHandoff(entryPath, outFile)) return;
+        // Branch through the memoized sequential reader instead of re-detecting the archive type
+        // on every prefetch (which, for RAR, would re-read the file signature each call).
+        SequentialArchiveImageReader reader = ensureSequentialReader(archive);
+        if (reader != null) {
+            // Sequential archive: prefetch only through the shared forward reader so a background
+            // neighbor fetch never falls back to whole-archive extraction. Pages still behind the
+            // read position are skipped here (extractBehindFrontier=false) and extracted on demand
+            // instead, so a background fetch never holds the reader lock for a single-entry decode
+            // while an on-demand page waits. This keeps the reading frontier, not the whole
+            // archive, as the extraction bound.
+            reader.ensureExtracted(entryPath, false);
+            return;
+        }
         ArchiveImageEntryCache.ensureReady(
                 archive,
                 entryPath,
-                new File(expectedPath),
+                outFile,
                 password,
                 PasswordChars.hasPassword(password),
                 verifiedSensitivePaths);

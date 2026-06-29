@@ -2590,13 +2590,20 @@ public class PdfReaderActivity extends AppCompatActivity {
         // large bitmaps; caching several of them at once can exhaust the heap and
         // get the activity killed. Zoom is for examining one page anyway.
         if (zoomForRender > 1.05f) return;
-        // Buffer equally in both directions so going back is as fast as going
-        // forward. Two pages each way (interleaved so the nearest neighbors on
-        // both sides are rendered first).
-        int[] neighbors = {
-                centerPage + 1, centerPage - 1,
-                centerPage + 2, centerPage - 2,
-        };
+        // Bias the buffer toward the direction the reader is moving so forward (or
+        // backward) tapping stays ahead of the render instead of spending half the
+        // budget on the side being navigated away from. Same number of pages either
+        // way; only the split changes. Nearest pages are listed first so they render
+        // before farther ones. With no direction yet, buffer both sides evenly.
+        final int slideDir = pendingPageSlideDirection;
+        int[] neighbors;
+        if (slideDir > 0) {
+            neighbors = new int[]{ centerPage + 1, centerPage + 2, centerPage + 3, centerPage - 1 };
+        } else if (slideDir < 0) {
+            neighbors = new int[]{ centerPage - 1, centerPage - 2, centerPage - 3, centerPage + 1 };
+        } else {
+            neighbors = new int[]{ centerPage + 1, centerPage - 1, centerPage + 2, centerPage - 2 };
+        }
         for (int p : neighbors) {
             if (p < 0 || p >= pageCount) continue;
             if (singlePageCache.get(p) != null) continue;
@@ -2612,7 +2619,7 @@ public class PdfReaderActivity extends AppCompatActivity {
                     // so prefetch work never competes with the visible render for
                     // pages that no longer matter.
                     if (destroyedOrZoomChanged(zoomSnap, widthSnap)
-                            || Math.abs(currentPage - centerPage) > 2) {
+                            || Math.abs(currentPage - centerPage) > 3) {
                         return;
                     }
                     synchronized (prefetchRendererLock) {

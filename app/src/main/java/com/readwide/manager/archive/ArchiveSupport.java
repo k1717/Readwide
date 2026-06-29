@@ -827,6 +827,208 @@ public final class ArchiveSupport {
         return extractSingleEntryDetailed(archive, entryPath, outFile, password).success;
     }
 
+    /**
+     * Forward-only entry reader for solid/sequential archives (7z and the TAR family).
+     *
+     * These formats have no cheap random per-entry access: a single open stream is read
+     * strictly forward, decoding each entry once. Callers keep one reader open for a whole
+     * image-viewing session so paging forward never re-decompresses earlier entries.
+     */
+    public interface ForwardArchiveReader extends java.io.Closeable {
+        /** Advances to the next entry, or returns null at end of archive. */
+        @Nullable ForwardEntry nextEntry() throws IOException;
+
+        /** Reads bytes of the current entry; returns -1 at the end of the current entry. */
+        int read(@NonNull byte[] buffer) throws IOException;
+    }
+
+    public static final class ForwardEntry {
+        /** Sanitized internal path, or null when the entry must be skipped (unsafe/unreadable). */
+        @Nullable public final String path;
+        public final boolean directory;
+        public final boolean hasData;
+
+        ForwardEntry(@Nullable String path, boolean directory, boolean hasData) {
+            this.path = path;
+            this.directory = directory;
+            this.hasData = hasData;
+        }
+    }
+
+    public static boolean isForwardImageReadableType(@Nullable Type type) {
+        if (type == null) return false;
+        switch (type) {
+            case SEVEN_Z:
+            case TAR:
+            case TAR_GZ:
+            case TAR_BZ2:
+            case TAR_XZ:
+            case TAR_LZMA:
+            case TAR_Z:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    public static boolean isForwardImageReadableType(@NonNull File archive) {
+        Type type = getSupportedArchiveType(archive);
+        if (type == Type.RAR) {
+            return isRarForwardImageReadable(archive);
+        }
+        return isForwardImageReadableType(type);
+    }
+
+    private static boolean isRarForwardImageReadable(@NonNull File archive) {
+        // RAR has no streaming Java engine of its own, but its libarchive backend is a strictly
+        // forward, single-pass reader - the access pattern the sequential reader is built for.
+        // Route RAR through the forward reader only when that backend is present and the file is a
+        // RAR version libarchive reads (4 or 5). Everything else, and any entry libarchive cannot
+        // decode at run time, falls back to the existing whole-archive path.
+        if (!LibarchiveNativeBridge.isRarFormatAvailable()) {
+            return false;
+        }
+        try {
+            int version = RarArchiveLocator.detectRarVersion(archive);
+            return version == 4 || version == 5;
+        } catch (IOException | SecurityException e) {
+            return false;
+        }
+    }
+
+    @Nullable
+    public static ForwardArchiveReader openForwardReader(@NonNull File archive,
+                                                         @Nullable char[] password) throws IOException {
+        PreparedArchive prepared = prepareArchiveForRead(archive);
+        try {
+            switch (prepared.type) {
+                case SEVEN_Z:
+                    return new SevenZForwardReader(prepared, openSevenZFile(prepared.file, password));
+                case TAR:
+                case TAR_GZ:
+                case TAR_BZ2:
+                case TAR_XZ:
+                case TAR_LZMA:
+                case TAR_Z: {
+                    InputStream fileIn = new BufferedInputStream(new FileInputStream(prepared.file));
+                    try {
+                        InputStream payload = wrapTarPayloadInputStream(fileIn, prepared.type);
+                        return new TarForwardReader(prepared, new TarArchiveInputStream(payload), fileIn);
+                    } catch (IOException | RuntimeException e) {
+                        try { fileIn.close(); } catch (IOException ignored) {}
+                        throw e;
+                    }
+                }
+                case RAR: {
+                    // libarchive reads RAR forward-only; resolve the volume chain (one file for a
+                    // single-volume archive) and hand the ordered paths to the streaming bridge.
+                    // libarchive's own volume input handles concatenation and embedded SFX offsets.
+                    List<File> volumes = RarArchiveLocator.collectReadableVolumes(prepared.file);
+                    String[] paths = new String[volumes.size()];
+                    for (int i = 0; i < volumes.size(); i++) {
+                        paths[i] = volumes.get(i).getAbsolutePath();
+                    }
+                    LibarchiveNativeBridge.ForwardStream stream =
+                            LibarchiveNativeBridge.openForwardStream(paths, password);
+                    prepared.close();
+                    return new LibarchiveForwardReader(stream);
+                }
+                default:
+                    prepared.close();
+                    return null;
+            }
+        } catch (IOException | RuntimeException e) {
+            prepared.close();
+            if (e instanceof IOException) throw (IOException) e;
+            throw new IOException(e);
+        }
+    }
+
+    private static final class SevenZForwardReader implements ForwardArchiveReader {
+        @NonNull private final PreparedArchive prepared;
+        @NonNull private final SevenZFile sevenZ;
+
+        SevenZForwardReader(@NonNull PreparedArchive prepared, @NonNull SevenZFile sevenZ) {
+            this.prepared = prepared;
+            this.sevenZ = sevenZ;
+        }
+
+        @Nullable
+        @Override
+        public ForwardEntry nextEntry() throws IOException {
+            SevenZArchiveEntry entry = sevenZ.getNextEntry();
+            if (entry == null) return null;
+            String path = sanitizeEntryPathForList(entry.getName());
+            return new ForwardEntry(path, entry.isDirectory(), entry.hasStream());
+        }
+
+        @Override
+        public int read(@NonNull byte[] buffer) throws IOException {
+            return sevenZ.read(buffer);
+        }
+
+        @Override
+        public void close() throws IOException {
+            try {
+                sevenZ.close();
+            } finally {
+                prepared.close();
+            }
+        }
+    }
+
+    private static final class TarForwardReader implements ForwardArchiveReader {
+        @NonNull private final PreparedArchive prepared;
+        @NonNull private final TarArchiveInputStream tar;
+        @NonNull private final InputStream fileIn;
+
+        TarForwardReader(@NonNull PreparedArchive prepared,
+                         @NonNull TarArchiveInputStream tar,
+                         @NonNull InputStream fileIn) {
+            this.prepared = prepared;
+            this.tar = tar;
+            this.fileIn = fileIn;
+        }
+
+        @Nullable
+        @Override
+        public ForwardEntry nextEntry() throws IOException {
+            ArchiveEntry entry = tar.getNextEntry();
+            if (entry == null) return null;
+            if (!tar.canReadEntryData(entry)) {
+                return new ForwardEntry(null, entry.isDirectory(), false);
+            }
+            if (entry instanceof TarArchiveEntry) {
+                TarArchiveEntry tarEntry = (TarArchiveEntry) entry;
+                if (tarEntry.isSymbolicLink() || tarEntry.isLink()) {
+                    return new ForwardEntry(null, false, false);
+                }
+            }
+            boolean directory = entry.isDirectory();
+            String path = sanitizeEntryPathForList(entry.getName());
+            return new ForwardEntry(path, directory, !directory);
+        }
+
+        @Override
+        public int read(@NonNull byte[] buffer) throws IOException {
+            return tar.read(buffer);
+        }
+
+        @Override
+        public void close() throws IOException {
+            try {
+                tar.close();
+            } finally {
+                try {
+                    fileIn.close();
+                } catch (IOException ignored) {
+                } finally {
+                    prepared.close();
+                }
+            }
+        }
+    }
+
     @NonNull
     public static ExtractionResult extractSingleEntryDetailed(@NonNull File archive,
                                                               @NonNull String entryPath,

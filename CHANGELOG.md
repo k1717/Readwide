@@ -1,5 +1,23 @@
 # Changelog
 
+## Readwide 1.0.10 - 2026-06-29
+
+### Release scope
+
+- Android metadata is `versionCode 10010` and `versionName "1.0.10"`. It keeps the `com.readwide.manager` applicationId and the `readwide` release signing key, so 1.0.10 updates in place over 1.0.9, 1.0.8, 1.0.7, and 1.0.6.
+- This release speeds up image page-flipping inside solid/sequential comic archives — 7z/CB7 and the TAR family (TAR/CBT and its gzip/bzip2/xz/lzma/compress variants) — fixes a problem where the previously shown image could stay on screen while paging through them, and smooths PDF page-flipping during rapid taps. The changes are internal to the archive image viewer and the PDF reader and add no new dependency.
+
+### Images - faster page-flipping in solid/sequential archives
+
+- Paging through images inside a solid 7z (`.7z`/`.cb7`) or a TAR-family archive (`.tar`/`.cbt` and its compressed variants) is faster, and the previous image no longer lingers while the next one loads. These formats have no cheap random access to a single entry: the viewer used to re-open the archive and re-decompress its shared stream from the start up to the requested image for every page, which is work proportional to the image's position and made each forward step progressively slower on a large archive. The viewer now keeps one forward reader open for the whole viewing session, decodes each image once, and caches every image it passes, so flipping forward decodes just the next image and pages already seen are served from cache.
+- The first page of a large solid archive now appears without waiting for the whole archive to be decompressed first; only the images up to the opened one are extracted. Paging back to a page that the cache size cap had to evict re-reads just that one page rather than re-reading the rest of the archive, so backward paging in a large 7z/CB7 or TAR/CBT stays smooth too.
+- Neighbour prefetch for these archives now flows through the same forward reader, so reading ahead extends only as far as you read rather than decompressing the whole archive in the background. Extraction still falls back to the previous whole-archive method whenever the forward reader cannot serve an image, so the change can only improve speed, never reduce what opens.
+- ZIP/CBZ, ALZ, and EGG already support direct per-entry access and are unchanged. RAR/CBR now flows through the same forward reader, backed by its libarchive engine, which is itself a strictly forward reader: opening a large RAR/CBR no longer decompresses the whole archive before the first image appears, paging forward decodes each image once, and reading ahead extends only as far as you read. This covers ordinary RAR v4/v5 comics; anything the libarchive engine cannot read on its own (for example some encrypted RAR) automatically falls back to the previous whole-archive extraction, so the change can only improve speed, never reduce what opens. Paging back to a page that the cache size cap had to evict re-extracts just that one page rather than the whole archive.
+
+### Reading - smoother PDF page-flipping
+
+- Flipping through pages in the PDF reader with rapid taps is smoother. In single-page mode the reader pre-renders neighbouring pages into a cache so a turn shows instantly; it now buffers further ahead in the direction you are reading instead of splitting the same budget evenly between forward and backward, so quick forward (or backward) tapping stays ahead of the on-demand render more often. Page rendering, zoom, pan, and continuous-scroll mode are otherwise unchanged.
+
 ## Readwide 1.0.9 - 2026-06-28
 
 ### Release scope

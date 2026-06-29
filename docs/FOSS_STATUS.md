@@ -1,10 +1,10 @@
-# FOSS status for Readwide 1.0.9
+# FOSS status for Readwide 1.0.10
 
-This is the project-level FOSS status note for the default Readwide 1.0.9 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
+This is the project-level FOSS status note for the default Readwide 1.0.10 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
 
 ## Current assessment
 
-The default Readwide 1.0.9 source package is intended to remain FOSS-friendly:
+The default Readwide 1.0.10 source package is intended to remain FOSS-friendly:
 
 - First-party source is licensed under Apache License 2.0.
 - Source code needed for the default build is included in the repository/source package.

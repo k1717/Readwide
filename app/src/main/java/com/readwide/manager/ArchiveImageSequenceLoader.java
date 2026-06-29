@@ -89,12 +89,28 @@ final class ArchiveImageSequenceLoader {
         if (targetIndex >= 0 && targetIndex < sequence.size()) {
             ArchiveSupport.EntryInfo targetEntry = sequence.get(targetIndex);
             File targetFile = outputFileForEntry(context, archiveFile, targetEntry, sensitiveCache);
-            selectedResult = ensureEntryReady(
-                    archiveFile,
-                    targetEntry.path,
-                    targetFile,
-                    password,
-                    sensitiveCache);
+            if (ArchiveSupport.isForwardImageReadableType(archiveFile)) {
+                // Sequential archives: extract only up to the target via a forward reader,
+                // avoiding whole-archive decompression for the first page. Falls back to
+                // whole-archive extraction internally and returns its real result, so a failure
+                // reason such as PASSWORD_REQUIRED still drives the password prompt.
+                selectedResult = SequentialArchiveImageReader.ensureImageReady(
+                        context,
+                        archiveFile,
+                        targetEntry.path,
+                        targetFile,
+                        password,
+                        sensitiveCache,
+                        null,
+                        null);
+            } else {
+                selectedResult = ensureEntryReady(
+                        archiveFile,
+                        targetEntry.path,
+                        targetFile,
+                        password,
+                        sensitiveCache);
+            }
             selectedReady = selectedResult.success;
         }
 

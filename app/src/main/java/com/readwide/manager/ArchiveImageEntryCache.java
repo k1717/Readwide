@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Shared cache/extraction gate for archive-backed image sequences.
@@ -387,6 +388,9 @@ final class ArchiveImageEntryCache {
                 return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED,
                         "Whole-archive fallback produced no readable image cache entries");
             }
+            // The whole archive was extracted and its images copied into the preview
+            // cache; remember this so a later miss extracts only the missing member.
+            WHOLE_ARCHIVE_BULK_DONE.add(archiveBulkKey(archiveFile));
             return isReadyImageFile(entryPath, outFile)
                     ? ArchiveSupport.ExtractionResult.success()
                     : ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED,
@@ -490,10 +494,58 @@ final class ArchiveImageEntryCache {
         return true;
     }
 
+    // Archives whose whole-archive image bulk extraction has already succeeded this
+    // process session, keyed by path+size+mtime. Used so a RAR cache miss after the
+    // initial bulk extracts just the missing member instead of re-extracting the
+    // whole archive again.
+    private static final Set<String> WHOLE_ARCHIVE_BULK_DONE =
+            ConcurrentHashMap.newKeySet();
+
+    private static String archiveBulkKey(@NonNull File archiveFile) {
+        return archiveFile.getAbsolutePath() + ":" + archiveFile.length() + ":" + archiveFile.lastModified();
+    }
+
     private static boolean shouldPreferWholeArchiveImageCache(@NonNull File archiveFile,
                                                               @NonNull String entryPath) {
-        return ArchiveSupport.getSupportedArchiveType(archiveFile) == ArchiveSupport.Type.RAR
-                && FileUtils.isImageFile(entryPath);
+        if (!FileUtils.isImageFile(entryPath)) return false;
+        ArchiveSupport.Type type = ArchiveSupport.getSupportedArchiveType(archiveFile);
+        if (!isSequentialEntryArchiveType(type)) return false;
+        // RAR has no forward reader (its libarchive backend exposes no Java streaming
+        // API), so the first access bulk-extracts the whole archive in one pass. Once
+        // that bulk has succeeded, a later cache miss - a page evicted by the preview
+        // cache size cap - extracts only that one member rather than re-extracting the
+        // entire archive again, which is what made paging back into a large RAR stutter.
+        // 7z and the TAR family keep whole-archive as their fallback because their
+        // forward reader is the primary, prune-tolerant path.
+        if (type == ArchiveSupport.Type.RAR
+                && WHOLE_ARCHIVE_BULK_DONE.contains(archiveBulkKey(archiveFile))) {
+            return false;
+        }
+        return true;
+    }
+
+    // RAR, 7z and the TAR family have no cheap random per-entry access: extracting a
+    // single entry re-reads the archive from the start up to that entry, and for the
+    // solid (RAR/7z) and compressed-TAR streams it must re-decompress everything before
+    // it. That makes per-page image extraction O(n) per page and O(n^2) for a full
+    // read-through, which stalls paging and leaves the previous image on screen. For
+    // these formats every image is extracted once into the preview cache so later page
+    // turns are cache hits. ZIP, ALZ and EGG seek directly to each entry and are excluded.
+    private static boolean isSequentialEntryArchiveType(@Nullable ArchiveSupport.Type type) {
+        if (type == null) return false;
+        switch (type) {
+            case RAR:
+            case SEVEN_Z:
+            case TAR:
+            case TAR_GZ:
+            case TAR_BZ2:
+            case TAR_XZ:
+            case TAR_LZMA:
+            case TAR_Z:
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static boolean shouldReuseReadyImageFile(@NonNull String entryPath,
@@ -540,6 +592,40 @@ final class ArchiveImageEntryCache {
 
     static boolean isReadyImageFileForHandoff(@NonNull String entryPath, @Nullable File file) {
         return isReadyImageFile(entryPath, file);
+    }
+
+    /**
+     * Commits an already-extracted temp image as the ready cache file for an entry.
+     *
+     * Used by the forward (sequential) image reader so it can populate the same preview
+     * cache that {@link #ensureReady} reads, reusing the shared validation and ready-marker
+     * logic. The temp file is consumed on success and deleted on any failure.
+     */
+    static boolean commitReadyImageFile(@NonNull String entryPath,
+                                        @NonNull File tmpFile,
+                                        @NonNull File outFile,
+                                        boolean sensitiveCache,
+                                        @Nullable Set<String> verifiedSensitivePaths) {
+        synchronized (lockFor(outFile.getAbsolutePath())) {
+            try {
+                if (!isUsableFile(tmpFile) || !looksLikeExpectedImage(entryPath, tmpFile)) {
+                    deleteQuietly(tmpFile);
+                    return false;
+                }
+                if (!replaceReadyFile(tmpFile, outFile)) {
+                    deleteQuietly(tmpFile);
+                    return false;
+                }
+                writeReadyMarker(outFile);
+                if (sensitiveCache && verifiedSensitivePaths != null) {
+                    verifiedSensitivePaths.add(outFile.getAbsolutePath());
+                }
+                return true;
+            } catch (IOException | SecurityException e) {
+                deleteQuietly(tmpFile);
+                return false;
+            }
+        }
     }
 
     private static boolean isReadyImageFile(@NonNull String entryPath, @Nullable File file) {

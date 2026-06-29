@@ -5,10 +5,10 @@ Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF
 [![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)](https://github.com/k1717/Readwide/releases)
 [![Downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)](https://github.com/k1717/Readwide/releases)
 
-Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4, and 1.0.9 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.9, then restoring bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
+Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4, and 1.0.10 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.10, then restoring bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
 
-- Current public version: **1.0.9**
-- Android metadata: `versionCode 10009`, `versionName "1.0.9"`
+- Current public version: **1.0.10**
+- Android metadata: `versionCode 10010`, `versionName "1.0.10"`
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
 - Release page: `https://github.com/k1717/Readwide/releases`
@@ -82,7 +82,7 @@ The same image extension set is also what the image viewer opens (including imag
 
 ## FOSS / F-Droid preparation
 
-Readwide 1.0.9 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
+Readwide 1.0.10 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
 
 - First-party code is Apache-2.0.
 - The default build does not bundle Junrar or RARLAB UnRAR-license code.

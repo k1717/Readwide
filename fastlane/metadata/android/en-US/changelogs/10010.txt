@@ -1,0 +1,4 @@
+Readwide 1.0.10
+- Faster image paging in solid/sequential comic archives — 7z/CB7, TAR/CBT (and the gzip/bzip2/xz/lzma variants), and now RAR/CBR. A large archive no longer fully decompresses before the first image, flipping forward decodes each image once, and the previous image no longer lingers while the next loads.
+- RAR cases the engine cannot read on its own (such as some encrypted RAR) fall back to the previous extraction, so nothing that opened before stops opening. PDF page-flipping is also smoother during rapid taps.
+- Internal changes; no new dependency. ZIP/CBZ, ALZ, and EGG archives are unchanged.

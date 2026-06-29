@@ -653,6 +653,122 @@ final class LibarchiveNativeBridge {
         return -1;
     }
 
+    /**
+     * Opens a forward-streaming handle over an archive (single file or multi-volume set),
+     * exposing libarchive's natural forward iteration to the shared sequential image reader.
+     * This is the streaming counterpart to the one-shot list/extract helpers above: instead of
+     * walking the whole archive in one call, the caller advances entry by entry and reads each
+     * entry's data on demand. Used for RAR/CBR, whose libarchive backend has no random access.
+     */
+    @NonNull
+    static ForwardStream openForwardStream(@NonNull String[] archivePaths, @Nullable char[] password)
+            throws IOException {
+        ensureAvailable();
+        Reader reader = openReader(archivePaths, password);
+        boolean handed = false;
+        try {
+            ForwardStream stream = new ForwardStream(reader);
+            handed = true;
+            return stream;
+        } finally {
+            // The ForwardStream field initializer allocates a direct ByteBuffer, which can fail with
+            // an OutOfMemoryError after the native reader handle is already open. Mirror the
+            // opened/finally guard the other openReader* paths use so the native handle (and any
+            // volume input) is freed rather than leaked if construction does not complete.
+            if (!handed) closeQuietly(reader);
+        }
+    }
+
+    /** Metadata for the entry the {@link ForwardStream} is currently positioned on. */
+    static final class ForwardStreamEntry {
+        @Nullable final String path;
+        final boolean directory;
+        final boolean regularFile;
+        final boolean encrypted;
+        final long size;
+
+        ForwardStreamEntry(@Nullable String path, boolean directory, boolean regularFile,
+                           boolean encrypted, long size) {
+            this.path = path;
+            this.directory = directory;
+            this.regularFile = regularFile;
+            this.encrypted = encrypted;
+            this.size = size;
+        }
+    }
+
+    /**
+     * A single open libarchive reader positioned for forward iteration. Not thread-safe; the
+     * caller (a session-scoped sequential reader) serializes access under its own lock.
+     */
+    static final class ForwardStream {
+        @NonNull private final Reader reader;
+        private final ByteBuffer block = ByteBuffer.allocateDirect(BLOCK_SIZE);
+        private boolean haveCurrentEntry;
+        private boolean closed;
+
+        private ForwardStream(@NonNull Reader reader) {
+            this.reader = reader;
+        }
+
+        /**
+         * Advances to the next archive entry, returning its metadata, or null at end of archive.
+         * libarchive automatically skips any unread data of the previous entry, so the caller
+         * does not have to drain an entry it decided not to read.
+         */
+        @Nullable
+        ForwardStreamEntry nextEntry() throws IOException {
+            if (closed) return null;
+            try {
+                long entry = nextHeaderEntry(reader.archive);
+                if (entry == 0L) {
+                    haveCurrentEntry = false;
+                    return null;
+                }
+                haveCurrentEntry = true;
+                boolean encrypted = ArchiveEntry.isEncrypted(entry)
+                        || ArchiveEntry.isDataEncrypted(entry)
+                        || ArchiveEntry.isMetadataEncrypted(entry);
+                long size = ArchiveEntry.sizeIsSet(entry) ? ArchiveEntry.size(entry) : -1L;
+                return new ForwardStreamEntry(normalizedEntryPath(entry), isDirectory(entry),
+                        isRegularFile(entry), encrypted, size);
+            } catch (ArchiveException e) {
+                throw toIOException("Could not read next archive header with libarchive", e);
+            }
+        }
+
+        /**
+         * Reads up to {@code out.length} bytes of the current entry into {@code out}, returning
+         * the number of bytes read or -1 at the end of the current entry. {@code readData}
+         * advances the direct buffer's position by the byte count (a count of 0, i.e. no
+         * advance, marks the end of the current entry's data).
+         */
+        int read(@NonNull byte[] out) throws IOException {
+            if (closed || !haveCurrentEntry || out.length == 0) return -1;
+            block.clear();
+            if (out.length < block.capacity()) {
+                block.limit(out.length);
+            }
+            try {
+                Archive.readData(reader.archive, block);
+            } catch (ArchiveException e) {
+                throw toIOException("Could not read archive entry data with libarchive", e);
+            }
+            int produced = block.position();
+            if (produced <= 0) return -1;
+            block.flip();
+            block.get(out, 0, produced);
+            return produced;
+        }
+
+        void close() {
+            if (closed) return;
+            closed = true;
+            haveCurrentEntry = false;
+            closeQuietly(reader);
+        }
+    }
+
     private static final class Reader {
         final long archive;
         @Nullable
