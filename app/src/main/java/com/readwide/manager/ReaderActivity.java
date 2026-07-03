@@ -598,6 +598,14 @@ public class ReaderActivity extends AppCompatActivity {
         loadedTextSnapshots().clearLoadedTextSnapshot();
     }
 
+    void clearAnyLoadedTextSnapshot() {
+        loadedTextSnapshots().clearAnyLoadedTextSnapshot();
+    }
+
+    void discardTransientRestoreStateForNewLoad() {
+        readerMemory().discardTransientRestoreStateForNewLoad();
+    }
+
     boolean restoreLoadedTextSnapshotIfAvailable(@NonNull Intent intent, Bundle savedInstanceState) {
         return loadedTextSnapshots().restoreLoadedTextSnapshotIfAvailable(intent, savedInstanceState);
     }

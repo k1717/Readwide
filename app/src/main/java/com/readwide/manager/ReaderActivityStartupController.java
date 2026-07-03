@@ -76,6 +76,7 @@ final class ReaderActivityStartupController {
 
     void onNewIntent(@NonNull android.content.Intent intent) {
         activity.saveReadingState();
+        activity.discardTransientRestoreStateForNewLoad();
         activity.setIntent(intent);
         activity.clearPendingToolbarSeekJump();
         activity.activeSearchQuery = "";
@@ -83,7 +84,6 @@ final class ReaderActivityStartupController {
         activity.activeSearchOrdinal = 0;
         activity.applySearchHighlight();
         activity.clearLargeTextSearchTotalCache();
-        activity.clearLoadedTextSnapshot();
         activity.loadFileFromIntent(intent);
     }
 

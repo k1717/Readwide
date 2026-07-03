@@ -79,6 +79,10 @@ final class ReaderLoadedTextSnapshotController {
         }
     }
 
+    void clearAnyLoadedTextSnapshot() {
+        lastLoadedTextSnapshot = null;
+    }
+
     boolean restoreLoadedTextSnapshotIfAvailable(@NonNull Intent intent, Bundle savedInstanceState) {
         if (savedInstanceState == null
                 || !savedInstanceState.getBoolean(ReaderActivity.STATE_RESTORE_FROM_MEMORY, false)) {

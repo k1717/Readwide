@@ -5,6 +5,8 @@ import android.content.Intent;
 import androidx.annotation.NonNull;
 
 import com.readwide.manager.model.ReaderState;
+import com.readwide.manager.util.ReaderRestoreTargetMath;
+import com.readwide.manager.view.CustomReaderView;
 
 import java.io.File;
 
@@ -32,12 +34,26 @@ final class ReaderMemoryController {
         Intent restoreIntent = activity.backgroundTextRestoreIntent != null
                 ? new Intent(activity.backgroundTextRestoreIntent)
                 : new Intent(activity.getIntent());
+        if (!restoreIntentMatchesCurrentReader(restoreIntent)) {
+            activity.backgroundTextMemoryReleased = false;
+            activity.backgroundTextRestoreIntent = null;
+            activity.clearAnyLoadedTextSnapshot();
+            return false;
+        }
         activity.backgroundTextMemoryReleased = false;
         activity.backgroundTextRestoreIntent = null;
         activity.clearLoadedTextSnapshot();
         activity.setIntent(restoreIntent);
         activity.loadFileFromIntent(restoreIntent);
         return true;
+    }
+
+    void discardTransientRestoreStateForNewLoad() {
+        cancelBackgroundMemoryTrim();
+        activity.backgroundTextMemoryReleased = false;
+        activity.backgroundTextRestoreIntent = null;
+        activity.clearAnyLoadedTextSnapshot();
+        activity.clearLargeTextPartitionSwitchPending();
     }
 
     void trimReaderMemoryForBackground(boolean force) {
@@ -171,12 +187,30 @@ final class ReaderMemoryController {
         if (activity.filePath != null && activity.prefs.getAutoSavePosition()) {
             ReaderState state = new ReaderState(activity.filePath);
             int savePosition = activity.getBookmarkSaveCharPosition();
+            String anchorBefore = null;
+            String anchorAfter = null;
+            if (activity.largeTextEstimateActive
+                    && activity.largeTextPartitionSwitchState.isInProgress()
+                    && activity.isLargeTextExactPageIndexReady()) {
+                CustomReaderView.PageTextAnchor anchor =
+                        activity.getExactLargeTextAnchorForPage(
+                                activity.largeTextPartitionSwitchState.pendingDisplayPage());
+                if (anchor != null) {
+                    savePosition = Math.max(0, anchor.charPosition);
+                    anchorBefore = anchor.anchorTextBefore;
+                    anchorAfter = anchor.anchorTextAfter;
+                }
+            }
             state.setCharPosition(savePosition);
             state.setScrollY(activity.readerView != null ? activity.readerView.getReaderScrollY() : 0);
             state.setPageNumber(activity.getDisplayedCurrentPageNumber());
             state.setTotalPages(activity.getDisplayedTotalPageCount());
-            state.setAnchorTextBefore(activity.getAnchorTextBefore(savePosition));
-            state.setAnchorTextAfter(activity.getAnchorTextAfter(savePosition));
+            state.setAnchorTextBefore(anchorBefore != null
+                    ? anchorBefore
+                    : activity.getAnchorTextBefore(savePosition));
+            state.setAnchorTextAfter(anchorAfter != null
+                    ? anchorAfter
+                    : activity.getAnchorTextAfter(savePosition));
             if (activity.filePath != null) {
                 File f = new File(activity.filePath);
                 if (f.exists()) state.setFileLength(f.length());
@@ -184,5 +218,24 @@ final class ReaderMemoryController {
             state.setPresentationSignature(activity.readerPageLayoutSignatureForPath(activity.filePath));
             activity.bookmarkManager.saveReadingState(state);
         }
+    }
+
+    private boolean restoreIntentMatchesCurrentReader(@NonNull Intent restoreIntent) {
+        Intent currentIntent = activity.getIntent();
+        String restorePath = restoreIntent.getStringExtra(ReaderActivity.EXTRA_FILE_PATH);
+        String restoreUri = restoreIntent.getStringExtra(ReaderActivity.EXTRA_FILE_URI);
+        String currentPath = currentIntent != null
+                ? currentIntent.getStringExtra(ReaderActivity.EXTRA_FILE_PATH)
+                : null;
+        String currentUri = currentIntent != null
+                ? currentIntent.getStringExtra(ReaderActivity.EXTRA_FILE_URI)
+                : null;
+
+        if (ReaderRestoreTargetMath.matchesCurrentTarget(
+                restorePath, restoreUri, currentPath, currentUri)) {
+            return true;
+        }
+        return ReaderRestoreTargetMath.matchesLoadedFile(
+                restorePath, restoreUri, activity.filePath);
     }
 }
