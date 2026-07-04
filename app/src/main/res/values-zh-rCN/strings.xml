@@ -555,6 +555,12 @@
     <string name="tts_voice_offline">离线</string>
     <string name="tts_speed">速度</string>
     <string name="tts_pitch">音调</string>
+    <string name="tts_phrase_length_short">短语长度：短</string>
+    <string name="tts_phrase_length_medium">短语长度：中</string>
+    <string name="tts_phrase_length_long">短语长度：长</string>
+    <string name="tts_pause_reduction_off">停顿缩减：关闭</string>
+    <string name="tts_pause_reduction_medium">停顿缩减：中</string>
+    <string name="tts_pause_reduction_aggressive">停顿缩减：强</string>
     <string name="tts_android_settings">Android TTS 设置</string>
     <string name="tts_add_voice_model">添加/下载语音模型</string>
     <string name="tts_settings_unavailable">无法打开 Android TTS 设置。</string>

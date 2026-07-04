@@ -555,6 +555,12 @@
     <string name="tts_voice_offline">sin conexión</string>
     <string name="tts_speed">Velocidad</string>
     <string name="tts_pitch">Tono</string>
+    <string name="tts_phrase_length_short">Longitud de frase: Corta</string>
+    <string name="tts_phrase_length_medium">Longitud de frase: Media</string>
+    <string name="tts_phrase_length_long">Longitud de frase: Larga</string>
+    <string name="tts_pause_reduction_off">Reducción de pausas: Desactivada</string>
+    <string name="tts_pause_reduction_medium">Reducción de pausas: Media</string>
+    <string name="tts_pause_reduction_aggressive">Reducción de pausas: Agresiva</string>
     <string name="tts_android_settings">Ajustes de TTS de Android</string>
     <string name="tts_add_voice_model">Añadir/descargar modelos de voz</string>
     <string name="tts_settings_unavailable">No se pudieron abrir los ajustes de TTS de Android.</string>

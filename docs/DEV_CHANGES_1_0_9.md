@@ -11,7 +11,7 @@ docs/LICENSE_REPORT_READWIDE_1_0_9.md, docs/SBOM_READWIDE_1_0_9.spdx.json (the
 last two add the PdfBox-Android dependency). "Current public version" is 1.0.9.
 Note: the F-Droid metadata carries a 1.0.7 build entry (real commit hash) and a
 1.0.9 build entry whose `commit` field is still a
-REPLACE_WITH_v1.0.9_FULL_COMMIT_HASH placeholder. It must be set to the full
+8fb16efbcae7e9d0d64d4b665b0e9bddf77d969c placeholder. It must be set to the full
 40-character commit hash that the v1.0.9 tag points to (this app's F-Droid
 maintainer requires a full hash, not the tag name) once that tag exists.
 

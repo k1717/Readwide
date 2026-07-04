@@ -555,6 +555,12 @@
     <string name="tts_voice_offline">ออฟไลน์</string>
     <string name="tts_speed">ความเร็ว</string>
     <string name="tts_pitch">ระดับเสียง</string>
+    <string name="tts_phrase_length_short">ความยาววลี: สั้น</string>
+    <string name="tts_phrase_length_medium">ความยาววลี: ปานกลาง</string>
+    <string name="tts_phrase_length_long">ความยาววลี: ยาว</string>
+    <string name="tts_pause_reduction_off">ลดการหยุดพัก: ปิด</string>
+    <string name="tts_pause_reduction_medium">ลดการหยุดพัก: ปานกลาง</string>
+    <string name="tts_pause_reduction_aggressive">ลดการหยุดพัก: มาก</string>
     <string name="tts_android_settings">การตั้งค่า Android TTS</string>
     <string name="tts_add_voice_model">เพิ่ม/ดาวน์โหลดโมเดลเสียง</string>
     <string name="tts_settings_unavailable">ไม่สามารถเปิดการตั้งค่า Android TTS ได้</string>

@@ -13,12 +13,11 @@ dependency set is identical to 1.0.9 (no new dependency), so the license report
 and SBOM carry the same packages as 1.0.9 with only the version stamp changed.
 "Current public version" is 1.0.10.
 
-Note: the F-Droid metadata now carries a 1.0.7 build entry (real commit hash) and
-two build entries whose `commit` fields are still placeholders -
-REPLACE_WITH_v1.0.9_FULL_COMMIT_HASH (1.0.9) and
-REPLACE_WITH_v1.0.10_FULL_COMMIT_HASH (1.0.10). Each must be set to the full
-40-character commit hash that its tag points to (this app's F-Droid maintainer
-requires a full hash, not the tag name) once those tags exist.
+Note: the F-Droid metadata carries real commit hashes for the 1.0.7, 1.0.8, and
+1.0.9 build entries; the 1.0.10 entry's `commit` field is still
+24de699a8f763e4de768ccaecb8418fbeb3ff498 and must be set to the full 40-character
+commit hash that the tag points to (this app's F-Droid maintainer requires a full
+hash, not the tag name) once the 1.0.10 tag exists.
 
 Theme: archive image viewer performance + correctness for solid/sequential
 archives. Fixes the CB7/7z paging bug where the previous image stayed on screen

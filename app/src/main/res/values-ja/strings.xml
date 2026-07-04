@@ -555,6 +555,12 @@
     <string name="tts_voice_offline">オフライン</string>
     <string name="tts_speed">速度</string>
     <string name="tts_pitch">ピッチ</string>
+    <string name="tts_phrase_length_short">フレーズの長さ: 短い</string>
+    <string name="tts_phrase_length_medium">フレーズの長さ: 普通</string>
+    <string name="tts_phrase_length_long">フレーズの長さ: 長い</string>
+    <string name="tts_pause_reduction_off">ポーズ軽減: オフ</string>
+    <string name="tts_pause_reduction_medium">ポーズ軽減: 中</string>
+    <string name="tts_pause_reduction_aggressive">ポーズ軽減: 強</string>
     <string name="tts_android_settings">Android の TTS 設定</string>
     <string name="tts_add_voice_model">音声モデルを追加/ダウンロード</string>
     <string name="tts_settings_unavailable">Android の TTS 設定を開けませんでした。</string>

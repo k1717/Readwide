@@ -69,6 +69,49 @@ public class ArchiveFilenameDecoderTest {
         assertEquals("Русский/page001.txt", ArchiveFilenameDecoder.decodeEggName(raw, 0, raw.length, 1251));
     }
 
+    @Test
+    public void nameCorpus_anchorsShortNamesToArchiveCharset() {
+        // Per-name detection cannot classify a one-syllable CP949 name (two
+        // bytes), but the archive-wide corpus lets its longer siblings decide.
+        String[] names = {"가.txt", "봄.txt", "메모장.txt", "프로젝트 계획서.hwp"};
+        ArchiveFilenameDecoder.NameCorpus corpus = new ArchiveFilenameDecoder.NameCorpus();
+        for (String name : names) corpus.observe(name.getBytes(Charset.forName("MS949")));
+        for (String name : names) {
+            assertEquals(name, ArchiveFilenameDecoder.decodeLegacyName(name.getBytes(Charset.forName("MS949")), corpus));
+        }
+    }
+
+    @Test
+    public void nameCorpus_resolvesDosCyrillicArchive() {
+        String[] names = {"да.txt", "мы.doc",
+                "документы отчёт.txt"};
+        ArchiveFilenameDecoder.NameCorpus corpus = new ArchiveFilenameDecoder.NameCorpus();
+        for (String name : names) corpus.observe(name.getBytes(Charset.forName("IBM866")));
+        for (String name : names) {
+            assertEquals(name, ArchiveFilenameDecoder.decodeLegacyName(name.getBytes(Charset.forName("IBM866")), corpus));
+        }
+    }
+
+    @Test
+    public void decodeLegacyName_russianDosNameSurvivesWithoutCorpus() {
+        // windows-874 used to outscore IBM866 here because Cyrillic bytes
+        // decode to structurally illegal Thai; the Thai validity check now
+        // rejects that even per name.
+        assertLegacy("документы отчёт.txt", "IBM866");
+    }
+
+    @Test
+    public void decodeLegacyName_genuineThaiAndGreekStillDetect() {
+        assertLegacy("เอกสาร.txt", "windows-874");
+        String[] greek = {"Έγγραφο.txt",
+                "φάκελος αρχείων.doc"};
+        ArchiveFilenameDecoder.NameCorpus corpus = new ArchiveFilenameDecoder.NameCorpus();
+        for (String name : greek) corpus.observe(name.getBytes(Charset.forName("windows-1253")));
+        for (String name : greek) {
+            assertEquals(name, ArchiveFilenameDecoder.decodeLegacyName(name.getBytes(Charset.forName("windows-1253")), corpus));
+        }
+    }
+
     private static void assertLegacy(String expected, String charsetName) {
         byte[] raw = expected.getBytes(Charset.forName(charsetName));
         assertEquals(expected, ArchiveFilenameDecoder.decodeLegacyName(raw));

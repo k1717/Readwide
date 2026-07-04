@@ -53,7 +53,7 @@ Base64 API on Java 17/Android builds. The shim implements only
 - PDF/image/HTML conversion.
 - Password/encrypted HWP support.
 - Legacy pre-v5 HWP support.
-- Full embedded object, drawing, chart, equation, or image rendering.
+- Full embedded object, drawing, chart, or equation rendering. (Raster embedded images - PNG/JPEG/GIF/BMP/WebP - do render in the later rendered-layout path at their authored size, with a placeholder frame for unrenderable WMF/EMF/OLE pictures; vector/OLE objects, drawings, charts, and equations are still not rendered.)
 
 ## Safety guards
 

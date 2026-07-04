@@ -27,6 +27,14 @@ public class TtsPlaybackService extends Service {
     static final String EXTRA_SUBTITLE = "subtitle";
     static final String EXTRA_PLAYING = "playing";
     static final String EXTRA_CONTINUOUS = "continuous";
+    static final String EXTRA_HOST_KIND = "host_kind";
+
+    /** Notification tap opens {@link ReaderActivity} (plain text / Markdown reader). */
+    static final String HOST_READER = "reader";
+    /** Notification tap opens {@link DocumentPageActivity} (EPUB / Word / HWP viewer). */
+    static final String HOST_DOCUMENT = "document";
+    /** Notification tap opens {@link PdfReaderActivity} (PDF viewer). */
+    static final String HOST_PDF = "pdf";
 
     private static final String CHANNEL_ID = "tts_playback";
     private static final int NOTIFICATION_ID = 2202;
@@ -37,6 +45,7 @@ public class TtsPlaybackService extends Service {
     private String subtitle = "";
     private boolean playing = false;
     private boolean continuous = false;
+    private String hostKind = HOST_READER;
 
     @Override
     public void onCreate() {
@@ -134,14 +143,28 @@ public class TtsPlaybackService extends Service {
         subtitle = intent.getStringExtra(EXTRA_SUBTITLE) != null ? intent.getStringExtra(EXTRA_SUBTITLE) : subtitle;
         playing = intent.getBooleanExtra(EXTRA_PLAYING, playing);
         continuous = intent.getBooleanExtra(EXTRA_CONTINUOUS, continuous);
+        hostKind = intent.getStringExtra(EXTRA_HOST_KIND) != null
+                ? intent.getStringExtra(EXTRA_HOST_KIND) : hostKind;
         updateMediaSessionState();
     }
 
     private Notification buildNotification() {
         updateMediaSessionState();
-        Intent openIntent = new Intent(this, ReaderActivity.class);
+        Class<?> target;
+        String filePathExtra;
+        if (HOST_DOCUMENT.equals(hostKind)) {
+            target = DocumentPageActivity.class;
+            filePathExtra = DocumentPageActivity.EXTRA_FILE_PATH;
+        } else if (HOST_PDF.equals(hostKind)) {
+            target = PdfReaderActivity.class;
+            filePathExtra = PdfReaderActivity.EXTRA_FILE_PATH;
+        } else {
+            target = ReaderActivity.class;
+            filePathExtra = ReaderActivity.EXTRA_FILE_PATH;
+        }
+        Intent openIntent = new Intent(this, target);
         if (filePath != null && !filePath.isEmpty()) {
-            openIntent.putExtra(ReaderActivity.EXTRA_FILE_PATH, filePath);
+            openIntent.putExtra(filePathExtra, filePath);
         }
         openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0, openIntent,
@@ -219,7 +242,8 @@ public class TtsPlaybackService extends Service {
                               String title,
                               String subtitle,
                               boolean playing,
-                              boolean continuous) {
+                              boolean continuous,
+                              String hostKind) {
         Intent intent = new Intent(context, TtsPlaybackService.class);
         intent.setAction(ACTION_REFRESH);
         intent.putExtra(EXTRA_FILE_PATH, filePath);
@@ -227,6 +251,7 @@ public class TtsPlaybackService extends Service {
         intent.putExtra(EXTRA_SUBTITLE, subtitle);
         intent.putExtra(EXTRA_PLAYING, playing);
         intent.putExtra(EXTRA_CONTINUOUS, continuous);
+        intent.putExtra(EXTRA_HOST_KIND, hostKind != null ? hostKind : HOST_READER);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent);

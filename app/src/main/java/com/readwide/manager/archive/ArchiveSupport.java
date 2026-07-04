@@ -21,6 +21,8 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 import org.apache.commons.compress.compressors.lzma.LZMACompressorInputStream;
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream;
 import org.apache.commons.compress.compressors.z.ZCompressorInputStream;
+import org.apache.commons.compress.compressors.zstandard.ZstdCompressorInputStream;
+import org.apache.commons.compress.compressors.lz4.FramedLZ4CompressorInputStream;
 
 import com.readwide.manager.util.FileOperationProgress;
 import com.readwide.manager.util.FileTreeProgressTracker;
@@ -80,6 +82,8 @@ public final class ArchiveSupport {
         TAR_XZ,
         TAR_LZMA,
         TAR_Z,
+        TAR_ZST,
+        TAR_LZ4,
         SEVEN_Z,
         RAR,
         ALZ,
@@ -88,7 +92,9 @@ public final class ArchiveSupport {
         SINGLE_BZ2,
         SINGLE_XZ,
         SINGLE_LZMA,
-        SINGLE_Z
+        SINGLE_Z,
+        SINGLE_ZST,
+        SINGLE_LZ4
     }
 
     public static final class PasswordRequiredException extends IOException {
@@ -181,6 +187,18 @@ public final class ArchiveSupport {
         return ArchiveTypeDetector.isFirstNumericSplitName(archive.getName().toLowerCase(Locale.ROOT));
     }
 
+    /**
+     * True when this file is the first volume of a generic numeric split
+     * ({@code name.zip.001} style). Read paths for such archives concatenate all
+     * volumes into a temporary file before opening ({@code combineSplitParts}),
+     * which makes per-entry access cost O(total archive size) per entry - callers
+     * that would otherwise extract entries one at a time (e.g. the image preview
+     * cache) can use this to switch to a single whole-archive pass instead.
+     */
+    public static boolean isNumericSplitArchive(@NonNull File archive) {
+        return isFirstNumericSplitArchive(archive);
+    }
+
     public static String getArchiveOutputBaseName(@NonNull File archive, @NonNull String fallback) {
         return ArchiveTypeDetector.outputBaseName(archive, fallback);
     }
@@ -253,11 +271,15 @@ public final class ArchiveSupport {
                 case TAR_XZ:
                 case TAR_LZMA:
                 case TAR_Z:
+                case TAR_ZST:
+                case TAR_LZ4:
                 case SINGLE_GZ:
                 case SINGLE_BZ2:
                 case SINGLE_XZ:
                 case SINGLE_LZMA:
                 case SINGLE_Z:
+                case SINGLE_ZST:
+                case SINGLE_LZ4:
                     return false;
                 default:
                     return false;
@@ -287,12 +309,16 @@ public final class ArchiveSupport {
                 case TAR_XZ:
                 case TAR_LZMA:
                 case TAR_Z:
+                case TAR_ZST:
+                case TAR_LZ4:
                     return listTarEntriesWithFallback(prepared.file, prepared.type, password);
                 case SINGLE_GZ:
                 case SINGLE_BZ2:
                 case SINGLE_XZ:
                 case SINGLE_LZMA:
                 case SINGLE_Z:
+                case SINGLE_ZST:
+                case SINGLE_LZ4:
                     return listSingleCompressedEntry(archive);
                 default:
                     throw new IOException("Unsupported archive");
@@ -429,7 +455,15 @@ public final class ArchiveSupport {
             byte[] central = new byte[(int) centralSize];
             raf.seek(centralOffset);
             raf.readFully(central);
-            ArrayList<ZipRawName> result = new ArrayList<>();
+            // Pass 1: collect raw names so the whole archive shares one
+            // charset decision (ArchiveFilenameDecoder.NameCorpus) - short
+            // legacy names inherit the code page their longer siblings
+            // establish instead of being scored alone. UTF-8-flagged names
+            // keep their flag path and are not part of the legacy corpus.
+            ArrayList<byte[]> rawNames = new ArrayList<>();
+            ArrayList<Boolean> utf8Flags = new ArrayList<>();
+            ArrayList<Long> sizes = new ArrayList<>();
+            ArchiveFilenameDecoder.NameCorpus corpus = new ArchiveFilenameDecoder.NameCorpus();
             for (int i = 0; i + 46 <= central.length; i++) {
                 int sig = readIntLE(central, i);
                 if (sig != 0x02014b50) break;
@@ -441,13 +475,20 @@ public final class ArchiveSupport {
                 int nameEnd = nameStart + nameLength;
                 if (nameLength <= 0 || nameEnd > central.length) return Collections.emptyList();
                 byte[] rawNameBytes = copyOfRange(central, nameStart, nameLength);
-                String decoded = ArchiveFilenameDecoder.decodeZipName(rawNameBytes, (flags & 0x0800) != 0);
-                boolean directory = decoded.replace('\\', '/').endsWith("/");
-                long size = readUInt32LE(central, i + 24);
-                result.add(new ZipRawName(decoded, directory, size));
+                boolean utf8Flag = (flags & 0x0800) != 0;
+                rawNames.add(rawNameBytes);
+                utf8Flags.add(utf8Flag);
+                sizes.add(readUInt32LE(central, i + 24));
+                if (!utf8Flag) corpus.observe(rawNameBytes);
                 long next = (long) nameEnd + extraLength + commentLength;
                 if (next <= i || next > central.length) return Collections.emptyList();
                 i = (int) next - 1;
+            }
+            ArrayList<ZipRawName> result = new ArrayList<>();
+            for (int i = 0; i < rawNames.size(); i++) {
+                String decoded = ArchiveFilenameDecoder.decodeZipName(rawNames.get(i), utf8Flags.get(i), corpus);
+                boolean directory = decoded.replace('\\', '/').endsWith("/");
+                result.add(new ZipRawName(decoded, directory, sizes.get(i)));
             }
             return result.size() == expectedEntries ? result : Collections.emptyList();
         } catch (IOException | SecurityException ignored) {
@@ -495,6 +536,10 @@ public final class ArchiveSupport {
             raf.readFully(tail);
         }
         ArrayList<EntryInfo> result = new ArrayList<>();
+        ArrayList<byte[]> tailRawNames = new ArrayList<>();
+        ArrayList<Boolean> tailUtf8Flags = new ArrayList<>();
+        ArrayList<Long> tailSizes = new ArrayList<>();
+        ArchiveFilenameDecoder.NameCorpus tailCorpus = new ArchiveFilenameDecoder.NameCorpus();
         for (int i = 0; i + 46 <= tail.length; i++) {
             int sig = readIntLE(tail, i);
             if (sig != 0x02014b50) continue;
@@ -506,15 +551,21 @@ public final class ArchiveSupport {
             if (nameLength <= 0 || nameEnd > tail.length) continue;
             int flags = readUInt16LE(tail, i + 8);
             byte[] rawNameBytes = copyOfRange(tail, nameStart, nameLength);
-            String rawName = ArchiveFilenameDecoder.decodeZipName(rawNameBytes, (flags & 0x0800) != 0);
-            String path = sanitizeEntryPathForList(rawName);
-            if (path != null) {
-                long size = readUInt32LE(tail, i + 24);
-                boolean directory = rawName.replace('\\', '/').endsWith("/");
-                result.add(new EntryInfo(path, directory, size, 0L));
-            }
+            boolean utf8Flag = (flags & 0x0800) != 0;
+            tailRawNames.add(rawNameBytes);
+            tailUtf8Flags.add(utf8Flag);
+            tailSizes.add(readUInt32LE(tail, i + 24));
+            if (!utf8Flag) tailCorpus.observe(rawNameBytes);
             long next = (long) nameEnd + extraLength + commentLength;
             if (next > i && next <= tail.length) i = (int) next - 1;
+        }
+        for (int i = 0; i < tailRawNames.size(); i++) {
+            String rawName = ArchiveFilenameDecoder.decodeZipName(tailRawNames.get(i), tailUtf8Flags.get(i), tailCorpus);
+            String path = sanitizeEntryPathForList(rawName);
+            if (path != null) {
+                boolean directory = rawName.replace('\\', '/').endsWith("/");
+                result.add(new EntryInfo(path, directory, tailSizes.get(i), 0L));
+            }
         }
         if (result.isEmpty()) throw new IOException("Unsupported ZIP directory");
         return withSyntheticDirectories(result);
@@ -524,8 +575,14 @@ public final class ArchiveSupport {
     private static List<EntryInfo> listSevenZEntries(@NonNull File archive, @Nullable char[] password) throws IOException {
         List<EntryInfo> result = new ArrayList<>();
         try (SevenZFile sevenZ = openSevenZFile(archive, password)) {
-            SevenZArchiveEntry entry;
-            while ((entry = sevenZ.getNextEntry()) != null) {
+            // getEntries() walks the already-parsed header metadata only.
+            // getNextEntry() would additionally build each entry's decoder
+            // chain, which throws for coders Commons Compress cannot decode
+            // (PPMd 030401, BCJ2 0303011B) even though the entry names and
+            // sizes are fully available. Listing must stay decode-free so
+            // PPMd/BCJ2 archives remain browsable without the libarchive
+            // fallback; extraction keeps using getNextEntry() and falls back.
+            for (SevenZArchiveEntry entry : sevenZ.getEntries()) {
                 String path = sanitizeEntryPathForList(entry.getName());
                 if (path == null) continue;
                 result.add(new EntryInfo(path, entry.isDirectory(), entry.getSize(), 0L));
@@ -714,15 +771,38 @@ public final class ArchiveSupport {
         try {
             return listSevenZEntries(archive, password);
         } catch (PasswordRequiredException e) {
+            List<EntryInfo> bcj2 = tryListSevenZBcj2Entries(archive, password);
+            if (bcj2 != null) return bcj2;
             throw e;
         } catch (IOException e) {
+            List<EntryInfo> bcj2 = tryListSevenZBcj2Entries(archive, password);
+            if (bcj2 != null) return bcj2;
             List<EntryInfo> fallback = tryListEntriesWithLibarchive(archive, type, password);
             if (fallback != null) return fallback;
             throw e;
         } catch (SecurityException e) {
+            List<EntryInfo> bcj2 = tryListSevenZBcj2Entries(archive, password);
+            if (bcj2 != null) return bcj2;
             List<EntryInfo> fallback = tryListEntriesWithLibarchive(archive, type, password);
             if (fallback != null) return fallback;
             throw new IOException(e);
+        }
+    }
+
+    /**
+     * First-party 7z entry listing for BCJ2/PPMd archives whose header is
+     * itself AES-encrypted (encoded header), where Commons Compress cannot
+     * list without decrypting. Returns {@code null} if the archive uses
+     * neither coder, so other fallbacks still apply.
+     */
+    @Nullable
+    private static List<EntryInfo> tryListSevenZBcj2Entries(@NonNull File archive,
+                                                            @Nullable char[] password) {
+        try {
+            if (!SevenZBcj2ArchiveReader.archiveUsesSpecialCoder(archive, password)) return null;
+            return SevenZBcj2ArchiveReader.listEntries(archive, password);
+        } catch (IOException | RuntimeException e) {
+            return null;
         }
     }
 
@@ -865,6 +945,8 @@ public final class ArchiveSupport {
             case TAR_XZ:
             case TAR_LZMA:
             case TAR_Z:
+            case TAR_ZST:
+            case TAR_LZ4:
                 return true;
             default:
                 return false;
@@ -909,7 +991,9 @@ public final class ArchiveSupport {
                 case TAR_BZ2:
                 case TAR_XZ:
                 case TAR_LZMA:
-                case TAR_Z: {
+                case TAR_Z:
+                case TAR_ZST:
+                case TAR_LZ4: {
                     InputStream fileIn = new BufferedInputStream(new FileInputStream(prepared.file));
                     try {
                         InputStream payload = wrapTarPayloadInputStream(fileIn, prepared.type);
@@ -1071,6 +1155,8 @@ public final class ArchiveSupport {
                 case TAR_XZ:
                 case TAR_LZMA:
                 case TAR_Z:
+                case TAR_ZST:
+                case TAR_LZ4:
                     ok = extractSingleTarEntryWithFallback(prepared.file, prepared.type, normalized, outFile);
                     break;
                 case SINGLE_GZ:
@@ -1078,6 +1164,8 @@ public final class ArchiveSupport {
                 case SINGLE_XZ:
                 case SINGLE_LZMA:
                 case SINGLE_Z:
+                case SINGLE_ZST:
+                case SINGLE_LZ4:
                     ok = extractSingleCompressedEntry(prepared.file, archive, normalized, outFile, prepared.type);
                     break;
                 default:
@@ -1166,12 +1254,16 @@ public final class ArchiveSupport {
                 case TAR_XZ:
                 case TAR_LZMA:
                 case TAR_Z:
+                case TAR_ZST:
+                case TAR_LZ4:
                     return extractTarIntoDirectoryWithFallback(prepared.file, prepared.type, targetDir, progress, entryProgress);
                 case SINGLE_GZ:
                 case SINGLE_BZ2:
                 case SINGLE_XZ:
                 case SINGLE_LZMA:
                 case SINGLE_Z:
+                case SINGLE_ZST:
+                case SINGLE_LZ4:
                     return extractSingleCompressedIntoDirectory(prepared.file, archive, targetDir, prepared.type, progress, entryProgress);
                 default:
                     return false;
@@ -1219,11 +1311,15 @@ public final class ArchiveSupport {
         } catch (PasswordRequiredException e) {
             throw e;
         } catch (IOException e) {
+            Boolean bcj2 = tryExtractSevenZBcj2IntoDirectory(archive, targetDir, password, progress, entryProgress);
+            if (bcj2 != null) return bcj2;
             Boolean fallback = tryExtractArchiveWithLibarchiveAfterDedicatedFailure(
                     archive, type, targetDir, password, progress, entryProgress);
             if (fallback != null) return fallback;
             throw e;
         } catch (SecurityException e) {
+            Boolean bcj2 = tryExtractSevenZBcj2IntoDirectory(archive, targetDir, password, progress, entryProgress);
+            if (bcj2 != null) return bcj2;
             Boolean fallback = tryExtractArchiveWithLibarchiveAfterDedicatedFailure(
                     archive, type, targetDir, password, progress, entryProgress);
             if (fallback != null) return fallback;
@@ -1288,11 +1384,15 @@ public final class ArchiveSupport {
         } catch (PasswordRequiredException e) {
             throw e;
         } catch (IOException e) {
+            Boolean bcj2 = tryExtractSevenZBcj2SingleEntry(archive, entryPath, outFile, password);
+            if (bcj2 != null) return bcj2;
             Boolean fallback = tryExtractSingleEntryWithLibarchiveAfterDedicatedFailure(
                     archive, type, entryPath, outFile, password, null);
             if (fallback != null) return fallback;
             throw e;
         } catch (SecurityException e) {
+            Boolean bcj2 = tryExtractSevenZBcj2SingleEntry(archive, entryPath, outFile, password);
+            if (bcj2 != null) return bcj2;
             Boolean fallback = tryExtractSingleEntryWithLibarchiveAfterDedicatedFailure(
                     archive, type, entryPath, outFile, password, null);
             if (fallback != null) return fallback;
@@ -1316,6 +1416,47 @@ public final class ArchiveSupport {
                     archive, type, entryPath, outFile, null, null);
             if (fallback != null) return fallback;
             throw new IOException(e);
+        }
+    }
+
+    /**
+     * First-party 7z extraction path for archives whose entries use a coder
+     * Commons Compress cannot decode: BCJ2 ("Multi input/output stream coders
+     * are not yet supported") or PPMd (no coder). Returns {@code null} when
+     * the archive uses neither, or when the first-party read fails for a
+     * reason other than a missing password, so the caller still falls through
+     * to the libarchive path that previously served unencrypted PPMd/BCJ2.
+     * AES-encrypted BCJ2/PPMd archives have no other path, since libarchive
+     * cannot decrypt 7z at all.
+     */
+    @Nullable
+    private static Boolean tryExtractSevenZBcj2IntoDirectory(@NonNull File archive,
+                                                             @NonNull File targetDir,
+                                                             @Nullable char[] password,
+                                                             @Nullable FileOperationProgress progress,
+                                                             @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
+        if (!SevenZBcj2ArchiveReader.archiveUsesSpecialCoder(archive, password)) return null;
+        try {
+            return SevenZBcj2ArchiveReader.extractArchiveIntoDirectory(archive, targetDir, password, progress, entryProgress);
+        } catch (PasswordRequiredException e) {
+            throw e;
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    @Nullable
+    private static Boolean tryExtractSevenZBcj2SingleEntry(@NonNull File archive,
+                                                           @NonNull String entryPath,
+                                                           @NonNull File outFile,
+                                                           @Nullable char[] password) throws IOException {
+        if (!SevenZBcj2ArchiveReader.archiveUsesSpecialCoder(archive, password)) return null;
+        try {
+            return SevenZBcj2ArchiveReader.extractSingleEntry(archive, entryPath, outFile, password);
+        } catch (PasswordRequiredException e) {
+            throw e;
+        } catch (IOException | RuntimeException e) {
+            return null;
         }
     }
 
@@ -1418,6 +1559,8 @@ public final class ArchiveSupport {
             case TAR_XZ:
             case TAR_LZMA:
             case TAR_Z:
+            case TAR_ZST:
+            case TAR_LZ4:
                 return true;
             default:
                 return false;
@@ -2243,6 +2386,10 @@ public final class ArchiveSupport {
                 return new LZMACompressorInputStream(input);
             case TAR_Z:
                 return new ZCompressorInputStream(input);
+            case TAR_ZST:
+                return new ZstdCompressorInputStream(input);
+            case TAR_LZ4:
+                return new FramedLZ4CompressorInputStream(input);
             case TAR:
             default:
                 return input;
@@ -2262,6 +2409,10 @@ public final class ArchiveSupport {
                 return new LZMACompressorInputStream(input);
             case SINGLE_Z:
                 return new ZCompressorInputStream(input);
+            case SINGLE_ZST:
+                return new ZstdCompressorInputStream(input);
+            case SINGLE_LZ4:
+                return new FramedLZ4CompressorInputStream(input);
             default:
                 throw new IOException("Unsupported single-file compression format");
         }
@@ -2275,7 +2426,7 @@ public final class ArchiveSupport {
             name = name.substring(0, name.length() - 4);
             lower = lower.substring(0, lower.length() - 4);
         }
-        String[] extensions = new String[] {".lzma", ".bz2", ".gz", ".xz", ".z"};
+        String[] extensions = new String[] {".lzma", ".zst", ".lz4", ".bz2", ".gz", ".xz", ".z"};
         for (String ext : extensions) {
             if (lower.endsWith(ext) && name.length() > ext.length()) {
                 return name.substring(0, name.length() - ext.length());

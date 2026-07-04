@@ -1,16 +1,16 @@
 # Public release build checklist
 
-This file is the practical build and verification checklist for Readwide 1.0.10.
+This file is the practical build and verification checklist for Readwide 1.0.11.
 
 ## Version metadata
 
 ```text
 applicationId com.readwide.manager
-versionCode 10010
-versionName 1.0.10
+versionCode 10011
+versionName 1.0.11
 ```
 
-The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.10 keeps that key, so it installs in place over 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.10, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
+The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.11 keeps that key, so it installs in place over 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.11, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
 
 ## Keystore policy
 
@@ -55,8 +55,8 @@ Keep these files with source and binary release materials:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_7.md`
-- `docs/SBOM_READWIDE_1_0_7.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_11.md`
+- `docs/SBOM_READWIDE_1_0_11.spdx.json`
 
 ## APK verification
 
@@ -102,8 +102,8 @@ Expected result:
 
 Before opening an F-Droid Data merge request:
 
-1. Publish a final Git tag, e.g. `v1.0.10`.
-2. Replace the commit placeholder in `fdroid/metadata/com.readwide.manager.yml` with the full 40-character commit hash that the `v1.0.10` tag points to (this app's F-Droid maintainer requires a full commit hash, not the tag name).
+1. Publish a final Git tag, e.g. `v1.0.11`.
+2. Replace the `1.0.11` commit placeholder in `fdroid/metadata/com.readwide.manager.yml` with the full 40-character commit hash that the `v1.0.11` tag points to (this app's F-Droid maintainer requires a full commit hash, not the tag name). The earlier entries through 1.0.10 already carry their real release commit hashes.
 3. The standard `gradle/wrapper/gradle-wrapper.jar` is kept; F-Droid verifies it against official Gradle hashes and builds with its own Gradle, so no `rm` rule is needed.
 4. Confirm a no-private-keystore `assembleRelease` build works.
 5. Keep RAR and HWP/HWPX support wording conservative.

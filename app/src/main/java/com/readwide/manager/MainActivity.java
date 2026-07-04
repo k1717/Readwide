@@ -1342,10 +1342,36 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
                     // Continue: restore the timer that was set at the interruption,
                     // open the file at its saved position, and auto-start playback.
                     prefs.setTtsSleepTimerMinutes(prefs.getTtsLastSleepTimerMinutes());
-                    Intent it = new Intent(this, ReaderActivity.class);
-                    it.putExtra(ReaderActivity.EXTRA_FILE_PATH, path);
-                    it.putExtra(ReaderActivity.EXTRA_AUTOSTART_TTS, true);
-                    startActivity(it);
+                    String lower = file.getName().toLowerCase(java.util.Locale.ROOT);
+                    if (FileUtils.isTextFile(file.getName())) {
+                        Intent it = new Intent(this, ReaderActivity.class);
+                        it.putExtra(ReaderActivity.EXTRA_FILE_PATH, path);
+                        it.putExtra(ReaderActivity.EXTRA_AUTOSTART_TTS, true);
+                        startActivity(it);
+                    } else if (FileUtils.isMarkdownFile(lower) || FileUtils.isEpubFile(file.getName())
+                            || FileUtils.isWordOrHwpFile(file.getName())) {
+                        // Markdown/EPUB/Word read-aloud lives in the document
+                        // viewer (where these files open normally), so resume there
+                        // too - the saved char position is in that viewer's buffer
+                        // space.
+                        Intent it = new Intent(this, DocumentPageActivity.class);
+                        it.putExtra(DocumentPageActivity.EXTRA_FILE_PATH, path);
+                        it.putExtra(DocumentPageActivity.EXTRA_AUTOSTART_TTS, true);
+                        startActivity(it);
+                    } else if (FileUtils.isPdfFile(file.getName())) {
+                        // PDF read-aloud lives in the PDF viewer; saved position is
+                        // offered by the resume row inside the TTS dialog.
+                        Intent it = new Intent(this, PdfReaderActivity.class);
+                        it.putExtra(PdfReaderActivity.EXTRA_FILE_PATH, path);
+                        startActivity(it);
+                    } else {
+                        // Defensive fallback for any other saved type: open in the
+                        // document viewer without autostart (the earlier branches
+                        // already cover text, Markdown, EPUB, Word/HWP, and PDF).
+                        Intent it = new Intent(this, DocumentPageActivity.class);
+                        it.putExtra(DocumentPageActivity.EXTRA_FILE_PATH, path);
+                        startActivity(it);
+                    }
                 },
                 () -> prefs.clearTtsLastPlaybackState());
     }

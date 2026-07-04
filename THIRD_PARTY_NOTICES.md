@@ -2,11 +2,11 @@
 
 Readwide first-party source code is licensed under the Apache License 2.0. Keep this file with source releases and with binary release materials such as APK/AAB release assets.
 
-This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.10 build. It does not replace a fully resolved transitive dependency report.
+This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.11 build. It does not replace a fully resolved transitive dependency report.
 
 ## Default build boundary
 
-The default Readwide 1.0.10 package is the FOSS-oriented public line:
+The default Readwide 1.0.11 package is the FOSS-oriented public line:
 
 - first-party source: Apache-2.0;
 - no Junrar or RARLAB UnRAR-license code bundled;
@@ -16,7 +16,7 @@ The default Readwide 1.0.10 package is the FOSS-oriented public line:
 - no Hancom proprietary SDK, LibreOffice bundle, or server conversion service;
 - no ads, analytics, telemetry SDK, account system, or network update checker in the default app.
 
-See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_9.md`, and `docs/SBOM_READWIDE_1_0_9.spdx.json`.
+See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_11.md`, and `docs/SBOM_READWIDE_1_0_11.spdx.json`.
 
 ## Runtime dependencies
 
@@ -47,6 +47,7 @@ License: Apache License 2.0.
 - Artifact: `org.apache.commons:commons-compress:1.28.0`
 - Purpose: TAR/7z/stream archive support and selected ZIP method fallback.
 - License: Apache License 2.0.
+- Vendored modified source: `app/src/main/java/com/readwide/manager/archive/AlzBzip2InputStream.java` is a modified copy of this artifact's `BZip2CompressorInputStream` (which credits Keiron Liddle, Aftex Software), adapted for the trimmed bzip2 bitstream variant used inside ALZip `.alz` archives. The Apache-2.0 header and a change summary are kept in the file, satisfying the license's modification-notice requirement. The bitstream facts follow the zlib-licensed `unalz` 0.65 reference decoder by kippler@gmail.com (`http://www.kipple.pe.kr`); no `unalz` code is included.
 
 ### libarchive-android
 
@@ -54,6 +55,7 @@ License: Apache License 2.0.
 - Project: `https://github.com/zhanghai/libarchive-android`
 - Purpose: Android libarchive Java/JNI backend used for RAR and other backend-dependent archive paths.
 - License position: Android library artifact under Apache License 2.0; bundled native libarchive under permissive BSD-style upstream notices.
+- 7z method note: 7z BCJ2 and PPMd entries (which neither Commons Compress nor a decryption-less libarchive can handle for AES-encrypted archives) are decoded by first-party Java in `SevenZBcj2ArchiveReader`/`SevenZBcj2Decoder`/`SevenZAesDecoder`/`SevenZPpmd7Decoder` (see `docs/SEVENZ_BCJ2_READER_READWIDE_1_0_11.md` and `docs/SEVENZ_PPMD_READER_READWIDE_1_0_11.md`). `SevenZPpmd7Decoder` is a Java port of the public-domain Ppmd7 reference - Dmitry Shkarin's PPMd var.H (2001, public domain) as maintained in Igor Pavlov's Ppmd7 codec (public domain) - obtained from pyppmd's source distribution; public-domain code carries no license obligations and is Apache-2.0 compatible. The bundled native libarchive also decodes unencrypted 7z PPMd as a fallback, via the same public-domain `Ppmd7.c` carried under libarchive's own BSD-style licensing. No code under the 7-Zip, UnRAR, or libarchive licenses is copied into the Readwide repository; test fixtures for these methods are self-made with p7zip from first-party content.
 - Binary-release requirement: keep libarchive-android/libarchive notices available with binary release materials.
 
 ### XZ for Java
@@ -158,5 +160,5 @@ The Gradle packaging block may exclude duplicate dependency `META-INF/LICENSE*` 
 - `LICENSE`
 - `NOTICE`
 - `THIRD_PARTY_NOTICES.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_9.md`
-- `docs/SBOM_READWIDE_1_0_9.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_11.md`
+- `docs/SBOM_READWIDE_1_0_11.spdx.json`

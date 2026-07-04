@@ -561,6 +561,12 @@ Aturan: %2$d aturan aktif</string>
     <string name="tts_voice_offline">offline</string>
     <string name="tts_speed">Kecepatan</string>
     <string name="tts_pitch">Nada</string>
+    <string name="tts_phrase_length_short">Panjang frasa: Pendek</string>
+    <string name="tts_phrase_length_medium">Panjang frasa: Sedang</string>
+    <string name="tts_phrase_length_long">Panjang frasa: Panjang</string>
+    <string name="tts_pause_reduction_off">Pengurangan jeda: Mati</string>
+    <string name="tts_pause_reduction_medium">Pengurangan jeda: Sedang</string>
+    <string name="tts_pause_reduction_aggressive">Pengurangan jeda: Agresif</string>
     <string name="tts_android_settings">Pengaturan TTS Android</string>
     <string name="tts_add_voice_model">Tambah/unduh model suara</string>
     <string name="tts_settings_unavailable">Tidak dapat membuka pengaturan TTS Android.</string>

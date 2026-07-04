@@ -1,0 +1,6 @@
+Readwide 1.0.11
+- Added basic legacy Word (.doc) formatting and improved HWP spacing.
+- Expanded read-aloud to PDF, EPUB, Word, HWP/HWPX, and Markdown.
+- Improved archive support for 7z PPMd/BCJ2, RAR5 header encryption, ALZ/EGG split/encrypted cases, and .zst/.lz4.
+- Faster image preview in split archives.
+- Fixed recent-list swipe sensitivity and several document rendering edge cases.

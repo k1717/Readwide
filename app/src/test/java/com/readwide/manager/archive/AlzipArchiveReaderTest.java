@@ -116,6 +116,113 @@ public class AlzipArchiveReaderTest {
         assertEquals("stored payload", new String(Files.readAllBytes(out.toPath()), StandardCharsets.UTF_8));
     }
 
+    /**
+     * ALZ bzip2 bitstream fixtures. ALZip 4.x writes a trimmed bzip2 variant
+     * (no "BZh"/block magics, no per-block CRC or randomised bit; block
+     * framing is 'D','L','Z',0x01 and end-of-stream is 'D','L','Z',0x02).
+     * These payloads were produced by bit-exact transformation of standard
+     * bzip2 output into that variant and validated byte-identical against the
+     * zlib-licensed unalz 0.65 reference decoder before being embedded here.
+     * The single-block stream compresses {@link #alzBzipSingleBlockPlain()};
+     * the second stream carries three bzip2 blocks (level-1 100k blocks) of
+     * {@link #alzBzipMultiBlockPlain()}.
+     */
+    private static final String ALZ_BZ_SINGLE_BLOCK_B64 =
+            "RExaAQABPz8AgAIgAEAIACB9W5BgQAEgUDTQyMmIFKpGhpk0PSaZCaidxNxOwmwmBPAmgnkTAmYmYToJsJ9EwJwJyJgTgTkT"
+            + "8JyJoEyE2CaiZif0RMWgIA==";
+    private static final String ALZ_BZ_MULTI_BLOCK_B64 =
+            "RExaAQAEfT8Af/////////////8AgAUwAAA5hNAaA0aMI0GI0xMmJoMI0DIBkwOYTQGgNGjCNBiNMTJiaDCNAyAZMBNVVRiZ"
+            + "NMjEMmI0aMQDE0aGBAyDRpkZNDmE0BoDRowjQYjTEyYmgwjQMgGTDoQKsrpwFWBAVYMBVhQFXUgKsOAqxICrqwFWLAVdaAqx"
+            + "oCrHgKuvAVdiAqyICrJgKsqAqyUCrsoFXaQKu2gVZaBVmIFXcQKs1AqzkCrPQKu6gVd5Aq0ECrvoFXgQKtFAq8KBV4kCrSQK"
+            + "tNAq1ECrxoFXkQKvKgVeZAq86BV6ECr0oFWqgVayBVroFXqQKthAq9aBV7ECrZQKvagVe5Aq96BVtIFW2gVbiBVuoFW8gVb6"
+            + "BV8ECr4oFXyQKvmgVfRAq4ECrhQKvqgVfZAq+6BV+ECriQKvygVfpAq40Cr9oFXIgVcqBV/ECr+oFXMgVc6BV/kCroQKv+iJ"
+            + "i0AgCqjn4A//////////////4BAApgAABzCaA0Bo0YRoMRpiZMTQYRoGQDJgcwmgNAaNGEaDEaYmTE0GEaBkAyYCaqqjEyaZ"
+            + "GIZMRo0ZAGJo0MCBkGmmIyaHMJoDQGjRhGgxGmJkxNBhGgZAMmHQgVdJAq6aBVgIFWCgVYSBV1ECrDQKsRAq6qBVioFXWQKs"
+            + "ZAqx0CrroFXYQKshAqyUCrKQKtLtQFXbgKsuAqzICruQFWbAVZ0BVnwFXdgKu9AVaEBV34CrwQFWjAVeGAq8UBVpQFWSgVaa"
+            + "BV40CryIFXlQKvMgVedAq9CBV6UCr1IFWogVaqBVrIFXrQKtdAq9iBV7UCrYQKvcgVe9Aq+CBVsoFW0gVbaBVuIFW6gVbyBV"
+            + "8UCr5IFXzQKvogVfVAq30CrgQKvsgVfdAq/CBV+UCrhQKv0gVcSBV+0CrjQKuRAq5UCr+IFX9QKuZAq50Cr/IFXQgVf9ETFo"
+            + "BAGO6PwB//////////////wCABLgAAHMJoDQGjRhGgxGmJkxNBhGgZAMmBzCaA0Bo0YRoMRpiZMTQYRoGQDJgcwmgNAaNGEa"
+            + "DEaYmTE0GEaBkAyYBSqqGTRpkMhkxGjTCZGmJo0MCBpkGQMmnQik6SKTpopOoikwEUmCik6qKTCRSdZFJ10UmGik7CKTERSY"
+            + "qKTsopO0ik7aKTGRSY6KTuIpO6ik7yKTIRSZKKTvopMpFJlopMxFJ4EUnhRSZqKTxIpPGikzkUnkRSZ6KTQRSaulRSeWik06"
+            + "KTUopPNRSeeik1aKTCRSehFJrIpNdFJsIpPSik2UUnqRSetFJtIpPYik9qKT3IpNtFJuIpN1FJvIpN9FJwIpPeik+CKT4opP"
+            + "kik+aKThRSfRFJxIpONFJ9UUn2RSfdFJ+EUnIik5UUn5RSfpFJ+0Un8RSf1FJzIpOdFJ/kUnQik/6ImLQEA=";
+
+    private static byte[] alzBzipSingleBlockPlain() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 40; i++) sb.append("ALZ bzip2 single block payload. ");
+        return sb.toString().getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] alzBzipMultiBlockPlain() {
+        byte[] pattern = new byte[87];
+        for (int i = 0; i < pattern.length; i++) pattern[i] = (byte) (33 + i);
+        byte[] data = new byte[260000];
+        for (int i = 0; i < data.length; i++) data[i] = pattern[i % pattern.length];
+        return data;
+    }
+
+    @Test
+    public void extractSingleEntry_alzBzip2SingleBlock_decodesVariantStream() throws Exception {
+        byte[] plain = alzBzipSingleBlockPlain();
+        byte[] stored = java.util.Base64.getDecoder().decode(ALZ_BZ_SINGLE_BLOCK_B64);
+        File archive = buildAlzArchiveWithStoredPayload("page-bz.txt", plain, 1, stored);
+        File out = tempFolder.newFile("alz-bzip2-single.txt");
+
+        assertTrue(ArchiveSupport.extractSingleEntry(archive, "page-bz.txt", out, null));
+
+        assertTrue(java.util.Arrays.equals(plain, Files.readAllBytes(out.toPath())));
+    }
+
+    @Test
+    public void extractSingleEntry_alzBzip2MultiBlock_decodesAllBlocks() throws Exception {
+        byte[] plain = alzBzipMultiBlockPlain();
+        byte[] stored = java.util.Base64.getDecoder().decode(ALZ_BZ_MULTI_BLOCK_B64);
+        File archive = buildAlzArchiveWithStoredPayload("multi.bin", plain, 1, stored);
+        File out = tempFolder.newFile("alz-bzip2-multi.bin");
+
+        assertTrue(ArchiveSupport.extractSingleEntry(archive, "multi.bin", out, null));
+
+        assertTrue(java.util.Arrays.equals(plain, Files.readAllBytes(out.toPath())));
+    }
+
+    @Test
+    public void extractSingleEntry_alzBzip2CorruptedStream_failsCleanly() throws Exception {
+        byte[] plain = alzBzipSingleBlockPlain();
+        byte[] stored = java.util.Base64.getDecoder().decode(ALZ_BZ_SINGLE_BLOCK_B64);
+        stored[stored.length / 2] ^= 0x5a; // corrupt mid-stream
+        File archive = buildAlzArchiveWithStoredPayload("page-bz.txt", plain, 1, stored);
+        File out = new File(tempFolder.getRoot(), "alz-bzip2-corrupt.txt");
+
+        // ArchiveSupport.extractSingleEntry reports failure via its return
+        // value rather than an exception; if the corrupted stream happens to
+        // decode structurally, the container CRC check must still reject it.
+        assertFalse(ArchiveSupport.extractSingleEntry(archive, "page-bz.txt", out, null));
+    }
+
+    /**
+     * Plain bzip2 flavor of ALZ method 1 (some real ALZip files carry a
+     * standard {@code BZh} stream; see docs/ALZ_FORMAT_NOTES.md). The payload
+     * is {@code "ALZ standard bzip2 payload. "} repeated 40 times, compressed
+     * with standard bzip2 level 9.
+     */
+    private static final String ALZ_BZ_STANDARD_B64 =
+            "QlpoOTFBWSZTWWPOxC0AAIufgEABEAAgBAAQNCXcMCAAkCmTEyDIwKVQj0gaabU0E8CbCYE1E4E7iYE3E4E/CYEwJgTkT2Jy"
+            + "JkTImwnQnQm4mwmgmRNRMifxdyRThQkGPOxC0A==";
+
+    @Test
+    public void extractSingleEntry_alzBzip2StandardFlavor_stillDecodes() throws Exception {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 40; i++) sb.append("ALZ standard bzip2 payload. ");
+        byte[] plain = sb.toString().getBytes(StandardCharsets.US_ASCII);
+        byte[] stored = java.util.Base64.getDecoder().decode(ALZ_BZ_STANDARD_B64);
+        File archive = buildAlzArchiveWithStoredPayload("page-std.txt", plain, 1, stored);
+        File out = tempFolder.newFile("alz-bzip2-standard.txt");
+
+        assertTrue(ArchiveSupport.extractSingleEntry(archive, "page-std.txt", out, null));
+
+        assertTrue(java.util.Arrays.equals(plain, Files.readAllBytes(out.toPath())));
+    }
+
     @Test
     public void extractSingleEntry_alzEncryptedStoredArchive_requiresAndUsesPassword() throws Exception {
         byte[] payload = "encrypted stored payload".getBytes(StandardCharsets.UTF_8);
@@ -137,6 +244,73 @@ public class AlzipArchiveReaderTest {
         assertTrue(ArchiveSupport.extractSingleEntry(archive, "page001.txt", out, "pw".toCharArray()));
 
         assertEquals("encrypted deflate payload", new String(Files.readAllBytes(out.toPath()), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void alzSplit_twoSegments_extractsAcrossBoundary() throws Exception {
+        byte[] payload = new byte[4096];
+        for (int i = 0; i < payload.length; i++) payload[i] = (byte) ('a' + (i % 23));
+        writeSplitAlzFixture("splitfx", "data.txt", payload);
+        File first = new File(tempFolder.getRoot(), "splitfx.alz");
+        File out = tempFolder.newFile("split-out.txt");
+
+        assertTrue(ArchiveSupport.extractSingleEntry(first, "data.txt", out, null));
+
+        byte[] extracted = Files.readAllBytes(out.toPath());
+        assertEquals(payload.length, extracted.length);
+        assertTrue(java.util.Arrays.equals(payload, extracted));
+    }
+
+    @Test
+    public void alzSplit_openedFromContinuationSegment_resolvesFirstPart() throws Exception {
+        byte[] payload = new byte[2048];
+        for (int i = 0; i < payload.length; i++) payload[i] = (byte) ('A' + (i % 19));
+        writeSplitAlzFixture("splitcont", "data.txt", payload);
+        File continuation = new File(tempFolder.getRoot(), "splitcont.a00");
+        File out = tempFolder.newFile("split-cont-out.txt");
+
+        assertTrue(ArchiveSupport.extractSingleEntry(continuation, "data.txt", out, null));
+
+        assertTrue(java.util.Arrays.equals(payload, Files.readAllBytes(out.toPath())));
+    }
+
+    @Test
+    public void alzSplit_missingSegment_failsWithoutPartialOutput() throws Exception {
+        byte[] payload = new byte[2048];
+        for (int i = 0; i < payload.length; i++) payload[i] = (byte) ('0' + (i % 10));
+        writeSplitAlzFixture("splitmiss", "data.txt", payload);
+        File first = new File(tempFolder.getRoot(), "splitmiss.alz");
+        File a00 = new File(tempFolder.getRoot(), "splitmiss.a00");
+        File a01 = new File(tempFolder.getRoot(), "splitmiss.a01");
+        assertTrue(a00.renameTo(a01)); // leaves a gap at .a00
+        File out = new File(tempFolder.getRoot(), "split-missing-out.txt");
+
+        ArchiveSupport.ExtractionResult result = ArchiveSupport.extractSingleEntryDetailed(
+                first, "data.txt", out, null);
+
+        assertFalse(result.success);
+        assertFalse(out.exists());
+    }
+
+    @Test
+    public void listEntries_alzDirectoryEntryWithZeroSizeNibble_isTolerated() throws Exception {
+        byte[] payload = "hello alz".getBytes(StandardCharsets.UTF_8);
+        File archive = buildAlzArchiveWithDirectoryEntry("docs", "docs/readme.txt", payload);
+
+        List<ArchiveSupport.EntryInfo> entries = ArchiveSupport.listEntries(archive, null);
+
+        boolean sawDirectory = false;
+        boolean sawFile = false;
+        for (ArchiveSupport.EntryInfo entry : entries) {
+            if (entry.directory && entry.path.startsWith("docs")) sawDirectory = true;
+            if (!entry.directory && entry.path.equals("docs/readme.txt")) sawFile = true;
+        }
+        assertTrue(sawDirectory);
+        assertTrue(sawFile);
+
+        File out = tempFolder.newFile("dir-entry-out.txt");
+        assertTrue(ArchiveSupport.extractSingleEntry(archive, "docs/readme.txt", out, null));
+        assertEquals("hello alz", new String(Files.readAllBytes(out.toPath()), StandardCharsets.UTF_8));
     }
 
     @Test
@@ -191,6 +365,36 @@ public class AlzipArchiveReaderTest {
         return buildAlzArchiveWithNameBytes(entryName.getBytes(StandardCharsets.UTF_8), plainPayload, method, encrypted, password);
     }
 
+    /** Builds a one-entry ALZ archive around an already-encoded payload. */
+    private File buildAlzArchiveWithStoredPayload(String entryName,
+                                                  byte[] plainPayload,
+                                                  int method,
+                                                  byte[] storedPayload) throws Exception {
+        File archive = tempFolder.newFile("fixture-" + System.nanoTime() + ".alz");
+        byte[] name = entryName.getBytes(StandardCharsets.UTF_8);
+        CRC32 crc = new CRC32();
+        crc.update(plainPayload);
+        try (FileOutputStream out = new FileOutputStream(archive)) {
+            writeIntLE(out, 0x015a4c41);
+            writeIntLE(out, 0);
+            writeIntLE(out, 0x015a4c42);
+            writeShortLE(out, name.length);
+            out.write(0x20);
+            writeIntLE(out, 0);
+            out.write(0x40);
+            out.write(0);
+            out.write(method);
+            out.write(0);
+            writeIntLE(out, (int) crc.getValue());
+            writeIntLE(out, storedPayload.length);
+            writeIntLE(out, plainPayload.length);
+            out.write(name);
+            out.write(storedPayload);
+            writeIntLE(out, 0x025a4c43);
+        }
+        return archive;
+    }
+
     private File buildAlzArchiveWithNameBytes(byte[] name,
                                              byte[] plainPayload,
                                              int method,
@@ -227,6 +431,114 @@ public class AlzipArchiveReaderTest {
             writeIntLE(out, 0x025a4c43);
         }
         return archive;
+    }
+
+    /**
+     * Writes a two-segment split fixture with real ALZ split framing: the
+     * logical stream (header + one deflate entry) is cut mid-data; the first
+     * segment gets a CLZ trailer ending in CLZ\3 (more segments follow), the
+     * continuation gets an 8-byte ALZ segment header and a CLZ\2 trailer.
+     */
+    private void writeSplitAlzFixture(String baseName, String entryName, byte[] plainPayload) throws Exception {
+        byte[] stored = rawDeflate(plainPayload);
+        CRC32 crc = new CRC32();
+        crc.update(plainPayload);
+        byte[] name = entryName.getBytes(StandardCharsets.UTF_8);
+
+        ByteArrayOutputStream logical = new ByteArrayOutputStream();
+        writeIntLE(logical, 0x015a4c41);
+        writeShortLE(logical, 0x000a); // version
+        writeShortLE(logical, 0x0000); // segment id of first part
+        writeIntLE(logical, 0x015a4c42);
+        writeShortLE(logical, name.length);
+        logical.write(0x20);
+        writeIntLE(logical, 0);
+        logical.write(0x40); // 4-byte sizes, not encrypted
+        logical.write(0);
+        logical.write(2); // deflate
+        logical.write(0);
+        writeIntLE(logical, (int) crc.getValue());
+        writeIntLE(logical, stored.length);
+        writeIntLE(logical, plainPayload.length);
+        logical.write(name);
+        logical.write(stored);
+        byte[] bytes = logical.toByteArray();
+
+        int cut = bytes.length - stored.length / 2; // mid-data
+        ByteArrayOutputStream seg1 = new ByteArrayOutputStream();
+        seg1.write(bytes, 0, cut);
+        writeSegmentTrailer(seg1, 0x035a4c43); // CLZ\3: more segments follow
+        ByteArrayOutputStream seg2 = new ByteArrayOutputStream();
+        writeIntLE(seg2, 0x015a4c41);
+        writeShortLE(seg2, 0x000a); // version
+        writeShortLE(seg2, 0x0001); // segment id
+        seg2.write(bytes, cut, bytes.length - cut);
+        writeSegmentTrailer(seg2, 0x025a4c43); // CLZ\2: final segment
+
+        writeBytes(new File(tempFolder.getRoot(), baseName + ".alz"), seg1.toByteArray());
+        writeBytes(new File(tempFolder.getRoot(), baseName + ".a00"), seg2.toByteArray());
+    }
+
+    private void writeSegmentTrailer(ByteArrayOutputStream out, int endSignature) throws Exception {
+        writeIntLE(out, 0x015a4c43); // CLZ\1
+        writeIntLE(out, 0);
+        writeIntLE(out, 0);
+        writeIntLE(out, endSignature);
+    }
+
+    /** One zero-size-nibble directory entry (no method/CRC/size fields) followed by a stored file. */
+    private File buildAlzArchiveWithDirectoryEntry(String dirName, String fileName, byte[] plainPayload) throws Exception {
+        CRC32 crc = new CRC32();
+        crc.update(plainPayload);
+        byte[] dirBytes = dirName.getBytes(StandardCharsets.UTF_8);
+        byte[] fileBytes = fileName.getBytes(StandardCharsets.UTF_8);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeIntLE(out, 0x015a4c41);
+        writeIntLE(out, 0);
+        writeIntLE(out, 0x015a4c42);
+        writeShortLE(out, dirBytes.length);
+        out.write(0x10); // directory attribute
+        writeIntLE(out, 0);
+        out.write(0x00); // zero size nibble: method/CRC/sizes omitted
+        out.write(0);
+        out.write(dirBytes);
+        writeIntLE(out, 0x015a4c42);
+        writeShortLE(out, fileBytes.length);
+        out.write(0x20);
+        writeIntLE(out, 0);
+        out.write(0x40);
+        out.write(0);
+        out.write(0); // stored
+        out.write(0);
+        writeIntLE(out, (int) crc.getValue());
+        writeIntLE(out, plainPayload.length);
+        writeIntLE(out, plainPayload.length);
+        out.write(fileBytes);
+        out.write(plainPayload);
+        writeIntLE(out, 0x025a4c43);
+
+        File archive = tempFolder.newFile("fixture-direntry.alz");
+        writeBytes(archive, out.toByteArray());
+        return archive;
+    }
+
+    private void writeBytes(File target, byte[] bytes) throws Exception {
+        try (FileOutputStream out = new FileOutputStream(target)) {
+            out.write(bytes);
+        }
+    }
+
+    private void writeIntLE(ByteArrayOutputStream out, int value) {
+        out.write(value & 0xff);
+        out.write((value >>> 8) & 0xff);
+        out.write((value >>> 16) & 0xff);
+        out.write((value >>> 24) & 0xff);
+    }
+
+    private void writeShortLE(ByteArrayOutputStream out, int value) {
+        out.write(value & 0xff);
+        out.write((value >>> 8) & 0xff);
     }
 
     private byte[] rawDeflate(byte[] payload) throws Exception {

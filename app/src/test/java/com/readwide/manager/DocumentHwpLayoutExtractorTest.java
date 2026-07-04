@@ -320,6 +320,103 @@ public class DocumentHwpLayoutExtractorTest {
         assertTrue("non-black color missing, html=" + html, html.contains("color:#"));
     }
 
+    @Test
+    public void base64EncodeMatchesJdkEncoder() {
+        java.util.Random random = new java.util.Random(42);
+        for (int len = 0; len <= 64; len++) {
+            byte[] data = new byte[len];
+            random.nextBytes(data);
+            assertEquals("length " + len,
+                    java.util.Base64.getEncoder().encodeToString(data),
+                    DocumentHwpLayoutExtractor.base64Encode(data));
+        }
+    }
+
+    @Test
+    public void extractsHwpxEmbeddedImageAsDataUri() throws Exception {
+        // Minimal valid 1x1 PNG.
+        byte[] png = java.util.Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC");
+        File hwpx = File.createTempFile("readwide-hwpx-image", ".hwpx");
+        hwpx.deleteOnExit();
+        try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(hwpx))) {
+            put(out, "Contents/content.hpf",
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+                    "<opf:package xmlns:opf=\"http://www.idpf.org/2007/opf/\">" +
+                    "<opf:manifest><opf:item id=\"picref\" href=\"BinData/photo.png\" media-type=\"image/png\"/>" +
+                    "</opf:manifest></opf:package>");
+            out.putNextEntry(new ZipEntry("BinData/photo.png"));
+            out.write(png);
+            out.closeEntry();
+            put(out, "Contents/section0.xml",
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+                    "<root xmlns:hp=\"http://www.hancom.co.kr/hwpml/2011/paragraph\"" +
+                    " xmlns:hc=\"http://www.hancom.co.kr/hwpml/2011/core\">" +
+                    "<hp:p><hp:run><hp:t>Before image</hp:t>" +
+                    "<hp:pic><hp:curSz width=\"20000\" height=\"10000\"/>" +
+                    "<hc:img binaryItemIDRef=\"picref\"/></hp:pic>" +
+                    "</hp:run></hp:p>" +
+                    "</root>");
+        }
+
+        RenderedDocument document = DocumentHwpLayoutExtractor.extract(hwpx, "fixture.hwpx", 30, 4800);
+        assertEquals("hwpx", document.sourceFormat);
+        assertTrue(document.plainText.contains("Before image"));
+
+        String html = FixedHtmlRenderer.render(document);
+        assertTrue("data URI image missing, html=" + html.substring(0, Math.min(400, html.length())),
+                html.contains("data:image/png;base64,"));
+        // 20000/10000 HWPUNIT -> 200pt x 100pt.
+        assertTrue("image width missing", html.contains("width:200pt"));
+        assertTrue("image height missing", html.contains("height:100pt"));
+    }
+
+    @Test
+    public void hwpxEmfImageRendersPlaceholderInsteadOfVanishing() throws Exception {
+        // An EMF byte stream (ENHMETA magic " EMF" at offset 40, record type 1)
+        // is a real embedded picture with no WebView-decodable raster form. It
+        // must render as a placeholder frame at the authored size, not silently
+        // disappear.
+        byte[] emf = new byte[128];
+        emf[0] = 0x01;                 // EMR_HEADER record type (LE)
+        emf[40] = 0x20; emf[41] = 0x45; // " E"
+        emf[42] = 0x4D; emf[43] = 0x46; // "MF"  -> " EMF" signature
+        File hwpx = File.createTempFile("readwide-hwpx-emf", ".hwpx");
+        hwpx.deleteOnExit();
+        try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(hwpx))) {
+            put(out, "Contents/content.hpf",
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+                    "<opf:package xmlns:opf=\"http://www.idpf.org/2007/opf/\">" +
+                    "<opf:manifest><opf:item id=\"emfref\" href=\"BinData/diagram.emf\" media-type=\"application/octet-stream\"/>" +
+                    "</opf:manifest></opf:package>");
+            out.putNextEntry(new ZipEntry("BinData/diagram.emf"));
+            out.write(emf);
+            out.closeEntry();
+            put(out, "Contents/section0.xml",
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+                    "<root xmlns:hp=\"http://www.hancom.co.kr/hwpml/2011/paragraph\"" +
+                    " xmlns:hc=\"http://www.hancom.co.kr/hwpml/2011/core\">" +
+                    "<hp:p><hp:run><hp:t>Diagram below</hp:t>" +
+                    "<hp:pic><hp:curSz width=\"18000\" height=\"12000\"/>" +
+                    "<hc:img binaryItemIDRef=\"emfref\"/></hp:pic>" +
+                    "</hp:run></hp:p>" +
+                    "</root>");
+        }
+
+        RenderedDocument document = DocumentHwpLayoutExtractor.extract(hwpx, "fixture.hwpx", 30, 4800);
+        assertEquals("hwpx", document.sourceFormat);
+        assertTrue(document.plainText.contains("Diagram below"));
+
+        String html = FixedHtmlRenderer.render(document);
+        assertTrue("placeholder frame missing, html=" + html.substring(0, Math.min(500, html.length())),
+                html.contains("rw-image-missing"));
+        // The unrenderable binary must not have leaked in as a data URI.
+        assertTrue("EMF should not become a raster data URI", !html.contains("data:image"));
+        // 18000/12000 HWPUNIT -> 180pt x 120pt authored size on the placeholder.
+        assertTrue("placeholder width missing", html.contains("width:180pt"));
+        assertTrue("placeholder height missing", html.contains("height:120pt"));
+    }
+
     private static void put(ZipOutputStream out, String name, String text) throws Exception {
         out.putNextEntry(new ZipEntry(name));
         out.write(text.getBytes(StandardCharsets.UTF_8));

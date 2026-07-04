@@ -218,6 +218,14 @@
                         android:drawableTop="@drawable/ic_bottom_bookmark"
                         android:text="@string/bookmark" />
                     <TextView
+                        android:id="@+id/btn_document_tts"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:visibility="gone"
+                        android:drawableTop="@drawable/ic_bottom_tts"
+                        android:text="@string/tts_toolbar" />
+                    <TextView
                         android:id="@+id/btn_screen_rotation"
                         style="@style/ReaderBottomButton"
                         android:layout_width="62dp"

@@ -75,7 +75,7 @@ import org.json.JSONObject;
  * instead of extracting plain text into the text reader. Bookmarks and recent-file
  * state store the current page index in ReaderState.charPosition / Bookmark.charPosition.
  */
-public class PdfReaderActivity extends AppCompatActivity {
+public class PdfReaderActivity extends AppCompatActivity implements TtsHost, ReaderDialogStyleHost {
 
     private static final long BACKGROUND_MEMORY_TRIM_DELAY_MS = 420_000L;
 
@@ -1226,6 +1226,11 @@ public class PdfReaderActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        // If read-aloud is running (or paused) in this viewer, reclaim the
+        // remote-command bridge so notification buttons land here.
+        if (pdfTtsController != null && pdfTtsController.isActive()) {
+            TtsPlaybackBridge.register(this);
+        }
         startup().onResume();
     }
 
@@ -1362,7 +1367,8 @@ public class PdfReaderActivity extends AppCompatActivity {
         updateLoadingIndicatorTheme();
 
         TextView[] buttons = {prevButton, nextButton, slideModeButton, pageButton, bookmarkButton,
-                findViewById(R.id.pdf_find), findViewById(R.id.pdf_screen_rotation),
+                findViewById(R.id.pdf_find), findViewById(R.id.pdf_tts),
+                findViewById(R.id.pdf_screen_rotation),
                 findViewById(R.id.pdf_settings), zoomMoreButton};
         for (TextView b : buttons) {
             if (b == null) continue;
@@ -1403,7 +1409,26 @@ public class PdfReaderActivity extends AppCompatActivity {
         if (pdfFindButton != null) {
             pdfFindButton.setOnClickListener(v -> showPdfSearchDialog());
         }
+        View pdfTtsButton = findViewById(R.id.pdf_tts);
+        if (pdfTtsButton != null) {
+            // Same entry point as the More-dialog read-aloud row; the direct
+            // toolbar button mirrors the text reader and document viewer, sitting
+            // immediately right of the bookmark button.
+            pdfTtsButton.setOnClickListener(v -> showPdfTtsDialog());
+        }
+        updatePdfTtsButtonVisibility();
         setupPdfPageSeekBar();
+    }
+
+    /**
+     * Shows the bottom-toolbar read-aloud button once the PDF is loaded and has
+     * pages (so it never appears for a not-yet-ready or page-less document).
+     * Mirrors the document viewer's {@code updateDocumentTtsButtonVisibility}.
+     */
+    void updatePdfTtsButtonVisibility() {
+        View button = findViewById(R.id.pdf_tts);
+        if (button == null) return;
+        button.setVisibility(pdfSupportsTts() ? View.VISIBLE : View.GONE);
     }
 
     private void updateRotationButtonIcon() {
@@ -1692,6 +1717,12 @@ public class PdfReaderActivity extends AppCompatActivity {
         addDialogAction(box, getString(R.string.zoom_out), () -> setZoomSmooth(Math.max(0.55f, zoom - 0.2f)));
         addDialogAction(box, getString(R.string.zoom_in), () -> setZoomSmooth(Math.min(4.5f, zoom + 0.2f)));
         addDialogAction(box, getString(R.string.reset_zoom), this::resetZoomToOriginal);
+        if (pdfSupportsTts()) {
+            addDialogAction(box, getString(R.string.tts_title), () -> {
+                if (dialogRef[0] != null) dialogRef[0].dismiss();
+                showPdfTtsDialog();
+            });
+        }
         addDialogAction(box, getString(R.string.settings), () -> {
             if (dialogRef[0] != null) dialogRef[0].dismiss();
             startActivity(new android.content.Intent(this, SettingsActivity.class));
@@ -3117,6 +3148,7 @@ public class PdfReaderActivity extends AppCompatActivity {
     }
 
     void updatePageStatus() {
+        updatePdfTtsButtonVisibility();
         if (pageStatus == null && pdfTopPageStatus == null) return;
         if (pageCount <= 0) {
             if (pageStatus != null) pageStatus.setText("");
@@ -3491,6 +3523,250 @@ public class PdfReaderActivity extends AppCompatActivity {
         return zoom > 1.05f;
     }
 
+    // ---- Read-aloud (TTS) for the PDF reader ------------------------------
+    //
+    // PdfRenderer has no text layer, so text comes from PdfBox via
+    // PdfTtsTextSource (a page-indexed plain-text buffer, extracted once off the
+    // main thread on first use). The playback controller is the same
+    // ReaderTtsController the text reader and document viewer use; this activity
+    // is its TtsHost. Continuous playback follows pages through goToPage; there
+    // is no glyph highlight in v1. Scanned/image-only PDFs extract no text and
+    // get a clear message instead of silent playback.
+
+    private ReaderTtsController pdfTtsController;
+    private PdfTtsTextSource pdfTtsTextSource;
+    private boolean pdfTtsTextBuilding = false;
+    private ReaderDialogStyleController pdfDialogStyleController;
+    private int pdfDialogSnapshotBg = Color.rgb(18, 18, 18);
+    private int pdfDialogSnapshotFg = Color.rgb(232, 234, 237);
+
+    private ReaderTtsController pdfTts() {
+        if (pdfTtsController == null) {
+            pdfTtsController = new ReaderTtsController(this);
+        }
+        return pdfTtsController;
+    }
+
+    boolean pdfSupportsTts() {
+        return localFile != null && pageCount > 0;
+    }
+
+    /**
+     * Entry point (toolbar/menu). Extracts the PDF text off the main thread on
+     * first use, then opens the standard read-aloud dialog. If the PDF has no
+     * extractable text (scanned/image-only), says so and does not start.
+     */
+    void showPdfTtsDialog() {
+        if (!pdfSupportsTts()) return;
+        TtsPlaybackBridge.register(this);
+        if (pdfTtsTextSource != null) {
+            if (!pdfTtsTextSource.hasAnyText()) {
+                ShortToast.show(this, localizedTts(
+                        "This PDF has no selectable text to read aloud (it looks scanned).",
+                        "이 PDF에는 읽어줄 수 있는 텍스트가 없습니다(스캔 문서로 보입니다)."));
+                return;
+            }
+            pdfTts().showDialog();
+            return;
+        }
+        if (pdfTtsTextBuilding) {
+            ShortToast.show(this, localizedTts("Preparing read-aloud\u2026", "읽어주기 준비 중\u2026"));
+            return;
+        }
+        pdfTtsTextBuilding = true;
+        final File file = localFile;
+        final int count = pageCount;
+        final int generation = renderGeneration;
+        executor.execute(() -> {
+            PdfTtsTextSource built = PdfTtsTextSource.build(this, file, count);
+            handler.post(() -> {
+                if (activityDestroyed) return;
+                pdfTtsTextBuilding = false;
+                if (generation != renderGeneration) {
+                    // A different document loaded while we were extracting.
+                    return;
+                }
+                pdfTtsTextSource = built;
+                if (!built.hasAnyText()) {
+                    ShortToast.show(this, localizedTts(
+                            "This PDF has no selectable text to read aloud (it looks scanned).",
+                            "이 PDF에는 읽어줄 수 있는 텍스트가 없습니다(스캔 문서로 보입니다)."));
+                    return;
+                }
+                pdfTts().showDialog();
+            });
+        });
+    }
+
+    private String localizedTts(String english, String korean) {
+        return isKoreanUi() ? korean : english;
+    }
+
+    // ---- TtsHost ----------------------------------------------------------
+
+    @Override
+    @NonNull
+    public AppCompatActivity ttsHostActivity() {
+        return this;
+    }
+
+    @Override
+    public PrefsManager ttsHostPrefs() {
+        return prefs;
+    }
+
+    @Override
+    @NonNull
+    public ReaderDialogStyleController ttsHostDialogStyler() {
+        if (pdfDialogStyleController == null) {
+            pdfDialogStyleController = new ReaderDialogStyleController(this);
+        }
+        return pdfDialogStyleController;
+    }
+
+    @Override
+    public int ttsHostDpToPx(int dp) {
+        return dpToPx(dp);
+    }
+
+    @Override
+    public TtsTextSource ttsTextSource() {
+        return pdfTtsTextSource;
+    }
+
+    @Override
+    public boolean isTtsHostDestroyed() {
+        return activityDestroyed;
+    }
+
+    @Override
+    public String ttsHostFilePath() {
+        return filePath;
+    }
+
+    @Override
+    @NonNull
+    public android.os.Handler ttsHostHandler() {
+        return handler;
+    }
+
+    @Override
+    public boolean isTtsTextFullyResident() {
+        // The whole buffer exists as soon as the source does, so cross-page
+        // prefetch is always available.
+        return pdfTtsTextSource != null;
+    }
+
+    @Override
+    public boolean isTtsTextTemporarilyUnavailable() {
+        return pdfTtsTextBuilding;
+    }
+
+    @Override
+    public int ttsDisplayedCurrentPageNumber() {
+        return Math.max(1, currentPage + 1);
+    }
+
+    @Override
+    public int ttsDisplayedTotalPageCount() {
+        return Math.max(1, pageCount);
+    }
+
+    @Override
+    public int ttsCurrentCharPosition() {
+        return pdfTtsTextSource != null ? pdfTtsTextSource.getCurrentCharPosition() : 0;
+    }
+
+    @Override
+    public void ttsHostPageBy(int direction) {
+        if (pageCount <= 0 || direction == 0) return;
+        int target = Math.max(0, Math.min(pageCount - 1, currentPage + direction));
+        if (target != currentPage) {
+            goToPage(target, Integer.signum(direction));
+        }
+    }
+
+    @Override
+    public void ttsJumpToAbsoluteCharPosition(int charPosition) {
+        if (pdfTtsTextSource == null || pageCount <= 0) return;
+        int target = Math.max(0, Math.min(pageCount - 1,
+                pdfTtsTextSource.pageIndexForChar(charPosition)));
+        if (target != currentPage) {
+            goToPage(target, Integer.signum(target - currentPage));
+        }
+    }
+
+    @Override
+    public void ttsJumpToAbsoluteCharPosition(int charPosition, int displayPage, int totalPages) {
+        // The char position is authoritative; the saved display page is a hint.
+        ttsJumpToAbsoluteCharPosition(charPosition);
+    }
+
+    @Override
+    public void ttsUpdateFloatingCard() {
+        // The PDF viewer has no floating playback card (v1): playback is
+        // controlled from the dialog and the notification.
+    }
+
+    @Override
+    public void ttsStopAutoPageTurn() {
+        // No auto page-turn feature in the PDF viewer.
+    }
+
+    @Override
+    public void ttsHandlePlaybackCommand(@NonNull String action) {
+        pdfTts().handlePlaybackCommand(action);
+    }
+
+    @Override
+    @NonNull
+    public String ttsHostKind() {
+        return TtsPlaybackService.HOST_PDF;
+    }
+
+    // ---- ReaderDialogStyleHost --------------------------------------------
+
+    @Override
+    @NonNull
+    public AppCompatActivity dialogStyleHostActivity() {
+        return this;
+    }
+
+    @Override
+    public int dialogStyleDpToPx(int dp) {
+        return dpToPx(dp);
+    }
+
+    @Override
+    @NonNull
+    public ThemeManager dialogStyleThemeManager() {
+        return ThemeManager.getInstance(this);
+    }
+
+    @Override
+    public int dialogSnapshotBackgroundColor() {
+        // Prefer the viewer's already-resolved reader theme so the TTS dialog
+        // matches the rest of the PDF chrome; fall back to the local snapshot.
+        return readerBg != 0 ? readerBg : pdfDialogSnapshotBg;
+    }
+
+    @Override
+    public int dialogSnapshotTextColor() {
+        return readerFg != 0 ? readerFg : pdfDialogSnapshotFg;
+    }
+
+    @Override
+    public void setDialogSnapshotColors(int backgroundColor, int textColor) {
+        pdfDialogSnapshotBg = backgroundColor;
+        pdfDialogSnapshotFg = textColor;
+    }
+
+    @Override
+    public BookmarkManager dialogStyleBookmarkManager() {
+        // The styler's bookmark dialog is only reachable from the text reader.
+        return null;
+    }
+
     @Override
     protected void onDestroy() {
         stopPdfViewportFling();
@@ -3536,6 +3812,11 @@ public class PdfReaderActivity extends AppCompatActivity {
             pdfSearchController.close();
             pdfSearchController = null;
         }
+        if (pdfTtsController != null) {
+            pdfTtsController.release();
+            pdfTtsController = null;
+        }
+        TtsPlaybackBridge.unregister(this);
         executor.shutdownNow();
         prefetchExecutor.shutdownNow();
         super.onDestroy();

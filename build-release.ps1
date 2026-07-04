@@ -67,7 +67,7 @@ try {
 
     Write-Host ""
     Write-Host "Project root: $ProjectRoot"
-    Write-Host "Keystore: $env:READWIDE_KEYSTORE_PATH"
+    Write-Host "Keystore: [provided]"
     Write-Host "Key alias: $env:READWIDE_KEY_ALIAS"
     Write-Host "JAVA_HOME=$env:JAVA_HOME"
     java -version

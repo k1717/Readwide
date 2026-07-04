@@ -51,7 +51,7 @@ public class RarBackendRouterTest {
     }
 
     @Test
-    public void keepsRar5CompressedLibarchivePrimaryWithoutFirstPartyClaim() {
+    public void keepsUnencryptedRar5CompressedLibarchivePrimaryWithoutFirstPartyClaim() {
         RarArchiveReader.RarEntry entry = entry(0x33, false, false, false, false, 5, null);
 
         RarBackendDecision decision = RarBackendRouter.decideEntry(entry);
@@ -59,6 +59,22 @@ public class RarBackendRouterTest {
         assertEquals(RarBackendRoute.Kind.TRY_LIBARCHIVE, decision.route);
         assertFalse(decision.firstPartyAllowed);
         assertTrue(decision.libarchiveOwned);
+    }
+
+    @Test
+    public void routesEncryptedRar5CompressedToFirstPartyOnly() {
+        // libarchive 3.7.2 cannot decrypt RAR5, so an AES-256 compressed RAR5
+        // entry has no libarchive route; it must go to the scoped first-party
+        // RAR5 decode path, never claimed as libarchive-owned.
+        RarArchiveReader.EncryptionInfo encryption = new RarArchiveReader.EncryptionInfo(
+                0L, 0L, 15, new byte[16], new byte[16], new byte[12]);
+        RarArchiveReader.RarEntry entry = entry(0x33, false, false, false, false, 5, encryption);
+
+        RarBackendDecision decision = RarBackendRouter.decideEntry(entry);
+
+        assertEquals(RarBackendRoute.Kind.TRY_FIRST_PARTY_RAR5_COMPRESSED, decision.route);
+        assertTrue(decision.firstPartyAllowed);
+        assertFalse(decision.libarchiveOwned);
     }
 
 

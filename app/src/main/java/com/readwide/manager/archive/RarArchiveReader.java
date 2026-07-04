@@ -450,6 +450,7 @@ final class RarArchiveReader {
     private static List<RarEntry> readRar4Entries(@NonNull RandomAccessFile raf,
                                                   @Nullable char[] password) throws IOException {
         List<RarEntry> result = new ArrayList<>();
+        List<Rar4FileBlock> fileBlocks = new ArrayList<>();
         while (raf.getFilePointer() < raf.length()) {
             long headerStart = raf.getFilePointer();
             if (raf.length() - headerStart < 7) break;
@@ -465,11 +466,14 @@ final class RarArchiveReader {
             raf.readFully(headerData);
             long dataSize = 0L;
             if (type == RAR4_HEADER_FILE) {
-                RarEntry entry = parseRar4FileBlock(headerStart + headerSize, flags, headerData);
+                // Pass 1 keeps the historical walk semantics (dataSize comes
+                // from the same parse as before); names are re-decoded below
+                // with the archive-wide corpus once every raw name is known.
+                RarEntry entry = parseRar4FileBlock(headerStart + headerSize, flags, headerData, null);
                 if (entry != null) {
-                    result.add(entry);
                     dataSize = entry.packedSize;
                 }
+                fileBlocks.add(new Rar4FileBlock(headerStart + headerSize, flags, headerData));
             } else if (type == RAR4_HEADER_MAIN && (flags & RAR4_MAIN_PASSWORD) != 0) {
                 if (password != null && password.length > 0) {
                     throw new UnsupportedRarFeatureException("Encrypted RAR4 headers are not supported yet");
@@ -484,11 +488,58 @@ final class RarArchiveReader {
             raf.seek(next);
             if (type == RAR4_HEADER_END) break;
         }
+        // Pass 2: one archive-wide charset decision for legacy (non-Unicode)
+        // RAR4 names (see ArchiveFilenameDecoder.NameCorpus). RAR4 stores
+        // such names in the creating machine's OEM code page with no flag,
+        // and the old chain fell back to a hardcoded IBM437; the corpus lets
+        // CP949/Shift_JIS/CP866 archives decode consistently, with short
+        // names anchored by their longer siblings.
+        ArchiveFilenameDecoder.NameCorpus corpus = new ArchiveFilenameDecoder.NameCorpus();
+        for (Rar4FileBlock block : fileBlocks) {
+            byte[] rawLegacy = extractRar4LegacyRawName(block.headerData, block.flags);
+            if (rawLegacy != null) corpus.observe(rawLegacy);
+        }
+        for (Rar4FileBlock block : fileBlocks) {
+            RarEntry entry = parseRar4FileBlock(block.dataOffset, block.flags, block.headerData, corpus);
+            if (entry != null) result.add(entry);
+        }
         return result;
     }
 
+    /** RAR4 FILE header captured during the walk for corpus-aware name decoding. */
+    private static final class Rar4FileBlock {
+        final long dataOffset;
+        final int flags;
+        final byte[] headerData;
+
+        Rar4FileBlock(long dataOffset, int flags, byte[] headerData) {
+            this.dataOffset = dataOffset;
+            this.flags = flags;
+            this.headerData = headerData;
+        }
+    }
+
+    /**
+     * Extracts the raw name bytes of a legacy (non-Unicode-flagged) RAR4 FILE
+     * header for corpus building; null for Unicode-flagged names or malformed
+     * headers. Fixed layout ahead of the name: packSize u32, unpackedSize u32,
+     * host u8, CRC u32, time u32, version u8, method u8, nameSize u16,
+     * attributes u32, then two more u32 when the LARGE flag is set.
+     */
     @Nullable
-    private static RarEntry parseRar4FileBlock(long dataOffset, int flags, @NonNull byte[] headerData) throws IOException {
+    private static byte[] extractRar4LegacyRawName(@NonNull byte[] headerData, int flags) {
+        if ((flags & RAR4_FILE_UNICODE_NAME) != 0) return null;
+        int nameSizeOffset = 19;
+        if (headerData.length < nameSizeOffset + 2) return null;
+        int nameSize = (headerData[nameSizeOffset] & 0xff) | ((headerData[nameSizeOffset + 1] & 0xff) << 8);
+        int nameStart = 25 + ((flags & RAR4_FILE_LARGE) != 0 ? 8 : 0);
+        if (nameSize <= 0 || nameStart + nameSize > headerData.length) return null;
+        return java.util.Arrays.copyOfRange(headerData, nameStart, nameStart + nameSize);
+    }
+
+    @Nullable
+    private static RarEntry parseRar4FileBlock(long dataOffset, int flags, @NonNull byte[] headerData,
+                                               @Nullable ArchiveFilenameDecoder.NameCorpus corpus) throws IOException {
         ByteCursor cursor = new ByteCursor(headerData);
         long packSize = readUInt32LE(cursor);
         long unpackedSize = readUInt32LE(cursor);
@@ -512,7 +563,7 @@ final class RarArchiveReader {
         if ((flags & RAR4_FILE_SALT) != 0 && cursor.remaining() >= 8) {
             rar4Salt = cursor.readBytes(8);
         }
-        String path = decodeRar4Name(rawName, (flags & RAR4_FILE_UNICODE_NAME) != 0);
+        String path = decodeRar4Name(rawName, (flags & RAR4_FILE_UNICODE_NAME) != 0, corpus);
         String sanitized = sanitizeEntryPath(path);
         if (sanitized == null) return null;
 
@@ -531,14 +582,21 @@ final class RarArchiveReader {
     private static List<RarEntry> readRar5Entries(@NonNull RandomAccessFile raf,
                                                   @Nullable char[] password) throws IOException {
         List<RarEntry> result = new ArrayList<>();
+        Rar5Crypto.Secrets headerSecrets = null;
         while (raf.getFilePointer() < raf.length()) {
-            HeaderBlock block = readRar5Header(raf);
+            HeaderBlock block = headerSecrets == null
+                    ? readRar5Header(raf)
+                    : readRar5EncryptedHeader(raf, headerSecrets);
             if (block == null) break;
             if (block.type == HEADER_ENCRYPTION) {
-                if (password != null && password.length > 0) {
-                    throw new UnsupportedRarFeatureException("Encrypted RAR5 headers are not supported yet");
+                if (password == null || password.length == 0) {
+                    throw new ArchiveSupport.PasswordRequiredException();
                 }
-                throw new ArchiveSupport.PasswordRequiredException();
+                // Header-encrypted (-hp) RAR5: derive the header key from the
+                // crypt block and read every following header through AES-CBC.
+                // A check-value mismatch means a wrong password, so re-prompt.
+                headerSecrets = deriveRar5HeaderSecrets(block, password);
+                continue;
             }
             if (block.type == HEADER_FILE) {
                 RarEntry entry = parseRar5FileBlock(block);
@@ -550,6 +608,147 @@ final class RarArchiveReader {
             if (block.type == HEADER_END) break;
         }
         return result;
+    }
+
+    /**
+     * Parses the RAR5 archive encryption header ({@code -hp}) and derives the
+     * header-decryption secrets, verifying the stored password check value
+     * when present. Layout after the common header fields: encryption version
+     * (vint, 0 = AES-256), encryption flags (vint, bit 0 = check value
+     * present), KDF count (u8), 16-byte salt, then an optional 12-byte check
+     * record (8 check bytes + 4 bytes of SHA-256 over them, which guards the
+     * check itself against corruption; an inconsistent record is ignored the
+     * way unrar ignores it, leaving wrong passwords to fail at the header
+     * CRC).
+     */
+    @NonNull
+    private static Rar5Crypto.Secrets deriveRar5HeaderSecrets(@NonNull HeaderBlock block,
+                                                              @NonNull char[] password) throws IOException {
+        ByteCursor cursor = new ByteCursor(block.headerData, block.fieldsStart, block.headerData.length);
+        long version = cursor.readVInt();
+        if (version != RAR5_ENCRYPTION_VERSION_AES256) {
+            throw new UnsupportedRarFeatureException("Unsupported RAR5 header encryption version: " + version);
+        }
+        long encFlags = cursor.readVInt();
+        int kdfCount = cursor.readUnsignedByte();
+        byte[] salt = cursor.readBytes(16);
+        byte[] check = null;
+        if ((encFlags & RAR5_ENCRYPTION_CHECK_VALUE) != 0 && cursor.remaining() >= 12) {
+            byte[] record = cursor.readBytes(12);
+            if (rar5CheckRecordConsistent(record)) {
+                check = record;
+            }
+        }
+        Rar5Crypto.Secrets secrets = Rar5Crypto.deriveSecrets(password, kdfCount, salt);
+        if (check != null && !Rar5Crypto.passwordMatches(secrets, check)) {
+            throw new ArchiveSupport.PasswordRequiredException();
+        }
+        return secrets;
+    }
+
+    /** Returns true when the 12-byte check record's SHA-256 guard matches its 8 check bytes. */
+    private static boolean rar5CheckRecordConsistent(@NonNull byte[] record) {
+        if (record.length < 12) return false;
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(java.util.Arrays.copyOfRange(record, 0, 8));
+            for (int i = 0; i < 4; i++) {
+                if (digest[i] != record[8 + i]) return false;
+            }
+            return true;
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Reads one RAR5 header block from a header-encrypted ({@code -hp})
+     * archive: a 16-byte IV followed by the AES-256-CBC ciphertext of the
+     * usual block (CRC32, size vint, header bytes), padded to a 16-byte
+     * boundary. The header CRC is verified on the decrypted bytes exactly as
+     * in the plain path; since a wrong key cannot produce a matching CRC, a
+     * mismatch on a header-encrypted archive is surfaced as a password
+     * problem rather than corruption.
+     */
+    @Nullable
+    private static HeaderBlock readRar5EncryptedHeader(@NonNull RandomAccessFile raf,
+                                                       @NonNull Rar5Crypto.Secrets secrets) throws IOException {
+        long headerStart = raf.getFilePointer();
+        if (raf.length() - headerStart < 32) return null;
+
+        byte[] iv = new byte[16];
+        raf.readFully(iv);
+        javax.crypto.Cipher cipher = Rar5Crypto.createAesCbcDecryptCipher(secrets, iv);
+        byte[] firstCipher = new byte[16];
+        raf.readFully(firstCipher);
+        byte[] first = cipher.update(firstCipher);
+        if (first == null || first.length != 16) throw new IOException("RAR5 header decrypt failed");
+
+        long headerCrc = (first[0] & 0xffL) | ((first[1] & 0xffL) << 8)
+                | ((first[2] & 0xffL) << 16) | ((first[3] & 0xffL) << 24);
+        long headerSize = 0L;
+        int vintLen = 0;
+        int shift = 0;
+        while (true) {
+            if (4 + vintLen >= first.length) throw new IOException("Invalid RAR5 encrypted header size");
+            int b = first[4 + vintLen] & 0xff;
+            vintLen++;
+            headerSize |= (long) (b & 0x7f) << shift;
+            if ((b & 0x80) == 0) break;
+            shift += 7;
+        }
+        if (headerSize < 0 || headerSize > 2L * 1024L * 1024L) {
+            throw rar5EncryptedHeaderFailure();
+        }
+        long plainTotal = 4L + vintLen + headerSize;
+        long alignedTotal = (plainTotal + 15L) & ~15L;
+        long remaining = alignedTotal - 16L;
+        if (remaining < 0 || remaining > raf.length() - raf.getFilePointer()) {
+            throw rar5EncryptedHeaderFailure();
+        }
+        byte[] headerData = new byte[(int) headerSize];
+        int fromFirst = Math.min(first.length - 4 - vintLen, headerData.length);
+        System.arraycopy(first, 4 + vintLen, headerData, 0, fromFirst);
+        if (remaining > 0) {
+            byte[] restCipher = new byte[(int) remaining];
+            raf.readFully(restCipher);
+            byte[] rest = cipher.update(restCipher);
+            if (rest == null || rest.length != restCipher.length) {
+                throw new IOException("RAR5 header decrypt failed");
+            }
+            int need = headerData.length - fromFirst;
+            if (need > rest.length) throw rar5EncryptedHeaderFailure();
+            System.arraycopy(rest, 0, headerData, fromFirst, need);
+        } else if (fromFirst < headerData.length) {
+            throw rar5EncryptedHeaderFailure();
+        }
+        byte[] encodedSize = new byte[vintLen];
+        System.arraycopy(first, 4, encodedSize, 0, vintLen);
+        try {
+            verifyHeaderCrc(headerCrc, encodedSize, headerData);
+        } catch (IOException e) {
+            throw rar5EncryptedHeaderFailure();
+        }
+
+        ByteCursor cursor = new ByteCursor(headerData);
+        int type = checkedInt(cursor.readVInt());
+        long flags = cursor.readVInt();
+        long extraSize = (flags & HEADER_FLAG_EXTRA) != 0 ? cursor.readVInt() : 0L;
+        long dataSize = (flags & HEADER_FLAG_DATA) != 0 ? cursor.readVInt() : 0L;
+        int fieldsStart = cursor.position();
+        int extraStart = safeExtraStart(headerData.length, extraSize);
+        long dataOffset = headerStart + 16L + alignedTotal;
+        raf.seek(dataOffset);
+
+        return new HeaderBlock(type, flags, dataSize, dataOffset, headerData, fieldsStart, extraStart, extraSize);
+    }
+
+    @NonNull
+    private static ArchiveSupport.PasswordRequiredException rar5EncryptedHeaderFailure() {
+        // On a header-encrypted archive a garbled decrypted header means the
+        // key is wrong far more often than the file is corrupt; re-prompting
+        // is the recoverable interpretation and matches the stored-entry path.
+        return new ArchiveSupport.PasswordRequiredException();
     }
 
     @Nullable
@@ -1318,7 +1517,8 @@ final class RarArchiveReader {
     }
 
     @NonNull
-    private static String decodeRar4Name(@NonNull byte[] rawName, boolean unicodeName) {
+    private static String decodeRar4Name(@NonNull byte[] rawName, boolean unicodeName,
+                                          @Nullable ArchiveFilenameDecoder.NameCorpus corpus) {
         int plainLength = rawName.length;
         if (unicodeName) {
             for (int i = 0; i < rawName.length; i++) {
@@ -1336,7 +1536,10 @@ final class RarArchiveReader {
         }
         String utf8 = tryDecode(plain, StandardCharsets.UTF_8);
         if (utf8 != null) return utf8;
-        return new String(plain, Charset.forName("IBM437"));
+        // Legacy OEM-code-page name: score it with the archive-wide corpus
+        // (IBM437 remains one of the candidates, so pure DOS-Latin archives
+        // decode exactly as before).
+        return ArchiveFilenameDecoder.decodeLegacyName(rawName.length == plain.length ? rawName : plain, corpus);
     }
 
     @Nullable

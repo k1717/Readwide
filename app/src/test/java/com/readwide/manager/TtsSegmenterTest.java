@@ -1,6 +1,7 @@
 package com.readwide.manager;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -84,5 +85,75 @@ public class TtsSegmenterTest {
         assertEquals("user id, value",
                 TtsSegmenter.normalizeForSpeech("user_id; value"));
         assertEquals("a, b, c", TtsSegmenter.normalizeForSpeech("a; b; c"));
+    }
+
+    // ---- Phrase length and pause reduction (issue #7) ---------------------
+
+    @Test
+    public void phraseLengthMapsToChunkSizes() {
+        assertEquals(200, TtsSegmenter.phraseLengthToChars(0)); // Short
+        assertEquals(400, TtsSegmenter.phraseLengthToChars(1)); // Medium
+        assertEquals(700, TtsSegmenter.phraseLengthToChars(2)); // Long
+        // Out-of-range falls back to the long default rather than throwing.
+        assertEquals(700, TtsSegmenter.phraseLengthToChars(9));
+        assertEquals(700, TtsSegmenter.phraseLengthToChars(-1));
+    }
+
+    @Test
+    public void pauseReductionOffKeepsPunctuation() {
+        String out = TtsSegmenter.normalizeForSpeech("Hello, world. Yes?", 0);
+        assertTrue(out.contains(","));
+        assertTrue(out.contains("."));
+        assertTrue(out.contains("?"));
+    }
+
+    @Test
+    public void pauseReductionMediumDropsCommasKeepsPeriods() {
+        String out = TtsSegmenter.normalizeForSpeech("a, b, c. d.", 1);
+        assertFalse("commas should be dropped", out.contains(","));
+        assertTrue("periods should remain", out.contains("."));
+    }
+
+    @Test
+    public void pauseReductionAggressiveRemovesSentenceStops() {
+        String out = TtsSegmenter.normalizeForSpeech("A. B! C?", 2);
+        assertFalse("no sentence terminators should remain", out.matches(".*[.!?].*"));
+        // Stops become comma-length pauses, not nothing - the cadence keeps
+        // moving but a short pause survives at each old sentence boundary.
+        assertTrue("stops should soften to commas, not vanish", out.contains(","));
+        assertTrue(out.contains("A"));
+        assertTrue(out.contains("B"));
+        assertTrue(out.contains("C"));
+    }
+
+    @Test
+    public void pauseReductionAggressiveDropsOriginalCommasButKeepsConverted() {
+        String out = TtsSegmenter.normalizeForSpeech("First. Second, third. End!", 2);
+        // Original comma (after "Second") gone; converted stops present.
+        assertFalse(out.contains("Second,"));
+        assertTrue(out.contains("First,"));
+        assertTrue(out.contains("third,"));
+    }
+
+    @Test
+    public void standardCleanupAppliesAtAllPauseLevels() {
+        for (int level = 0; level <= 2; level++) {
+            String out = TtsSegmenter.normalizeForSpeech("Wait... foo_bar", level);
+            assertFalse("ellipsis muted at level " + level, out.contains(".."));
+            assertFalse("underscore muted at level " + level, out.contains("_"));
+        }
+    }
+
+    @Test
+    public void shorterPhraseLengthProducesMoreOrEqualChunks() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 10; i++) {
+            sb.append("This is sentence number ").append(i).append(" in the paragraph. ");
+        }
+        String paragraph = sb.toString();
+        int shortChunks = TtsSegmenter.segmentPage(paragraph, 0, 200, 0).size();
+        int longChunks = TtsSegmenter.segmentPage(paragraph, 0, 700, 0).size();
+        assertTrue("short phrase length should not produce fewer chunks",
+                shortChunks >= longChunks);
     }
 }

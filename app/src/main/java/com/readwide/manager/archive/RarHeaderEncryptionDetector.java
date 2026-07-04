@@ -12,9 +12,13 @@ import java.io.RandomAccessFile;
  * file blocks.
  *
  * <p>This helper only detects the encrypted-header mode. RAR3/RAR4 header block decryption lives in
- * {@link Rar4HeaderEncryptedArchiveRewriter}; RAR5 header decryption still belongs to libarchive.
- * Keeping detection separate prevents password-required checks from depending on successful entry
- * parsing.</p>
+ * {@link Rar4HeaderEncryptedArchiveRewriter}; RAR5 header encryption ({@code -hp}) is decrypted
+ * first party inside {@code RarArchiveReader.readRar5Entries} (the bundled libarchive 3.7.2 cannot
+ * decrypt RAR5 headers - it reports "Encryption is not supported", verified against a real WinRAR
+ * 7.00 {@code -hp} file - so first party is the only path). With that in place a RAR5 archive only
+ * reaches this detector when header decryption itself failed after a correct password check, which
+ * indicates a parser gap rather than a missing capability. Keeping detection separate prevents
+ * password-required checks from depending on successful entry parsing.</p>
  */
 final class RarHeaderEncryptionDetector {
     private static final int RAR4_HEADER_MAIN = 0x73;
@@ -45,14 +49,41 @@ final class RarHeaderEncryptionDetector {
         return false;
     }
 
+    /**
+     * @return 4 or 5 for the first volume whose headers are encrypted, or 0 if none is.
+     *     Lets callers phrase the unsupported message precisely: RAR4 {@code -hp} has a
+     *     first-party header rewriter (a rewrite failure is the real fault), whereas RAR5
+     *     {@code -hp} has no decrypt path in either backend at all.
+     */
+    static int headerEncryptedRarVersion(@NonNull File archive) throws IOException {
+        for (File volume : RarArchiveLocator.collectVolumes(archive)) {
+            try (RandomAccessFile raf = new RandomAccessFile(volume, "r")) {
+                RarArchiveLocator.Signature signature = RarArchiveLocator.findSignature(raf);
+                if (signature == null) continue;
+                raf.seek(signature.offset + RarArchiveLocator.signatureLength(signature.version));
+                if (signature.version == 5) {
+                    if (hasRar5HeaderEncryption(raf)) return 5;
+                } else if (hasRar4HeaderEncryption(raf)) {
+                    return 4;
+                }
+            }
+        }
+        return 0;
+    }
+
     static void throwIfHeaderEncryptedNeedsUnsupportedPath(@NonNull File archive,
                                                            @Nullable char[] password,
                                                            @Nullable IOException backendFailure) throws IOException {
-        if (!hasEncryptedHeaders(archive)) return;
+        int version = headerEncryptedRarVersion(archive);
+        if (version == 0) return;
         if (password == null || password.length == 0) {
             throw new ArchiveSupport.PasswordRequiredException();
         }
-        String message = "RAR header-encrypted archive could not be handled by the first-party header rewriter or libarchive";
+        String message = version == 5
+                ? "RAR5 header-encrypted (-hp) archive could not be read: the first-party header "
+                    + "decryptor accepted the password but could not parse the decrypted headers, and the "
+                    + "bundled libarchive backend cannot decrypt RAR5 headers at all"
+                : "RAR4 header-encrypted (-hp) archive could not be handled by the first-party header rewriter or libarchive";
         if (backendFailure != null && backendFailure.getMessage() != null && !backendFailure.getMessage().isEmpty()) {
             message += " (libarchive: " + backendFailure.getMessage() + ")";
         } else if (!RarLibarchiveFallback.isAvailable()) {

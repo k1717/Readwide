@@ -555,6 +555,12 @@
     <string name="tts_voice_offline">بلا اتصال</string>
     <string name="tts_speed">السرعة</string>
     <string name="tts_pitch">طبقة الصوت</string>
+    <string name="tts_phrase_length_short">طول العبارة: قصير</string>
+    <string name="tts_phrase_length_medium">طول العبارة: متوسط</string>
+    <string name="tts_phrase_length_long">طول العبارة: طويل</string>
+    <string name="tts_pause_reduction_off">تقليل التوقفات: إيقاف</string>
+    <string name="tts_pause_reduction_medium">تقليل التوقفات: متوسط</string>
+    <string name="tts_pause_reduction_aggressive">تقليل التوقفات: قوي</string>
     <string name="tts_android_settings">إعدادات TTS في Android</string>
     <string name="tts_add_voice_model">إضافة/تنزيل نماذج صوتية</string>
     <string name="tts_settings_unavailable">تعذّر فتح إعدادات TTS في Android.</string>

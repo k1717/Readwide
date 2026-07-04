@@ -1,5 +1,6 @@
 package com.readwide.manager.archive;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -60,6 +61,59 @@ public class RarHeaderEncryptionDetectorTest {
                 out.write(0); // flags.
             }
             assertTrue(RarHeaderEncryptionDetector.hasEncryptedHeaders(rar));
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            rar.delete();
+        }
+    }
+
+    @Test
+    public void headerEncryptedRarVersion_reportsRar4() throws Exception {
+        File rar = File.createTempFile("textview-rar4-hp-ver-", ".rar");
+        try {
+            try (FileOutputStream out = new FileOutputStream(rar)) {
+                out.write(RAR4_SIGNATURE);
+                writeRar4Header(out, RAR4_HEADER_MAIN, RAR4_MAIN_PASSWORD, new byte[6]);
+            }
+            // RAR4 -hp has a first-party header rewriter, so the version must be
+            // reported as 4 (drives the "rewriter or libarchive" message, not the
+            // RAR5 "no decrypt path anywhere" message).
+            assertEquals(4, RarHeaderEncryptionDetector.headerEncryptedRarVersion(rar));
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            rar.delete();
+        }
+    }
+
+    @Test
+    public void headerEncryptedRarVersion_reportsRar5() throws Exception {
+        File rar = File.createTempFile("textview-rar5-hp-ver-", ".rar");
+        try {
+            try (FileOutputStream out = new FileOutputStream(rar)) {
+                out.write(RAR5_SIGNATURE);
+                writeUInt32LE(out, 0);
+                out.write(2);
+                out.write(4); // HEADER_ENCRYPTION.
+                out.write(0);
+            }
+            // RAR5 -hp has no decrypt path in either backend; the version drives
+            // the hard-unsupported message.
+            assertEquals(5, RarHeaderEncryptionDetector.headerEncryptedRarVersion(rar));
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            rar.delete();
+        }
+    }
+
+    @Test
+    public void headerEncryptedRarVersion_reportsZeroWhenNotEncrypted() throws Exception {
+        File rar = File.createTempFile("textview-rar4-normal-ver-", ".rar");
+        try {
+            try (FileOutputStream out = new FileOutputStream(rar)) {
+                out.write(RAR4_SIGNATURE);
+                writeRar4Header(out, RAR4_HEADER_MAIN, 0, new byte[6]);
+            }
+            assertEquals(0, RarHeaderEncryptionDetector.headerEncryptedRarVersion(rar));
         } finally {
             //noinspection ResultOfMethodCallIgnored
             rar.delete();

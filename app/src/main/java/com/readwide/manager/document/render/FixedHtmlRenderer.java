@@ -37,6 +37,12 @@ public final class FixedHtmlRenderer {
         out.append(".rw-display-math .frac .den{padding:0 .12em;}");
         out.append(".rw-inline-math sup,.rw-inline-math sub{font-size:.72em;line-height:0;}");
         out.append(".rw-image{display:block;max-width:100%;height:auto;margin:.6em auto;break-inside:avoid;}");
+        out.append(".rw-image-missing{display:flex;align-items:center;justify-content:center;box-sizing:border-box;"
+                + "max-width:100%;min-width:2.2em;min-height:2.2em;margin:.6em auto;border:1px dashed currentColor;"
+                + "border-radius:3px;opacity:.55;break-inside:avoid;}");
+        // Language-neutral framed-picture glyph (U+1F5BC). CSS content avoids any
+        // translatable string for the WMF/EMF/OLE placeholder.
+        out.append(".rw-image-missing::after{content:\"\\1F5BC\";font-size:1.6em;line-height:1;}");
         out.append(".rw-placeholder{border:1px dashed currentColor;padding:.5em;margin:.6em 0;opacity:.75;}");
         out.append(".rw-floating-downgraded{opacity:.92;}");
         out.append(".rw-note-ref{text-decoration:none;vertical-align:super;font-size:smaller;}");
@@ -282,6 +288,17 @@ public final class FixedHtmlRenderer {
 
     private static void renderImage(RenderedImage image, StringBuilder out) {
         if (image == null) return;
+        if (image.unrenderablePlaceholder) {
+            // A picture existed but has no WebView-decodable raster form (HWP
+            // WMF/EMF/OLE). Draw a language-neutral framed box at the authored
+            // size instead of dropping the image silently. The glyph comes from
+            // CSS content so no translatable string is introduced.
+            out.append("<span class=\"rw-image-missing\" style=\"");
+            if (image.widthPt != null) appendPt(out, "width", image.widthPt);
+            if (image.heightPt != null) appendPt(out, "height", image.heightPt);
+            out.append("\"></span>");
+            return;
+        }
         out.append("<img class=\"rw-image");
         if (image.downgradedFromFloating) out.append(" rw-floating-downgraded");
         out.append("\" src=\"").append(escapeAttribute(image.src)).append("\" alt=\"")

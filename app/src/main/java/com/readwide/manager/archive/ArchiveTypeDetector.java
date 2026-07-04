@@ -25,9 +25,9 @@ final class ArchiveTypeDetector {
     static final Pattern ALZ_VOLUME_PART = Pattern.compile("^(.*)\\.a(\\d{2,3})$", Pattern.CASE_INSENSITIVE);
 
     private static final String[] OUTPUT_BASE_EXTENSIONS = new String[] {
-            ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.lzma", ".tar.z",
-            ".tgz", ".tbz2", ".tbz", ".txz", ".tlz", ".taz",
-            ".lzma", ".bz2", ".gz", ".xz", ".z",
+            ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.lzma", ".tar.z", ".tar.zst", ".tar.lz4",
+            ".tgz", ".tbz2", ".tbz", ".txz", ".tlz", ".taz", ".tzst",
+            ".lzma", ".zst", ".lz4", ".bz2", ".gz", ".xz", ".z",
             ".zip", ".zipx", ".cbz", ".rar", ".cbr",
             ".alz", ".egg", ".cb7", ".7z", ".cbt", ".tar"
     };
@@ -63,12 +63,16 @@ final class ArchiveTypeDetector {
         if (name.endsWith(".tar.xz") || name.endsWith(".txz")) return ArchiveSupport.Type.TAR_XZ;
         if (name.endsWith(".tar.lzma") || name.endsWith(".tlz")) return ArchiveSupport.Type.TAR_LZMA;
         if (name.endsWith(".tar.z") || name.endsWith(".taz")) return ArchiveSupport.Type.TAR_Z;
+        if (name.endsWith(".tar.zst") || name.endsWith(".tzst")) return ArchiveSupport.Type.TAR_ZST;
+        if (name.endsWith(".tar.lz4")) return ArchiveSupport.Type.TAR_LZ4;
         if (name.endsWith(".tar") || name.endsWith(".cbt")) return ArchiveSupport.Type.TAR;
         if (name.endsWith(".gz")) return ArchiveSupport.Type.SINGLE_GZ;
         if (name.endsWith(".bz2")) return ArchiveSupport.Type.SINGLE_BZ2;
         if (name.endsWith(".xz")) return ArchiveSupport.Type.SINGLE_XZ;
         if (name.endsWith(".lzma")) return ArchiveSupport.Type.SINGLE_LZMA;
         if (name.endsWith(".z")) return ArchiveSupport.Type.SINGLE_Z;
+        if (name.endsWith(".zst")) return ArchiveSupport.Type.SINGLE_ZST;
+        if (name.endsWith(".lz4")) return ArchiveSupport.Type.SINGLE_LZ4;
         return null;
     }
 

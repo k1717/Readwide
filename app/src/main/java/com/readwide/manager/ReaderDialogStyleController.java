@@ -31,18 +31,30 @@ import androidx.appcompat.app.AlertDialog;
 
 import com.readwide.manager.model.Bookmark;
 import com.readwide.manager.model.Theme;
-import com.readwide.manager.util.ThemeManager;
 
 final class ReaderDialogStyleController {
-    private final ReaderActivity activity;
+    private final ReaderDialogStyleHost host;
+    private final androidx.appcompat.app.AppCompatActivity activity;
 
     // Tracks the most recent positioned reader dialog so a new one dismisses any
     // still-showing previous dialog. Prevents duplicate/stacked dialogs from
     // repeated toolbar taps.
     private android.app.Dialog currentPositionedDialog;
 
-    ReaderDialogStyleController(@NonNull ReaderActivity activity) {
-        this.activity = activity;
+    ReaderDialogStyleController(@NonNull ReaderDialogStyleHost host) {
+        this.host = host;
+        this.activity = host.dialogStyleHostActivity();
+    }
+
+    private int dpToPx(int dp) {
+        return host.dialogStyleDpToPx(dp);
+    }
+
+    private void deleteBookmarkViaHost(String bookmarkId) {
+        com.readwide.manager.util.BookmarkManager manager = host.dialogStyleBookmarkManager();
+        if (manager != null) {
+            manager.deleteBookmark(bookmarkId);
+        }
     }
 
      boolean isLightColor(int color) {
@@ -58,15 +70,12 @@ final class ReaderDialogStyleController {
     }
 
      void syncReaderDialogThemeSnapshot() {
-        if (activity.themeManager == null) {
-            activity.themeManager = ThemeManager.getInstance(activity);
-        }
-        Theme theme = activity.themeManager.getActiveTheme();
+        Theme theme = host.dialogStyleThemeManager().getActiveTheme();
         if (theme != null) {
-            activity.currentReaderBackgroundColor = theme.getBackgroundColor();
-            activity.currentReaderTextColor = theme.getTextColor();
+            host.setDialogSnapshotColors(theme.getBackgroundColor(), theme.getTextColor());
         } else {
-            activity.currentReaderTextColor = readableTextColorForBackground(activity.currentReaderBackgroundColor);
+            int bg = host.dialogSnapshotBackgroundColor();
+            host.setDialogSnapshotColors(bg, readableTextColorForBackground(bg));
         }
     }
 
@@ -74,10 +83,10 @@ final class ReaderDialogStyleController {
         syncReaderDialogThemeSnapshot();
         // Opaque, but theme-blended.
         // This keeps the Close/OK/Delete area non-transparent while avoiding a harsh flat gray block.
-        boolean light = isLightColor(activity.currentReaderBackgroundColor);
+        boolean light = isLightColor(host.dialogSnapshotBackgroundColor());
         int overlay = light ? Color.WHITE : Color.BLACK;
         float mix = light ? 0.10f : 0.18f;
-        int blended = blendColors(activity.currentReaderBackgroundColor, overlay, mix);
+        int blended = blendColors(host.dialogSnapshotBackgroundColor(), overlay, mix);
         return Color.rgb(Color.red(blended), Color.green(blended), Color.blue(blended));
     }
 
@@ -95,13 +104,13 @@ final class ReaderDialogStyleController {
 
      int readerDialogTextColor(int bgColor) {
         syncReaderDialogThemeSnapshot();
-        return activity.currentReaderTextColor;
+        return host.dialogSnapshotTextColor();
     }
 
      int readerDialogSubTextColor(int bgColor) {
         syncReaderDialogThemeSnapshot();
-        return blendColors(activity.currentReaderBackgroundColor, activity.currentReaderTextColor,
-                isDarkColor(activity.currentReaderBackgroundColor) ? 0.72f : 0.64f);
+        return blendColors(host.dialogSnapshotBackgroundColor(), host.dialogSnapshotTextColor(),
+                isDarkColor(host.dialogSnapshotBackgroundColor()) ? 0.72f : 0.64f);
     }
 
     int strongDialogBorderColor(int bgColor) {
@@ -121,7 +130,7 @@ final class ReaderDialogStyleController {
         title.setGravity(Gravity.CENTER);
         title.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setPadding(activity.dpToPx(18), activity.dpToPx(14), activity.dpToPx(18), activity.dpToPx(12));
+        title.setPadding(dpToPx(18), dpToPx(14), dpToPx(18), dpToPx(12));
         title.setBackgroundColor(Color.TRANSPARENT);
         return title;
     }
@@ -132,7 +141,7 @@ final class ReaderDialogStyleController {
         row.setTextColor(fgColor);
         row.setTextSize(16f);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(activity.dpToPx(14), 0, activity.dpToPx(14), 0);
+        row.setPadding(dpToPx(14), 0, dpToPx(14), 0);
 
         // Match the EPUB/Word/PDF "More" window style: each TXT More row is a
         // separate rounded card, not a flat/bland text row.  The fill and stroke
@@ -141,13 +150,13 @@ final class ReaderDialogStyleController {
         int panel = readerDialogPanelColor();
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(panel);
-        bg.setCornerRadius(activity.dpToPx(10));
+        bg.setCornerRadius(dpToPx(10));
         bg.setStroke(0, Color.TRANSPARENT);
         row.setBackground(bg);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, activity.dpToPx(48));
-        lp.setMargins(0, 0, 0, activity.dpToPx(8));
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48));
+        lp.setMargins(0, 0, 0, dpToPx(8));
         row.setLayoutParams(lp);
         return row;
     }
@@ -169,7 +178,7 @@ final class ReaderDialogStyleController {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setGravity(Gravity.CENTER);
         title.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        title.setPadding(activity.dpToPx(18), activity.dpToPx(18), activity.dpToPx(18), activity.dpToPx(14));
+        title.setPadding(dpToPx(18), dpToPx(18), dpToPx(18), dpToPx(14));
         title.setBackgroundColor(Color.TRANSPARENT);
         return title;
     }
@@ -187,7 +196,7 @@ final class ReaderDialogStyleController {
         row.setGravity(Gravity.CENTER_VERTICAL);
         // Keep the rounded row "bubble" used by EPUB/Word, but remove the small
         // radio/circle bubble. Selection is shown by text weight and row outline.
-        row.setPadding(activity.dpToPx(18), 0, activity.dpToPx(18), 0);
+        row.setPadding(dpToPx(18), 0, dpToPx(18), 0);
         row.setCompoundDrawables(null, null, null, null);
         row.setCompoundDrawablePadding(0);
 
@@ -202,13 +211,13 @@ final class ReaderDialogStyleController {
         // Every font row should look like the EPUB/Word rounded card row, not only
         // the selected row. Selection is shown by stronger text + stronger outline.
         bg.setColor(selected ? selectedFill : normalFill);
-        bg.setCornerRadius(activity.dpToPx(10));
+        bg.setCornerRadius(dpToPx(10));
         bg.setStroke(1, selected ? selectedStroke : normalStroke);
         row.setBackground(bg);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, activity.dpToPx(48));
-        lp.setMargins(0, 0, 0, activity.dpToPx(8));
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48));
+        lp.setMargins(0, 0, 0, dpToPx(8));
         row.setLayoutParams(lp);
         return row;
     }
@@ -227,13 +236,13 @@ final class ReaderDialogStyleController {
 
         GradientDrawable panelBg = new GradientDrawable();
         panelBg.setColor(bgColor);
-        panelBg.setCornerRadius(activity.dpToPx(14));
-        panelBg.setStroke(Math.max(1, activity.dpToPx(1)), borderColor);
+        panelBg.setCornerRadius(dpToPx(14));
+        panelBg.setStroke(Math.max(1, dpToPx(1)), borderColor);
 
         GradientDrawable foregroundBorder = new GradientDrawable();
         foregroundBorder.setColor(Color.TRANSPARENT);
-        foregroundBorder.setCornerRadius(activity.dpToPx(14));
-        foregroundBorder.setStroke(Math.max(1, activity.dpToPx(1)), borderColor);
+        foregroundBorder.setCornerRadius(dpToPx(14));
+        foregroundBorder.setStroke(Math.max(1, dpToPx(1)), borderColor);
 
         // No inner padding here. The overlay stroke sits exactly on the panel edge,
         // so any 2dp inset would push the content panel inward and cause a sub-pixel
@@ -282,8 +291,8 @@ final class ReaderDialogStyleController {
         if (decor.getWidth() <= 0 || decor.getHeight() <= 0) return;
 
         final float density = activity.getResources().getDisplayMetrics().density;
-        final float strokePx = Math.max(1f, activity.dpToPx(1));
-        final float outerRadiusPx = activity.dpToPx(14);
+        final float strokePx = Math.max(1f, dpToPx(1));
+        final float outerRadiusPx = dpToPx(14);
 
         Drawable overlayBorder = new Drawable() {
             final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -362,8 +371,8 @@ final class ReaderDialogStyleController {
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
         lp.copyFrom(window.getAttributes());
         lp.width = Math.min(
-                activity.getResources().getDisplayMetrics().widthPixels - activity.dpToPx(40),
-                activity.dpToPx(420));
+                activity.getResources().getDisplayMetrics().widthPixels - dpToPx(40),
+                dpToPx(420));
         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.dimAmount = 0.16f;
         lp.x = 0;
@@ -386,9 +395,9 @@ final class ReaderDialogStyleController {
         // Custom reading-theme action/delete dialogs are short confirmation boxes.
         // Keep them visibly narrower than the full Settings-style dialogs.
         int screenWidth = activity.getResources().getDisplayMetrics().widthPixels;
-        int compactWidth = Math.max(activity.dpToPx(240), Math.round(screenWidth * 0.70f));
+        int compactWidth = Math.max(dpToPx(240), Math.round(screenWidth * 0.70f));
         lp.width = compactWidth;
-        lp.y = activity.dpToPx(44);
+        lp.y = dpToPx(44);
         window.setAttributes(lp);
         window.setLayout(compactWidth, WindowManager.LayoutParams.WRAP_CONTENT);
     }
@@ -398,14 +407,14 @@ final class ReaderDialogStyleController {
         // border is a thin theme-derived line, not the older heavy TXT outline.
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(bgColor);
-        drawable.setCornerRadius(activity.dpToPx(14));
+        drawable.setCornerRadius(dpToPx(14));
         return drawable;
     }
 
     Drawable positionedReaderDialogBorderOverlay(int bgColor) {
         final int borderColor = strongDialogBorderColor(bgColor);
-        final float strokeWidth = Math.max(1f, activity.dpToPx(1));
-        final float radius = activity.dpToPx(14);
+        final float strokeWidth = Math.max(1f, dpToPx(1));
+        final float radius = dpToPx(14);
         return new Drawable() {
             private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
             private final RectF rect = new RectF();
@@ -513,13 +522,13 @@ final class ReaderDialogStyleController {
             WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
             lp.copyFrom(window.getAttributes());
             int screenWidth = activity.getResources().getDisplayMetrics().widthPixels;
-            int cappedWidth = Math.min(screenWidth - activity.dpToPx(horizontalMarginDp), activity.dpToPx(maxWidthDp));
+            int cappedWidth = Math.min(screenWidth - dpToPx(horizontalMarginDp), dpToPx(maxWidthDp));
             if (widthFraction > 0f && widthFraction < 1f) {
-                cappedWidth = Math.min(Math.round(screenWidth * widthFraction), activity.dpToPx(maxWidthDp));
+                cappedWidth = Math.min(Math.round(screenWidth * widthFraction), dpToPx(maxWidthDp));
             }
-            lp.width = Math.max(activity.dpToPx(220), cappedWidth);
+            lp.width = Math.max(dpToPx(220), cappedWidth);
             lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
-            lp.y = activity.dpToPx(yDp);
+            lp.y = dpToPx(yDp);
             lp.dimAmount = 0.16f;
             window.setAttributes(lp);
             window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
@@ -527,7 +536,7 @@ final class ReaderDialogStyleController {
                 window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
             }
         }
-        int widthPx = Math.max(activity.dpToPx(220), lpWidthForAdaptiveDialog(horizontalMarginDp, maxWidthDp, widthFraction));
+        int widthPx = Math.max(dpToPx(220), lpWidthForAdaptiveDialog(horizontalMarginDp, maxWidthDp, widthFraction));
         applyAdaptiveDialogMaxHeight(dialog, adaptiveScroll, widthPx);
 
         // Track for single-dialog enforcement. We intentionally do NOT attach an
@@ -540,9 +549,9 @@ final class ReaderDialogStyleController {
 
     int lpWidthForAdaptiveDialog(int horizontalMarginDp, int maxWidthDp, float widthFraction) {
         int screenWidth = activity.getResources().getDisplayMetrics().widthPixels;
-        int cappedWidth = Math.min(screenWidth - activity.dpToPx(horizontalMarginDp), activity.dpToPx(maxWidthDp));
+        int cappedWidth = Math.min(screenWidth - dpToPx(horizontalMarginDp), dpToPx(maxWidthDp));
         if (widthFraction > 0f && widthFraction < 1f) {
-            cappedWidth = Math.min(Math.round(screenWidth * widthFraction), activity.dpToPx(maxWidthDp));
+            cappedWidth = Math.min(Math.round(screenWidth * widthFraction), dpToPx(maxWidthDp));
         }
         return cappedWidth;
     }
@@ -587,7 +596,7 @@ final class ReaderDialogStyleController {
 
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
         lp.copyFrom(window.getAttributes());
-        lp.y = activity.dpToPx(yDp);
+        lp.y = dpToPx(yDp);
         window.setAttributes(lp);
     }
 
@@ -599,7 +608,7 @@ final class ReaderDialogStyleController {
         button.setGravity(gravity);
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setBackgroundColor(Color.TRANSPARENT);
-        button.setPadding(activity.dpToPx(18), 0, activity.dpToPx(18), 0);
+        button.setPadding(dpToPx(18), 0, dpToPx(18), 0);
         return button;
     }
 
@@ -649,8 +658,8 @@ final class ReaderDialogStyleController {
         // Natural fit: no outer rectangle or horizontal separator. The action
         // buttons sit on the same card background as the rest of the TXT dialog.
         panel.setBackground(actionPanelBackground(panelFill, lineColor));
-        panel.setPadding(activity.dpToPx(12), activity.dpToPx(6), activity.dpToPx(12), activity.dpToPx(6));
-        panel.setMinimumHeight(activity.dpToPx(50));
+        panel.setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6));
+        panel.setMinimumHeight(dpToPx(50));
         panel.setClipToOutline(false);
 
         if (panel instanceof ViewGroup) {
@@ -669,15 +678,15 @@ final class ReaderDialogStyleController {
         button.setTextColor(textColor);
         button.setBackgroundColor(Color.TRANSPARENT);
         button.setAllCaps(false);
-        button.setMinWidth(activity.dpToPx(72));
-        button.setMinimumWidth(activity.dpToPx(72));
-        button.setMinHeight(activity.dpToPx(40));
-        button.setMinimumHeight(activity.dpToPx(40));
-        button.setPadding(activity.dpToPx(14), 0, activity.dpToPx(14), 0);
+        button.setMinWidth(dpToPx(72));
+        button.setMinimumWidth(dpToPx(72));
+        button.setMinHeight(dpToPx(40));
+        button.setMinimumHeight(dpToPx(40));
+        button.setPadding(dpToPx(14), 0, dpToPx(14), 0);
 
         ViewGroup.LayoutParams rawLp = button.getLayoutParams();
         if (rawLp instanceof LinearLayout.LayoutParams lp) {
-            lp.setMargins(activity.dpToPx(2), 0, activity.dpToPx(2), 0);
+            lp.setMargins(dpToPx(2), 0, dpToPx(2), 0);
             button.setLayoutParams(lp);
         }
     }
@@ -700,7 +709,7 @@ final class ReaderDialogStyleController {
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setBackgroundColor(Color.TRANSPARENT);
-        box.setPadding(activity.dpToPx(22), activity.dpToPx(12), activity.dpToPx(22), activity.dpToPx(8));
+        box.setPadding(dpToPx(22), dpToPx(12), dpToPx(22), dpToPx(8));
 
         TextView message = new TextView(activity);
         String body = bookmark.getFileName() + "\n\n" + bookmark.getDisplayText();
@@ -708,7 +717,7 @@ final class ReaderDialogStyleController {
         message.setTextColor(fg);
         message.setTextSize(14f);
         message.setLineSpacing(0f, 1.15f);
-        message.setPadding(0, activity.dpToPx(4), 0, activity.dpToPx(8));
+        message.setPadding(0, dpToPx(4), 0, dpToPx(8));
         box.addView(message, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -717,7 +726,7 @@ final class ReaderDialogStyleController {
         warning.setText(activity.getString(R.string.delete_this_bookmark));
         warning.setTextColor(sub);
         warning.setTextSize(13f);
-        warning.setPadding(0, activity.dpToPx(4), 0, 0);
+        warning.setPadding(0, dpToPx(4), 0, 0);
         box.addView(warning, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -729,11 +738,11 @@ final class ReaderDialogStyleController {
         actions.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
         actions.setBackground(actionPanelBackground(
                 dialogActionPanelFillColor(bg), dialogActionPanelLineColor(bg)));
-        actions.setPadding(activity.dpToPx(8), activity.dpToPx(4), activity.dpToPx(8), activity.dpToPx(4));
+        actions.setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4));
         TextView cancel = makeReaderDialogActionText(activity.getString(R.string.cancel), sub, Gravity.CENTER);
         TextView delete = makeReaderDialogActionText(activity.getString(R.string.delete), danger, Gravity.CENTER);
-        actions.addView(cancel, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, activity.dpToPx(46)));
-        actions.addView(delete, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, activity.dpToPx(46)));
+        actions.addView(cancel, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dpToPx(46)));
+        actions.addView(delete, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dpToPx(46)));
         panel.addView(actions, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -742,7 +751,7 @@ final class ReaderDialogStyleController {
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL, 74, 14, 460, false);
         cancel.setOnClickListener(v -> dialog.dismiss());
         delete.setOnClickListener(v -> {
-            activity.bookmarkManager.deleteBookmark(bookmark.getId());
+            deleteBookmarkViaHost(bookmark.getId());
             if (afterDelete != null) afterDelete.run();
             dialog.dismiss();
         });
@@ -782,16 +791,16 @@ final class ReaderDialogStyleController {
 
         // Give text a real left gap so "검색할 텍스트" / "정확한 페이지 번호" is not
         // stuck to the beginning of the box.
-        input.setPadding(activity.dpToPx(16), 0, activity.dpToPx(16), 0);
+        input.setPadding(dpToPx(16), 0, dpToPx(16), 0);
 
         int fill = blendColors(bgColor, fgColor, isLightColor(bgColor) ? 0.025f : 0.035f);
         int stroke = blendColors(bgColor, fgColor, isLightColor(bgColor) ? 0.10f : 0.14f);
 
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(fill);
-        drawable.setCornerRadius(activity.dpToPx(6));
+        drawable.setCornerRadius(dpToPx(6));
         // Subtle inner boundary only. The strong contrast border belongs to the OUTER dialog box.
-        drawable.setStroke(activity.dpToPx(1), stroke);
+        drawable.setStroke(dpToPx(1), stroke);
 
         input.setBackgroundTintList(null);
         input.setBackground(drawable);
@@ -809,7 +818,7 @@ final class ReaderDialogStyleController {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             GradientDrawable cursor = new GradientDrawable();
             cursor.setColor(accent);
-            cursor.setSize(Math.max(2, activity.dpToPx(2)), activity.dpToPx(28));
+            cursor.setSize(Math.max(2, dpToPx(2)), dpToPx(28));
             input.setTextCursorDrawable(cursor);
         }
 

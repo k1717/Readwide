@@ -555,6 +555,12 @@
     <string name="tts_voice_offline">ngoại tuyến</string>
     <string name="tts_speed">Tốc độ</string>
     <string name="tts_pitch">Cao độ</string>
+    <string name="tts_phrase_length_short">Độ dài cụm từ: Ngắn</string>
+    <string name="tts_phrase_length_medium">Độ dài cụm từ: Vừa</string>
+    <string name="tts_phrase_length_long">Độ dài cụm từ: Dài</string>
+    <string name="tts_pause_reduction_off">Giảm khoảng dừng: Tắt</string>
+    <string name="tts_pause_reduction_medium">Giảm khoảng dừng: Vừa</string>
+    <string name="tts_pause_reduction_aggressive">Giảm khoảng dừng: Mạnh</string>
     <string name="tts_android_settings">Cài đặt Android TTS</string>
     <string name="tts_add_voice_model">Thêm/tải xuống mô hình giọng nói</string>
     <string name="tts_settings_unavailable">Không thể mở cài đặt Android TTS.</string>

@@ -45,7 +45,7 @@ import java.util.List;
  * The denominator cannot grow while dragging because it is not based on RecyclerView's
  * lazy/estimated scroll range.
  */
-public class CustomReaderView extends View {
+public class CustomReaderView extends View implements com.readwide.manager.TtsTextSource {
 
     public interface ReaderListener {
         void onSingleTap(float x, float y);

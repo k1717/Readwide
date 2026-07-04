@@ -555,6 +555,12 @@
     <string name="tts_voice_offline">offline</string>
     <string name="tts_speed">Hastighet</string>
     <string name="tts_pitch">Tonhöjd</string>
+    <string name="tts_phrase_length_short">Fraslängd: Kort</string>
+    <string name="tts_phrase_length_medium">Fraslängd: Medel</string>
+    <string name="tts_phrase_length_long">Fraslängd: Lång</string>
+    <string name="tts_pause_reduction_off">Pausreducering: Av</string>
+    <string name="tts_pause_reduction_medium">Pausreducering: Medel</string>
+    <string name="tts_pause_reduction_aggressive">Pausreducering: Kraftig</string>
     <string name="tts_android_settings">Android TTS-inställningar</string>
     <string name="tts_add_voice_model">Lägg till/ladda ner röstmodeller</string>
     <string name="tts_settings_unavailable">Det gick inte att öppna Android TTS-inställningarna.</string>

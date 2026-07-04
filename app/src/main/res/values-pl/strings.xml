@@ -567,6 +567,12 @@ Reguły: %2$d włączonych reguł</string>
     <string name="tts_voice_offline">offline</string>
     <string name="tts_speed">Szybkość</string>
     <string name="tts_pitch">Wysokość głosu</string>
+    <string name="tts_phrase_length_short">Długość frazy: Krótka</string>
+    <string name="tts_phrase_length_medium">Długość frazy: Średnia</string>
+    <string name="tts_phrase_length_long">Długość frazy: Długa</string>
+    <string name="tts_pause_reduction_off">Redukcja pauz: Wyłączona</string>
+    <string name="tts_pause_reduction_medium">Redukcja pauz: Średnia</string>
+    <string name="tts_pause_reduction_aggressive">Redukcja pauz: Silna</string>
     <string name="tts_android_settings">Ustawienia Android TTS</string>
     <string name="tts_add_voice_model">Dodaj/pobierz modele głosu</string>
     <string name="tts_settings_unavailable">Nie można otworzyć ustawień Android TTS.</string>

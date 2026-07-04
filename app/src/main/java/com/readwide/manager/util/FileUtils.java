@@ -449,6 +449,10 @@ public class FileUtils {
                 || lower.endsWith(".tar.xz") || lower.endsWith(".txz")
                 || lower.endsWith(".tar.lzma") || lower.endsWith(".tlz")
                 || lower.endsWith(".tar.z") || lower.endsWith(".taz")
+                || lower.endsWith(".tar.zst") || lower.endsWith(".tzst")
+                || lower.endsWith(".tar.lz4")
+                || lower.endsWith(".zst")
+                || lower.endsWith(".lz4")
                 || lower.endsWith(".gz")
                 || lower.endsWith(".bz2")
                 || lower.endsWith(".xz")
@@ -732,7 +736,12 @@ public class FileUtils {
         return lower.endsWith(".xhtml") || lower.endsWith(".html") || lower.endsWith(".htm");
     }
 
-    private static String htmlToPlainText(String html) {
+    /**
+     * Plain reading text from rendered page HTML. Used by document search and,
+     * since read-aloud reached the document viewer, by
+     * {@code DocumentTtsTextSource} to build the page-indexed speech buffer.
+     */
+    public static String htmlToPlainText(String html) {
         if (html == null || html.isEmpty()) return "";
 
         String cleaned = html

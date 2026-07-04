@@ -904,6 +904,33 @@ public class PrefsManager {
         prefs.edit().putInt("tts_pitch_percent", Math.max(50, Math.min(200, percent))).apply();
     }
 
+    // Phrase length: how many characters the segmenter aims for per spoken chunk.
+    // 0 = Short (~200 chars, the neural sweet spot; snappier, slightly more robotic),
+    // 1 = Medium (~400), 2 = Long (~700, the pre-1.0.11 default; best prosody, more
+    // synthesis latency per chunk). Stored as the 0/1/2 index, not the char count,
+    // so the mapping can be tuned later without migrating stored values.
+    public int getTtsPhraseLengthLevel() {
+        return Math.max(0, Math.min(2, prefs.getInt("tts_phrase_length_level", 2)));
+    }
+
+    public void setTtsPhraseLengthLevel(int level) {
+        prefs.edit().putInt("tts_phrase_length_level", Math.max(0, Math.min(2, level))).apply();
+    }
+
+    // Pause reduction: text-level punctuation smoothing for engines that over-pause.
+    // 0 = Off (default; punctuation untouched beyond the standard speech cleanup),
+    // 1 = Medium (drop most commas so clauses run together),
+    // 2 = Aggressive (also soften sentence stops so the cadence keeps moving).
+    // This is purely a text transform - it never touches audio - so it stays within
+    // the TextToSpeech-delegated architecture.
+    public int getTtsPauseReduction() {
+        return Math.max(0, Math.min(2, prefs.getInt("tts_pause_reduction", 0)));
+    }
+
+    public void setTtsPauseReduction(int level) {
+        prefs.edit().putInt("tts_pause_reduction", Math.max(0, Math.min(2, level))).apply();
+    }
+
     public void setTtsLastPlaybackState(String filePath, int charPosition, int pageNumber, boolean continuous, int sleepTimerMinutes) {
         prefs.edit()
                 .putString("tts_last_file_path", filePath == null ? "" : filePath)

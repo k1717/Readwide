@@ -72,7 +72,7 @@ It is a **direct-dependency/source-declared report**, not a fully resolved trans
 
 Before publishing source or APK release materials:
 
-1. Include `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `PRIVACY.md`, `docs/FOSS_STATUS.md`, this report, and `docs/SBOM_READWIDE_1_0_9.spdx.json`.
+1. Include `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `PRIVACY.md`, `docs/FOSS_STATUS.md`, this report, and `docs/SBOM_READWIDE_1_0_10.spdx.json`.
 2. Confirm `app/libs` is absent or contains no optional local jars.
 3. Confirm no Junrar/UnRAR-license code or jar is bundled in the default source/APK.
 4. Confirm native dependency notices for libarchive-android/libarchive and zstd-jni/Zstandard are kept with binary release materials.

@@ -1,5 +1,6 @@
 package com.readwide.manager;
 
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.TextView;
 
@@ -29,7 +30,24 @@ final class MainRecentFilesController {
     // position threshold commits, mirroring the drawer's move-then-commit feel.
     private static final float SWIPE_DISMISS_FRACTION = 0.45f;
 
+    // A dismiss swipe must be clearly horizontal before it can start: the
+    // finger's total horizontal travel since touch-down has to be at least
+    // this multiple of its vertical travel (2x is about 26.6 degrees off the
+    // horizontal). Steeper, diagonal drags never grab the row, so a sloppy
+    // vertical scroll cannot slide a recent card sideways. Once a swipe has
+    // legitimately started, later finger wobble does not cancel it because
+    // ItemTouchHelper only consults getSwipeDirs before selection.
+    private static final float SWIPE_HORIZONTAL_DOMINANCE = 2f;
+
     private final MainActivity activity;
+
+    // Cumulative finger travel of the current touch gesture on the recent
+    // list, recorded by an observing OnItemTouchListener registered before the
+    // ItemTouchHelper so it sees every event first.
+    private float swipeGestureDownX;
+    private float swipeGestureDownY;
+    private float swipeGestureDx;
+    private float swipeGestureDy;
 
     // Full visible recent list (the search corpus) and the states behind it,
     // kept in sync with the store so search and swipe-delete operate on
@@ -240,6 +258,26 @@ final class MainRecentFilesController {
 
     void attachSwipeToDismiss() {
         if (activity.recentRecyclerView == null) return;
+        // Observe-only touch listener (always returns false) that tracks the
+        // gesture's travel from ACTION_DOWN. Registered before the
+        // ItemTouchHelper attaches its own listener, so the travel is up to
+        // date whenever getSwipeDirs is consulted for swipe selection.
+        activity.recentRecyclerView.addOnItemTouchListener(new RecyclerView.SimpleOnItemTouchListener() {
+            @Override
+            public boolean onInterceptTouchEvent(@NonNull RecyclerView rv, @NonNull MotionEvent e) {
+                int action = e.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN) {
+                    swipeGestureDownX = e.getX();
+                    swipeGestureDownY = e.getY();
+                    swipeGestureDx = 0f;
+                    swipeGestureDy = 0f;
+                } else if (action == MotionEvent.ACTION_MOVE) {
+                    swipeGestureDx = e.getX() - swipeGestureDownX;
+                    swipeGestureDy = e.getY() - swipeGestureDownY;
+                }
+                return false;
+            }
+        });
         androidx.recyclerview.widget.ItemTouchHelper.SimpleCallback callback =
                 new androidx.recyclerview.widget.ItemTouchHelper.SimpleCallback(
                         0, androidx.recyclerview.widget.ItemTouchHelper.LEFT) {
@@ -256,6 +294,9 @@ final class MainRecentFilesController {
                         // No row deletion mid multi-select; a swipe there is
                         // ambiguous against selection toggling.
                         if (activity.fileSelectionMode) return 0;
+                        // Diagonal drags never start a dismiss: require the
+                        // gesture so far to be clearly horizontal.
+                        if (!isSwipeGestureHorizontal()) return 0;
                         return super.getSwipeDirs(rv, vh);
                     }
 
@@ -281,6 +322,12 @@ final class MainRecentFilesController {
                 };
         new androidx.recyclerview.widget.ItemTouchHelper(callback)
                 .attachToRecyclerView(activity.recentRecyclerView);
+    }
+
+    private boolean isSwipeGestureHorizontal() {
+        float absDx = Math.abs(swipeGestureDx);
+        float absDy = Math.abs(swipeGestureDy);
+        return absDx >= absDy * SWIPE_HORIZONTAL_DOMINANCE;
     }
 
     private void removeRecentItemAt(int position) {

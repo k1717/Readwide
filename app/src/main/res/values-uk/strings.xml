@@ -567,6 +567,12 @@
     <string name="tts_voice_offline">offline</string>
     <string name="tts_speed">Швидкість</string>
     <string name="tts_pitch">Висота голосу</string>
+    <string name="tts_phrase_length_short">Довжина фрази: Коротка</string>
+    <string name="tts_phrase_length_medium">Довжина фрази: Середня</string>
+    <string name="tts_phrase_length_long">Довжина фрази: Довга</string>
+    <string name="tts_pause_reduction_off">Зменшення пауз: Вимкнено</string>
+    <string name="tts_pause_reduction_medium">Зменшення пауз: Середнє</string>
+    <string name="tts_pause_reduction_aggressive">Зменшення пауз: Сильне</string>
     <string name="tts_android_settings">Налаштування Android TTS</string>
     <string name="tts_add_voice_model">Додати/завантажити голосові моделі</string>
     <string name="tts_settings_unavailable">Не вдалося відкрити налаштування Android TTS.</string>

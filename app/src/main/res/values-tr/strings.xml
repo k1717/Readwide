@@ -561,6 +561,12 @@ Kurallar: %2$d etkin kural</string>
     <string name="tts_voice_offline">çevrimdışı</string>
     <string name="tts_speed">Hız</string>
     <string name="tts_pitch">Perde</string>
+    <string name="tts_phrase_length_short">İfade uzunluğu: Kısa</string>
+    <string name="tts_phrase_length_medium">İfade uzunluğu: Orta</string>
+    <string name="tts_phrase_length_long">İfade uzunluğu: Uzun</string>
+    <string name="tts_pause_reduction_off">Duraklama azaltma: Kapalı</string>
+    <string name="tts_pause_reduction_medium">Duraklama azaltma: Orta</string>
+    <string name="tts_pause_reduction_aggressive">Duraklama azaltma: Güçlü</string>
     <string name="tts_android_settings">Android TTS ayarları</string>
     <string name="tts_add_voice_model">Ses modelleri ekle/indir</string>
     <string name="tts_settings_unavailable">Android TTS ayarları açılamadı.</string>

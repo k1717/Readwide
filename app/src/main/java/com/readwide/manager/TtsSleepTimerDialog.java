@@ -17,17 +17,23 @@ import androidx.annotation.Nullable;
  * controller to re-read them mid-playback via {@link ReaderTtsController#refreshSleepTimerFromPrefs()}.
  */
 final class TtsSleepTimerDialog {
-    private final ReaderActivity activity;
+    private final TtsHost host;
+    private final androidx.appcompat.app.AppCompatActivity activity;
     private final ReaderTtsController controller;
 
-    TtsSleepTimerDialog(@NonNull ReaderActivity activity, @NonNull ReaderTtsController controller) {
-        this.activity = activity;
+    TtsSleepTimerDialog(@NonNull TtsHost host, @NonNull ReaderTtsController controller) {
+        this.host = host;
+        this.activity = host.ttsHostActivity();
         this.controller = controller;
+    }
+
+    private com.readwide.manager.util.PrefsManager prefs() {
+        return host.ttsHostPrefs();
     }
 
     /** Label for the row that opens this dialog (shows the current setting). */
     String rowLabel() {
-        int minutes = activity.prefs != null ? activity.prefs.getTtsSleepTimerMinutes() : 0;
+        int minutes = prefs() != null ? prefs().getTtsSleepTimerMinutes() : 0;
         if (minutes <= 0) {
             return activity.getString(R.string.tts_sleep_timer) + ": "
                     + activity.getString(R.string.tts_sleep_timer_off);
@@ -36,16 +42,16 @@ final class TtsSleepTimerDialog {
     }
 
     void show(@Nullable Runnable onChanged) {
-        if (activity.prefs == null) return;
-        activity.dialogStyler().syncReaderDialogThemeSnapshot();
-        final int bg = activity.dialogStyler().readerDialogBgColor();
-        final int fg = activity.dialogStyler().readerDialogTextColor(bg);
+        if (prefs() == null) return;
+        host.ttsHostDialogStyler().syncReaderDialogThemeSnapshot();
+        final int bg = host.ttsHostDialogStyler().readerDialogBgColor();
+        final int fg = host.ttsHostDialogStyler().readerDialogTextColor(bg);
 
         LinearLayout outer = new LinearLayout(activity);
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setBackgroundColor(Color.TRANSPARENT);
 
-        TextView title = activity.dialogStyler().makeReaderDialogTitle(
+        TextView title = host.ttsHostDialogStyler().makeReaderDialogTitle(
                 activity.getString(R.string.tts_sleep_timer), bg, fg);
         outer.addView(title, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -53,8 +59,8 @@ final class TtsSleepTimerDialog {
 
         LinearLayout list = new LinearLayout(activity);
         list.setOrientation(LinearLayout.VERTICAL);
-        int pad = activity.dpToPx(14);
-        list.setPadding(pad, activity.dpToPx(4), pad, activity.dpToPx(8));
+        int pad = host.ttsHostDpToPx(14);
+        list.setPadding(pad, host.ttsHostDpToPx(4), pad, host.ttsHostDpToPx(8));
 
         final android.app.Dialog[] ref = new android.app.Dialog[1];
 
@@ -68,12 +74,12 @@ final class TtsSleepTimerDialog {
         };
         for (int i = 0; i < presets.length; i++) {
             final int minutes = presets[i];
-            TextView row = activity.dialogStyler().makeReaderActionRow(
+            TextView row = host.ttsHostDialogStyler().makeReaderActionRow(
                     activity.getString(labels[i]), fg);
             row.setGravity(Gravity.CENTER);
             row.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
             row.setOnClickListener(v -> {
-                activity.prefs.setTtsSleepTimerMinutes(minutes);
+                prefs().setTtsSleepTimerMinutes(minutes);
                 controller.refreshSleepTimerFromPrefs();
                 if (onChanged != null) onChanged.run();
                 if (ref[0] != null) ref[0].dismiss();
@@ -81,7 +87,7 @@ final class TtsSleepTimerDialog {
             list.addView(row);
         }
 
-        TextView customRow = activity.dialogStyler().makeReaderActionRow(
+        TextView customRow = host.ttsHostDialogStyler().makeReaderActionRow(
                 activity.getString(R.string.tts_sleep_timer_custom), fg);
         customRow.setGravity(Gravity.CENTER);
         customRow.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
@@ -91,13 +97,13 @@ final class TtsSleepTimerDialog {
         }));
         list.addView(customRow);
 
-        TextView finishToggle = activity.dialogStyler().makeReaderActionRow(
+        TextView finishToggle = host.ttsHostDialogStyler().makeReaderActionRow(
                 finishSentenceRowLabel(), fg);
         finishToggle.setGravity(Gravity.CENTER);
         finishToggle.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
         finishToggle.setOnClickListener(v -> {
-            boolean next = !activity.prefs.getTtsSleepTimerFinishSentence();
-            activity.prefs.setTtsSleepTimerFinishSentence(next);
+            boolean next = !prefs().getTtsSleepTimerFinishSentence();
+            prefs().setTtsSleepTimerFinishSentence(next);
             controller.refreshSleepTimerFromPrefs();
             finishToggle.setText(finishSentenceRowLabel());
         });
@@ -105,13 +111,13 @@ final class TtsSleepTimerDialog {
 
         ScrollView scroll = new ScrollView(activity);
         scroll.setBackgroundColor(Color.TRANSPARENT);
-        activity.dialogStyler().constrainDialogScrollArea(scroll, list);
+        host.ttsHostDialogStyler().constrainDialogScrollArea(scroll, list);
         scroll.addView(list);
         outer.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        android.app.Dialog dialog = activity.dialogStyler().createNarrowPositionedReaderDialog(
+        android.app.Dialog dialog = host.ttsHostDialogStyler().createNarrowPositionedReaderDialog(
                 outer,
                 bg,
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL,
@@ -124,23 +130,23 @@ final class TtsSleepTimerDialog {
     }
 
     private String finishSentenceRowLabel() {
-        boolean on = activity.prefs != null && activity.prefs.getTtsSleepTimerFinishSentence();
+        boolean on = prefs() != null && prefs().getTtsSleepTimerFinishSentence();
         return activity.getString(R.string.tts_sleep_timer_finish_sentence)
                 + ": " + (on ? "ON" : "OFF");
     }
 
     private void showCustom(@Nullable Runnable onChanged) {
-        if (activity.prefs == null) return;
-        activity.dialogStyler().syncReaderDialogThemeSnapshot();
-        final int bg = activity.dialogStyler().readerDialogBgColor();
-        final int fg = activity.dialogStyler().readerDialogTextColor(bg);
-        final int sub = activity.dialogStyler().readerDialogSubTextColor(bg);
+        if (prefs() == null) return;
+        host.ttsHostDialogStyler().syncReaderDialogThemeSnapshot();
+        final int bg = host.ttsHostDialogStyler().readerDialogBgColor();
+        final int fg = host.ttsHostDialogStyler().readerDialogTextColor(bg);
+        final int sub = host.ttsHostDialogStyler().readerDialogSubTextColor(bg);
 
         LinearLayout outer = new LinearLayout(activity);
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setBackgroundColor(Color.TRANSPARENT);
 
-        TextView title = activity.dialogStyler().makeReaderDialogTitle(
+        TextView title = host.ttsHostDialogStyler().makeReaderDialogTitle(
                 activity.getString(R.string.tts_sleep_timer_custom_minutes), bg, fg);
         outer.addView(title, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -148,8 +154,8 @@ final class TtsSleepTimerDialog {
 
         LinearLayout body = new LinearLayout(activity);
         body.setOrientation(LinearLayout.VERTICAL);
-        int pad = activity.dpToPx(16);
-        body.setPadding(pad, activity.dpToPx(6), pad, activity.dpToPx(6));
+        int pad = host.ttsHostDpToPx(16);
+        body.setPadding(pad, host.ttsHostDpToPx(6), pad, host.ttsHostDpToPx(6));
 
         final android.widget.EditText input = new android.widget.EditText(activity);
         input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
@@ -157,14 +163,14 @@ final class TtsSleepTimerDialog {
         input.setHintTextColor(sub);
         input.setHint(R.string.tts_sleep_timer_custom_minutes);
         input.setGravity(Gravity.CENTER);
-        input.setPadding(activity.dpToPx(14), activity.dpToPx(10),
-                activity.dpToPx(14), activity.dpToPx(10));
+        input.setPadding(host.ttsHostDpToPx(14), host.ttsHostDpToPx(10),
+                host.ttsHostDpToPx(14), host.ttsHostDpToPx(10));
         GradientDrawable inputBg = new GradientDrawable();
-        inputBg.setCornerRadius(activity.dpToPx(12));
-        inputBg.setColor(activity.dialogStyler().readerDialogPanelColor());
-        inputBg.setStroke(activity.dpToPx(1), sub);
+        inputBg.setCornerRadius(host.ttsHostDpToPx(12));
+        inputBg.setColor(host.ttsHostDialogStyler().readerDialogPanelColor());
+        inputBg.setStroke(host.ttsHostDpToPx(1), sub);
         input.setBackground(inputBg);
-        int current = activity.prefs.getTtsSleepTimerMinutes();
+        int current = prefs().getTtsSleepTimerMinutes();
         if (current > 0) input.setText(String.valueOf(current));
         body.addView(input, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -172,7 +178,7 @@ final class TtsSleepTimerDialog {
 
         final android.app.Dialog[] ref = new android.app.Dialog[1];
 
-        TextView okRow = activity.dialogStyler().makeReaderActionRow(
+        TextView okRow = host.ttsHostDialogStyler().makeReaderActionRow(
                 activity.getString(android.R.string.ok), fg);
         okRow.setGravity(Gravity.CENTER);
         okRow.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
@@ -182,14 +188,14 @@ final class TtsSleepTimerDialog {
                 minutes = Integer.parseInt(input.getText().toString().trim());
             } catch (NumberFormatException ignored) { }
             minutes = Math.max(0, Math.min(600, minutes));
-            activity.prefs.setTtsSleepTimerMinutes(minutes);
+            prefs().setTtsSleepTimerMinutes(minutes);
             controller.refreshSleepTimerFromPrefs();
             if (onChanged != null) onChanged.run();
             if (ref[0] != null) ref[0].dismiss();
         });
         body.addView(okRow);
 
-        TextView cancelRow = activity.dialogStyler().makeReaderActionRow(
+        TextView cancelRow = host.ttsHostDialogStyler().makeReaderActionRow(
                 activity.getString(android.R.string.cancel), fg);
         cancelRow.setGravity(Gravity.CENTER);
         cancelRow.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
@@ -202,7 +208,7 @@ final class TtsSleepTimerDialog {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        android.app.Dialog dialog = activity.dialogStyler().createNarrowPositionedReaderDialog(
+        android.app.Dialog dialog = host.ttsHostDialogStyler().createNarrowPositionedReaderDialog(
                 outer,
                 bg,
                 Gravity.CENTER,

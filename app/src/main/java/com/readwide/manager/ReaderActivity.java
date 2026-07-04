@@ -84,7 +84,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class ReaderActivity extends AppCompatActivity {
+public class ReaderActivity extends AppCompatActivity implements TtsHost, ReaderDialogStyleHost {
 
     static final long LARGE_TEXT_FAST_OPEN_THRESHOLD_BYTES = 3L * 1024L * 1024L;
     private static final long HUGE_TEXT_PREVIEW_ONLY_THRESHOLD_BYTES = 32L * 1024L * 1024L;
@@ -972,6 +972,160 @@ public class ReaderActivity extends AppCompatActivity {
         readerTts().handlePlaybackCommand(action);
     }
 
+    // ---- TtsHost (public wrappers over the package members ReaderTtsController
+    // ---- historically reached into; behavior-preserving by construction).
+
+    @Override
+    @NonNull
+    public androidx.appcompat.app.AppCompatActivity ttsHostActivity() {
+        return this;
+    }
+
+    @Override
+    @Nullable
+    public PrefsManager ttsHostPrefs() {
+        return prefs;
+    }
+
+    @Override
+    @NonNull
+    public ReaderDialogStyleController ttsHostDialogStyler() {
+        return dialogStyler();
+    }
+
+    @Override
+    public int ttsHostDpToPx(int dp) {
+        return dpToPx(dp);
+    }
+
+    @Override
+    @Nullable
+    public TtsTextSource ttsTextSource() {
+        return readerView;
+    }
+
+    @Override
+    public boolean isTtsHostDestroyed() {
+        return activityDestroyed;
+    }
+
+    @Override
+    @Nullable
+    public String ttsHostFilePath() {
+        return filePath;
+    }
+
+    @Override
+    @NonNull
+    public android.os.Handler ttsHostHandler() {
+        return handler;
+    }
+
+    @Override
+    public boolean isTtsTextFullyResident() {
+        return !largeTextEstimateActive;
+    }
+
+    @Override
+    public boolean isTtsTextTemporarilyUnavailable() {
+        return largeTextEstimateActive && largeTextPartitionSwitchState.isInProgress();
+    }
+
+    @Override
+    public int ttsDisplayedCurrentPageNumber() {
+        return getDisplayedCurrentPageNumber();
+    }
+
+    @Override
+    public int ttsDisplayedTotalPageCount() {
+        return getDisplayedTotalPageCount();
+    }
+
+    @Override
+    public int ttsCurrentCharPosition() {
+        return getCurrentCharPosition();
+    }
+
+    @Override
+    public void ttsHostPageBy(int direction) {
+        pageBy(direction, true);
+    }
+
+    @Override
+    public void ttsJumpToAbsoluteCharPosition(int charPosition) {
+        jumpToAbsoluteCharPosition(charPosition);
+    }
+
+    @Override
+    public void ttsJumpToAbsoluteCharPosition(int charPosition, int displayPage, int totalPages) {
+        jumpToAbsoluteCharPosition(charPosition, displayPage, totalPages);
+    }
+
+    @Override
+    public void ttsUpdateFloatingCard() {
+        updateTtsFloatingCard();
+    }
+
+    @Override
+    public void ttsStopAutoPageTurn() {
+        stopAutoPageTurn(false);
+    }
+
+    @Override
+    public void ttsHandlePlaybackCommand(@NonNull String action) {
+        handleTtsPlaybackCommand(action);
+    }
+
+    @Override
+    @NonNull
+    public String ttsHostKind() {
+        return TtsPlaybackService.HOST_READER;
+    }
+
+    // ---- ReaderDialogStyleHost
+
+    @Override
+    @NonNull
+    public androidx.appcompat.app.AppCompatActivity dialogStyleHostActivity() {
+        return this;
+    }
+
+    @Override
+    public int dialogStyleDpToPx(int dp) {
+        return dpToPx(dp);
+    }
+
+    @Override
+    @NonNull
+    public ThemeManager dialogStyleThemeManager() {
+        if (themeManager == null) {
+            themeManager = ThemeManager.getInstance(this);
+        }
+        return themeManager;
+    }
+
+    @Override
+    public int dialogSnapshotBackgroundColor() {
+        return currentReaderBackgroundColor;
+    }
+
+    @Override
+    public int dialogSnapshotTextColor() {
+        return currentReaderTextColor;
+    }
+
+    @Override
+    public void setDialogSnapshotColors(int backgroundColor, int textColor) {
+        currentReaderBackgroundColor = backgroundColor;
+        currentReaderTextColor = textColor;
+    }
+
+    @Override
+    @Nullable
+    public BookmarkManager dialogStyleBookmarkManager() {
+        return bookmarkManager;
+    }
+
     boolean isTtsActive() {
         return readerTtsController != null && readerTtsController.isActive();
     }
@@ -1833,6 +1987,8 @@ public class ReaderActivity extends AppCompatActivity {
     void cancelBackgroundMemoryTrim() { readerMemory().cancelBackgroundMemoryTrim(); }
 
     void scheduleBackgroundMemoryTrim() { readerMemory().scheduleBackgroundMemoryTrim(); }
+
+    void discardTransientRestoreStateForNewLoad() { readerMemory().discardTransientRestoreStateForNewLoad(); }
 
     boolean restoreReaderAfterBackgroundMemoryTrimIfNeeded() {
         return readerMemory().restoreReaderAfterBackgroundMemoryTrimIfNeeded();

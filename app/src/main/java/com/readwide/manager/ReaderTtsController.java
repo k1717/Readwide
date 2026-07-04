@@ -34,14 +34,14 @@ import java.util.Locale;
 import java.util.Set;
 
 final class ReaderTtsController implements TextToSpeech.OnInitListener {
-    private static final int MAX_TTS_SEGMENT_CHARS = 700;
-    private static final long NEXT_PAGE_DELAY_MS = 320L;
+    private static final int MAX_TTS_SEGMENT_CHARS = 700;    private static final long NEXT_PAGE_DELAY_MS = 320L;
     private static final long PARTITION_RETRY_DELAY_MS = 220L;
     private static final int MAX_PARTITION_RETRIES = 28;
     private static final int REQUEST_TTS_NOTIFICATION_PERMISSION = 2202;
     private static final String ACTION_ANDROID_TTS_SETTINGS = "com.android.settings.TTS_SETTINGS";
 
-    private final ReaderActivity activity;
+    private final TtsHost host;
+    private final androidx.appcompat.app.AppCompatActivity activity;
 
     private TextToSpeech tts;
     private boolean initialized = false;
@@ -63,13 +63,22 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     private TtsSleepTimerDialog sleepTimerDialog() {
         if (sleepTimerDialog == null) {
-            sleepTimerDialog = new TtsSleepTimerDialog(activity, this);
+            sleepTimerDialog = new TtsSleepTimerDialog(host, this);
         }
         return sleepTimerDialog;
     }
     private int currentSegmentIndex = 0;            // segment currently being spoken
     private int pausedSegmentIndex = 0;             // segment to resume from
     private int currentSpeechGeneration = 0;        // generation of the queued page
+
+    // Cross-page pre-buffering: how much of the next page to queue ahead, and the
+    // index in queuedSegments where the prefetched next-page segments begin
+    // (-1 = nothing prefetched). When speech crosses this boundary the UI page is
+    // turned to follow, and the normal end-of-page advance is skipped because the
+    // next page is already playing from the same queue.
+    private static final int PREFETCH_NEXT_PAGE_CHARS = 1400;
+    private int prefetchedNextPageBoundaryIndex = -1;
+    private boolean crossedPrefetchBoundary = false;
 
     // Sleep timer (counts playback time only; paused time does not accrue).
     private long sleepTimerTargetMs = 0L;       // 0 = timer off
@@ -97,8 +106,9 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     };
     private final AudioManager.OnAudioFocusChangeListener audioFocusListener;
 
-    ReaderTtsController(@NonNull ReaderActivity activity) {
-        this.activity = activity;
+    ReaderTtsController(@NonNull TtsHost host) {
+        this.host = host;
+        this.activity = host.ttsHostActivity();
         this.audioFocusListener = focusChange -> {
             switch (focusChange) {
                 case AudioManager.AUDIOFOCUS_LOSS:
@@ -142,10 +152,10 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     void showDialog() {
-        activity.dialogStyler().syncReaderDialogThemeSnapshot();
-        final int bg = activity.dialogStyler().readerDialogBgColor();
-        final int fg = activity.dialogStyler().readerDialogTextColor(bg);
-        final int sub = activity.dialogStyler().readerDialogSubTextColor(bg);
+        host.ttsHostDialogStyler().syncReaderDialogThemeSnapshot();
+        final int bg = host.ttsHostDialogStyler().readerDialogBgColor();
+        final int fg = host.ttsHostDialogStyler().readerDialogTextColor(bg);
+        final int sub = host.ttsHostDialogStyler().readerDialogSubTextColor(bg);
 
         LinearLayout panel = new LinearLayout(activity);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -153,7 +163,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         panel.setClipChildren(true);
         panel.setClipToPadding(true);
 
-        TextView title = activity.dialogStyler().makeReaderDialogTitle(
+        TextView title = host.ttsHostDialogStyler().makeReaderDialogTitle(
                 activity.getString(R.string.tts_title), bg, fg);
         panel.addView(title, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -164,16 +174,16 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         desc.setTextColor(sub);
         desc.setTextSize(13f);
         desc.setLineSpacing(0, 1.08f);
-        desc.setPadding(activity.dpToPx(18), activity.dpToPx(4),
-                activity.dpToPx(18), activity.dpToPx(14));
+        desc.setPadding(host.ttsHostDpToPx(18), host.ttsHostDpToPx(4),
+                host.ttsHostDpToPx(18), host.ttsHostDpToPx(14));
         panel.addView(desc, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
         final android.app.Dialog[] dialogRef = new android.app.Dialog[1];
-        LinearLayout languageBox = TtsDialogViews.makeOptionBox(activity);
+        LinearLayout languageBox = TtsDialogViews.makeOptionBox(host);
         final TextView[] voiceButtonRef = new TextView[1];
-        TextView languageButton = activity.dialogStyler().makeReaderActionRow(
+        TextView languageButton = host.ttsHostDialogStyler().makeReaderActionRow(
                 currentLanguageRowLabel(), fg);
         languageButton.setGravity(Gravity.CENTER);
         languageButton.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
@@ -185,7 +195,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         }));
         languageBox.addView(languageButton);
 
-        TextView voiceButton = activity.dialogStyler().makeReaderActionRow(
+        TextView voiceButton = host.ttsHostDialogStyler().makeReaderActionRow(
                 currentVoiceRowLabel(), fg);
         voiceButtonRef[0] = voiceButton;
         voiceButton.setGravity(Gravity.CENTER);
@@ -195,7 +205,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         languageBox.addView(voiceButton);
 
         if (hasResumeStateForCurrentFile()) {
-            TextView resumeButton = activity.dialogStyler().makeReaderActionRow(
+            TextView resumeButton = host.ttsHostDialogStyler().makeReaderActionRow(
                     resumeRowLabel(), fg);
             resumeButton.setGravity(Gravity.CENTER);
             resumeButton.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
@@ -206,26 +216,61 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             languageBox.addView(resumeButton);
         }
 
-        TtsDialogViews.addPercentSlider(activity, languageBox,
+        TtsDialogViews.addPercentSlider(host, languageBox,
                 activity.getString(R.string.tts_speed),
-                activity.prefs != null ? activity.prefs.getTtsSpeechRatePercent() : 100,
+                host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsSpeechRatePercent() : 100,
                 value -> {
-                    if (activity.prefs != null) activity.prefs.setTtsSpeechRatePercent(value);
+                    if (host.ttsHostPrefs() != null) host.ttsHostPrefs().setTtsSpeechRatePercent(value);
                     applySpeechParameters();
                 },
                 fg,
                 sub);
-        TtsDialogViews.addPercentSlider(activity, languageBox,
+        TtsDialogViews.addPercentSlider(host, languageBox,
                 activity.getString(R.string.tts_pitch),
-                activity.prefs != null ? activity.prefs.getTtsPitchPercent() : 100,
+                host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsPitchPercent() : 100,
                 value -> {
-                    if (activity.prefs != null) activity.prefs.setTtsPitchPercent(value);
+                    if (host.ttsHostPrefs() != null) host.ttsHostPrefs().setTtsPitchPercent(value);
                     applySpeechParameters();
                 },
                 fg,
                 sub);
 
-        TextView sleepTimerButton = activity.dialogStyler().makeReaderActionRow(
+        // Phrase length (chunk size) and pause reduction are tap-to-cycle rows:
+        // both are text-level controls that take effect on the next queued page,
+        // so they need no live re-synthesis. They help high-latency neural engines
+        // (e.g. Kokoro) that either over-pause at punctuation or add latency on
+        // long chunks; see issue #7.
+        final TextView[] phraseRowRef = new TextView[1];
+        TextView phraseRow = host.ttsHostDialogStyler().makeReaderActionRow(
+                phraseLengthRowLabel(), fg);
+        phraseRow.setGravity(Gravity.CENTER);
+        phraseRow.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
+        phraseRowRef[0] = phraseRow;
+        phraseRow.setOnClickListener(v -> {
+            if (host.ttsHostPrefs() != null) {
+                int next = (host.ttsHostPrefs().getTtsPhraseLengthLevel() + 1) % 3;
+                host.ttsHostPrefs().setTtsPhraseLengthLevel(next);
+            }
+            if (phraseRowRef[0] != null) phraseRowRef[0].setText(phraseLengthRowLabel());
+        });
+        languageBox.addView(phraseRow);
+
+        final TextView[] pauseRowRef = new TextView[1];
+        TextView pauseRow = host.ttsHostDialogStyler().makeReaderActionRow(
+                pauseReductionRowLabel(), fg);
+        pauseRow.setGravity(Gravity.CENTER);
+        pauseRow.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
+        pauseRowRef[0] = pauseRow;
+        pauseRow.setOnClickListener(v -> {
+            if (host.ttsHostPrefs() != null) {
+                int next = (host.ttsHostPrefs().getTtsPauseReduction() + 1) % 3;
+                host.ttsHostPrefs().setTtsPauseReduction(next);
+            }
+            if (pauseRowRef[0] != null) pauseRowRef[0].setText(pauseReductionRowLabel());
+        });
+        languageBox.addView(pauseRow);
+
+        TextView sleepTimerButton = host.ttsHostDialogStyler().makeReaderActionRow(
                 sleepTimerDialog().rowLabel(), fg);
         sleepTimerButton.setGravity(Gravity.CENTER);
         sleepTimerButton.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
@@ -233,14 +278,14 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 sleepTimerButton.setText(sleepTimerDialog().rowLabel())));
         languageBox.addView(sleepTimerButton);
 
-        TextView systemSettings = activity.dialogStyler().makeReaderActionRow(
+        TextView systemSettings = host.ttsHostDialogStyler().makeReaderActionRow(
                 activity.getString(R.string.tts_android_settings), fg);
         systemSettings.setGravity(Gravity.CENTER);
         systemSettings.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
         systemSettings.setOnClickListener(v -> openAndroidTtsSettings());
         languageBox.addView(systemSettings);
 
-        TextView addVoice = activity.dialogStyler().makeReaderActionRow(
+        TextView addVoice = host.ttsHostDialogStyler().makeReaderActionRow(
                 activity.getString(R.string.tts_add_voice_model), fg);
         addVoice.setGravity(Gravity.CENTER);
         addVoice.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
@@ -251,28 +296,28 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams optionLp = (LinearLayout.LayoutParams) languageBox.getLayoutParams();
-        optionLp.setMargins(activity.dpToPx(18), 0, activity.dpToPx(18), activity.dpToPx(10));
+        optionLp.setMargins(host.ttsHostDpToPx(18), 0, host.ttsHostDpToPx(18), host.ttsHostDpToPx(10));
         languageBox.setLayoutParams(optionLp);
 
         LinearLayout actionRow = new LinearLayout(activity);
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
         actionRow.setGravity(Gravity.CENTER_VERTICAL);
-        actionRow.setBackground(activity.dialogStyler().positionedActionPanelBackground(
-                activity.dialogStyler().dialogActionPanelFillColor(bg),
-                activity.dialogStyler().dialogActionPanelLineColor(bg)));
-        actionRow.setPadding(activity.dpToPx(8), 0, activity.dpToPx(8), 0);
+        actionRow.setBackground(host.ttsHostDialogStyler().positionedActionPanelBackground(
+                host.ttsHostDialogStyler().dialogActionPanelFillColor(bg),
+                host.ttsHostDialogStyler().dialogActionPanelLineColor(bg)));
+        actionRow.setPadding(host.ttsHostDpToPx(8), 0, host.ttsHostDpToPx(8), 0);
 
-        TextView stopButton = activity.dialogStyler().makeReaderDialogActionText(
+        TextView stopButton = host.ttsHostDialogStyler().makeReaderDialogActionText(
                 activity.getString(R.string.tts_stop), sub, Gravity.CENTER);
-        TextView pageButton = activity.dialogStyler().makeReaderDialogActionText(
+        TextView pageButton = host.ttsHostDialogStyler().makeReaderDialogActionText(
                 activity.getString(R.string.tts_read_page), fg, Gravity.CENTER);
-        TextView continuousButton = activity.dialogStyler().makeReaderDialogActionText(
+        TextView continuousButton = host.ttsHostDialogStyler().makeReaderDialogActionText(
                 activity.getString(R.string.tts_read_continuous), fg, Gravity.CENTER);
 
         // Pause/Resume is only meaningful while playback is active.
         TextView pauseButton = null;
         if (active) {
-            pauseButton = activity.dialogStyler().makeReaderDialogActionText(
+            pauseButton = host.ttsHostDialogStyler().makeReaderDialogActionText(
                     activity.getString(paused ? R.string.tts_resume : R.string.tts_pause),
                     fg, Gravity.CENTER);
         }
@@ -284,7 +329,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         actionButtons.add(continuousButton);
         for (TextView actionButton : actionButtons) {
             actionButton.setTextSize(12.5f);
-            actionButton.setPadding(activity.dpToPx(8), 0, activity.dpToPx(8), 0);
+            actionButton.setPadding(host.ttsHostDpToPx(8), 0, host.ttsHostDpToPx(8), 0);
             actionButton.setSingleLine(true);
         }
 
@@ -300,9 +345,9 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
         panel.addView(actionRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                activity.dpToPx(54)));
+                host.ttsHostDpToPx(54)));
 
-        android.app.Dialog dialog = activity.dialogStyler().createNarrowPositionedReaderDialog(
+        android.app.Dialog dialog = host.ttsHostDialogStyler().createNarrowPositionedReaderDialog(
                 panel,
                 bg,
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL,
@@ -335,12 +380,13 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     void start(boolean continuousMode) {
-        if (activity.readerView == null || TextUtils.isEmpty(activity.readerView.getTextContent())) {
+        TtsTextSource source = host.ttsTextSource();
+        if (source == null || TextUtils.isEmpty(source.getTextContent())) {
             ShortToast.show(activity, R.string.tts_no_text);
             return;
         }
 
-        activity.stopAutoPageTurn(false);
+        host.ttsStopAutoPageTurn();
         requestNotificationPermissionIfNeeded();
         pendingStart = true;
         pendingContinuous = continuousMode;
@@ -371,7 +417,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         lastQueuedUtteranceId = "";
         queuedSegments.clear();
         clearTtsHighlight();
-        activity.updateTtsFloatingCard();
+        host.ttsUpdateFloatingCard();
         unregisterNoisyReceiver();
         abandonAudioFocus();
         sleepTimerSegmentStartMs = 0L;
@@ -415,17 +461,17 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         pausedSegmentIndex = currentSegmentIndex;
         paused = true;
         if (tts != null) tts.stop(); // flushes the queue; segments are remembered
-        activity.updateTtsFloatingCard();
+        host.ttsUpdateFloatingCard();
         // Persist the paused position so it survives leaving the app.
-        if (activity.prefs != null && activity.filePath != null
+        if (host.ttsHostPrefs() != null && host.ttsHostFilePath() != null
                 && pausedSegmentIndex >= 0 && pausedSegmentIndex < queuedSegments.size()) {
             TtsSpeechSegment seg = queuedSegments.get(pausedSegmentIndex);
-            activity.prefs.setTtsLastPlaybackState(
-                    activity.filePath,
+            host.ttsHostPrefs().setTtsLastPlaybackState(
+                    host.ttsHostFilePath(),
                     seg.startChar,
-                    activity.getDisplayedCurrentPageNumber(),
+                    host.ttsDisplayedCurrentPageNumber(),
                     continuous,
-                    activity.prefs.getTtsSleepTimerMinutes());
+                    host.ttsHostPrefs().getTtsSleepTimerMinutes());
         }
         updatePlaybackNotification(false);
     }
@@ -444,10 +490,16 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             return;
         }
         applySpeechParameters();
+        // The paused queue may already contain prefetched next-page segments.
+        // Rather than reconstruct the boundary bookkeeping across a pause, just
+        // replay the queue as-is; the end-of-queue advance handles the following
+        // page and a fresh page queue re-arms prefetch.
+        prefetchedNextPageBoundaryIndex = -1;
+        crossedPrefetchBoundary = false;
         int from = Math.max(0, Math.min(pausedSegmentIndex, queuedSegments.size() - 1));
         speakQueuedFrom(from);
         updatePlaybackNotification(true);
-        activity.updateTtsFloatingCard();
+        host.ttsUpdateFloatingCard();
     }
 
     /** Re-enqueue the already-segmented current page starting at the given index. */
@@ -485,7 +537,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             } else if (hasResumeStateForCurrentFile()) {
                 resumeFromSavedState();
             } else {
-                start(continuous || (activity.prefs != null && activity.prefs.getTtsLastContinuous()));
+                start(continuous || (host.ttsHostPrefs() != null && host.ttsHostPrefs().getTtsLastContinuous()));
             }
         } else if (TtsPlaybackService.ACTION_NEXT.equals(action)) {
             movePageFromRemote(+1);
@@ -495,35 +547,50 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     private boolean hasResumeStateForCurrentFile() {
-        if (activity.prefs == null || activity.filePath == null) return false;
-        return TextUtils.equals(activity.filePath, activity.prefs.getTtsLastFilePath())
-                && activity.prefs.getTtsLastCharPosition() > 0;
+        if (host.ttsHostPrefs() == null || host.ttsHostFilePath() == null) return false;
+        return TextUtils.equals(host.ttsHostFilePath(), host.ttsHostPrefs().getTtsLastFilePath())
+                && host.ttsHostPrefs().getTtsLastCharPosition() > 0;
     }
 
     private String resumeRowLabel() {
-        int page = activity.prefs != null ? activity.prefs.getTtsLastPageNumber() : 1;
+        int page = host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsLastPageNumber() : 1;
         return activity.getString(R.string.tts_resume_from_page, Math.max(1, page));
+    }
+
+    /**
+     * Entry point for auto-start-on-open (the "continue reading aloud" resume
+     * launched from the main screen). If saved playback state exists for the
+     * current file, resume from that exact position (which also scrolls the host
+     * to follow); otherwise start from the top. Public so host activities can
+     * trigger it once their text buffer is ready.
+     */
+    void autoStartOrResume(boolean continuousMode) {
+        if (hasResumeStateForCurrentFile()) {
+            resumeFromSavedState();
+        } else {
+            start(continuousMode);
+        }
     }
 
     private void resumeFromSavedState() {
         if (!hasResumeStateForCurrentFile()) {
-            start(activity.prefs != null && activity.prefs.getTtsLastContinuous());
+            start(host.ttsHostPrefs() != null && host.ttsHostPrefs().getTtsLastContinuous());
             return;
         }
-        int charPosition = activity.prefs.getTtsLastCharPosition();
-        boolean resumeContinuous = activity.prefs.getTtsLastContinuous();
-        activity.jumpToAbsoluteCharPosition(charPosition,
-                activity.prefs.getTtsLastPageNumber(),
-                activity.getDisplayedTotalPageCount());
-        activity.handler.postDelayed(() -> {
-            if (!activity.activityDestroyed) start(resumeContinuous);
+        int charPosition = host.ttsHostPrefs().getTtsLastCharPosition();
+        boolean resumeContinuous = host.ttsHostPrefs().getTtsLastContinuous();
+        host.ttsJumpToAbsoluteCharPosition(charPosition,
+                host.ttsHostPrefs().getTtsLastPageNumber(),
+                host.ttsDisplayedTotalPageCount());
+        host.ttsHostHandler().postDelayed(() -> {
+            if (!host.isTtsHostDestroyed()) start(resumeContinuous);
         }, 420L);
     }
 
     @Override
     public void onInit(int status) {
         activity.runOnUiThread(() -> {
-            if (activity.activityDestroyed) {
+            if (host.isTtsHostDestroyed()) {
                 initializing = false;
                 pendingStart = false;
                 pendingVoiceDialog = false;
@@ -619,10 +686,10 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     private void initSleepTimer() {
-        if (activity.prefs != null) {
-            int minutes = activity.prefs.getTtsSleepTimerMinutes();
+        if (host.ttsHostPrefs() != null) {
+            int minutes = host.ttsHostPrefs().getTtsSleepTimerMinutes();
             sleepTimerTargetMs = minutes > 0 ? minutes * 60_000L : 0L;
-            sleepTimerFinishSentence = activity.prefs.getTtsSleepTimerFinishSentence();
+            sleepTimerFinishSentence = host.ttsHostPrefs().getTtsSleepTimerFinishSentence();
         } else {
             sleepTimerTargetMs = 0L;
             sleepTimerFinishSentence = true;
@@ -633,10 +700,10 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     /** Re-read timer settings mid-playback (e.g. user changed the timer while playing). */
     void refreshSleepTimerFromPrefs() {
-        if (!active || activity.prefs == null) return;
-        int minutes = activity.prefs.getTtsSleepTimerMinutes();
+        if (!active || host.ttsHostPrefs() == null) return;
+        int minutes = host.ttsHostPrefs().getTtsSleepTimerMinutes();
         sleepTimerTargetMs = minutes > 0 ? minutes * 60_000L : 0L;
-        sleepTimerFinishSentence = activity.prefs.getTtsSleepTimerFinishSentence();
+        sleepTimerFinishSentence = host.ttsHostPrefs().getTtsSleepTimerFinishSentence();
     }
 
     /** Mark the start of an utterance for playback-time accrual. */
@@ -690,20 +757,19 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         int generation = ++speechGeneration;
         updatePlaybackNotification(true);
         ShortToast.show(activity, continuousMode ? R.string.tts_continuous_started : R.string.tts_started);
-        activity.updateTtsFloatingCard();
+        host.ttsUpdateFloatingCard();
         speakCurrentPage(generation, 0);
     }
 
     private void speakCurrentPage(int generation, int partitionRetryCount) {
-        if (!active || generation != speechGeneration || activity.activityDestroyed) return;
+        if (!active || generation != speechGeneration || host.isTtsHostDestroyed()) return;
 
-        if (activity.largeTextEstimateActive
-                && activity.largeTextPartitionSwitchState.isInProgress()) {
+        if (host.isTtsTextTemporarilyUnavailable()) {
             if (partitionRetryCount == 0) {
                 ShortToast.show(activity, R.string.tts_waiting_for_page);
             }
             if (partitionRetryCount < MAX_PARTITION_RETRIES) {
-                activity.handler.postDelayed(
+                host.ttsHostHandler().postDelayed(
                         () -> speakCurrentPage(generation, partitionRetryCount + 1),
                         PARTITION_RETRY_DELAY_MS);
             } else {
@@ -732,7 +798,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         List<TtsSpeechSegment> segments = TtsSegmenter.segmentPage(
                 page.text,
                 page.startChar,
-                MAX_TTS_SEGMENT_CHARS);
+                ttsSegmentChars(),
+                ttsPauseReduction());
         if (segments.isEmpty()) {
             stop(false);
             return;
@@ -742,6 +809,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         queuedSegments.addAll(segments);
         currentSpeechGeneration = generation;
         currentSegmentIndex = 0;
+        prefetchedNextPageBoundaryIndex = -1;
+        crossedPrefetchBoundary = false;
         lastQueuedUtteranceId = utteranceId(generation, segments.size() - 1);
         for (int i = 0; i < segments.size(); i++) {
             Bundle params = new Bundle();
@@ -754,11 +823,69 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 return;
             }
         }
+        // Neural engines (sherpa-onnx/VoxSherpa, Kokoro/Piper) synthesize with
+        // enough latency that the gap between the current page's last utterance
+        // and the first utterance of the next page is audible. When the whole
+        // document text is already in memory (i.e. not the lazily partitioned
+        // large-text path), append the next page's opening segments onto the
+        // same engine queue now, so the engine keeps synthesizing across the
+        // boundary instead of going silent while we turn the page. The UI page
+        // turn still happens later, driven by onStart of the first prefetched
+        // segment, so highlight and saved-position tracking are unaffected.
+        maybePrefetchNextPageSegments(generation);
+    }
+
+    /**
+     * Append the beginning of the next page's text to the live queue so playback
+     * does not stall at the page seam. No-op unless continuous mode is on, the
+     * document is not the lazily partitioned large-text kind, and the reader can
+     * hand us the full text with a known boundary.
+     */
+    private void maybePrefetchNextPageSegments(int generation) {
+        if (!continuous || tts == null) return;
+        if (!host.isTtsTextFullyResident()) return; // text is not fully resident
+        TtsTextSource source = host.ttsTextSource();
+        if (source == null) return;
+        if (!canAdvancePage()) return;
+        if (queuedSegments.isEmpty()) return;
+
+        String content = source.getTextContent();
+        if (content == null || content.isEmpty()) return;
+        int nextStart = queuedSegments.get(queuedSegments.size() - 1).endChar;
+        if (nextStart < 0 || nextStart >= content.length()) return;
+
+        int nextEnd = Math.min(content.length(), nextStart + PREFETCH_NEXT_PAGE_CHARS);
+        if (nextEnd <= nextStart) return;
+        String nextText = content.substring(nextStart, nextEnd);
+        List<TtsSpeechSegment> nextSegments = TtsSegmenter.segmentPage(
+                nextText, nextStart, ttsSegmentChars(), ttsPauseReduction());
+        if (nextSegments.isEmpty()) return;
+
+        prefetchedNextPageBoundaryIndex = queuedSegments.size();
+        int base = queuedSegments.size();
+        queuedSegments.addAll(nextSegments);
+        lastQueuedUtteranceId = utteranceId(generation, queuedSegments.size() - 1);
+        for (int i = 0; i < nextSegments.size(); i++) {
+            Bundle params = new Bundle();
+            String utteranceId = utteranceId(generation, base + i);
+            int result = tts.speak(nextSegments.get(i).speechText,
+                    TextToSpeech.QUEUE_ADD, params, utteranceId);
+            if (result == TextToSpeech.ERROR) {
+                // Non-fatal: the current page is already queued and will play;
+                // drop the prefetch and let the normal page-turn path continue.
+                while (queuedSegments.size() > base) {
+                    queuedSegments.remove(queuedSegments.size() - 1);
+                }
+                prefetchedNextPageBoundaryIndex = -1;
+                lastQueuedUtteranceId = utteranceId(generation, queuedSegments.size() - 1);
+                return;
+            }
+        }
     }
 
     private void handleUtteranceStart(String utteranceId) {
         activity.runOnUiThread(() -> {
-            if (activity.activityDestroyed || !active || utteranceId == null) return;
+            if (host.isTtsHostDestroyed() || !active || utteranceId == null) return;
             // Sleep timer: account for the segment that just finished, then stop at
             // this sentence boundary if the playback-time target has been reached.
             sleepTimerAccrueSegment();
@@ -766,18 +893,43 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             sleepTimerOnSegmentStart();
             int segmentIndex = segmentIndexFromUtteranceId(utteranceId);
             if (segmentIndex < 0 || segmentIndex >= queuedSegments.size()) return;
+
+            // If speech has reached the prefetched next-page segments, catch the
+            // UI up to the page that is already being spoken, then chain another
+            // prefetch so the following seam is covered too. jumpToAbsoluteChar
+            // only scrolls the reader; it does not touch the engine queue, so
+            // audio keeps flowing without a gap.
+            if (prefetchedNextPageBoundaryIndex >= 0
+                    && segmentIndex >= prefetchedNextPageBoundaryIndex
+                    && !crossedPrefetchBoundary) {
+                crossedPrefetchBoundary = true;
+                TtsSpeechSegment boundarySegment = queuedSegments.get(prefetchedNextPageBoundaryIndex);
+                host.ttsJumpToAbsoluteCharPosition(boundarySegment.startChar);
+                prefetchedNextPageBoundaryIndex = -1;
+                int generation = currentSpeechGeneration;
+                // Defer the follow-on prefetch until after the reader has settled
+                // on the new page so canAdvancePage()/getTextContent() reflect it.
+                host.ttsHostHandler().post(() -> {
+                    if (!active || host.isTtsHostDestroyed()
+                            || generation != currentSpeechGeneration) return;
+                    crossedPrefetchBoundary = false;
+                    maybePrefetchNextPageSegments(generation);
+                });
+            }
+
             currentSegmentIndex = segmentIndex;
             TtsSpeechSegment segment = queuedSegments.get(segmentIndex);
-            if (activity.readerView != null) {
-                activity.readerView.setTtsHighlightRange(segment.startChar, segment.endChar);
+            TtsTextSource source = host.ttsTextSource();
+            if (source != null) {
+                source.setTtsHighlightRange(segment.startChar, segment.endChar);
             }
-            if (activity.prefs != null && activity.filePath != null) {
-                activity.prefs.setTtsLastPlaybackState(
-                        activity.filePath,
+            if (host.ttsHostPrefs() != null && host.ttsHostFilePath() != null) {
+                host.ttsHostPrefs().setTtsLastPlaybackState(
+                        host.ttsHostFilePath(),
                         segment.startChar,
-                        activity.getDisplayedCurrentPageNumber(),
+                        host.ttsDisplayedCurrentPageNumber(),
                         continuous,
-                        activity.prefs.getTtsSleepTimerMinutes());
+                        host.ttsHostPrefs().getTtsSleepTimerMinutes());
             }
             updatePlaybackNotification(true);
         });
@@ -785,7 +937,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     private void handleUtteranceDone(String utteranceId) {
         activity.runOnUiThread(() -> {
-            if (activity.activityDestroyed || !active || !TextUtils.equals(utteranceId, lastQueuedUtteranceId)) return;
+            if (host.isTtsHostDestroyed() || !active || !TextUtils.equals(utteranceId, lastQueuedUtteranceId)) return;
             sleepTimerAccrueSegment();
             if (sleepTimerCheckAndMaybeStop()) return;
             int generation = speechGeneration;
@@ -794,7 +946,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             } else {
                 // Whole document finished reading aloud — nothing left to resume, so
                 // drop the saved playback state that drives the main-screen prompt.
-                if (activity.prefs != null) activity.prefs.clearTtsLastPlaybackState();
+                if (host.ttsHostPrefs() != null) host.ttsHostPrefs().clearTtsLastPlaybackState();
                 stop(false);
                 clearTtsHighlight();
                 TtsPlaybackService.stop(activity.getApplicationContext());
@@ -805,7 +957,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     private void handleUtteranceError(String utteranceId) {
         activity.runOnUiThread(() -> {
-            if (activity.activityDestroyed || !active || !isCurrentGenerationUtterance(utteranceId)) return;
+            if (host.isTtsHostDestroyed() || !active || !isCurrentGenerationUtterance(utteranceId)) return;
             stop(false);
             clearTtsHighlight();
             ShortToast.show(activity, R.string.tts_engine_unavailable);
@@ -813,14 +965,14 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     private void advanceAndSpeakNextPage(int generation) {
-        int beforePage = activity.getDisplayedCurrentPageNumber();
-        int beforeChar = activity.getCurrentCharPosition();
+        int beforePage = host.ttsDisplayedCurrentPageNumber();
+        int beforeChar = host.ttsCurrentCharPosition();
         clearTtsHighlight();
-        activity.pageBy(+1, true);
-        activity.handler.postDelayed(() -> {
-            if (!active || generation != speechGeneration || activity.activityDestroyed) return;
-            int afterPage = activity.getDisplayedCurrentPageNumber();
-            int afterChar = activity.getCurrentCharPosition();
+        host.ttsHostPageBy(+1);
+        host.ttsHostHandler().postDelayed(() -> {
+            if (!active || generation != speechGeneration || host.isTtsHostDestroyed()) return;
+            int afterPage = host.ttsDisplayedCurrentPageNumber();
+            int afterChar = host.ttsCurrentCharPosition();
             if (afterPage == beforePage && afterChar == beforeChar && !canAdvancePage()) {
                 stop(false);
                 clearTtsHighlight();
@@ -832,29 +984,30 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     private void movePageFromRemote(int direction) {
-        boolean wasContinuous = continuous || (activity.prefs != null && activity.prefs.getTtsLastContinuous());
+        boolean wasContinuous = continuous || (host.ttsHostPrefs() != null && host.ttsHostPrefs().getTtsLastContinuous());
         stopInternal(false, false);
-        activity.pageBy(direction, true);
-        activity.handler.postDelayed(() -> {
-            if (!activity.activityDestroyed) start(wasContinuous);
+        host.ttsHostPageBy(direction);
+        host.ttsHostHandler().postDelayed(() -> {
+            if (!host.isTtsHostDestroyed()) start(wasContinuous);
         }, NEXT_PAGE_DELAY_MS);
     }
 
     private boolean canAdvancePage() {
-        int total = Math.max(1, activity.getDisplayedTotalPageCount());
-        int current = Math.max(1, Math.min(total, activity.getDisplayedCurrentPageNumber()));
+        int total = Math.max(1, host.ttsDisplayedTotalPageCount());
+        int current = Math.max(1, Math.min(total, host.ttsDisplayedCurrentPageNumber()));
         return current < total;
     }
 
     @NonNull
     private VisiblePage currentVisiblePage() {
-        if (activity.readerView == null) return VisiblePage.EMPTY;
-        String content = activity.readerView.getTextContent();
+        TtsTextSource source = host.ttsTextSource();
+        if (source == null) return VisiblePage.EMPTY;
+        String content = source.getTextContent();
         if (content == null || content.isEmpty()) return VisiblePage.EMPTY;
 
-        int start = Math.max(0, Math.min(content.length(), activity.readerView.getCurrentCharPosition()));
+        int start = Math.max(0, Math.min(content.length(), source.getCurrentCharPosition()));
         int end = Math.max(start, Math.min(content.length(),
-                activity.readerView.getCharPositionAfterCurrentVisibleContent()));
+                source.getCharPositionAfterCurrentVisibleContent()));
         if (end <= start && start < content.length()) {
             end = Math.min(content.length(), start + MAX_TTS_SEGMENT_CHARS);
         }
@@ -883,16 +1036,17 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     private void clearTtsHighlight() {
-        if (activity.readerView != null) {
-            activity.readerView.clearTtsHighlight();
+        TtsTextSource source = host.ttsTextSource();
+        if (source != null) {
+            source.clearTtsHighlight();
         }
     }
 
     private void updatePlaybackNotification(boolean isPlaying) {
-        String path = activity.filePath != null ? activity.filePath : "";
+        String path = host.ttsHostFilePath() != null ? host.ttsHostFilePath() : "";
         String title = path.isEmpty() ? activity.getString(R.string.tts_title) : new File(path).getName();
-        int page = Math.max(1, activity.getDisplayedCurrentPageNumber());
-        int total = Math.max(1, activity.getDisplayedTotalPageCount());
+        int page = Math.max(1, host.ttsDisplayedCurrentPageNumber());
+        int total = Math.max(1, host.ttsDisplayedTotalPageCount());
         String subtitle = activity.getString(R.string.tts_notification_page, page, total);
         TtsPlaybackService.startOrUpdate(
                 activity.getApplicationContext(),
@@ -900,7 +1054,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 title,
                 subtitle,
                 isPlaying,
-                continuous);
+                continuous,
+                host.ttsHostKind());
     }
 
     private void requestNotificationPermissionIfNeeded() {
@@ -961,15 +1116,15 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     private void showLanguageDialog(@NonNull Runnable afterSelect) {
-        activity.dialogStyler().syncReaderDialogThemeSnapshot();
-        final int bg = activity.dialogStyler().readerDialogBgColor();
-        final int fg = activity.dialogStyler().readerDialogTextColor(bg);
+        host.ttsHostDialogStyler().syncReaderDialogThemeSnapshot();
+        final int bg = host.ttsHostDialogStyler().readerDialogBgColor();
+        final int fg = host.ttsHostDialogStyler().readerDialogTextColor(bg);
 
         LinearLayout outer = new LinearLayout(activity);
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setBackgroundColor(Color.TRANSPARENT);
 
-        TextView title = activity.dialogStyler().makeReaderDialogTitle(
+        TextView title = host.ttsHostDialogStyler().makeReaderDialogTitle(
                 activity.getString(R.string.tts_language), bg, fg);
         outer.addView(title, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -977,8 +1132,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
         LinearLayout list = new LinearLayout(activity);
         list.setOrientation(LinearLayout.VERTICAL);
-        int pad = activity.dpToPx(14);
-        list.setPadding(pad, activity.dpToPx(4), pad, activity.dpToPx(8));
+        int pad = host.ttsHostDpToPx(14);
+        list.setPadding(pad, host.ttsHostDpToPx(4), pad, host.ttsHostDpToPx(8));
 
         final android.app.Dialog[] ref = new android.app.Dialog[1];
         addLanguageRow(list, "system", activity.getString(R.string.tts_language_system), fg, ref, afterSelect);
@@ -1001,13 +1156,13 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
         ScrollView scroll = new ScrollView(activity);
         scroll.setBackgroundColor(Color.TRANSPARENT);
-        activity.dialogStyler().constrainDialogScrollArea(scroll, list);
+        host.ttsHostDialogStyler().constrainDialogScrollArea(scroll, list);
         scroll.addView(list);
         outer.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 ttsLanguageListHeightPx()));
 
-        android.app.Dialog dialog = activity.dialogStyler().createNarrowPositionedReaderDialog(
+        android.app.Dialog dialog = host.ttsHostDialogStyler().createNarrowPositionedReaderDialog(
                 outer,
                 bg,
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL,
@@ -1021,9 +1176,9 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     private int ttsLanguageListHeightPx() {
         int screenHeight = activity.getResources().getDisplayMetrics().heightPixels;
-        int compactCap = activity.dpToPx(330);
+        int compactCap = host.ttsHostDpToPx(330);
         int screenCap = Math.round(screenHeight * 0.42f);
-        return Math.max(activity.dpToPx(220), Math.min(compactCap, screenCap));
+        return Math.max(host.ttsHostDpToPx(220), Math.min(compactCap, screenCap));
     }
 
     private void addLanguageRow(LinearLayout list,
@@ -1032,14 +1187,14 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                                 int fg,
                                 android.app.Dialog[] dialogRef,
                                 @NonNull Runnable afterSelect) {
-        String current = activity.prefs != null ? activity.prefs.getTtsLanguageTag() : "system";
+        String current = host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsLanguageTag() : "system";
         String rowText = tag.equals(current) ? activity.getString(R.string.tts_language_selected, label) : label;
-        TextView row = activity.dialogStyler().makeReaderActionRow(rowText, fg);
+        TextView row = host.ttsHostDialogStyler().makeReaderActionRow(rowText, fg);
         row.setGravity(Gravity.CENTER);
         row.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
         row.setOnClickListener(v -> {
-            if (activity.prefs != null) activity.prefs.setTtsLanguageTag(tag);
-            if (activity.prefs != null) activity.prefs.setTtsVoiceName("");
+            if (host.ttsHostPrefs() != null) host.ttsHostPrefs().setTtsLanguageTag(tag);
+            if (host.ttsHostPrefs() != null) host.ttsHostPrefs().setTtsVoiceName("");
             if (tts != null && initialized) applySelectedLanguage(false);
             afterSelect.run();
             if (dialogRef[0] != null) dialogRef[0].dismiss();
@@ -1059,7 +1214,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     @NonNull
     private String selectedVoiceLabel() {
-        String voiceName = activity.prefs != null ? activity.prefs.getTtsVoiceName() : "";
+        String voiceName = host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsVoiceName() : "";
         if (voiceName == null || voiceName.trim().isEmpty()) {
             return activity.getString(R.string.tts_voice_auto);
         }
@@ -1068,7 +1223,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     @NonNull
     private String selectedLanguageLabel() {
-        String tag = activity.prefs != null ? activity.prefs.getTtsLanguageTag() : "system";
+        String tag = host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsLanguageTag() : "system";
         switch (tag) {
             case "ko":
                 return activity.getString(R.string.language_korean);
@@ -1122,23 +1277,91 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         int result = tts.setLanguage(locale);
         boolean supported = result != TextToSpeech.LANG_MISSING_DATA
                 && result != TextToSpeech.LANG_NOT_SUPPORTED;
-        if (!supported && showUnsupportedToast) {
-            ShortToast.show(activity, activity.getString(R.string.tts_language_unavailable, selectedLanguageLabel()));
+        if (supported) return true;
+
+        // The chosen locale isn't available on this engine. Rather than refusing
+        // to speak (which reads to the user as broken TTS producing no audio),
+        // fall back to whatever language the engine already has loaded, then to
+        // the default locale. Neural engines such as sherpa-onnx/VoxSherpa often
+        // report a specific locale as NOT_SUPPORTED while still speaking fine
+        // with their own default voice, so this recovers real audio in the
+        // common case instead of going silent.
+        Locale engineDefault = engineDefaultLanguage();
+        if (engineDefault != null) {
+            int fallback = tts.setLanguage(engineDefault);
+            if (fallback != TextToSpeech.LANG_MISSING_DATA
+                    && fallback != TextToSpeech.LANG_NOT_SUPPORTED) {
+                if (showUnsupportedToast) {
+                    ShortToast.show(activity,
+                            activity.getString(R.string.tts_language_unavailable, selectedLanguageLabel()));
+                }
+                return true;
+            }
         }
-        return supported;
+        int deviceDefault = tts.setLanguage(Locale.getDefault());
+        boolean deviceOk = deviceDefault != TextToSpeech.LANG_MISSING_DATA
+                && deviceDefault != TextToSpeech.LANG_NOT_SUPPORTED;
+        if (!deviceOk && showUnsupportedToast) {
+            ShortToast.show(activity,
+                    activity.getString(R.string.tts_language_unavailable, selectedLanguageLabel()));
+        }
+        return deviceOk;
+    }
+
+    @androidx.annotation.Nullable
+    private Locale engineDefaultLanguage() {
+        if (tts == null) return null;
+        try {
+            Voice defaultVoice = tts.getDefaultVoice();
+            if (defaultVoice != null && defaultVoice.getLocale() != null) {
+                return defaultVoice.getLocale();
+            }
+        } catch (Exception ignored) {
+            // Some engines throw from getDefaultVoice(); ignore and fall through.
+        }
+        return null;
     }
 
     private void applySpeechParameters() {
         if (tts == null) return;
-        int rate = activity.prefs != null ? activity.prefs.getTtsSpeechRatePercent() : 100;
-        int pitch = activity.prefs != null ? activity.prefs.getTtsPitchPercent() : 100;
+        int rate = host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsSpeechRatePercent() : 100;
+        int pitch = host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsPitchPercent() : 100;
         tts.setSpeechRate(Math.max(0.5f, Math.min(2.0f, rate / 100f)));
         tts.setPitch(Math.max(0.5f, Math.min(2.0f, pitch / 100f)));
     }
 
+    /** Target chunk size in chars for the segmenter, from the phrase-length pref. */
+    private int ttsSegmentChars() {
+        if (host.ttsHostPrefs() == null) return MAX_TTS_SEGMENT_CHARS;
+        return TtsSegmenter.phraseLengthToChars(host.ttsHostPrefs().getTtsPhraseLengthLevel());
+    }
+
+    /** Pause-reduction level (0/1/2) from prefs, for the segmenter's text transform. */
+    private int ttsPauseReduction() {
+        return host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsPauseReduction() : 0;
+    }
+
+    private String phraseLengthRowLabel() {
+        int level = host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsPhraseLengthLevel() : 2;
+        switch (level) {
+            case 0: return activity.getString(R.string.tts_phrase_length_short);
+            case 1: return activity.getString(R.string.tts_phrase_length_medium);
+            default: return activity.getString(R.string.tts_phrase_length_long);
+        }
+    }
+
+    private String pauseReductionRowLabel() {
+        int level = host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsPauseReduction() : 0;
+        switch (level) {
+            case 1: return activity.getString(R.string.tts_pause_reduction_medium);
+            case 2: return activity.getString(R.string.tts_pause_reduction_aggressive);
+            default: return activity.getString(R.string.tts_pause_reduction_off);
+        }
+    }
+
     @NonNull
     private Locale selectedTtsLocale() {
-        String tag = activity.prefs != null ? activity.prefs.getTtsLanguageTag() : "system";
+        String tag = host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsLanguageTag() : "system";
         switch (tag) {
             case "ko":
                 return Locale.KOREAN;
@@ -1175,15 +1398,15 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             return;
         }
 
-        activity.dialogStyler().syncReaderDialogThemeSnapshot();
-        final int bg = activity.dialogStyler().readerDialogBgColor();
-        final int fg = activity.dialogStyler().readerDialogTextColor(bg);
+        host.ttsHostDialogStyler().syncReaderDialogThemeSnapshot();
+        final int bg = host.ttsHostDialogStyler().readerDialogBgColor();
+        final int fg = host.ttsHostDialogStyler().readerDialogTextColor(bg);
 
         LinearLayout outer = new LinearLayout(activity);
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setBackgroundColor(Color.TRANSPARENT);
 
-        TextView title = activity.dialogStyler().makeReaderDialogTitle(
+        TextView title = host.ttsHostDialogStyler().makeReaderDialogTitle(
                 activity.getString(R.string.tts_voice), bg, fg);
         outer.addView(title, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1191,13 +1414,13 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
         LinearLayout list = new LinearLayout(activity);
         list.setOrientation(LinearLayout.VERTICAL);
-        int pad = activity.dpToPx(14);
-        list.setPadding(pad, activity.dpToPx(4), pad, activity.dpToPx(8));
+        int pad = host.ttsHostDpToPx(14);
+        list.setPadding(pad, host.ttsHostDpToPx(4), pad, host.ttsHostDpToPx(8));
 
         final android.app.Dialog[] ref = new android.app.Dialog[1];
         addVoiceRow(list, "", activity.getString(R.string.tts_voice_auto), fg, ref, afterSelect);
 
-        TextView addVoice = activity.dialogStyler().makeReaderActionRow(
+        TextView addVoice = host.ttsHostDialogStyler().makeReaderActionRow(
                 activity.getString(R.string.tts_add_voice_model), fg);
         addVoice.setGravity(Gravity.CENTER);
         addVoice.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
@@ -1206,7 +1429,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
         List<Voice> voices = matchingVoices();
         if (voices.isEmpty()) {
-            TextView empty = activity.dialogStyler().makeReaderActionRow(
+            TextView empty = host.ttsHostDialogStyler().makeReaderActionRow(
                     activity.getString(R.string.tts_no_matching_voices), fg);
             empty.setGravity(Gravity.CENTER);
             empty.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
@@ -1221,13 +1444,13 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
         ScrollView scroll = new ScrollView(activity);
         scroll.setBackgroundColor(Color.TRANSPARENT);
-        activity.dialogStyler().constrainDialogScrollArea(scroll, list);
+        host.ttsHostDialogStyler().constrainDialogScrollArea(scroll, list);
         scroll.addView(list);
         outer.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                activity.dpToPx(330)));
+                host.ttsHostDpToPx(330)));
 
-        android.app.Dialog dialog = activity.dialogStyler().createNarrowPositionedReaderDialog(
+        android.app.Dialog dialog = host.ttsHostDialogStyler().createNarrowPositionedReaderDialog(
                 outer,
                 bg,
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL,
@@ -1245,16 +1468,16 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                              int fg,
                              android.app.Dialog[] dialogRef,
                              Runnable afterSelect) {
-        String current = activity.prefs != null ? activity.prefs.getTtsVoiceName() : "";
+        String current = host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsVoiceName() : "";
         boolean selected = TextUtils.equals(current, voiceName);
-        TextView row = activity.dialogStyler().makeReaderActionRow(
+        TextView row = host.ttsHostDialogStyler().makeReaderActionRow(
                 selected ? activity.getString(R.string.tts_language_selected, label) : label, fg);
         row.setGravity(Gravity.CENTER);
         row.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
         row.setSingleLine(false);
         row.setMaxLines(2);
         row.setOnClickListener(v -> {
-            if (activity.prefs != null) activity.prefs.setTtsVoiceName(voiceName);
+            if (host.ttsHostPrefs() != null) host.ttsHostPrefs().setTtsVoiceName(voiceName);
             applySelectedLanguage(false);
             if (afterSelect != null) afterSelect.run();
             if (dialogRef[0] != null) dialogRef[0].dismiss();
@@ -1286,7 +1509,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     private Voice findSelectedVoice() {
-        String selected = activity.prefs != null ? activity.prefs.getTtsVoiceName() : "";
+        String selected = host.ttsHostPrefs() != null ? host.ttsHostPrefs().getTtsVoiceName() : "";
         if (selected == null || selected.trim().isEmpty() || tts == null || tts.getVoices() == null) {
             return null;
         }

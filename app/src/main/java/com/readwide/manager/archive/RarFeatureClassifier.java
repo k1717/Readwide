@@ -110,8 +110,10 @@ final class RarFeatureClassifier {
             @Nullable IOException backendFailure) {
         String message;
         if (hasRar3Or4HeaderEncryptedOnly(entries)) {
-            message = "RAR3/RAR4 header-encrypted (-hp) archives are detected before entry parsing and delegated to libarchive; "
-                    + "the first-party header decryptor is not implemented yet";
+            message = "RAR3/RAR4 archive yielded no parseable entries; if its headers are encrypted (-hp), "
+                    + "the first-party header rewriter (Rar4HeaderEncryptedArchiveRewriter) normally handles it "
+                    + "earlier with the correct password, so reaching this point means that rewrite failed or "
+                    + "the archive is damaged";
         } else if (hasRar3Or4SolidPpmdPayload(entries)) {
             message = "RAR3/RAR4 solid PPMd extraction has a scoped first-party decoder for eligible non-encrypted single-volume solid sets; "
                     + "other compressed-solid variants remain limited or backend-dependent. Stored solid entries do not need dictionary continuation and are handled by the stored-entry path";
@@ -119,8 +121,9 @@ final class RarFeatureClassifier {
             message = "RAR3/RAR4 compressed solid extraction is routed through scoped first-party special-case decoders where eligible; "
                     + "classic-LZ solid, split, encrypted, and VM-filtered variants remain limited or backend-dependent. Stored solid entries do not need dictionary continuation and are handled by the stored-entry path";
         } else if (hasRar3Or4EncryptedPayload(entries)) {
-            message = "RAR3/RAR4 encrypted extraction is reserved for the first-party password/encryption decoder; "
-                    + "that decoder is not implemented yet";
+            message = "RAR3/RAR4 encrypted extraction goes through the first-party decrypt/rewrite helpers for "
+                    + "eligible visible-header entries (stored and rewrite-candidate compressed, non-solid, non-split); "
+                    + "this archive fell outside that scope or the rewrite failed - encrypted solid/split variants remain unsupported";
         } else if (hasRar3Or4CompressedSplitPayload(entries)) {
             message = "RAR3/RAR4 compressed split extraction is not implemented in the first-party decoder yet";
         } else if (hasRar3Or4PpmdPayload(entries)) {
@@ -172,7 +175,8 @@ final class RarFeatureClassifier {
         } else if (hasRar3Or4PpmdPayload(entries)) {
             message += ", and the scoped first-party RAR3/RAR4 PPMd decoder also could not complete this archive";
         } else if (hasRar3Or4EncryptedPayload(entries)) {
-            message += ", but it failed on an encrypted RAR3/RAR4 payload. First-party encrypted compressed decoding is not live";
+            message += ", but it failed on an encrypted RAR3/RAR4 payload outside the first-party decrypt/rewrite scope "
+                    + "(eligible visible-header stored/compressed candidates are rewritten; encrypted solid/split variants are not)";
         } else if (hasRar3Or4CompressedSplitPayload(entries)) {
             message += ", but it failed on a compressed split RAR3/RAR4 payload. First-party split compressed decoding is not live";
         } else if (hasRar3Or4LimitedClassicLzFallbackPayload(entries)) {

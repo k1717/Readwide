@@ -22,29 +22,31 @@ final class TtsDialogViews {
         void onChanged(int value);
     }
 
-    static LinearLayout makeOptionBox(@NonNull ReaderActivity activity) {
+    static LinearLayout makeOptionBox(@NonNull TtsHost host) {
+        androidx.appcompat.app.AppCompatActivity activity = host.ttsHostActivity();
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(activity.dpToPx(10), activity.dpToPx(10),
-                activity.dpToPx(10), activity.dpToPx(2));
-        box.setBackground(roundedPanelBackground(activity,
-                activity.dialogStyler().readerDialogPanelColor(), 14));
+        box.setPadding(host.ttsHostDpToPx(10), host.ttsHostDpToPx(10),
+                host.ttsHostDpToPx(10), host.ttsHostDpToPx(2));
+        box.setBackground(roundedPanelBackground(host,
+                host.ttsHostDialogStyler().readerDialogPanelColor(), 14));
         return box;
     }
 
-    static void addPercentSlider(@NonNull ReaderActivity activity,
+    static void addPercentSlider(@NonNull TtsHost host,
                                  LinearLayout parent,
                                  String title,
                                  int initialValue,
                                  @NonNull PercentValueCallback callback,
                                  int fg,
                                  int sub) {
+        androidx.appcompat.app.AppCompatActivity activity = host.ttsHostActivity();
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(activity.dpToPx(8), activity.dpToPx(8),
-                activity.dpToPx(8), activity.dpToPx(6));
-        box.setBackground(roundedPanelBackground(activity,
-                activity.dialogStyler().readerDialogBgColor(), 10));
+        box.setPadding(host.ttsHostDpToPx(8), host.ttsHostDpToPx(8),
+                host.ttsHostDpToPx(8), host.ttsHostDpToPx(6));
+        box.setBackground(roundedPanelBackground(host,
+                host.ttsHostDialogStyler().readerDialogBgColor(), 10));
 
         TextView label = new TextView(activity);
         label.setText(percentLabel(title, initialValue));
@@ -55,12 +57,12 @@ final class TtsDialogViews {
         label.setIncludeFontPadding(false);
         box.addView(label, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                activity.dpToPx(22)));
+                host.ttsHostDpToPx(22)));
 
         SeekBar seek = new SeekBar(activity);
         seek.setMax(150);
         seek.setProgress(Math.max(50, Math.min(200, initialValue)) - 50);
-        seek.setPadding(activity.dpToPx(16), 0, activity.dpToPx(16), 0);
+        seek.setPadding(host.ttsHostDpToPx(16), 0, host.ttsHostDpToPx(16), 0);
         seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -76,12 +78,12 @@ final class TtsDialogViews {
         });
         box.addView(seek, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                activity.dpToPx(34)));
+                host.ttsHostDpToPx(34)));
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.setMargins(0, 0, 0, activity.dpToPx(8));
+        lp.setMargins(0, 0, 0, host.ttsHostDpToPx(8));
         parent.addView(box, lp);
     }
 
@@ -89,11 +91,11 @@ final class TtsDialogViews {
         return title + ": " + Math.max(50, Math.min(200, value)) + "%";
     }
 
-    static GradientDrawable roundedPanelBackground(@NonNull ReaderActivity activity,
+    static GradientDrawable roundedPanelBackground(@NonNull TtsHost host,
                                                    int color, int radiusDp) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color);
-        drawable.setCornerRadius(activity.dpToPx(radiusDp));
+        drawable.setCornerRadius(host.ttsHostDpToPx(radiusDp));
         drawable.setStroke(0, Color.TRANSPARENT);
         return drawable;
     }

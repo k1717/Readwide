@@ -509,15 +509,29 @@ final class ArchiveImageEntryCache {
                                                               @NonNull String entryPath) {
         if (!FileUtils.isImageFile(entryPath)) return false;
         ArchiveSupport.Type type = ArchiveSupport.getSupportedArchiveType(archiveFile);
-        if (!isSequentialEntryArchiveType(type)) return false;
+        // Numeric split archives (name.zip.001 style) of random-access types have
+        // no cheap per-entry access either, but for a different reason than the
+        // solid formats: every open concatenates all volumes into a temporary file
+        // first, so extracting entries one at a time costs O(total archive size)
+        // of disk I/O per entry (a full re-concatenation per page and per
+        // prefetched neighbor). One whole-archive pass pays the concatenation
+        // once. Splits of the sequential types (e.g. name.7z.001) are excluded
+        // here on purpose - they already take the sequential path above, with its
+        // own volume handling and forward-reader-first design.
+        boolean numericSplitRandomAccess = ArchiveSupport.isNumericSplitArchive(archiveFile)
+                && !isSequentialEntryArchiveType(type);
+        if (!isSequentialEntryArchiveType(type) && !numericSplitRandomAccess) return false;
         // RAR has no forward reader (its libarchive backend exposes no Java streaming
         // API), so the first access bulk-extracts the whole archive in one pass. Once
         // that bulk has succeeded, a later cache miss - a page evicted by the preview
         // cache size cap - extracts only that one member rather than re-extracting the
         // entire archive again, which is what made paging back into a large RAR stutter.
-        // 7z and the TAR family keep whole-archive as their fallback because their
-        // forward reader is the primary, prune-tolerant path.
-        if (type == ArchiveSupport.Type.RAR
+        // The same downgrade applies to random-access numeric splits: after the bulk,
+        // refilling one evicted page costs one concatenation plus one entry, which
+        // beats re-running the whole-archive pass. 7z and the TAR family keep
+        // whole-archive as their fallback because their forward reader is the
+        // primary, prune-tolerant path.
+        if ((type == ArchiveSupport.Type.RAR || numericSplitRandomAccess)
                 && WHOLE_ARCHIVE_BULK_DONE.contains(archiveBulkKey(archiveFile))) {
             return false;
         }
@@ -542,6 +556,8 @@ final class ArchiveImageEntryCache {
             case TAR_XZ:
             case TAR_LZMA:
             case TAR_Z:
+            case TAR_ZST:
+            case TAR_LZ4:
                 return true;
             default:
                 return false;

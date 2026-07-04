@@ -2,32 +2,38 @@ package com.readwide.manager;
 
 import java.lang.ref.WeakReference;
 
+/**
+ * Routes remote playback commands (notification actions, media buttons) from
+ * {@link TtsPlaybackService} to whichever {@link TtsHost} currently owns
+ * read-aloud. Hosts register on startup/resume ({@code ReaderActivity}) or when
+ * read-aloud is opened ({@code DocumentPageActivity}) and unregister on destroy.
+ */
 final class TtsPlaybackBridge {
-    private static WeakReference<ReaderActivity> activeReader = new WeakReference<>(null);
+    private static WeakReference<TtsHost> activeHost = new WeakReference<>(null);
 
     private TtsPlaybackBridge() {
     }
 
-    static synchronized void register(ReaderActivity activity) {
-        activeReader = new WeakReference<>(activity);
+    static synchronized void register(TtsHost host) {
+        activeHost = new WeakReference<>(host);
     }
 
-    static synchronized void unregister(ReaderActivity activity) {
-        ReaderActivity current = activeReader.get();
-        if (current == null || current == activity) {
-            activeReader = new WeakReference<>(null);
+    static synchronized void unregister(TtsHost host) {
+        TtsHost current = activeHost.get();
+        if (current == null || current == host) {
+            activeHost = new WeakReference<>(null);
         }
     }
 
     static boolean dispatch(String action) {
-        ReaderActivity activity;
+        TtsHost host;
         synchronized (TtsPlaybackBridge.class) {
-            activity = activeReader.get();
+            host = activeHost.get();
         }
-        if (activity == null || activity.isFinishing() || activity.activityDestroyed) {
+        if (host == null || host.ttsHostActivity().isFinishing() || host.isTtsHostDestroyed()) {
             return false;
         }
-        activity.runOnUiThread(() -> activity.handleTtsPlaybackCommand(action));
+        host.ttsHostActivity().runOnUiThread(() -> host.ttsHandlePlaybackCommand(action));
         return true;
     }
 }

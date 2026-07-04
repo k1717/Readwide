@@ -58,22 +58,114 @@ public final class ArchiveFilenameDecoder {
 
     @NonNull
     public static String decodeZipName(@NonNull byte[] raw, boolean utf8Flag) {
-        return decode(raw, 0, raw.length, utf8Flag, 0);
+        return decode(raw, 0, raw.length, utf8Flag, 0, null);
+    }
+
+    @NonNull
+    public static String decodeZipName(@NonNull byte[] raw, boolean utf8Flag, @Nullable NameCorpus corpus) {
+        return decode(raw, 0, raw.length, utf8Flag, 0, corpus);
     }
 
     @NonNull
     public static String decodeLegacyName(@NonNull byte[] raw) {
-        return decode(raw, 0, raw.length, false, 0);
+        return decode(raw, 0, raw.length, false, 0, null);
+    }
+
+    @NonNull
+    public static String decodeLegacyName(@NonNull byte[] raw, @Nullable NameCorpus corpus) {
+        return decode(raw, 0, raw.length, false, 0, corpus);
     }
 
     @NonNull
     public static String decodeEggName(@NonNull byte[] raw, int offset, int length, int localeCodePage) {
-        return decode(raw, offset, length, false, localeCodePage);
+        return decode(raw, offset, length, false, localeCodePage, null);
+    }
+
+    @NonNull
+    public static String decodeEggName(@NonNull byte[] raw, int offset, int length, int localeCodePage,
+                                       @Nullable NameCorpus corpus) {
+        return decode(raw, offset, length, false, localeCodePage, corpus);
     }
 
     @NonNull
     public static String decodeUtf8OrLegacy(@NonNull byte[] raw) {
-        return decode(raw, 0, raw.length, true, 0);
+        return decode(raw, 0, raw.length, true, 0, null);
+    }
+
+    /**
+     * Archive-level name corpus for joint charset detection.
+     *
+     * <p>Per-name detection is unreliable for short names: a one-syllable
+     * CP949 name is two bytes, which many single-byte code pages also decode
+     * "cleanly", and script scoring over one or two characters is noise. Real
+     * archives, however, are written by one tool with one code page, so the
+     * long names in an archive carry the signal the short ones lack. This
+     * borrows the text viewer's encoding-detection principle - judge one
+     * large sample once, not many small samples independently - scaled down
+     * to the pure-Java scorer this class already has: readers observe every
+     * legacy-path raw name during parsing, the corpus picks the single
+     * best-scoring charset that decodes all of them, and each name is then
+     * decoded with that shared decision. Per-name precedence is unchanged
+     * ahead of the corpus: ASCII, flagged/valid UTF-8, and explicit locale
+     * code-page hints (EGG) still win; the corpus only replaces the per-name
+     * scoring fallback.</p>
+     */
+    public static final class NameCorpus {
+        private final List<byte[]> names = new ArrayList<>();
+        private boolean resolvedComputed;
+        @Nullable
+        private String resolvedCharset;
+
+        /** Observes one raw legacy-path name (skip names taking the UTF-8 flag path). */
+        public void observe(@NonNull byte[] raw) {
+            observe(raw, 0, raw.length);
+        }
+
+        public void observe(@NonNull byte[] raw, int offset, int length) {
+            if (length <= 0 || isAscii(raw, offset, length)) return;
+            names.add(Arrays.copyOfRange(raw, offset, offset + length));
+            resolvedComputed = false;
+        }
+
+        /** The single charset that best explains every observed name, or null. */
+        @Nullable
+        public String resolvedLegacyCharset() {
+            if (!resolvedComputed) {
+                resolvedCharset = resolveCorpusCharset(names);
+                resolvedComputed = true;
+            }
+            return resolvedCharset;
+        }
+    }
+
+    @Nullable
+    private static String resolveCorpusCharset(@NonNull List<byte[]> names) {
+        if (names.isEmpty()) return null;
+        ArrayList<String> candidates = new ArrayList<>();
+        candidates.add("UTF-8");
+        candidates.addAll(LEGACY_CANDIDATES);
+        String bestCharset = null;
+        double bestScore = 0.0;
+        for (String charsetName : candidates) {
+            if (!Charset.isSupported(charsetName)) continue;
+            Charset charset = Charset.forName(charsetName);
+            double total = 0.0;
+            boolean decodesAll = true;
+            for (byte[] raw : names) {
+                String decoded = tryDecode(raw, 0, raw.length, charset);
+                if (decoded == null || !isUsableDecodedName(decoded)) {
+                    decodesAll = false;
+                    break;
+                }
+                total += scoreDecodedName(decoded, charsetName, null);
+            }
+            if (!decodesAll) continue;
+            if (bestCharset == null || total > bestScore) {
+                bestCharset = charsetName;
+                bestScore = total;
+            }
+        }
+        return bestCharset;
     }
 
     @NonNull
@@ -81,7 +173,8 @@ public final class ArchiveFilenameDecoder {
                                  int offset,
                                  int length,
                                  boolean preferUtf8,
-                                 int localeCodePage) {
+                                 int localeCodePage,
+                                 @Nullable NameCorpus corpus) {
         if (length <= 0) return "";
         if (isAscii(raw, offset, length)) {
             return normalizeName(new String(raw, offset, length, StandardCharsets.US_ASCII));
@@ -99,8 +192,21 @@ public final class ArchiveFilenameDecoder {
             return normalizeName(utf8);
         }
 
-        ArrayList<String> candidates = new ArrayList<>();
         String localeCharset = charsetForCodePage(localeCodePage);
+        if (localeCharset == null && corpus != null) {
+            // Archive-level decision: one tool wrote all these names with one
+            // code page, so a short ambiguous name inherits the charset its
+            // longer siblings established instead of being scored alone.
+            String corpusCharset = corpus.resolvedLegacyCharset();
+            if (corpusCharset != null && Charset.isSupported(corpusCharset)) {
+                String decoded = tryDecode(raw, offset, length, Charset.forName(corpusCharset));
+                if (decoded != null && isUsableDecodedName(decoded)) {
+                    return normalizeName(decoded);
+                }
+            }
+        }
+
+        ArrayList<String> candidates = new ArrayList<>();
         if (localeCharset != null) candidates.add(localeCharset);
         if (utf8 != null) candidates.add("UTF-8");
         for (String candidate : LEGACY_CANDIDATES) {
@@ -167,8 +273,8 @@ public final class ArchiveFilenameDecoder {
         score += stats.cjk * 6.0;
         score += stats.commonCjk * 5.0;
         score += stats.cyrillic * 9.0;
-        score += stats.greek * 9.0;
-        score += stats.greekTonos * 10.0;
+        score += stats.greek * 7.0;
+        score += stats.greekTonos * 6.0;
         score += stats.hebrew * 10.0;
         score += stats.arabic * 10.0;
         score += stats.thai * 11.0;
@@ -185,6 +291,13 @@ public final class ArchiveFilenameDecoder {
         score -= stats.currencyOrMathSymbols * 4.0;
         score -= stats.suspicious * 8.0;
 
+        // Real words in bicameral scripts are all-caps, all-lower, or
+        // Capitalized; a lowercase letter immediately followed by an
+        // uppercase one of the same script ("\u0416\u044d\u0419...") is the signature of
+        // bytes misread into the wrong code page. Applied to Cyrillic and
+        // Greek only - Latin camel-case filenames are legitimate.
+        score -= countBicameralCaseViolations(value) * 40.0;
+
         String normalized = charsetName.toUpperCase(Locale.ROOT);
         String normalizedLocale = localeCharset == null ? null : localeCharset.toUpperCase(Locale.ROOT);
         if (normalizedLocale != null && normalized.equals(normalizedLocale)) score += 1000.0;
@@ -199,13 +312,42 @@ public final class ArchiveFilenameDecoder {
         if (isCharset(normalized, "BIG5") && stats.cjk >= 2 && stats.hangul == 0 && stats.kana == 0) score += 8.0;
         if (isCharset(normalized, "BIG5") && stats.commonCjk > 0 && stats.hangul == 0 && stats.kana == 0) score += 175.0;
         if (isCharset(normalized, "WINDOWS-1251", "KOI8-R", "IBM866", "CP866") && stats.cyrillic > 0) score += 22.0;
+        if (isCharset(normalized, "WINDOWS-1251", "KOI8-R", "IBM866", "CP866") && stats.cyrillicRussianMarkers > 0) {
+            // Letters like \u0451/\u044b/\u044d/\u044f pin the text as Russian - misreads
+            // into Greek or Thai rarely produce them in legal positions.
+            // Russian words essentially never begin with \u0451, \u044b, or \u0439,
+            // which is exactly where misreads put them, so word-initial
+            // occurrences cancel the bonus instead of collecting it.
+            int markerViolations = countCyrillicMarkerViolations(value);
+            if (markerViolations == 0) {
+                score += stats.cyrillicRussianMarkers * 8.0 + 60.0;
+            } else {
+                score -= markerViolations * 40.0;
+            }
+        }
         if (isCharset(normalized, "WINDOWS-1253", "ISO-8859-7") && stats.greek > 0) score += 22.0;
-        if (isCharset(normalized, "WINDOWS-1253", "ISO-8859-7") && stats.greekTonos > 0) score += 120.0;
+        if (isCharset(normalized, "WINDOWS-1253", "ISO-8859-7")) {
+            // Position-bound Greek structure: final sigma only ends words and
+            // accented capitals only start them. Genuine Greek names satisfy
+            // both and collect the bonuses; Cyrillic bytes misread as 1253
+            // scatter these letters mid-word and collect the penalties.
+            GreekStructure structure = analyzeGreekStructure(value);
+            score -= structure.violations * 40.0;
+            score += structure.finalSigmaAtWordEnd * 25.0;
+            score += structure.tonosCapitalAtWordStart * 25.0;
+            if (stats.greekTonos > 0 && structure.violations == 0
+                    && stats.suspicious == 0 && stats.currencyOrMathSymbols == 0
+                    && stats.greek >= 3 * stats.greekTonos) score += 50.0;
+        }
         if (isCharset(normalized, "WINDOWS-1254", "ISO-8859-9") && stats.turkish >= 3 && stats.latinExtended <= stats.turkish) score += 220.0;
         else if (isCharset(normalized, "WINDOWS-1254", "ISO-8859-9") && stats.turkish > 0) score += 12.0;
         if (isCharset(normalized, "WINDOWS-1255", "ISO-8859-8") && stats.hebrew > 0) score += 24.0;
         if (isCharset(normalized, "WINDOWS-1256", "ISO-8859-6") && stats.arabic > 0) score += 24.0;
-        if (isCharset(normalized, "WINDOWS-874", "TIS-620") && stats.thai > 0) score += 60.0;
+        int thaiViolations = countThaiStructureViolations(value);
+        boolean naturalThai = stats.thai > 0 && thaiViolations == 0 && hasThaiVowelStructure(value, stats);
+        score -= thaiViolations * 30.0;
+        if (isCharset(normalized, "WINDOWS-874", "TIS-620") && naturalThai) score += 60.0;
+        else if (isCharset(normalized, "WINDOWS-874", "TIS-620") && stats.thai > 0 && !naturalThai) score -= 120.0;
         if (isCharset(normalized, "WINDOWS-1258") && stats.vietnamese >= 2) score += 110.0;
         else if (isCharset(normalized, "WINDOWS-1258") && stats.vietnamese > 0) score += 24.0;
         if (isCharset(normalized, "WINDOWS-1250", "ISO-8859-2") && stats.centralEuropeanLatin >= 5) score += 95.0;
@@ -220,6 +362,113 @@ public final class ArchiveFilenameDecoder {
         if (isCharset(normalized, "IBM437") && hasOnlyAsciiLike(stats)) score += 5.0;
 
         return score;
+    }
+
+    /**
+     * Counts structurally illegal Thai sequences. Thai combining vowels and
+     * tone marks can only follow a Thai consonant, and the leading vowels
+     * U+0E40-U+0E44 must be followed by a consonant; legacy single-byte
+     * bytes misread as windows-874 violate these constantly, whereas genuine
+     * Thai names never do. (Same idea as the text viewer's naturalness
+     * signals, reduced to hard script structure so it works on short names.)
+     */
+    private static int countThaiStructureViolations(@NonNull String value) {
+        int violations = 0;
+        int prev = -1;
+        for (int i = 0; i < value.length(); ) {
+            int cp = value.codePointAt(i);
+            i += Character.charCount(cp);
+            boolean combining = cp == 0x0E31 || (cp >= 0x0E34 && cp <= 0x0E3A) || (cp >= 0x0E47 && cp <= 0x0E4E);
+            if (combining && !(prev >= 0x0E01 && prev <= 0x0E2E)) violations++;
+            if (prev >= 0x0E40 && prev <= 0x0E44 && !(cp >= 0x0E01 && cp <= 0x0E2E)) violations++;
+            prev = cp;
+        }
+        if (prev >= 0x0E40 && prev <= 0x0E44) violations++;
+        return violations;
+    }
+
+    /**
+     * Real Thai words interleave consonants with vowels; a long run of bare
+     * consonants (which is what Cyrillic code pages decode to in windows-874)
+     * is not natural Thai.
+     */
+    private static boolean hasThaiVowelStructure(@NonNull String value, @NonNull ScriptStats stats) {
+        if (stats.thai < 6) return true;
+        for (int i = 0; i < value.length(); ) {
+            int cp = value.codePointAt(i);
+            i += Character.charCount(cp);
+            boolean vowelOrTone = cp == 0x0E31 || (cp >= 0x0E30 && cp <= 0x0E45) || (cp >= 0x0E47 && cp <= 0x0E4E);
+            if (vowelOrTone) return true;
+        }
+        return false;
+    }
+
+    private static int countBicameralCaseViolations(@NonNull String value) {
+        int violations = 0;
+        int prev = -1;
+        for (int i = 0; i < value.length(); ) {
+            int cp = value.codePointAt(i);
+            i += Character.charCount(cp);
+            boolean prevLowerCyr = prev >= 0x0430 && prev <= 0x045F;
+            boolean curUpperCyr = cp >= 0x0400 && cp <= 0x042F;
+            boolean prevLowerGreek = (prev >= 0x03B1 && prev <= 0x03C9)
+                    || (prev >= 0x03AC && prev <= 0x03AF) || prev == 0x03CC || prev == 0x03CD || prev == 0x03CE;
+            boolean curUpperGreek = (cp >= 0x0391 && cp <= 0x03A9)
+                    || cp == 0x0386 || (cp >= 0x0388 && cp <= 0x038F);
+            if ((prevLowerCyr && curUpperCyr) || (prevLowerGreek && curUpperGreek)) violations++;
+            prev = cp;
+        }
+        return violations;
+    }
+
+    /** Word-initial \u0451/\u0401, \u044b/\u042b, or \u0439/\u0419 - positions real Russian avoids. */
+    private static int countCyrillicMarkerViolations(@NonNull String value) {
+        int violations = 0;
+        int prev = -1;
+        for (int i = 0; i < value.length(); ) {
+            int cp = value.codePointAt(i);
+            i += Character.charCount(cp);
+            boolean wordInitial = !(prev >= 0x0400 && prev <= 0x052f);
+            if (wordInitial && (cp == 0x0451 || cp == 0x0401 || cp == 0x044B || cp == 0x042B
+                    || cp == 0x0439 || cp == 0x0419)) {
+                violations++;
+            }
+            prev = cp;
+        }
+        return violations;
+    }
+
+    private static final class GreekStructure {
+        int violations;
+        int finalSigmaAtWordEnd;
+        int tonosCapitalAtWordStart;
+    }
+
+    @NonNull
+    private static GreekStructure analyzeGreekStructure(@NonNull String value) {
+        GreekStructure result = new GreekStructure();
+        int prev = -1;
+        for (int i = 0; i < value.length(); ) {
+            int cp = value.codePointAt(i);
+            int next = i + Character.charCount(cp) < value.length()
+                    ? value.codePointAt(i + Character.charCount(cp)) : -1;
+            i += Character.charCount(cp);
+            boolean nextIsGreekLetter = (next >= 0x0391 && next <= 0x03A9) || (next >= 0x03B1 && next <= 0x03C9)
+                    || isGreekTonosLetter(next);
+            boolean prevIsGreekLetter = (prev >= 0x0391 && prev <= 0x03A9) || (prev >= 0x03B1 && prev <= 0x03C9)
+                    || isGreekTonosLetter(prev);
+            if (cp == 0x03C2) { // final sigma
+                if (nextIsGreekLetter) result.violations++;
+                else result.finalSigmaAtWordEnd++;
+            }
+            boolean tonosCapital = cp == 0x0386 || (cp >= 0x0388 && cp <= 0x038F);
+            if (tonosCapital) {
+                if (prevIsGreekLetter) result.violations++;
+                else result.tonosCapitalAtWordStart++;
+            }
+            prev = cp;
+        }
+        return result;
     }
 
     private static ScriptStats collectScriptStats(@NonNull String value) {
@@ -244,8 +493,16 @@ public final class ArchiveFilenameDecoder {
                 if (isRussianMarkerCyrillic(cp)) stats.cyrillicRussianMarkers++;
             }
             else if (cp >= 0x0370 && cp <= 0x03ff) {
-                stats.greek++;
-                if (isGreekTonosLetter(cp)) stats.greekTonos++;
+                if ((cp >= 0x0391 && cp <= 0x03A9) || (cp >= 0x03B1 && cp <= 0x03C9)
+                        || isGreekTonosLetter(cp)) {
+                    stats.greek++;
+                    if (isGreekTonosLetter(cp)) stats.greekTonos++;
+                } else {
+                    // Tonos/dialytika symbols, archaic letters, and the rest of
+                    // the block do not occur in real Greek filenames but appear
+                    // constantly when CP949/CP1251 bytes are misread as 1253.
+                    stats.suspicious += 1;
+                }
             }
             else if (cp >= 0x0590 && cp <= 0x05ff) {
                 if (cp >= 0x05d0 && cp <= 0x05ea) stats.hebrew++;
@@ -253,8 +510,16 @@ public final class ArchiveFilenameDecoder {
             }
             else if (cp >= 0x0600 && cp <= 0x06ff) stats.arabic++;
             else if (cp >= 0x0e00 && cp <= 0x0e7f) {
-                if ((cp >= 0x0e01 && cp <= 0x0e2e) || (cp >= 0x0e40 && cp <= 0x0e44)) stats.thai++;
-                else stats.suspicious += 1;
+                if ((cp >= 0x0e01 && cp <= 0x0e2e) || (cp >= 0x0e30 && cp <= 0x0e46)
+                        || (cp >= 0x0e47 && cp <= 0x0e4e) || cp == 0x0e2f) {
+                    // Consonants, all vowels (leading, following, and
+                    // combining), tone marks, and repetition signs are legal
+                    // Thai; countThaiStructureViolations handles misplaced
+                    // combining marks so they are not blanket-suspicious.
+                    stats.thai++;
+                } else {
+                    stats.suspicious += 1;
+                }
             }
             else if (isVietnameseLatin(cp)) stats.vietnamese++;
             else if (isTurkishLatin(cp)) stats.turkish++;

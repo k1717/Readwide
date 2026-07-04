@@ -5,10 +5,10 @@ Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF
 [![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)](https://github.com/k1717/Readwide/releases)
 [![Downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)](https://github.com/k1717/Readwide/releases)
 
-Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4, and 1.0.10 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.10, then restoring bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
+Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4, and 1.0.11 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.11, then restoring bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
 
-- Current public version: **1.0.10**
-- Android metadata: `versionCode 10010`, `versionName "1.0.10"`
+- Current public version: **1.0.11**
+- Android metadata: `versionCode 10011`, `versionName "1.0.11"`
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
 - Release page: `https://github.com/k1717/Readwide/releases`
@@ -37,7 +37,8 @@ See `PRIVACY.md` for the full local-data and cache policy.
 - Word-family document filter:
   - OOXML Word: `.docx`, `.docm`, `.dotx`, `.dotm`
   - HWP/HWPX: `.hwp`, `.hwpx`
-  - Legacy `.doc` is recognized under the Word filter but is not rendered yet.
+  - Legacy `.doc` (Word 97-2003) opens through a self-contained pure-Java reader.
+- Read-aloud (text-to-speech) across the readers and viewers - plain-text/Markdown, the document viewer (EPUB, Word-family, HWP/HWPX, and Markdown), and text-based PDF: language and voice selection, speed and pitch, adjustable phrase length and pause reduction for neural voices, pause/resume, a sleep timer, a playback notification with media controls, and continuous reading that follows along as it goes (turning the page across boundaries in paginated viewers, and scrolling to follow in Markdown). A read-aloud button sits next to the bookmark button in each viewer's toolbar, and "continue reading aloud" from the main screen resumes at the saved spot. It uses the Android `TextToSpeech` API, so any installed engine works, including neural engines exposed as system TTS. Scanned/image-only PDFs report that they have no selectable text instead of playing silence.
 - HWP/HWPX text-first reading via Apache-2.0 dogfoot libraries (`hwplib`, `hwpxlib`). This is not Hancom-compatible layout rendering.
 - Image viewer with archive-backed image sequences, saved positions, optional touch page zones, adaptive image fit, and left-to-right/right-to-left flow mode.
 - Archive browser and extraction/creation workflows for supported ZIP, 7z, TAR-family, RAR/CBR, ALZ, and EGG paths, with conservative support boundaries.
@@ -61,7 +62,7 @@ This table is a release-summary view. See the archive support matrix and the for
 | 7z/CB7 | Apache Commons Compress 7z path, password forwarding for covered variants, and standard `.001/.002/...` raw split chains. |
 | TAR family / single compressor streams | Commons Compress primary path for covered tar/compressor combinations and single streams. |
 | RAR/CBR | Limited extraction/read support. libarchive-android is the primary compressed-RAR backend; first-party Java handles covered stored entries, scoped RAR3/RAR4 PPMd cases, RAR5 v5.0 compressed/solid cases, and fixture-verified RAR5 AES visible-header multi-volume cases. No broad encrypted, split, SFX, VM-filtered, or complete RAR support claim. |
-| ALZ/EGG | First-party read/extraction paths for covered Store/Deflate/BZip2/LZMA/AZO cases with CRC checks. Encrypted/split/solid EGG remains unsupported. |
+| ALZ/EGG | First-party read/extraction paths for covered Store/Deflate/BZip2/LZMA/AZO cases with CRC checks, split volumes (EGG `.volN.egg`, ALZ `.a00`...), and ZipCrypto-encrypted entries. AES/LEA-encrypted and solid EGG remain unsupported. |
 
 ## Quick filter buttons
 
@@ -72,7 +73,7 @@ The file list has quick-filter chips. Each matches by file-name extension (case-
 | All | Every file (no extension filter). |
 | General | Text-like and source/config files **except** plain `.txt`/`.text` and `.svg`: `.log .md .markdown .csv .tsv .ini .cfg .conf .properties .prop .json .jsonl .xml .html .htm .xhtml .css .scss .sass .yaml .yml .toml .sql .srt .vtt .rtf .tex .bib`, common source code (`.java .kt .kts .gradle .groovy .js .mjs .cjs .tsx .jsx .vue .svelte .py .pyw .rb .go .rs .swift .c .cc .cpp .cxx .h .hh .hpp .m .mm .cs .php .pl .pm .r .lua .dart .scala .sc .sh .bash .zsh .fish .bat .cmd .ps1 .psm1`), dotfiles (`.gitignore .gitattributes .editorconfig .env`), and `.manifest .mf .plist`. Extensionless files named `readme`, `license`/`licence`, `copying`, `notice`, `authors`, `contributors`, `changelog`, `changes`, `makefile`, `dockerfile`, `gemfile`, `rakefile`, `podfile`, `procfile` are also matched. |
 | TXT | `.txt .text` |
-| Archive | `.zip .zipx .cbz .rar .cbr .alz .egg .7z .cb7 .tar .cbt .tar.gz .tgz .tar.bz2 .tbz2 .tbz .tar.xz .txz .tar.lzma .tlz .tar.z .taz .gz .bz2 .xz .lzma .z`, plus split-volume parts (RAR `.partN.rar` / old-style `.rNN`, 7z `.7z.NNN`, EGG volumes, and first numeric `.001` split parts). |
+| Archive | `.zip .zipx .cbz .rar .cbr .alz .egg .7z .cb7 .tar .cbt .tar.gz .tgz .tar.bz2 .tbz2 .tbz .tar.xz .txz .tar.lzma .tlz .tar.z .taz .tar.zst .tzst .tar.lz4 .gz .bz2 .xz .lzma .z .zst .lz4`, plus split-volume parts (RAR `.partN.rar` / old-style `.rNN`, 7z `.7z.NNN`, EGG volumes, ALZ `.aNN` parts, and first numeric `.001` split parts). |
 | PDF | `.pdf` |
 | EPUB | `.epub` |
 | Word | `.doc .docx .docm .dotx .dotm` and HWP `.hwp .hwpx` (grouped together under the Word filter). |
@@ -82,7 +83,7 @@ The same image extension set is also what the image viewer opens (including imag
 
 ## FOSS / F-Droid preparation
 
-Readwide 1.0.10 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
+Readwide 1.0.11 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
 
 - First-party code is Apache-2.0.
 - The default build does not bundle Junrar or RARLAB UnRAR-license code.
@@ -118,10 +119,10 @@ Release signing is conditional. If the `READWIDE_*` (or legacy `TEXTVIEW_*`) sig
 - `CHANGELOG.md` — public changelog.
 - `PATCHNOTES.md` — detailed public release notes.
 - `GITHUB_UPLOAD_NOTES.md` — GitHub upload checklist.
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_7.md` — copy-ready GitHub release notes.
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_11.md` — copy-ready GitHub release notes.
 - `docs/FDROID_SUBMISSION.md` — F-Droid submission notes.
 - `docs/TXT_SEARCH_USAGE.md` — reader find-in-page options for TXT and WebView document readers (case sensitive, whole word, regular expression).
 - `docs/FOSS_STATUS.md` — FOSS boundary and caveats.
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — archive compatibility wording source.
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md` — HWP/HWPX scope and license notes.
-- `docs/LICENSE_REPORT_READWIDE_1_0_9.md` and `docs/SBOM_READWIDE_1_0_9.spdx.json` — direct-dependency license/SBOM drafts.
+- `docs/LICENSE_REPORT_READWIDE_1_0_11.md` and `docs/SBOM_READWIDE_1_0_11.spdx.json` — direct-dependency license/SBOM drafts.

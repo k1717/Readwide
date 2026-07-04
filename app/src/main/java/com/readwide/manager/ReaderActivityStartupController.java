@@ -75,7 +75,14 @@ final class ReaderActivityStartupController {
     }
 
     void onNewIntent(@NonNull android.content.Intent intent) {
+        // Save the previous file's state first (a background trim has already
+        // saved it and made this a no-op in that case), then drop every
+        // transient restore artifact - pending trim, released-memory flag,
+        // stored restore intent, loaded text snapshot, in-flight partition
+        // switch - so nothing recorded for the previous file can fire after
+        // the new file loads.
         activity.saveReadingState();
+        activity.discardTransientRestoreStateForNewLoad();
         activity.setIntent(intent);
         activity.clearPendingToolbarSeekJump();
         activity.activeSearchQuery = "";

@@ -555,6 +555,12 @@
     <string name="tts_voice_offline">εκτός σύνδεσης</string>
     <string name="tts_speed">Ταχύτητα</string>
     <string name="tts_pitch">Τόνος</string>
+    <string name="tts_phrase_length_short">Μήκος φράσης: Σύντομο</string>
+    <string name="tts_phrase_length_medium">Μήκος φράσης: Μέτριο</string>
+    <string name="tts_phrase_length_long">Μήκος φράσης: Μακρύ</string>
+    <string name="tts_pause_reduction_off">Μείωση παύσεων: Ανενεργή</string>
+    <string name="tts_pause_reduction_medium">Μείωση παύσεων: Μέτρια</string>
+    <string name="tts_pause_reduction_aggressive">Μείωση παύσεων: Έντονη</string>
     <string name="tts_android_settings">Ρυθμίσεις TTS Android</string>
     <string name="tts_add_voice_model">Προσθήκη/λήψη μοντέλων φωνής</string>
     <string name="tts_settings_unavailable">Δεν ήταν δυνατό το άνοιγμα των ρυθμίσεων TTS Android.</string>

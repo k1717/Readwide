@@ -555,6 +555,12 @@
     <string name="tts_voice_offline">ऑफ़लाइन</string>
     <string name="tts_speed">गति</string>
     <string name="tts_pitch">पिच</string>
+    <string name="tts_phrase_length_short">वाक्यांश लंबाई: छोटा</string>
+    <string name="tts_phrase_length_medium">वाक्यांश लंबाई: मध्यम</string>
+    <string name="tts_phrase_length_long">वाक्यांश लंबाई: लंबा</string>
+    <string name="tts_pause_reduction_off">विराम में कमी: बंद</string>
+    <string name="tts_pause_reduction_medium">विराम में कमी: मध्यम</string>
+    <string name="tts_pause_reduction_aggressive">विराम में कमी: अधिक</string>
     <string name="tts_android_settings">Android TTS सेटिंग्स</string>
     <string name="tts_add_voice_model">आवाज़ मॉडल जोड़ें/डाउनलोड करें</string>
     <string name="tts_settings_unavailable">Android TTS सेटिंग्स नहीं खोली जा सकीं।</string>

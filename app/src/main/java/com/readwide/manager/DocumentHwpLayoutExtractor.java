@@ -25,9 +25,11 @@ import kr.dogfoot.hwplib.object.docinfo.BorderFill;
 import kr.dogfoot.hwplib.object.docinfo.borderfill.EachBorder;
 import kr.dogfoot.hwplib.object.docinfo.borderfill.BorderType;
 import kr.dogfoot.hwplib.object.bodytext.control.gso.ControlLine;
+import kr.dogfoot.hwplib.object.bodytext.control.gso.ControlPicture;
 import kr.dogfoot.hwplib.object.bodytext.control.ControlSectionDefine;
 import kr.dogfoot.hwplib.object.bodytext.control.sectiondefine.PageDef;
 import com.readwide.manager.document.render.RenderedHorizontalLine;
+import com.readwide.manager.document.render.RenderedImage;
 
 import org.w3c.dom.Document;
 import org.w3c.dom.NamedNodeMap;
@@ -86,7 +88,10 @@ final class DocumentHwpLayoutExtractor {
         float pageWidthPt = hwpContentWidthPt(hwp);
 
         ArrayList<RenderedBlock> blocks = new ArrayList<>();
+        Map<Integer, byte[]> embeddedImages = hwpEmbeddedBinaryDataById(hwp);
+        long[] imageBudget = {MAX_TOTAL_EMBEDDED_IMAGE_BYTES};
         boolean sawTable = false;
+        boolean sawImage = false;
         for (Section section : hwp.getBodyText().getSectionList()) {
             if (section == null) continue;
             for (Paragraph paragraph : section) {
@@ -103,6 +108,13 @@ final class DocumentHwpLayoutExtractor {
                             RenderedHorizontalLine line = horizontalLineFromControlLine(
                                     (ControlLine) control, pageWidthPt);
                             if (line != null) blocks.add(RenderedBlock.horizontalLine(line));
+                        } else if (control instanceof ControlPicture) {
+                            RenderedImage image = hwpImageFromPicture(
+                                    (ControlPicture) control, hwp, embeddedImages, imageBudget);
+                            if (image != null) {
+                                blocks.add(RenderedBlock.image(image));
+                                sawImage = true;
+                            }
                         }
                     }
                 }
@@ -119,10 +131,11 @@ final class DocumentHwpLayoutExtractor {
             }
         }
 
-        // Only claim structural success when we actually recovered tables; a
-        // text-only result is better served by the existing plain-text path
-        // (which paginates and keeps the verified dogfoot extraction).
-        if (!sawTable || blocks.isEmpty()) return null;
+        // Only claim structural success when we actually recovered tables or
+        // images; a text-only result is better served by the existing
+        // plain-text path (which paginates and keeps the verified dogfoot
+        // extraction).
+        if ((!sawTable && !sawImage) || blocks.isEmpty()) return null;
 
         RenderedPage.Builder page = RenderedPage.builder(0)
                 .pageSizePt(DEFAULT_PAGE_WIDTH_PT, DEFAULT_PAGE_HEIGHT_PT)
@@ -279,24 +292,232 @@ final class DocumentHwpLayoutExtractor {
         return defaultHwpTextStyle();
     }
 
-    /** Resolves a paragraph's horizontal alignment from its ParaShape. */
+    /**
+     * Resolves a paragraph's style (alignment, left/right margins, first-line
+     * indent, paragraph spacing, and line spacing) from its ParaShape.
+     *
+     * Binary HWP quirk: the ParaShape margin, indent, and paragraph-space
+     * fields are stored as HWPUNIT (1pt = 100) multiplied by 2, so points are
+     * value / 200. Percent line spacing is a plain percentage; fixed line
+     * spacing is again doubled HWPUNIT. Both facts are confirmed by neolord0's
+     * hwp2hwpx converter (ForParaProperties divides these fields by 2 for the
+     * HWPUNIT case) and pyhwp's binmodel ("doubled_margin_left # 1/7200 * 2").
+     */
     private static ParagraphStyle hwpParagraphStyle(Paragraph paragraph, HWPFile hwp) {
-        ParagraphStyle.Alignment alignment = ParagraphStyle.Alignment.LEFT;
+        ParagraphStyle.Builder builder = new ParagraphStyle.Builder();
+        builder.alignment(ParagraphStyle.Alignment.LEFT);
         try {
             if (paragraph.getHeader() != null && hwp.getDocInfo() != null) {
                 int paraShapeId = paragraph.getHeader().getParaShapeId();
                 java.util.List<kr.dogfoot.hwplib.object.docinfo.ParaShape> paraShapes =
                         hwp.getDocInfo().getParaShapeList();
                 if (paraShapeId >= 0 && paraShapeId < paraShapes.size()) {
-                    kr.dogfoot.hwplib.object.docinfo.parashape.Alignment a =
-                            paraShapes.get(paraShapeId).getProperty1().getAlignment();
-                    alignment = mapHwpAlignment(a);
+                    kr.dogfoot.hwplib.object.docinfo.ParaShape shape = paraShapes.get(paraShapeId);
+                    builder.alignment(mapHwpAlignment(shape.getProperty1().getAlignment()));
+                    applyHwpParaShapeMetrics(shape, builder);
                 }
             }
         } catch (Exception ignored) {
-            // default left
+            // default left, no metrics
         }
-        return new ParagraphStyle.Builder().alignment(alignment).build();
+        return builder.build();
+    }
+
+    /** Maps ParaShape indents/spacing (doubled HWPUNIT) onto the shared style model. */
+    private static void applyHwpParaShapeMetrics(kr.dogfoot.hwplib.object.docinfo.ParaShape shape,
+                                                 ParagraphStyle.Builder builder) {
+        float left = shape.getLeftMargin() / 200f;
+        float right = shape.getRightMargin() / 200f;
+        float indent = shape.getIndent() / 200f;
+        // HWP stores the raw UI values: leftMargin is where the FIRST line
+        // starts and a negative indent (naeeosseugi/hanging) pushes the BODY
+        // lines right of it. CSS text-indent instead offsets the first line
+        // from margin-left, so for a hanging indent the hang is folded into
+        // margin-left and text-indent stays negative (same convention Word
+        // uses internally for dxaLeft/dxaLeft1).
+        if (indent < 0f) left += -indent;
+        if (left > 0.5f) builder.marginLeftPt(clampPt(left, 300f));
+        if (right > 0.5f) builder.marginRightPt(clampPt(right, 300f));
+        if (Math.abs(indent) > 0.5f) {
+            builder.textIndentPt(indent < 0 ? -clampPt(-indent, 300f) : clampPt(indent, 300f));
+        }
+
+        float spaceTop = shape.getTopParaSpace() / 200f;
+        float spaceBottom = shape.getBottomParaSpace() / 200f;
+        if (spaceTop > 0.5f) builder.marginTopPt(clampPt(spaceTop, 200f));
+        if (spaceBottom > 0.5f) builder.marginBottomPt(clampPt(spaceBottom, 200f));
+
+        // Line spacing: files >= 5.0.2.5 carry it in lineSpace2 with the type
+        // in property3; older files use lineSpace with the type in property1.
+        // hwplib leaves lineSpace2 at 0 for old files, so > 0 selects the pair.
+        long lineSpace;
+        kr.dogfoot.hwplib.object.docinfo.parashape.LineSpaceSort sort;
+        if (shape.getLineSpace2() > 0) {
+            lineSpace = shape.getLineSpace2();
+            sort = shape.getProperty3().getLineSpaceSort();
+        } else {
+            lineSpace = shape.getLineSpace();
+            sort = shape.getProperty1().getLineSpaceSort();
+        }
+        if (lineSpace > 0 && sort != null) {
+            switch (sort) {
+                case RatioForLetter: // percent of letter height, e.g. 160 = 160%
+                    builder.lineHeightMultiplier(Math.max(0.75f, Math.min(3.0f, lineSpace / 100f)));
+                    break;
+                case FixedValue: // doubled HWPUNIT -> pt
+                    float pt = lineSpace / 200f;
+                    if (pt >= 4f && pt <= 120f) builder.lineHeightPt(pt);
+                    break;
+                default:
+                    // OnlyMargin / AtLeast have no direct CSS equivalent; keep default.
+                    break;
+            }
+        }
+    }
+
+    private static float clampPt(float v, float max) {
+        return Math.max(0f, Math.min(max, v));
+    }
+
+    // ---- embedded images (shared by the .hwp and .hwpx paths) ----
+
+    /** Per-image byte cap before base64; larger pictures are skipped, not scaled. */
+    private static final long MAX_EMBEDDED_IMAGE_BYTES = 4L * 1024L * 1024L;
+    /** Per-document raw-byte budget so an image-stuffed file cannot balloon the page HTML. */
+    private static final long MAX_TOTAL_EMBEDDED_IMAGE_BYTES = 24L * 1024L * 1024L;
+    private static final float MAX_IMAGE_DIMENSION_PT = 700f;
+
+    /**
+     * Indexes the document's embedded BinData streams by their binDataID. HWP
+     * stores them as "BINxxxx.ext" where xxxx is the ID in hex (the same
+     * convention hwplib's reader and neolord0's hwp2hwpx use), and hwplib has
+     * already inflated compressed streams, so the bytes are the raw file.
+     */
+    private static Map<Integer, byte[]> hwpEmbeddedBinaryDataById(HWPFile hwp) {
+        Map<Integer, byte[]> byId = new LinkedHashMap<>();
+        try {
+            if (hwp.getBinData() == null || hwp.getBinData().getEmbeddedBinaryDataList() == null) return byId;
+            for (kr.dogfoot.hwplib.object.bindata.EmbeddedBinaryData ebd
+                    : hwp.getBinData().getEmbeddedBinaryDataList()) {
+                if (ebd == null || ebd.getName() == null || ebd.getData() == null) continue;
+                String name = ebd.getName();
+                int dot = name.indexOf('.');
+                String stem = dot > 0 ? name.substring(0, dot) : name;
+                if (stem.length() <= 3) continue;
+                try {
+                    byId.put(Integer.parseInt(stem.substring(3), 16), ebd.getData());
+                } catch (NumberFormatException ignored) {
+                    // Non-standard stream name; skip.
+                }
+            }
+        } catch (Exception ignored) {
+            // Image extraction is a fidelity enhancement only.
+        }
+        return byId;
+    }
+
+    /**
+     * Converts an inline picture control into a data-URI image. The picture's
+     * binItemID is a 1-based index into DocInfo's BinData list; that entry's
+     * binDataID names the embedded stream. Only raster formats a WebView can
+     * decode (PNG/JPEG/GIF/BMP/WebP) are emitted - .hwp files can also embed
+     * WMF/EMF/OLE, which are skipped. Display size comes from the GSO header
+     * (plain HWPUNIT, 1pt = 100).
+     */
+    private static RenderedImage hwpImageFromPicture(ControlPicture picture, HWPFile hwp,
+                                                     Map<Integer, byte[]> embeddedImages, long[] budget) {
+        try {
+            if (picture.getShapeComponentPicture() == null
+                    || picture.getShapeComponentPicture().getPictureInfo() == null
+                    || hwp.getDocInfo() == null) return null;
+            int binItemId = picture.getShapeComponentPicture().getPictureInfo().getBinItemID();
+            java.util.List<kr.dogfoot.hwplib.object.docinfo.BinData> binDataList =
+                    hwp.getDocInfo().getBinDataList();
+            if (binDataList == null || binItemId < 1 || binItemId > binDataList.size()) return null;
+            kr.dogfoot.hwplib.object.docinfo.BinData binData = binDataList.get(binItemId - 1);
+            if (binData == null) return null;
+            byte[] data = embeddedImages.get(binData.getBinDataID());
+
+            Float widthPt = null;
+            Float heightPt = null;
+            if (picture.getHeader() != null) {
+                float w = picture.getHeader().getWidth() / 100f;
+                float h = picture.getHeader().getHeight() / 100f;
+                if (w > 1f && h > 1f && w <= MAX_IMAGE_DIMENSION_PT * 4 && h <= MAX_IMAGE_DIMENSION_PT * 4) {
+                    // Keep the aspect ratio while fitting oversized pictures.
+                    float scale = Math.min(1f, Math.min(MAX_IMAGE_DIMENSION_PT / w, MAX_IMAGE_DIMENSION_PT / h));
+                    widthPt = w * scale;
+                    heightPt = h * scale;
+                }
+            }
+
+            String dataUri = imageDataUri(data, budget);
+            if (dataUri == null) {
+                // The picture references real embedded bytes, but they are not a
+                // WebView-decodable raster (WMF/EMF/OLE) or exceed the byte caps.
+                // Show a placeholder at the authored size rather than dropping
+                // the image silently. If there are no bytes at all, there is
+                // nothing to represent, so skip.
+                if (data != null && data.length > 0) {
+                    return RenderedImage.placeholder(widthPt, heightPt);
+                }
+                return null;
+            }
+
+            return new RenderedImage(dataUri, "", widthPt, heightPt, false);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** Sniffs the format, checks the caps, and returns a data URI, or null. */
+    private static String imageDataUri(byte[] data, long[] budget) {
+        if (data == null || data.length == 0 || data.length > MAX_EMBEDDED_IMAGE_BYTES) return null;
+        if (budget[0] - data.length < 0) return null;
+        String mime = sniffRasterImageMime(data);
+        if (mime == null) return null;
+        budget[0] -= data.length;
+        return "data:" + mime + ";base64," + base64Encode(data);
+    }
+
+    /** Magic-byte sniffing for WebView-renderable raster formats only. */
+    private static String sniffRasterImageMime(byte[] d) {
+        if (d.length >= 8 && (d[0] & 0xFF) == 0x89 && d[1] == 'P' && d[2] == 'N' && d[3] == 'G') return "image/png";
+        if (d.length >= 3 && (d[0] & 0xFF) == 0xFF && (d[1] & 0xFF) == 0xD8 && (d[2] & 0xFF) == 0xFF) return "image/jpeg";
+        if (d.length >= 6 && d[0] == 'G' && d[1] == 'I' && d[2] == 'F' && d[3] == '8') return "image/gif";
+        if (d.length >= 2 && d[0] == 'B' && d[1] == 'M') return "image/bmp";
+        if (d.length >= 12 && d[0] == 'R' && d[1] == 'I' && d[2] == 'F' && d[3] == 'F'
+                && d[8] == 'W' && d[9] == 'E' && d[10] == 'B' && d[11] == 'P') return "image/webp";
+        return null;
+    }
+
+    private static final char[] BASE64_ALPHABET =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".toCharArray();
+
+    /**
+     * Minimal RFC 4648 encoder. Kept local and pure Java because
+     * java.util.Base64 needs API 26 (minSdk is 24) and android.util.Base64
+     * is unavailable in JVM unit tests.
+     */
+    static String base64Encode(byte[] data) {
+        StringBuilder sb = new StringBuilder(((data.length + 2) / 3) * 4);
+        int i = 0;
+        while (i + 3 <= data.length) {
+            int n = ((data[i] & 0xFF) << 16) | ((data[i + 1] & 0xFF) << 8) | (data[i + 2] & 0xFF);
+            sb.append(BASE64_ALPHABET[(n >>> 18) & 63]).append(BASE64_ALPHABET[(n >>> 12) & 63])
+                    .append(BASE64_ALPHABET[(n >>> 6) & 63]).append(BASE64_ALPHABET[n & 63]);
+            i += 3;
+        }
+        int rem = data.length - i;
+        if (rem == 1) {
+            int n = (data[i] & 0xFF) << 16;
+            sb.append(BASE64_ALPHABET[(n >>> 18) & 63]).append(BASE64_ALPHABET[(n >>> 12) & 63]).append("==");
+        } else if (rem == 2) {
+            int n = ((data[i] & 0xFF) << 16) | ((data[i + 1] & 0xFF) << 8);
+            sb.append(BASE64_ALPHABET[(n >>> 18) & 63]).append(BASE64_ALPHABET[(n >>> 12) & 63])
+                    .append(BASE64_ALPHABET[(n >>> 6) & 63]).append('=');
+        }
+        return sb.toString();
     }
 
     private static ParagraphStyle.Alignment mapHwpAlignment(
@@ -491,6 +712,7 @@ final class DocumentHwpLayoutExtractor {
         HwpxDocumentContext context;
         try (ZipFile zip = new ZipFile(file)) {
             context = loadHwpxDocumentContext(zip);
+            loadHwpxBinaryImages(zip, context);
             List<String> sectionPaths = findHwpxSectionPaths(zip);
             if (sectionPaths.isEmpty()) throw new IllegalArgumentException("No HWPX section XML found");
             for (String path : sectionPaths) {
@@ -827,6 +1049,11 @@ final class DocumentHwpLayoutExtractor {
     private static void appendHwpxBlocks(Node node, List<RenderedBlock> out, boolean insideTable, HwpxDocumentContext context) {
         if (node == null) return;
         String local = localName(node);
+        if (isHwpxPictureNode(local)) {
+            RenderedImage image = readHwpxImage(node, context);
+            if (image != null) out.add(RenderedBlock.image(image));
+            return;
+        }
         if (isHwpxTableNode(local)) {
             RenderedTable table = readHwpxTable(node, context);
             if (table != null && !table.rows.isEmpty()) out.add(RenderedBlock.table(table));
@@ -837,12 +1064,79 @@ final class DocumentHwpLayoutExtractor {
             if (paragraph != null && !paragraph.plainText().trim().isEmpty()) {
                 out.add(RenderedBlock.paragraph(paragraph));
             }
+            appendHwpxImagesInSubtree(node, out, context);
             return;
         }
         NodeList children = node.getChildNodes();
         for (int i = 0; i < children.getLength(); i++) {
             appendHwpxBlocks(children.item(i), out, insideTable, context);
         }
+    }
+
+    /** Emits any pictures found inside an already-consumed paragraph node. */
+    private static void appendHwpxImagesInSubtree(Node node, List<RenderedBlock> out, HwpxDocumentContext context) {
+        if (node == null) return;
+        if (isHwpxPictureNode(localName(node))) {
+            RenderedImage image = readHwpxImage(node, context);
+            if (image != null) out.add(RenderedBlock.image(image));
+            return;
+        }
+        NodeList children = node.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            appendHwpxImagesInSubtree(children.item(i), out, context);
+        }
+    }
+
+    private static boolean isHwpxPictureNode(String local) {
+        return "pic".equals(local) || "picture".equals(local);
+    }
+
+    /**
+     * Resolves an hp:pic to a data-URI image. The reference lives on a
+     * descendant (hc:img binaryItemIDRef) and the display size on an hp:sz /
+     * hp:curSz / hp:orgSz child (HWPUNIT, 1pt = 100).
+     */
+    private static RenderedImage readHwpxImage(Node picNode, HwpxDocumentContext context) {
+        if (picNode == null || context == null) return null;
+        String idref = firstAttr(picNode, true, "binaryItemIDRef", "binaryItemIdRef", "binItemIDRef");
+        String dataUri = context.binaryItemDataUri(idref);
+
+        Float widthPt = null;
+        Float heightPt = null;
+        Node sizeNode = findHwpxSizeNode(picNode);
+        if (sizeNode != null) {
+            Float w = unitToPt(attr(sizeNode, "width", "w"));
+            Float h = unitToPt(attr(sizeNode, "height", "h"));
+            if (w != null && h != null && w > 1f && h > 1f
+                    && w <= MAX_IMAGE_DIMENSION_PT * 4 && h <= MAX_IMAGE_DIMENSION_PT * 4) {
+                float scale = Math.min(1f, Math.min(MAX_IMAGE_DIMENSION_PT / w, MAX_IMAGE_DIMENSION_PT / h));
+                widthPt = w * scale;
+                heightPt = h * scale;
+            }
+        }
+
+        if (dataUri == null) {
+            // The reference points at a real embedded binary with no raster
+            // form (WMF/EMF/OLE): show a placeholder at the authored size
+            // rather than dropping it. An unresolvable/absent ref is skipped.
+            if (context.binaryItemIsUnrenderable(idref)) {
+                return RenderedImage.placeholder(widthPt, heightPt);
+            }
+            return null;
+        }
+        return new RenderedImage(dataUri, "", widthPt, heightPt, false);
+    }
+
+    private static Node findHwpxSizeNode(Node picNode) {
+        NodeList children = picNode.getChildNodes();
+        Node fallback = null;
+        for (int i = 0; i < children.getLength(); i++) {
+            Node child = children.item(i);
+            String local = localName(child);
+            if ("sz".equals(local) || "curSz".equals(local)) return child;
+            if ("orgSz".equals(local) && fallback == null) fallback = child;
+        }
+        return fallback;
     }
 
     private static RenderedTable readHwpxTable(Node tableNode, HwpxDocumentContext context) {
@@ -1044,6 +1338,100 @@ final class DocumentHwpLayoutExtractor {
             }
         }
         return context;
+    }
+
+    /**
+     * Loads the package's BinData images as data URIs, keyed by every name a
+     * section's binaryItemIDRef might use: the manifest item id from
+     * Contents/content.hpf when present, plus the file's stem and base name
+     * (hwpxlib writes id "image1" for "BinData/image1.png", so the stem match
+     * also covers packages without a readable manifest). Only raster formats
+     * are kept and the same per-image/per-document caps as the .hwp path apply.
+     */
+    private static void loadHwpxBinaryImages(ZipFile zip, HwpxDocumentContext context) {
+        if (zip == null || context == null) return;
+        long[] budget = {MAX_TOTAL_EMBEDDED_IMAGE_BYTES};
+        Map<String, String> dataUriByPath = new LinkedHashMap<>();
+        java.util.Set<String> unrenderablePathKeys = new java.util.HashSet<>();
+        java.util.Enumeration<? extends ZipEntry> entries = zip.entries();
+        while (entries.hasMoreElements()) {
+            ZipEntry entry = entries.nextElement();
+            if (entry == null || entry.isDirectory() || entry.getName() == null) continue;
+            String path = entry.getName().replace('\\', '/');
+            String lowerPath = path.toLowerCase(Locale.ROOT);
+            if (!lowerPath.contains("bindata/")) continue;
+            long size = entry.getSize();
+            if (size > MAX_EMBEDDED_IMAGE_BYTES) continue;
+            try (InputStream is = zip.getInputStream(entry)) {
+                byte[] data = readAllBytesWithLimit(is, MAX_EMBEDDED_IMAGE_BYTES);
+                String base = lowerPath.substring(lowerPath.lastIndexOf('/') + 1);
+                int dot = base.lastIndexOf('.');
+                String stem = dot > 0 ? base.substring(0, dot) : base;
+                String dataUri = imageDataUri(data, budget);
+                if (dataUri == null) {
+                    // A real embedded binary that is not a WebView raster
+                    // (WMF/EMF/OLE) or over the caps: remember it so an hp:pic
+                    // reference draws a placeholder instead of disappearing.
+                    if (data != null && data.length > 0) {
+                        context.unrenderableBinaryItemKeys.add(base);
+                        context.unrenderableBinaryItemKeys.add(stem);
+                        unrenderablePathKeys.add(lowerPath);
+                    }
+                    continue;
+                }
+                dataUriByPath.put(lowerPath, dataUri);
+                context.binaryItemDataUris.put(base, dataUri);
+                context.binaryItemDataUris.put(stem, dataUri);
+            } catch (Exception ignored) {
+                // Image loading is a fidelity enhancement only.
+            }
+        }
+        if (dataUriByPath.isEmpty() && unrenderablePathKeys.isEmpty()) return;
+        // Manifest pass: map each item id to its href's data URI, or to the
+        // unrenderable set so an hp:pic by manifest id can draw a placeholder.
+        try {
+            ZipEntry manifest = zip.getEntry("Contents/content.hpf");
+            if (manifest == null) manifest = zip.getEntry("contents/content.hpf");
+            if (manifest != null && !manifest.isDirectory()
+                    && manifest.getSize() <= MAX_HWPX_SECTION_XML_BYTES) {
+                byte[] xml;
+                try (InputStream is = zip.getInputStream(manifest)) {
+                    xml = readAllBytesWithLimit(is, MAX_HWPX_SECTION_XML_BYTES);
+                }
+                Document doc = DocumentArchiveUtils.secureDocumentBuilder().parse(new ByteArrayInputStream(xml));
+                collectHwpxManifestImageIds(doc.getDocumentElement(), dataUriByPath, unrenderablePathKeys, context);
+            }
+        } catch (Exception ignored) {
+            // Stem/base-name matching above remains the fallback.
+        }
+    }
+
+    private static void collectHwpxManifestImageIds(Node node, Map<String, String> dataUriByPath,
+                                                    java.util.Set<String> unrenderablePathKeys,
+                                                    HwpxDocumentContext context) {
+        if (node == null) return;
+        if ("item".equals(localName(node))) {
+            String id = attr(node, "id");
+            String href = attr(node, "href");
+            if (id != null && !id.isEmpty() && href != null) {
+                String lowerHref = href.replace('\\', '/').toLowerCase(Locale.ROOT);
+                String dataUri = dataUriByPath.get(lowerHref);
+                String altHref = "contents/" + lowerHref;
+                if (dataUri == null && !lowerHref.startsWith("contents/")) {
+                    dataUri = dataUriByPath.get(altHref);
+                }
+                if (dataUri != null) {
+                    context.binaryItemDataUris.put(id.toLowerCase(Locale.ROOT), dataUri);
+                } else if (unrenderablePathKeys.contains(lowerHref)
+                        || unrenderablePathKeys.contains(altHref)) {
+                    context.unrenderableBinaryItemKeys.add(id.toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+        NodeList children = node.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            collectHwpxManifestImageIds(children.item(i), dataUriByPath, unrenderablePathKeys, context);
+        }
     }
 
     private static void collectHwpxContext(Node node, HwpxDocumentContext context) {
@@ -1481,6 +1869,15 @@ final class DocumentHwpLayoutExtractor {
     private static final class HwpxDocumentContext {
         final Map<String, ParagraphStyle> paragraphStyles = new LinkedHashMap<>();
         final Map<String, TextStyle> textStyles = new LinkedHashMap<>();
+        /** Lowercased binary-item key (manifest id, file stem, or base name) -> data URI. */
+        final Map<String, String> binaryItemDataUris = new LinkedHashMap<>();
+        /**
+         * Lowercased binary-item keys that exist in the package but are not
+         * WebView-renderable rasters (WMF/EMF/OLE or over the byte caps). Lets
+         * an hp:pic reference to one of these draw a placeholder instead of
+         * silently vanishing, mirroring the .hwp path.
+         */
+        final java.util.Set<String> unrenderableBinaryItemKeys = new java.util.HashSet<>();
         PageMetrics pageMetrics = PageMetrics.defaults();
 
         ParagraphStyle paragraphStyle(String id) {
@@ -1489,6 +1886,16 @@ final class DocumentHwpLayoutExtractor {
 
         TextStyle textStyle(String id) {
             return id == null ? null : textStyles.get(id);
+        }
+
+        String binaryItemDataUri(String idref) {
+            if (idref == null || idref.isEmpty()) return null;
+            return binaryItemDataUris.get(idref.toLowerCase(Locale.ROOT));
+        }
+
+        boolean binaryItemIsUnrenderable(String idref) {
+            if (idref == null || idref.isEmpty()) return false;
+            return unrenderableBinaryItemKeys.contains(idref.toLowerCase(Locale.ROOT));
         }
     }
 

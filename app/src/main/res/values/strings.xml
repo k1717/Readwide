@@ -593,6 +593,12 @@ Rules: %2$d enabled rules</string>
     <string name="tts_voice_offline">offline</string>
     <string name="tts_speed">Speed</string>
     <string name="tts_pitch">Pitch</string>
+    <string name="tts_phrase_length_short">Phrase length: Short</string>
+    <string name="tts_phrase_length_medium">Phrase length: Medium</string>
+    <string name="tts_phrase_length_long">Phrase length: Long</string>
+    <string name="tts_pause_reduction_off">Pause reduction: Off</string>
+    <string name="tts_pause_reduction_medium">Pause reduction: Medium</string>
+    <string name="tts_pause_reduction_aggressive">Pause reduction: Aggressive</string>
     <string name="tts_android_settings">Android TTS settings</string>
     <string name="tts_add_voice_model">Add/download voice models</string>
     <string name="tts_settings_unavailable">Could not open Android TTS settings.</string>

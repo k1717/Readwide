@@ -15,6 +15,14 @@ final class TtsSegmenter {
     static List<TtsSpeechSegment> segmentPage(@NonNull String pageText,
                                               int pageStartChar,
                                               int maxSegmentChars) {
+        return segmentPage(pageText, pageStartChar, maxSegmentChars, 0);
+    }
+
+    @NonNull
+    static List<TtsSpeechSegment> segmentPage(@NonNull String pageText,
+                                              int pageStartChar,
+                                              int maxSegmentChars,
+                                              int pauseReduction) {
         ArrayList<TtsSpeechSegment> result = new ArrayList<>();
         int length = pageText.length();
         int maxChars = Math.max(16, maxSegmentChars);
@@ -35,7 +43,7 @@ final class TtsSegmenter {
             }
 
             String raw = FileUtils.safeSubstring(pageText, cursor, end);
-            String spoken = normalizeForSpeech(raw);
+            String spoken = normalizeForSpeech(raw, pauseReduction);
             if (!spoken.isEmpty()) {
                 result.add(new TtsSpeechSegment(
                         pageStartChar + cursor,
@@ -91,9 +99,22 @@ final class TtsSegmenter {
     }
 
     @NonNull
+    /** Maps the stored phrase-length level (0/1/2) to a target chunk size in chars. */
+    static int phraseLengthToChars(int level) {
+        switch (level) {
+            case 0: return 200;   // Short - neural "sweet spot", snappier
+            case 1: return 400;   // Medium
+            default: return 700;  // Long - best prosody, pre-1.0.11 default
+        }
+    }
+
     static String normalizeForSpeech(String raw) {
+        return normalizeForSpeech(raw, 0);
+    }
+
+    static String normalizeForSpeech(String raw, int pauseReduction) {
         if (raw == null) return "";
-        return raw.replace('\u00A0', ' ')
+        String text = raw.replace('\u00A0', ' ')
                 .replaceAll("[\\t\\x0B\\f\\r]+", " ")
                 .replaceAll("\\n{3,}", "\n\n")
                 // Mute ellipses. The speech engine names consecutive dots ("점" =
@@ -107,8 +128,23 @@ final class TtsSegmenter {
                 // naturally. Semicolons become a comma: if the engine voices ";"
                 // its name is dropped, while the clause-level pause is preserved.
                 .replace('_', ' ')
-                .replaceAll(";+", ",")
-                .replaceAll(" {2,}", " ")
-                .trim();
+                .replaceAll(";+", ",");
+
+        // Optional pause reduction for engines (e.g. Kokoro) that stop too long at
+        // punctuation. This is a text transform only; it never touches audio.
+        // Medium: drop commas so clauses run together. Aggressive: also turn
+        // sentence stops into commas so the cadence keeps moving instead of a full
+        // stop. Applied before whitespace collapse so the gaps left behind merge.
+        if (pauseReduction >= 2) {
+            // Drop the original commas first, THEN soften sentence-final stops to
+            // a comma-length pause. Order matters: doing it the other way around
+            // would delete the commas the stop-conversion just created, removing
+            // every pause instead of shortening them.
+            text = text.replace(",", " ").replaceAll("[.!?]+(?=\\s|$)", ",");
+        } else if (pauseReduction >= 1) {
+            text = text.replace(",", " ");
+        }
+
+        return text.replaceAll(" {2,}", " ").trim();
     }
 }

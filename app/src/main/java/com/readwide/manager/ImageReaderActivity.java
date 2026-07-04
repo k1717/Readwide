@@ -142,6 +142,13 @@ public class ImageReaderActivity extends AppCompatActivity {
     private Bitmap currentBitmap;
     private Drawable currentDrawable;
     private volatile int imageLoadGeneration;
+    // Consecutive same-direction page turns (ImagePrefetchMath.updateStreak);
+    // sustained motion deepens the file-extraction look-ahead in that direction.
+    private int pagingStreak;
+    // Bumped on every prefetch plan; a queued plan for an older center exits
+    // early instead of walking its offsets after the user has moved on.
+    private final java.util.concurrent.atomic.AtomicInteger prefetchPlanGeneration =
+            new java.util.concurrent.atomic.AtomicInteger();
     private boolean currentImageDetailLoaded = true;
     private int detailRequestGeneration = -1;
     private int displayedImageIndex = -1;
@@ -830,6 +837,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             updateImageSliderState();
             return;
         }
+        pagingStreak = com.readwide.manager.util.ImagePrefetchMath.updateStreak(pagingStreak, next - currentIndex);
         currentIndex = next;
         filePath = imagePaths.get(currentIndex);
         fileUri = null;
@@ -1129,10 +1137,16 @@ public class ImageReaderActivity extends AppCompatActivity {
         final ArrayList<String> imagePathsSnapshot = new ArrayList<>(imagePaths);
         final ArrayList<String> entryPathsSnapshot = new ArrayList<>(sourceEntryPaths);
         final int total = imagePathsSnapshot.size();
-        // Prefetch three pages each direction; sequences are usually read in one
-        // direction quickly, so a little depth keeps the next taps instant.
-        // Nearest pages are listed first so they decode before farther ones.
-        final int[] offsets = { 1, -1, 2, -2, 3, -3 };
+        // Bitmap warm-up stays at the nearest neighbors (decoded bitmaps cost
+        // real memory); file extraction deepens ahead once the paging
+        // direction is sustained, so the shared forward stream keeps working
+        // ahead of a continuous read instead of idling between page turns.
+        final int sustained = com.readwide.manager.util.ImagePrefetchMath
+                .sustainedDirection(pagingStreak);
+        final int[] offsets = com.readwide.manager.util.ImagePrefetchMath.bitmapOffsets();
+        final int[] extractionOffsets = com.readwide.manager.util.ImagePrefetchMath
+                .extractionOffsets(sustained);
+        final int planGeneration = prefetchPlanGeneration.incrementAndGet();
 
         if (!fromArchive) {
             // Plain filesystem images already sit on disk at their listed path, so
@@ -1161,8 +1175,11 @@ public class ImageReaderActivity extends AppCompatActivity {
         }
         sequenceExecutor.execute(() -> {
             try {
-                for (int off : offsets) {
+                for (int off : extractionOffsets) {
                     if (destroyed) break;
+                    // A newer page turn has re-planned the window; this plan's
+                    // remaining offsets are centered on a page the user left.
+                    if (prefetchPlanGeneration.get() != planGeneration) break;
                     // For a solid/sequential archive the read-ahead and the page the
                     // user asked for share one forward reader; pause read-ahead the
                     // moment an on-demand extraction is waiting so it gets the reader
@@ -1171,8 +1188,11 @@ public class ImageReaderActivity extends AppCompatActivity {
                     int idx = ImageSequenceNavigationMath.nextIndex(centerIndex, off, total);
                     if (idx == centerIndex) continue;
                     prefetchArchiveImageEntry(archivePathSnapshot, entryPathsSnapshot, imagePathsSnapshot, idx, passwordSnapshot, verifiedSensitiveArchiveCachePaths);
-                    final int decodeIndex = idx;
-                    if (!destroyed) {
+                    // Bitmap warm-up only for the nearest neighbors; the deep
+                    // ahead run extracts files without holding decoded bitmaps.
+                    boolean inDecodeWindow = Math.abs(off) <= 3;
+                    if (inDecodeWindow && !destroyed) {
+                        final int decodeIndex = idx;
                         prefetchDecodeExecutor.execute(
                                 () -> prefetchDecodeIntoCache(decodeIndex, imagePathsSnapshot, entryPathsSnapshot));
                     }
