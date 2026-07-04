@@ -256,4 +256,39 @@
         </LinearLayout>
     </LinearLayout>
 
+    <LinearLayout
+        android:id="@+id/tts_floating_card"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="96dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="4dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:elevation="16dp"
+        android:visibility="gone"
+        android:background="@drawable/tts_floating_card_bg">
+
+        <ImageButton
+            android:id="@+id/tts_floating_play_pause"
+            android:layout_width="72dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackground"
+            android:contentDescription="@string/tts_pause"
+            android:src="@android:drawable/ic_media_pause" />
+
+        <ImageButton
+            android:id="@+id/tts_floating_stop"
+            android:layout_width="72dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="4dp"
+            android:background="?attr/selectableItemBackground"
+            android:contentDescription="@string/tts_stop"
+            android:src="@android:drawable/ic_menu_close_clear_cancel" />
+
+    </LinearLayout>
+
 </FrameLayout>

@@ -156,4 +156,38 @@ public class TtsSegmenterTest {
         assertTrue("short phrase length should not produce fewer chunks",
                 shortChunks >= longChunks);
     }
+
+    @Test
+    public void aggressiveMutesQuotesButLowerLevelsKeepThem() {
+        String src = "\u201CHello!\u201D she said. \"Fine.\" \u300C\uC548\uB155\u300D";
+        // Off and Medium keep quotes (they carry meaning in fiction).
+        assertTrue(TtsSegmenter.normalizeForSpeech(src, 0).contains("\u201C"));
+        assertTrue(TtsSegmenter.normalizeForSpeech(src, 1).contains("\u201C"));
+        // Aggressive mutes straight, curly, and CJK corner quotes.
+        String agg = TtsSegmenter.normalizeForSpeech(src, 2);
+        assertFalse(agg.contains("\u201C"));
+        assertFalse(agg.contains("\u201D"));
+        assertFalse(agg.contains("\""));
+        assertFalse(agg.contains("\u300C"));
+        assertFalse(agg.contains("\u300D"));
+        // The words themselves survive.
+        assertTrue(agg.contains("Hello"));
+        assertTrue(agg.contains("\uC548\uB155"));
+    }
+
+    @Test
+    public void aggressiveSoftensDialogueFinalStopsOnceQuotesAreMuted() {
+        // "...!<closing quote>" - the stop is not followed by whitespace until
+        // the quote is muted, so quote muting must run before stop softening.
+        String agg = TtsSegmenter.normalizeForSpeech("\u201CStop!\u201D he shouted.", 2);
+        assertFalse("dialogue-final stop should soften", agg.matches(".*[.!?].*"));
+        assertTrue("softened stop should leave a comma pause", agg.contains(","));
+    }
+
+    @Test
+    public void apostrophesSurviveAggressiveQuoteMuting() {
+        String agg = TtsSegmenter.normalizeForSpeech("Don't stop, it's fine.", 2);
+        assertTrue(agg.contains("Don't"));
+        assertTrue(agg.contains("it's"));
+    }
 }

@@ -1,7 +1,10 @@
 package com.readwide.manager;
 
+import android.content.Context;
+
 import androidx.annotation.NonNull;
 
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
 import com.tom_roush.pdfbox.pdmodel.PDDocument;
 import com.tom_roush.pdfbox.pdmodel.PDPage;
 import com.tom_roush.pdfbox.text.PDFTextStripper;
@@ -35,13 +38,27 @@ final class PdfPlainTextExtractor {
     /**
      * Extracts every page's plain text in one pass.
      *
+     * @param context any context; used to initialize PdfBox's Android resource
+     *     loader, which MUST happen before the stripper runs. The search path
+     *     initializes it in {@code PdfSearchController}'s constructor, but
+     *     read-aloud can be the first PdfBox user in the process (a user who
+     *     never opened search), and without the init PdfBox's font/glyph
+     *     resource loading fails - partly with {@link Error}s from static
+     *     initializers, which no {@code catch (RuntimeException)} contains and
+     *     which killed the process when read-aloud started.
      * @param pdf the PDF file
      * @return page index (0-based) -> plain text; pages with no extractable
      *     text (e.g. scanned/image-only pages) map to an empty string. Returns
      *     an empty map if the document cannot be opened.
      */
     @NonNull
-    static Map<Integer, String> extractPageText(@NonNull File pdf) {
+    static Map<Integer, String> extractPageText(@NonNull Context context, @NonNull File pdf) {
+        try {
+            PDFBoxResourceLoader.init(context.getApplicationContext());
+        } catch (Throwable ignored) {
+            // Mirrors PdfSearchController: init is best-effort; extraction below
+            // still runs and reports "no text" if PdfBox cannot operate.
+        }
         PDDocument document = null;
         try {
             document = PDDocument.load(pdf);
@@ -49,9 +66,17 @@ final class PdfPlainTextExtractor {
             stripper.setSortByPosition(true);
             stripper.getText(document);
             return stripper.result;
-        } catch (IOException | RuntimeException e) {
-            // Extraction is best-effort; whatever pages finalized before a
-            // failure are still returned. An empty map means "no text".
+        } catch (Throwable e) {
+            // Extraction is best-effort and must never take the process down:
+            // this runs on a bare executor thread where an uncaught throw kills
+            // the app. Throwable (not just IOException/RuntimeException) because
+            // PdfBox's font machinery can throw Errors (static-init failures,
+            // NoClassDefFoundError on retry) for broken environments or PDFs.
+            // An empty map means "no text" and surfaces as the scanned-PDF toast.
+            // Log it - a contained failure that is also silent would leave "PDF
+            // read-aloud says scanned but the PDF has text" reports undiagnosable.
+            android.util.Log.w("ReadwideTts", "PDF text extraction failed for "
+                    + pdf.getName(), e);
             return new HashMap<>();
         } finally {
             if (document != null) {

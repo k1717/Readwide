@@ -1934,7 +1934,23 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         }
     }
 
+    // Debounce for the file-open funnels: a fast double tap on a recent card or
+    // list row fires openFile twice before the first viewer reaches the top of
+    // the stack, and singleTop only dedupes an activity that is already on top -
+    // so the user got the same file stacked twice and had to press back through
+    // it. Accepting one open per window fixes that without affecting normal use.
+    private long lastFileOpenElapsedMs;
+    private static final long FILE_OPEN_DEBOUNCE_MS = 600L;
+
+    private boolean acceptFileOpenNow() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastFileOpenElapsedMs < FILE_OPEN_DEBOUNCE_MS) return false;
+        lastFileOpenElapsedMs = now;
+        return true;
+    }
+
     void openFile(File file) {
+        if (!acceptFileOpenNow()) return;
         File parent = file.getParentFile();
         if (parent != null && prefs != null) {
             prefs.addRecentFolder(parent.getAbsolutePath());
@@ -2022,6 +2038,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     void openFileFromUri(Uri uri) {
+        if (!acceptFileOpenNow()) return;
         String displayName;
         try {
             displayName = FileUtils.getFileNameFromUri(this, uri);

@@ -56,7 +56,8 @@ final class PdfTtsTextSource implements TtsTextSource {
     static PdfTtsTextSource build(@NonNull PdfReaderActivity activity,
                                   @NonNull File pdf,
                                   int pageCount) {
-        Map<Integer, String> byPage = PdfPlainTextExtractor.extractPageText(pdf);
+        Map<Integer, String> byPage =
+                PdfPlainTextExtractor.extractPageText(activity.getApplicationContext(), pdf);
         return build(activity, byPage, pageCount);
     }
 

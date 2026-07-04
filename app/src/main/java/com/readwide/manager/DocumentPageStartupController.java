@@ -133,6 +133,10 @@ final class DocumentPageStartupController {
         activity.documentAppBar = activity.findViewById(R.id.document_appbar);
         activity.documentBottomChrome = activity.findViewById(R.id.document_bottom_scroller);
         activity.documentNavBarSpacer = activity.findViewById(R.id.document_nav_bar_spacer);
+        activity.ttsFloatingCard = activity.findViewById(R.id.tts_floating_card);
+        activity.ttsFloatingPlayPause = activity.findViewById(R.id.tts_floating_play_pause);
+        activity.ttsFloatingStop = activity.findViewById(R.id.tts_floating_stop);
+        activity.setupTtsFloatingCard();
         if (activity.documentBottomChrome != null) {
             activity.documentBottomChrome.addOnLayoutChangeListener((v, left, top, right, bottom,
                     oldLeft, oldTop, oldRight, oldBottom) -> {

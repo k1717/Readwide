@@ -136,6 +136,15 @@ final class TtsSegmenter {
         // sentence stops into commas so the cadence keeps moving instead of a full
         // stop. Applied before whitespace collapse so the gaps left behind merge.
         if (pauseReduction >= 2) {
+            // Mute quotation marks first (straight/curly doubles, guillemets, CJK
+            // corner brackets) - some neural engines pause at every quote, which
+            // makes dialogue crawl. Quotes-first also matters for dialogue-final
+            // stops: the stop-softening below only matches a stop followed by
+            // whitespace, so "...!\u201D must become "...! " before it can soften.
+            // Apostrophes/single quotes are deliberately left alone (contractions
+            // like "don't" would break). Off and Medium keep quotes: they carry
+            // meaning in fiction, so only the strongest level trades them away.
+            text = text.replaceAll("[\"\u201C\u201D\u201E\u00AB\u00BB\u300C\u300D\u300E\u300F]+", " ");
             // Drop the original commas first, THEN soften sentence-final stops to
             // a comma-length pause. Order matters: doing it the other way around
             // would delete the commas the stop-conversion just created, removing

@@ -5,10 +5,10 @@ Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF
 [![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)](https://github.com/k1717/Readwide/releases)
 [![Downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)](https://github.com/k1717/Readwide/releases)
 
-Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4, and 1.0.11 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.11, then restoring bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
+Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4, and 1.0.12 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.12, then restoring bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
 
-- Current public version: **1.0.11**
-- Android metadata: `versionCode 10011`, `versionName "1.0.11"`
+- Current public version: **1.0.12**
+- Android metadata: `versionCode 10012`, `versionName "1.0.12"`
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
 - Release page: `https://github.com/k1717/Readwide/releases`
@@ -57,7 +57,7 @@ This table is a release-summary view. See the archive support matrix and the for
 | EPUB | WebView document reader path with TXT-style search dialog; exact publisher layout parity is not guaranteed. |
 | OOXML Word | Document WebView text/layout path for covered `.docx/.docm/.dotx/.dotm` content, including shared document search. |
 | HWP/HWPX | Text-first read-only extraction through `hwplib` / `hwpxlib`, including shared document search; no Hancom layout parity, editing, writing, or password/encrypted HWP support. |
-| Legacy DOC | Recognized and grouped under the Word filter; rendering is still unsupported. |
+| Legacy DOC | Read-only rendering through a self-contained pure-Java parser (paragraph text with alignment and indents); layout fidelity is limited compared to `.docx`. |
 | ZIP/CBZ | Zip4j-primary listing/extraction, covered password and split cases, with Commons Compress fallback for selected non-encrypted methods. |
 | 7z/CB7 | Apache Commons Compress 7z path, password forwarding for covered variants, and standard `.001/.002/...` raw split chains. |
 | TAR family / single compressor streams | Commons Compress primary path for covered tar/compressor combinations and single streams. |
@@ -83,7 +83,7 @@ The same image extension set is also what the image viewer opens (including imag
 
 ## FOSS / F-Droid preparation
 
-Readwide 1.0.11 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
+Readwide 1.0.12 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
 
 - First-party code is Apache-2.0.
 - The default build does not bundle Junrar or RARLAB UnRAR-license code.
@@ -119,10 +119,10 @@ Release signing is conditional. If the `READWIDE_*` (or legacy `TEXTVIEW_*`) sig
 - `CHANGELOG.md` — public changelog.
 - `PATCHNOTES.md` — detailed public release notes.
 - `GITHUB_UPLOAD_NOTES.md` — GitHub upload checklist.
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_11.md` — copy-ready GitHub release notes.
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_12.md` — copy-ready GitHub release notes (per-version notes back through 1.0.2 are retained alongside).
 - `docs/FDROID_SUBMISSION.md` — F-Droid submission notes.
 - `docs/TXT_SEARCH_USAGE.md` — reader find-in-page options for TXT and WebView document readers (case sensitive, whole word, regular expression).
 - `docs/FOSS_STATUS.md` — FOSS boundary and caveats.
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — archive compatibility wording source.
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md` — HWP/HWPX scope and license notes.
-- `docs/LICENSE_REPORT_READWIDE_1_0_11.md` and `docs/SBOM_READWIDE_1_0_11.spdx.json` — direct-dependency license/SBOM drafts.
+- `docs/LICENSE_REPORT_READWIDE_1_0_12.md` and `docs/SBOM_READWIDE_1_0_12.spdx.json` — direct-dependency license/SBOM drafts.

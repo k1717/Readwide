@@ -1,5 +1,23 @@
 # Changelog
 
+## Readwide 1.0.12 - 2026-07-04
+
+### Main screen - double-tap open
+
+- Quickly double-tapping a file no longer opens the same file twice (which previously required pressing back through a duplicate viewer).
+
+### Read-aloud (TTS) - floating card in more viewers
+
+- The floating play/pause and stop card shown during read-aloud in the text reader now also appears in the document viewer (EPUB, Word, HWP/HWPX, Markdown) and the PDF viewer, so you can pause, resume, and stop without opening the dialog. It can be dragged anywhere on screen.
+
+### Read-aloud (TTS) - PDF start crash fixed
+
+- Starting read-aloud in the PDF viewer no longer crashes the app when PDF search was never opened first (the text extractor now initializes the PDF library itself instead of relying on the search feature having done it).
+
+### Read-aloud (TTS) - quotation-mark muting at the strongest pause reduction
+
+- The Aggressive pause-reduction level now also mutes quotation marks (straight, curly, and CJK corner brackets), so dialogue-heavy text keeps moving on neural voices that pause at every quote. Off and Medium leave quotes untouched.
+
 ## Readwide 1.0.11 - 2026-07-03
 
 ### Release scope

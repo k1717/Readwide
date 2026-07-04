@@ -43,12 +43,19 @@ Builds:
 
   - versionName: 1.0.11
     versionCode: 10011
-    commit: REPLACE_WITH_v1.0.11_FULL_COMMIT_HASH
+    commit: 5d75fda36a4c0a92a9ca81e1d997e1b62cae1289
+    subdir: app
+    gradle:
+      - yes
+
+  - versionName: 1.0.12
+    versionCode: 10012
+    commit: REPLACE_WITH_v1.0.12_FULL_COMMIT_HASH
     subdir: app
     gradle:
       - yes
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 1.0.11
-CurrentVersionCode: 10011
+CurrentVersion: 1.0.12
+CurrentVersionCode: 10012

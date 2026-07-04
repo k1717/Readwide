@@ -103,6 +103,9 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     View root;
     View pdfAppBar;
     View pdfToolbar;
+    View ttsFloatingCard;
+    android.widget.ImageButton ttsFloatingPlayPause;
+    android.widget.ImageButton ttsFloatingStop;
     TextView pdfTopPageStatus;
     View pdfBottomBar;
     private int lastPdfBottomBarHeight = 0;
@@ -227,7 +230,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private Runnable pendingSinglePagePrefetch = null;
     private final java.util.Set<Integer> singlePagePrefetchInFlight =
             java.util.Collections.synchronizedSet(new java.util.HashSet<>());
-    private File localFile;
+    File localFile;
     String filePath;
     String fileName;
     int pageCount = 0;
@@ -236,7 +239,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private float zoom = 1.0f;
     private float renderedZoom = 1.0f;
     private int pendingPageSlideDirection = 0;
-    private int renderGeneration = 0;
+    int renderGeneration = 0;
     private boolean backgroundPdfBitmapsReleased = false;
     private final Runnable backgroundPdfMemoryTrimRunnable = () -> trimPdfBitmapsForBackground(false);
     private PdfReaderStartupController startupController;
@@ -1417,6 +1420,10 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             pdfTtsButton.setOnClickListener(v -> showPdfTtsDialog());
         }
         updatePdfTtsButtonVisibility();
+        ttsFloatingCard = findViewById(R.id.tts_floating_card);
+        ttsFloatingPlayPause = findViewById(R.id.tts_floating_play_pause);
+        ttsFloatingStop = findViewById(R.id.tts_floating_stop);
+        setupPdfTtsFloatingCard();
         setupPdfPageSeekBar();
     }
 
@@ -1426,9 +1433,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
      * Mirrors the document viewer's {@code updateDocumentTtsButtonVisibility}.
      */
     void updatePdfTtsButtonVisibility() {
-        View button = findViewById(R.id.pdf_tts);
-        if (button == null) return;
-        button.setVisibility(pdfSupportsTts() ? View.VISIBLE : View.GONE);
+        pdfTtsIntegration().updateButtonVisibility();
     }
 
     private void updateRotationButtonIcon() {
@@ -1792,7 +1797,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         slideModeButton.setContentDescription(pdfSlideModeDialogLabel());
     }
 
-    private boolean isKoreanUi() {
+    boolean isKoreanUi() {
         return Locale.getDefault().getLanguage().toLowerCase(Locale.ROOT).startsWith("ko");
     }
 
@@ -3533,73 +3538,35 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     // is no glyph highlight in v1. Scanned/image-only PDFs extract no text and
     // get a clear message instead of silent playback.
 
-    private ReaderTtsController pdfTtsController;
-    private PdfTtsTextSource pdfTtsTextSource;
-    private boolean pdfTtsTextBuilding = false;
+    ReaderTtsController pdfTtsController;
+    PdfTtsTextSource pdfTtsTextSource;
+    private PdfTtsIntegrationController pdfTtsIntegrationController;
     private ReaderDialogStyleController pdfDialogStyleController;
     private int pdfDialogSnapshotBg = Color.rgb(18, 18, 18);
     private int pdfDialogSnapshotFg = Color.rgb(232, 234, 237);
 
-    private ReaderTtsController pdfTts() {
+    ReaderTtsController pdfTts() {
         if (pdfTtsController == null) {
             pdfTtsController = new ReaderTtsController(this);
         }
         return pdfTtsController;
     }
 
+    /** Read-aloud integration (dialog entry, off-thread build, button visibility). */
+    PdfTtsIntegrationController pdfTtsIntegration() {
+        if (pdfTtsIntegrationController == null) {
+            pdfTtsIntegrationController = new PdfTtsIntegrationController(this);
+        }
+        return pdfTtsIntegrationController;
+    }
+
     boolean pdfSupportsTts() {
         return localFile != null && pageCount > 0;
     }
 
-    /**
-     * Entry point (toolbar/menu). Extracts the PDF text off the main thread on
-     * first use, then opens the standard read-aloud dialog. If the PDF has no
-     * extractable text (scanned/image-only), says so and does not start.
-     */
+    /** Entry point (toolbar/menu); see the integration controller. */
     void showPdfTtsDialog() {
-        if (!pdfSupportsTts()) return;
-        TtsPlaybackBridge.register(this);
-        if (pdfTtsTextSource != null) {
-            if (!pdfTtsTextSource.hasAnyText()) {
-                ShortToast.show(this, localizedTts(
-                        "This PDF has no selectable text to read aloud (it looks scanned).",
-                        "이 PDF에는 읽어줄 수 있는 텍스트가 없습니다(스캔 문서로 보입니다)."));
-                return;
-            }
-            pdfTts().showDialog();
-            return;
-        }
-        if (pdfTtsTextBuilding) {
-            ShortToast.show(this, localizedTts("Preparing read-aloud\u2026", "읽어주기 준비 중\u2026"));
-            return;
-        }
-        pdfTtsTextBuilding = true;
-        final File file = localFile;
-        final int count = pageCount;
-        final int generation = renderGeneration;
-        executor.execute(() -> {
-            PdfTtsTextSource built = PdfTtsTextSource.build(this, file, count);
-            handler.post(() -> {
-                if (activityDestroyed) return;
-                pdfTtsTextBuilding = false;
-                if (generation != renderGeneration) {
-                    // A different document loaded while we were extracting.
-                    return;
-                }
-                pdfTtsTextSource = built;
-                if (!built.hasAnyText()) {
-                    ShortToast.show(this, localizedTts(
-                            "This PDF has no selectable text to read aloud (it looks scanned).",
-                            "이 PDF에는 읽어줄 수 있는 텍스트가 없습니다(스캔 문서로 보입니다)."));
-                    return;
-                }
-                pdfTts().showDialog();
-            });
-        });
-    }
-
-    private String localizedTts(String english, String korean) {
-        return isKoreanUi() ? korean : english;
+        pdfTtsIntegration().showDialogEntry();
     }
 
     // ---- TtsHost ----------------------------------------------------------
@@ -3659,7 +3626,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     @Override
     public boolean isTtsTextTemporarilyUnavailable() {
-        return pdfTtsTextBuilding;
+        return pdfTtsIntegration().isTextBuilding();
     }
 
     @Override
@@ -3704,8 +3671,35 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     @Override
     public void ttsUpdateFloatingCard() {
-        // The PDF viewer has no floating playback card (v1): playback is
-        // controlled from the dialog and the notification.
+        TtsFloatingCardController.update(this, ttsFloatingCard, ttsFloatingPlayPause,
+                pdfTtsFloatingCardControls());
+    }
+
+    /** Binds the floating playback card's buttons and drag/tap handling. */
+    void setupPdfTtsFloatingCard() {
+        TtsFloatingCardController.setup(this, ttsFloatingCard, ttsFloatingPlayPause,
+                ttsFloatingStop, pdfTtsFloatingCardControls());
+    }
+
+    private TtsFloatingCardController.Controls pdfTtsFloatingCardControls() {
+        return new TtsFloatingCardController.Controls() {
+            @Override public boolean isActive() {
+                return pdfTtsController != null && pdfTtsController.isActive();
+            }
+            @Override public boolean isPaused() {
+                return pdfTtsController != null && pdfTtsController.isPaused();
+            }
+            @Override public void togglePlayPause() {
+                if (pdfTtsController == null) return;
+                if (pdfTtsController.isPaused()) pdfTtsController.resumePlayback();
+                else pdfTtsController.pausePlayback();
+                ttsUpdateFloatingCard();
+            }
+            @Override public void stop() {
+                if (pdfTtsController != null) pdfTtsController.stop(true);
+                ttsUpdateFloatingCard();
+            }
+        };
     }
 
     @Override

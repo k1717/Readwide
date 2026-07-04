@@ -54,7 +54,6 @@ import com.readwide.manager.util.FontManager;
 import com.readwide.manager.util.HwpTextExtractor;
 import com.readwide.manager.util.PrefsManager;
 import com.readwide.manager.util.TapZoneMath;
-import com.readwide.manager.util.MarkdownTtsFollowMath;
 import com.readwide.manager.util.MarkdownVisualPageMath;
 import com.readwide.manager.util.ThemeManager;
 import com.readwide.manager.document.doc.DocLegacyLayoutExtractor;
@@ -112,7 +111,8 @@ import javax.xml.parsers.DocumentBuilderFactory;
 public class DocumentPageActivity extends AppCompatActivity implements TtsHost, ReaderDialogStyleHost {
     public static final String EXTRA_FILE_PATH = "file_path";
     /** When true, begin read-aloud automatically once the document is ready. */
-    public static final String EXTRA_AUTOSTART_TTS = "autostart_tts";    public static final String EXTRA_FILE_URI = "file_uri";
+    public static final String EXTRA_AUTOSTART_TTS = "autostart_tts";
+    public static final String EXTRA_FILE_URI = "file_uri";
     public static final String EXTRA_JUMP_TO_PAGE = "jump_page";
     public static final String EXTRA_MARKDOWN_SOURCE_OFFSET = "markdown_source_offset";
     public static final String EXTRA_CONTENT_ANCHOR_JSON = "content_anchor_json";
@@ -139,6 +139,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     View documentNavBarSpacer;
     boolean documentChromeVisible = true;
     WebView webView;
+    View ttsFloatingCard;
+    android.widget.ImageButton ttsFloatingPlayPause;
+    android.widget.ImageButton ttsFloatingStop;
     LinearLayout loadingBox;
     ProgressBar progressBar;
     TextView progressText;
@@ -234,9 +237,6 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             registerForActivityResult(new ActivityResultContracts.OpenDocument(),
                     uri -> { if (uri != null) importDocumentFontFromUri(uri); });
     int loadGeneration = 0;
-    private boolean pendingAutoStartTts = false;
-    private boolean autoStartTtsConsumed = false;
-    private int autoStartTtsAttempts = 0;
     File selectedDocumentFontFile = null;
     boolean epubHasDocumentFont = false;
     boolean epubFixedLayoutLike = false;
@@ -1983,78 +1983,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         // any running playback belong to the previous document.
         resetDocumentTts();
         pageLoader().loadFromIntent(intent);
-        if (!autoStartTtsConsumed && intent != null
-                && intent.getBooleanExtra(EXTRA_AUTOSTART_TTS, false)) {
-            autoStartTtsConsumed = true;
-            pendingAutoStartTts = true;
-            autoStartTtsAttempts = 0;
-            scheduleAutoStartDocumentTtsCheck();
-        }
-    }
-
-    // Auto-start read-aloud for a "continue reading aloud" resume launched from
-    // the main screen. The document (and, for Markdown, its rendered page) loads
-    // asynchronously, so poll briefly until pages are ready, then build the text
-    // buffer off-thread and begin playback in the saved continuous mode. Gives up
-    // quietly after a few seconds if nothing becomes readable.
-    private void scheduleAutoStartDocumentTtsCheck() {
-        View anchor = webView != null ? webView : getWindow().getDecorView();
-        anchor.postDelayed(() -> {
-            if (activityDestroyed || !pendingAutoStartTts) return;
-            if (documentSupportsTts()) {
-                pendingAutoStartTts = false;
-                autostartDocumentTts();
-            } else if (++autoStartTtsAttempts <= 40) {
-                scheduleAutoStartDocumentTtsCheck();
-            } else {
-                pendingAutoStartTts = false;
-            }
-        }, 150L);
-    }
-
-    /**
-     * Builds the read-aloud text buffer if needed (off the main thread), then
-     * starts playback. Mirrors {@link #showDocumentTtsDialog} but begins playing
-     * instead of opening the dialog.
-     */
-    private void autostartDocumentTts() {
-        if (!documentSupportsTts()) return;
-        TtsPlaybackBridge.register(this);
-        if (documentTtsTextSource != null) {
-            documentTts().autoStartOrResume(prefs != null && prefs.getTtsLastContinuous());
-            return;
-        }
-        if (documentTtsTextBuilding) {
-            // A build is already in flight (e.g. user opened the dialog); retry
-            // shortly so autostart rides the same buffer once it's ready. The
-            // generation check drops the retry if a different document loads in
-            // the meantime - otherwise the closure would auto-play the new
-            // document the user never asked to hear.
-            final int retryGeneration = loadGeneration;
-            View anchor = webView != null ? webView : getWindow().getDecorView();
-            anchor.postDelayed(() -> {
-                if (!activityDestroyed && retryGeneration == loadGeneration) {
-                    autostartDocumentTts();
-                }
-            }, 150L);
-            return;
-        }
-        documentTtsTextBuilding = true;
-        final int generation = loadGeneration;
-        final java.util.List<Page> snapshot = new java.util.ArrayList<>(pages);
-        submitDocumentTask(() -> {
-            DocumentTtsTextSource built = DocumentTtsTextSource.build(this, snapshot);
-            runOnUiThread(() -> {
-                if (activityDestroyed) return;
-                if (generation != loadGeneration) {
-                    documentTtsTextBuilding = false;
-                    return;
-                }
-                documentTtsTextSource = built;
-                documentTtsTextBuilding = false;
-                documentTts().autoStartOrResume(prefs != null && prefs.getTtsLastContinuous());
-            });
-        });
+        documentTtsIntegration().onLoadFromIntent(intent);
     }
 
     // ---- Read-aloud (TTS) for the document viewer -------------------------
@@ -2065,24 +1994,32 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     // Markdown-as-document is supported too: it has a single rendered page, so
     // the text source is one buffer, and read-aloud follows the spoken position
     // by mapping it back to a raw-source offset and scrolling there
-    // (approximate following - see followMarkdownTtsToSourceOffsetForChar),
+    // (approximate following - see DocumentTtsIntegrationController),
     // since Markdown's visual paging (markdownVisualCurrentPage over one long
     // page) has no page list to advance.
 
-    private ReaderTtsController documentTtsController;
-    private DocumentTtsTextSource documentTtsTextSource;
-    private boolean documentTtsTextBuilding = false;
+    ReaderTtsController documentTtsController;
+    DocumentTtsTextSource documentTtsTextSource;
+    private DocumentTtsIntegrationController documentTtsIntegrationController;
     private final android.os.Handler documentTtsHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
     private ReaderDialogStyleController documentDialogStyleController;
     private int documentDialogSnapshotBg = Color.rgb(18, 18, 18);
     private int documentDialogSnapshotFg = Color.rgb(232, 234, 237);
 
-    private ReaderTtsController documentTts() {
+    ReaderTtsController documentTts() {
         if (documentTtsController == null) {
             documentTtsController = new ReaderTtsController(this);
         }
         return documentTtsController;
+    }
+
+    /** Read-aloud integration (dialog/autostart/build/Markdown following). */
+    DocumentTtsIntegrationController documentTtsIntegration() {
+        if (documentTtsIntegrationController == null) {
+            documentTtsIntegrationController = new DocumentTtsIntegrationController(this);
+        }
+        return documentTtsIntegrationController;
     }
 
     boolean documentSupportsTts() {
@@ -2091,52 +2028,12 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     /** Stop playback and drop the text buffer; the next open rebuilds both. */
     void resetDocumentTts() {
-        if (documentTtsController != null) {
-            documentTtsController.stop(false);
-        }
-        documentTtsTextSource = null;
-        documentTtsTextBuilding = false;
-        lastMarkdownTtsFollowOffset = -1;
-        markdownTtsAnchorCharPosition = -1;
-        // A new document invalidates any autostart still pending for the previous
-        // one; loadFromIntent re-arms it when the new intent carries the extra.
-        pendingAutoStartTts = false;
+        documentTtsIntegration().reset();
     }
 
-    /**
-     * Entry point from the More dialog. Builds the plain-text buffer off the
-     * main thread on first use (Html.fromHtml per page can be slow on big
-     * books), then opens the standard TTS dialog. Also claims the remote
-     * bridge so notification/media-button commands reach this activity.
-     */
+    /** Entry point from the toolbar button and the More dialog. */
     void showDocumentTtsDialog() {
-        if (!documentSupportsTts()) return;
-        TtsPlaybackBridge.register(this);
-        if (documentTtsTextSource != null) {
-            documentTts().showDialog();
-            return;
-        }
-        if (documentTtsTextBuilding) {
-            ShortToast.show(this, R.string.tts_waiting_for_page);
-            return;
-        }
-        documentTtsTextBuilding = true;
-        final int generation = loadGeneration;
-        final java.util.List<Page> snapshot = new java.util.ArrayList<>(pages);
-        submitDocumentTask(() -> {
-            DocumentTtsTextSource built = DocumentTtsTextSource.build(this, snapshot);
-            runOnUiThread(() -> {
-                if (activityDestroyed) return;
-                if (generation != loadGeneration) {
-                    // A different document loaded while we were extracting.
-                    documentTtsTextBuilding = false;
-                    return;
-                }
-                documentTtsTextSource = built;
-                documentTtsTextBuilding = false;
-                documentTts().showDialog();
-            });
-        });
+        documentTtsIntegration().showDialogEntry();
     }
 
     // ---- TtsHost ----------------------------------------------------------
@@ -2196,7 +2093,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     @Override
     public boolean isTtsTextTemporarilyUnavailable() {
-        return documentTtsTextBuilding;
+        return documentTtsIntegration().isTextBuilding();
     }
 
     @Override
@@ -2222,7 +2119,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             // Markdown is one long WebView page scrolled by visual page; there is
             // no page list to advance. Follow by mapping the spoken position back
             // to a source offset and scrolling there (approximate following).
-            followMarkdownTtsToCurrentSpokenPosition();
+            documentTtsIntegration().followToCurrentSpokenPosition();
             return;
         }
         if (pages.isEmpty()) return;
@@ -2242,7 +2139,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             String plain = documentTtsTextSource.getTextContent();
             int len = plain != null ? plain.length() : 0;
             markdownTtsAnchorCharPosition = Math.max(0, Math.min(len, charPosition));
-            followMarkdownTtsToSourceOffsetForChar(charPosition);
+            documentTtsIntegration().followToSourceOffsetForChar(charPosition);
             return;
         }
         if (pages.isEmpty()) return;
@@ -2258,44 +2155,14 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
      * Uses the TTS controller's current char position in the plain-text buffer.
      */
     /**
-     * Called as each read-aloud segment starts speaking (via the text source's
-     * highlight callback). For Markdown it does two things: advances the speech
-     * anchor ({@link #markdownTtsAnchorCharPosition}, the position a restart or
-     * the end-of-document convergence reads from), and drives approximate
-     * following - scrolling only when the spoken position crosses into a
-     * different visual page, so the view keeps up without jerking on every
-     * sentence. No-op for paged documents, which follow by turning pages at
-     * prefetch boundaries instead.
+     * Per-segment callback from {@link DocumentTtsTextSource}; drives Markdown's
+     * approximate following and speech-anchor tracking in the integration
+     * controller. No-op for paged documents.
      */
     void onDocumentTtsSegmentSpoken(int charPosition, int segmentEndChar) {
-        if (!isMarkdownDocument() || documentTtsTextSource == null
-                || markdownSourceText == null || markdownSourceText.isEmpty()) {
-            return;
-        }
-        // Track progress past the segment being spoken, so a stop/restart
-        // continues from here and the end-of-document state is reachable.
-        markdownTtsAnchorCharPosition = Math.max(markdownTtsAnchorCharPosition, segmentEndChar);
-        String plain = documentTtsTextSource.getTextContent();
-        if (plain == null || plain.isEmpty()) return;
-        int sourceOffset = clampMarkdownSourceOffset(
-                MarkdownTtsFollowMath.approximateSourceOffset(
-                        plain, charPosition, markdownSourceText, lastMarkdownTtsFollowOffset));
-        // Throttle: only scroll when the target moved enough to likely change the
-        // visible viewport. markdownSourceText length / max(1, visualTotalPages)
-        // approximates one visual page worth of source chars.
-        int total = Math.max(1, markdownVisualTotalPages);
-        int perPage = Math.max(1, markdownSourceText.length() / total);
-        if (lastMarkdownTtsFollowOffset >= 0
-                && Math.abs(sourceOffset - lastMarkdownTtsFollowOffset) < perPage / 2) {
-            return;
-        }
-        lastMarkdownTtsFollowOffset = sourceOffset;
-        double ratio = (double) sourceOffset / (double) markdownSourceText.length();
-        int fallbackPage = Math.max(0, Math.min(total - 1, (int) Math.round(ratio * (total - 1))));
-        scrollMarkdownToSourceOffset(sourceOffset, true, fallbackPage);
+        documentTtsIntegration().onSegmentSpoken(charPosition, segmentEndChar);
     }
 
-    private int lastMarkdownTtsFollowOffset = -1;
     /**
      * Read-aloud's position in the plain-text buffer for Markdown (which has no
      * page list to derive it from): -1 = unset (fresh start reads from the
@@ -2304,35 +2171,6 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
      * {@link DocumentTtsTextSource#getCurrentCharPosition}.
      */
     int markdownTtsAnchorCharPosition = -1;
-
-    private void followMarkdownTtsToCurrentSpokenPosition() {
-        if (documentTtsTextSource == null) return;
-        followMarkdownTtsToSourceOffsetForChar(documentTtsTextSource.getCurrentCharPosition());
-    }
-
-    /**
-     * Maps a read-aloud char position (plain-text buffer space) to a raw Markdown
-     * source offset via {@link MarkdownTtsFollowMath} and scrolls there, falling
-     * back to a proportional visual page if the JS offset scroll can't resolve.
-     */
-    private void followMarkdownTtsToSourceOffsetForChar(int charPosition) {
-        if (documentTtsTextSource == null || markdownSourceText == null
-                || markdownSourceText.isEmpty()) {
-            return;
-        }
-        String plain = documentTtsTextSource.getTextContent();
-        if (plain == null || plain.isEmpty()) return;
-        int sourceOffset = MarkdownTtsFollowMath.approximateSourceOffset(
-                plain, charPosition, markdownSourceText, lastMarkdownTtsFollowOffset);
-        sourceOffset = clampMarkdownSourceOffset(sourceOffset);
-        lastMarkdownTtsFollowOffset = sourceOffset;
-        // Proportional fallback page for when __rwMdScrollToOffset can't place it.
-        int total = Math.max(1, markdownVisualTotalPages);
-        double ratio = markdownSourceText.length() > 0
-                ? (double) sourceOffset / (double) markdownSourceText.length() : 0.0;
-        int fallbackPage = Math.max(0, Math.min(total - 1, (int) Math.round(ratio * (total - 1))));
-        scrollMarkdownToSourceOffset(sourceOffset, true, fallbackPage);
-    }
 
     @Override
     public void ttsJumpToAbsoluteCharPosition(int charPosition, int displayPage, int totalPages) {
@@ -2343,8 +2181,35 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     @Override
     public void ttsUpdateFloatingCard() {
-        // The document viewer has no floating playback card (v1): playback is
-        // controlled from the TTS dialog and the notification.
+        TtsFloatingCardController.update(this, ttsFloatingCard, ttsFloatingPlayPause,
+                ttsFloatingCardControls());
+    }
+
+    /** Binds the floating playback card's buttons and drag/tap handling. */
+    void setupTtsFloatingCard() {
+        TtsFloatingCardController.setup(this, ttsFloatingCard, ttsFloatingPlayPause,
+                ttsFloatingStop, ttsFloatingCardControls());
+    }
+
+    private TtsFloatingCardController.Controls ttsFloatingCardControls() {
+        return new TtsFloatingCardController.Controls() {
+            @Override public boolean isActive() {
+                return documentTtsController != null && documentTtsController.isActive();
+            }
+            @Override public boolean isPaused() {
+                return documentTtsController != null && documentTtsController.isPaused();
+            }
+            @Override public void togglePlayPause() {
+                if (documentTtsController == null) return;
+                if (documentTtsController.isPaused()) documentTtsController.resumePlayback();
+                else documentTtsController.pausePlayback();
+                ttsUpdateFloatingCard();
+            }
+            @Override public void stop() {
+                if (documentTtsController != null) documentTtsController.stop(true);
+                ttsUpdateFloatingCard();
+            }
+        };
     }
 
     @Override
@@ -2802,16 +2667,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         if (nextButton != null) nextButton.setEnabled(page < total);
     }
 
-    /**
-     * Shows or hides the bottom-toolbar TTS button. Read-aloud support is only
-     * known once pages exist (and Markdown never supports it), so this runs
-     * after wiring and again from {@link #showPage} - the common funnel every
-     * document passes through once its pages are ready.
-     */
+    /** Toolbar read-aloud button visibility; see the integration controller. */
     void updateDocumentTtsButtonVisibility() {
-        View button = findViewById(R.id.btn_document_tts);
-        if (button == null) return;
-        button.setVisibility(documentSupportsTts() ? View.VISIBLE : View.GONE);
+        documentTtsIntegration().updateButtonVisibility();
     }
 
     void showPage(int page, int direction) {

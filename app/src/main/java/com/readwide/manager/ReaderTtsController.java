@@ -34,11 +34,16 @@ import java.util.Locale;
 import java.util.Set;
 
 final class ReaderTtsController implements TextToSpeech.OnInitListener {
-    private static final int MAX_TTS_SEGMENT_CHARS = 700;    private static final long NEXT_PAGE_DELAY_MS = 320L;
+    private static final int MAX_TTS_SEGMENT_CHARS = 700;
+    private static final long NEXT_PAGE_DELAY_MS = 320L;
     private static final long PARTITION_RETRY_DELAY_MS = 220L;
     private static final int MAX_PARTITION_RETRIES = 28;
     private static final int REQUEST_TTS_NOTIFICATION_PERMISSION = 2202;
     private static final String ACTION_ANDROID_TTS_SETTINGS = "com.android.settings.TTS_SETTINGS";
+    // Logcat tag for read-aloud diagnostics (engine init, language/voice results,
+    // queue sizes, speak() failures, dropped callbacks). Helps triage "silent
+    // fail" reports from release builds via `adb logcat -s ReadwideTts`.
+    private static final String TTS_LOG_TAG = "ReadwideTts";
 
     private final TtsHost host;
     private final androidx.appcompat.app.AppCompatActivity activity;
@@ -513,6 +518,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             int queueMode = (i == fromIndex) ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
             int result = tts.speak(queuedSegments.get(i).speechText, queueMode, params, utteranceId);
             if (result == TextToSpeech.ERROR) {
+                android.util.Log.d(TTS_LOG_TAG, "speak() ERROR at segment " + i
+                        + " (resume from " + fromIndex + "), stopping");
                 stop(false);
                 ShortToast.show(activity, R.string.tts_engine_unavailable);
                 return;
@@ -597,6 +604,9 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 return;
             }
             initializing = false;
+            android.util.Log.d(TTS_LOG_TAG, "engine init: status=" + status
+                    + (status == TextToSpeech.SUCCESS ? " (SUCCESS)" : " (FAILED)")
+                    + ", engine=" + (tts != null ? tts.getDefaultEngine() : "null"));
             if (status != TextToSpeech.SUCCESS || tts == null) {
                 initialized = false;
                 pendingStart = false;
@@ -812,12 +822,16 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         prefetchedNextPageBoundaryIndex = -1;
         crossedPrefetchBoundary = false;
         lastQueuedUtteranceId = utteranceId(generation, segments.size() - 1);
+        android.util.Log.d(TTS_LOG_TAG, "queue page: " + segments.size() + " segments, gen=" + generation
+                + ", first lens=" + firstSegmentLengths(segments));
         for (int i = 0; i < segments.size(); i++) {
             Bundle params = new Bundle();
             String utteranceId = utteranceId(generation, i);
             int queueMode = i == 0 ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
             int result = tts.speak(segments.get(i).speechText, queueMode, params, utteranceId);
             if (result == TextToSpeech.ERROR) {
+                android.util.Log.d(TTS_LOG_TAG, "speak() ERROR at segment " + i + "/" + segments.size()
+                        + " (queue page), stopping");
                 stop(false);
                 ShortToast.show(activity, R.string.tts_engine_unavailable);
                 return;
@@ -862,6 +876,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         if (nextSegments.isEmpty()) return;
 
         prefetchedNextPageBoundaryIndex = queuedSegments.size();
+        android.util.Log.d(TTS_LOG_TAG, "prefetch next page: " + nextSegments.size()
+                + " segments from char " + nextStart);
         int base = queuedSegments.size();
         queuedSegments.addAll(nextSegments);
         lastQueuedUtteranceId = utteranceId(generation, queuedSegments.size() - 1);
@@ -873,6 +889,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             if (result == TextToSpeech.ERROR) {
                 // Non-fatal: the current page is already queued and will play;
                 // drop the prefetch and let the normal page-turn path continue.
+                android.util.Log.d(TTS_LOG_TAG, "speak() ERROR at prefetch segment " + i
+                        + "/" + nextSegments.size() + " (non-fatal, dropping prefetch)");
                 while (queuedSegments.size() > base) {
                     queuedSegments.remove(queuedSegments.size() - 1);
                 }
@@ -957,11 +975,23 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     private void handleUtteranceError(String utteranceId) {
         activity.runOnUiThread(() -> {
+            android.util.Log.d(TTS_LOG_TAG, "onError: id=" + utteranceId
+                    + ", active=" + active + ", gen=" + speechGeneration);
             if (host.isTtsHostDestroyed() || !active || !isCurrentGenerationUtterance(utteranceId)) return;
             stop(false);
             clearTtsHighlight();
             ShortToast.show(activity, R.string.tts_engine_unavailable);
         });
+    }
+
+    /** Lengths of the first few segments, for the queue diagnostics log line. */
+    private static String firstSegmentLengths(@NonNull List<TtsSpeechSegment> segments) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < Math.min(3, segments.size()); i++) {
+            if (i > 0) sb.append(',');
+            sb.append(segments.get(i).speechText.length());
+        }
+        return sb.append(']').toString();
     }
 
     private void advanceAndSpeakNextPage(int generation) {
@@ -1027,8 +1057,16 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     private boolean isCurrentGenerationUtterance(String utteranceId) {
-        return utteranceId != null
+        boolean current = utteranceId != null
                 && utteranceId.startsWith("reader_tts_" + speechGeneration + "_");
+        if (!current) {
+            // A callback for a superseded playback (page turned, settings changed,
+            // restarted). Dropping it is correct; logging it makes "audio stopped
+            // and nothing happened" reports diagnosable from logcat.
+            android.util.Log.d(TTS_LOG_TAG, "callback dropped (stale generation): id="
+                    + utteranceId + ", current gen=" + speechGeneration);
+        }
+        return current;
     }
 
     private String utteranceId(int generation, int chunkIndex) {
@@ -1267,6 +1305,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         Voice selectedVoice = findSelectedVoice();
         if (selectedVoice != null) {
             int result = tts.setVoice(selectedVoice);
+            android.util.Log.d(TTS_LOG_TAG, "setVoice(" + selectedVoice.getName() + ") -> "
+                    + (result != TextToSpeech.ERROR ? "OK" : "ERROR"));
             if (result != TextToSpeech.ERROR) return true;
             if (showUnsupportedToast) {
                 ShortToast.show(activity, R.string.tts_voice_unavailable);
@@ -1277,6 +1317,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         int result = tts.setLanguage(locale);
         boolean supported = result != TextToSpeech.LANG_MISSING_DATA
                 && result != TextToSpeech.LANG_NOT_SUPPORTED;
+        android.util.Log.d(TTS_LOG_TAG, "setLanguage(" + locale + ") -> " + result
+                + (supported ? " (supported)" : " (unsupported, trying fallbacks)"));
         if (supported) return true;
 
         // The chosen locale isn't available on this engine. Rather than refusing
@@ -1289,6 +1331,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         Locale engineDefault = engineDefaultLanguage();
         if (engineDefault != null) {
             int fallback = tts.setLanguage(engineDefault);
+            android.util.Log.d(TTS_LOG_TAG, "fallback setLanguage(engine default "
+                    + engineDefault + ") -> " + fallback);
             if (fallback != TextToSpeech.LANG_MISSING_DATA
                     && fallback != TextToSpeech.LANG_NOT_SUPPORTED) {
                 if (showUnsupportedToast) {
@@ -1301,6 +1345,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         int deviceDefault = tts.setLanguage(Locale.getDefault());
         boolean deviceOk = deviceDefault != TextToSpeech.LANG_MISSING_DATA
                 && deviceDefault != TextToSpeech.LANG_NOT_SUPPORTED;
+        android.util.Log.d(TTS_LOG_TAG, "fallback setLanguage(device default "
+                + Locale.getDefault() + ") -> " + deviceDefault + (deviceOk ? " (using it)" : " (giving up)"));
         if (!deviceOk && showUnsupportedToast) {
             ShortToast.show(activity,
                     activity.getString(R.string.tts_language_unavailable, selectedLanguageLabel()));

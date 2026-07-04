@@ -196,3 +196,38 @@ locale-mismatch abort (fix 1) - not a per-sentence synchronous loop inside a
 page. The proposed `QUEUE_ADD` buffering in the feedback matches what the code
 already does within a page; 1.0.11 extends that same idea across page
 boundaries.
+
+## 1.0.12 addendum
+
+Three read-aloud changes shipped as the 1.0.12 patch; recorded here so this
+document stays the single design reference.
+
+- **PdfBox initialization is a hard precondition of the Stage 3 extractor.**
+  `PDFBoxResourceLoader.init` was only called in `PdfSearchController`'s
+  constructor, so read-aloud as the first PdfBox user in the process crashed:
+  the font/glyph machinery fails partly with `Error`s that
+  `catch (RuntimeException)` cannot contain, and an uncaught throw on the bare
+  extraction executor kills the process. `PdfPlainTextExtractor` now initializes
+  the loader itself and contains `Throwable`, logging the failure. Design
+  lesson: every independent PdfBox entry point must init - do not assume another
+  feature ran first.
+- **Quotation-mark muting at Aggressive pause reduction.** Level 2 of the pause
+  reduction now also mutes double quotes/guillemets/CJK corner brackets, applied
+  *before* the stop-softening because a dialogue-final stop (`..."!`) only
+  matches the softening pattern once the quote becomes whitespace. Apostrophes
+  are untouched; Off/Medium keep quotes.
+- **Logcat diagnostics.** `ReaderTtsController` and the PDF text-source build
+  log under the `ReadwideTts` tag (engine init, language/voice results with
+  fallback hops, queue summaries, `speak()` failures, dropped stale-generation
+  callbacks, extraction results). Collect from any build with
+  `adb logcat -s ReadwideTts`; this is the intended first step for triaging
+  silent-failure reports before changing queueing behavior.
+
+- **Where the document-viewer integration lives (1.0.12).** The non-interface
+  integration logic (dialog/autostart entry, buffer build, button visibility,
+  Markdown following) is in `DocumentTtsIntegrationController`;
+  `DocumentPageActivity` keeps the `TtsHost` implementation and thin delegates.
+  Start there when changing document-viewer read-aloud behavior. The PDF
+  viewer's equivalent is `PdfTtsIntegrationController` (dialog entry, text
+  extraction/build, button visibility); `PdfReaderActivity` keeps the `TtsHost`
+  implementation and thin delegates.

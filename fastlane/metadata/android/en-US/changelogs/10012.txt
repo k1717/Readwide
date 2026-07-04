@@ -1,0 +1,4 @@
+- Fixed a crash when starting read-aloud in the PDF viewer.
+- Read-aloud: quieter dialogue for neural voices - the strongest pause-reduction level now also mutes quotation marks.
+- Fixed quickly double-tapping a file opening the same file twice.
+- Read-aloud now shows the floating play/pause and stop card in the document and PDF viewers too, not just the text reader.
