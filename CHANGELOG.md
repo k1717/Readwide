@@ -2,6 +2,8 @@
 
 ## Readwide 1.0.12 - 2026-07-04
 
+### Release scope
+
 ### Main screen - double-tap open
 
 - Quickly double-tapping a file no longer opens the same file twice (which previously required pressing back through a duplicate viewer).
