@@ -43,7 +43,7 @@ Builds:
 
   - versionName: 1.0.11
     versionCode: 10011
-    commit: REPLACE_WITH_v1.0.11_FULL_COMMIT_HASH
+    commit: 75c67a42d8fdcf0c784ccd15ec3122280356f89b
     subdir: app
     gradle:
       - yes
