@@ -50,7 +50,7 @@ Builds:
 
   - versionName: 1.0.12
     versionCode: 10012
-    commit: REPLACE_WITH_v1.0.12_FULL_COMMIT_HASH
+    commit: 75be8c86bb1e3654f9e1a9d6b27ef3c4fc6030b0
     subdir: app
     gradle:
       - yes
