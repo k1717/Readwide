@@ -1,4 +1,4 @@
-# GitHub upload notes for Readwide 1.0.12
+# GitHub upload notes for Readwide 1.0.13
 
 Use this checklist before publishing the public GitHub source and release assets.
 
@@ -6,12 +6,12 @@ Use this checklist before publishing the public GitHub source and release assets
 
 - App name: Readwide
 - Android `applicationId`: `com.readwide.manager`
-- `versionName`: `1.0.12`
-- `versionCode`: `10012`
+- `versionName`: `1.0.13`
+- `versionCode`: `10013`
 - First-party license: Apache-2.0
 - Repository: `https://github.com/k1717/Readwide`
 
-The `applicationId` has been `com.readwide.manager` since 1.0.4. 1.0.12 keeps the `readwide` release signing key introduced in 1.0.6, so it installs in place over 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.12, and transferring data with the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Older `com.textview.reader` builds also install as a separate app and migrate the same way.
+The `applicationId` has been `com.readwide.manager` since 1.0.4. 1.0.13 keeps the `readwide` release signing key introduced in 1.0.6, so it installs in place over 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.13, and transferring data with the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Older `com.textview.reader` builds also install as a separate app and migrate the same way.
 
 ## Files expected in the source release
 
@@ -27,9 +27,9 @@ Keep these files in the public source package:
 - `CONTRIBUTING.md`
 - `docs/FOSS_STATUS.md`
 - `docs/FDROID_SUBMISSION.md`
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_12.md` (and the retained per-version notes back through 1.0.2)
-- `docs/LICENSE_REPORT_READWIDE_1_0_12.md`
-- `docs/SBOM_READWIDE_1_0_12.spdx.json`
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_13.md` (and the retained per-version notes back through 1.0.2)
+- `docs/LICENSE_REPORT_READWIDE_1_0_13.md`
+- `docs/SBOM_READWIDE_1_0_13.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `docs/TXT_SEARCH_USAGE.md`
@@ -101,8 +101,8 @@ Avoid:
 
 Before opening an F-Droid Data merge request:
 
-1. Tag the exact release commit as `v1.0.12` and push the tag.
-2. Set the `1.0.12` build entry's `commit` field in `fdroid/metadata/com.readwide.manager.yml` to the full 40-character commit hash that the `v1.0.12` tag points to. This app's F-Droid maintainer requires a full commit hash (not a tag name), so use the hash directly rather than the tag. The 1.0.11 entry now carries its real release commit hash (5d75fda36a4c0a92a9ca81e1d997e1b62cae1289), and earlier entries through 1.0.10 do as well; only the 1.0.12 entry still holds a placeholder, to be filled the same way once v1.0.12 is tagged.
+1. Tag the exact release commit as `v1.0.13` and push the tag.
+2. Start from the current fdroiddata upstream metadata. It already contains Readwide builds through 1.0.12; add only the 1.0.13 build block, set its `commit` field to the full 40-character commit hash that the `v1.0.13` tag points to, then update `CurrentVersion` to `1.0.13` and `CurrentVersionCode` to `10013`. This app's F-Droid maintainer requires a full commit hash rather than the tag name.
 3. Confirm release builds work without private signing environment variables.
 4. Confirm no optional local jars are present under `app/libs`.
 5. Keep broad-storage and no-network privacy rationale in the merge request.

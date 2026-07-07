@@ -1343,26 +1343,31 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
                     // open the file at its saved position, and auto-start playback.
                     prefs.setTtsSleepTimerMinutes(prefs.getTtsLastSleepTimerMinutes());
                     String lower = file.getName().toLowerCase(java.util.Locale.ROOT);
-                    if (FileUtils.isTextFile(file.getName())) {
-                        Intent it = new Intent(this, ReaderActivity.class);
-                        it.putExtra(ReaderActivity.EXTRA_FILE_PATH, path);
-                        it.putExtra(ReaderActivity.EXTRA_AUTOSTART_TTS, true);
-                        startActivity(it);
-                    } else if (FileUtils.isMarkdownFile(lower) || FileUtils.isEpubFile(file.getName())
+                    if (FileUtils.isMarkdownFile(lower) || FileUtils.isEpubFile(file.getName())
                             || FileUtils.isWordOrHwpFile(file.getName())) {
                         // Markdown/EPUB/Word read-aloud lives in the document
                         // viewer (where these files open normally), so resume there
                         // too - the saved char position is in that viewer's buffer
-                        // space.
+                        // space. This branch MUST come before the isTextFile check:
+                        // isTextFile() also matches .md/.markdown, so testing text
+                        // first would route Markdown to the plain-text reader and
+                        // the viewer would visibly switch from the WebView-based
+                        // document view to the text view on resume.
                         Intent it = new Intent(this, DocumentPageActivity.class);
                         it.putExtra(DocumentPageActivity.EXTRA_FILE_PATH, path);
                         it.putExtra(DocumentPageActivity.EXTRA_AUTOSTART_TTS, true);
                         startActivity(it);
+                    } else if (FileUtils.isTextFile(file.getName())) {
+                        Intent it = new Intent(this, ReaderActivity.class);
+                        it.putExtra(ReaderActivity.EXTRA_FILE_PATH, path);
+                        it.putExtra(ReaderActivity.EXTRA_AUTOSTART_TTS, true);
+                        startActivity(it);
                     } else if (FileUtils.isPdfFile(file.getName())) {
-                        // PDF read-aloud lives in the PDF viewer; saved position is
-                        // offered by the resume row inside the TTS dialog.
+                        // PDF read-aloud lives in the PDF viewer; resume auto-starts
+                        // there too via the autostart extra.
                         Intent it = new Intent(this, PdfReaderActivity.class);
                         it.putExtra(PdfReaderActivity.EXTRA_FILE_PATH, path);
+                        it.putExtra(PdfReaderActivity.EXTRA_AUTOSTART_TTS, true);
                         startActivity(it);
                     } else {
                         // Defensive fallback for any other saved type: open in the

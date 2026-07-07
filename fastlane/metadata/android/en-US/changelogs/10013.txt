@@ -1,0 +1,4 @@
+- Read-aloud now highlights the sentence being spoken in the document viewer (EPUB, Word, HWP, Markdown) and the PDF viewer.
+- Page titles are no longer spoken twice in EPUB-style documents.
+- "Continue reading aloud" resumes in the right viewer at the exact saved spot; PDF auto-starts.
+- Renaming a file or folder to the same name in a different case no longer fails silently.

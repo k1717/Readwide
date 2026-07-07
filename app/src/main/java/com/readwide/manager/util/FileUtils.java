@@ -558,7 +558,7 @@ public class FileUtils {
     private static String readWordFile(File file) throws IOException {
         String lower = lowerName(file != null ? file.getName() : null);
         if (lower.endsWith(".doc")) {
-            throw new IOException("Legacy binary Word (.doc) files are recognized in the Word filter, but only OOXML Word files (.docx/.docm/.dotx/.dotm) are currently rendered.");
+            throw new IOException("Legacy binary Word (.doc) files open through the document viewer's basic read-only renderer, but this plain-text extraction utility currently supports only OOXML Word files (.docx/.docm/.dotx/.dotm).");
         }
         try (ZipFile zip = new ZipFile(file)) {
             ZipEntry documentXml = zip.getEntry("word/document.xml");
@@ -745,6 +745,14 @@ public class FileUtils {
         if (html == null || html.isEmpty()) return "";
 
         String cleaned = html
+                // Head/title content is not part of the rendered page: EPUB
+                // chapter XHTML carries <head><title>Chapter</title></head>
+                // alongside the visible <h1>, and Html.fromHtml would leak the
+                // title text into the buffer - read-aloud then spoke every
+                // page's title twice, and the sentence highlight could never
+                // match the DOM (which only contains the body).
+                .replaceAll("(?is)<head[^>]*>.*?</head>", " ")
+                .replaceAll("(?is)<title[^>]*>.*?</title>", " ")
                 .replaceAll("(?is)<script[^>]*>.*?</script>", " ")
                 .replaceAll("(?is)<style[^>]*>.*?</style>", " ")
                 .replaceAll("(?i)<br\\s*/?>", "\n")

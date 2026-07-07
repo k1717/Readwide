@@ -118,6 +118,17 @@ final class DocumentTtsTextSource implements TtsTextSource {
             if (anchor >= 0) {
                 return Math.max(0, Math.min(fullText.length(), anchor));
             }
+            // Locate the top-visible block's text directly in the rendered
+            // buffer - both come from the same rendering, so a whitespace-
+            // insensitive search gives the exact start of what the user sees.
+            // The proportional source-offset mapping below is only a fallback:
+            // Markdown syntax makes source and rendered text distribute
+            // differently, so the ratio drifts by pages on larger documents.
+            String anchorText = activity.lastMarkdownAnchorText;
+            if (anchorText != null && !anchorText.trim().isEmpty()) {
+                int found = indexOfCollapsed(fullText, anchorText);
+                if (found >= 0) return snapToNaturalStart(fullText, found);
+            }
             String source = activity.markdownSourceText;
             int srcLen = source != null ? source.length() : 0;
             if (srcLen <= 0) return 0;
@@ -126,7 +137,26 @@ final class DocumentTtsTextSource implements TtsTextSource {
             return Math.max(0, Math.min(fullText.length(),
                     (int) Math.round(ratio * fullText.length())));
         }
-        return pageStartOffsets[clampedCurrentPage()];
+        // Paged documents (EPUB/Word/HWP): normally the current page's start
+        // offset, but if a one-shot resume anchor is set and falls within the
+        // current page, begin from that exact saved position instead so
+        // "continue reading aloud" resumes mid-page. The anchor is validated
+        // against the current page bounds so a stale anchor (page changed) is
+        // ignored rather than mispositioning playback.
+        int page = clampedCurrentPage();
+        int pageStart = pageStartOffsets[page];
+        int anchor = activity.pagedTtsResumeAnchorCharPosition;
+        if (anchor > pageStart) {
+            int pageEnd = pageStartOffsets[page + 1];
+            if (anchor < pageEnd) {
+                // One-shot: consume on read. The resume queue reads it exactly
+                // once to start mid-page; leaving it armed made the dialog's
+                // "page" restart begin from the saved spot instead of the top.
+                activity.pagedTtsResumeAnchorCharPosition = -1;
+                return anchor;
+            }
+        }
+        return pageStart;
     }
 
     @Override
@@ -143,15 +173,82 @@ final class DocumentTtsTextSource implements TtsTextSource {
 
     @Override
     public void setTtsHighlightRange(int startChar, int endChar) {
-        // No glyph highlight on the WebView page yet, but this per-segment
-        // callback is the signal the Markdown viewer uses to follow playback by
-        // scrolling (approximate following) and to advance the speech anchor.
-        // No-op for paged documents.
+        // Drive Markdown's scroll-following / speech anchor (no-op for paged
+        // documents beyond the anchor bookkeeping).
         activity.onDocumentTtsSegmentSpoken(startChar, endChar);
+        // Highlight the spoken sentence in the WebView. The buffer is plain text
+        // (HTML flattened), so exact offsets don't map to the DOM; the controller
+        // searches the DOM for this sentence's text instead.
+        int s = Math.max(0, Math.min(fullText.length(), startChar));
+        int e = Math.max(s, Math.min(fullText.length(), endChar));
+        if (e > s) {
+            // Markdown follows playback with its own scroll; let the highlight
+            // scroll only in the paged viewers, and only when off-screen.
+            activity.documentTtsHighlight().highlight(fullText.substring(s, e),
+                    !activity.isMarkdownDocument());
+        }
     }
 
     @Override
     public void clearTtsHighlight() {
-        // No-op; nothing is ever highlighted.
+        activity.documentTtsHighlight().clear();
+        // Playback has stopped (this is only invoked on stop/finish/error paths,
+        // never on start - verified against every ReaderTtsController call site).
+        // Retire the Markdown speech anchor so the NEXT start reads from the
+        // position the user is looking at: scrolled to the top means "from the
+        // beginning". During playback the view follows the spoken position, so
+        // an immediate restart still lands on the sentence that was being heard.
+        activity.markdownTtsAnchorCharPosition = -1;
+    }
+
+    /**
+     * Snaps a mid-line/mid-word buffer position back to a natural reading
+     * start: the beginning of the current line or sentence when one lies within
+     * a short window behind it, else the start of the current word. Keeps the
+     * spoken opening from beginning in the middle of a word when the viewport
+     * probe landed inside the top line.
+     */
+    static int snapToNaturalStart(String text, int pos) {
+        int p = Math.max(0, Math.min(text.length(), pos));
+        int window = Math.max(0, p - 160);
+        int best = -1;
+        for (int i = p - 1; i >= window; i--) {
+            char c = text.charAt(i);
+            if (c == '\n') { best = i + 1; break; }
+            if ((c == '.' || c == '!' || c == '?') && i + 1 < text.length()
+                    && Character.isWhitespace(text.charAt(i + 1))) {
+                best = i + 2;
+                break;
+            }
+        }
+        if (best >= 0 && best <= p) return best;
+        while (p > 0 && !Character.isWhitespace(text.charAt(p - 1))) p--;
+        return p;
+    }
+
+    /**
+     * Finds {@code needle} in {@code hay} comparing with all whitespace ignored
+     * on both sides, returning the index in {@code hay} of the first matched
+     * non-whitespace character, or -1. Case-sensitive: both strings come from
+     * the same rendering.
+     */
+    static int indexOfCollapsed(String hay, String needle) {
+        int nStart = 0;
+        while (nStart < needle.length() && Character.isWhitespace(needle.charAt(nStart))) nStart++;
+        if (nStart >= needle.length()) return -1;
+        char first = needle.charAt(nStart);
+        for (int i = 0; i < hay.length(); i++) {
+            if (hay.charAt(i) != first) continue;
+            int h = i, n = nStart;
+            while (n < needle.length()) {
+                while (n < needle.length() && Character.isWhitespace(needle.charAt(n))) n++;
+                if (n >= needle.length()) break;
+                while (h < hay.length() && Character.isWhitespace(hay.charAt(h))) h++;
+                if (h >= hay.length() || hay.charAt(h) != needle.charAt(n)) { n = -1; break; }
+                h++; n++;
+            }
+            if (n != -1) return i;
+        }
+        return -1;
     }
 }

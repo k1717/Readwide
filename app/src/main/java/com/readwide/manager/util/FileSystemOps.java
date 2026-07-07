@@ -22,6 +22,68 @@ public final class FileSystemOps {
     private FileSystemOps() {
     }
 
+    /**
+     * Renames {@code source} to a new name in the same directory, correctly
+     * handling case-only changes on case-insensitive/case-preserving file
+     * systems (FAT32/exFAT and the sdcardfs/FUSE layers Android often mounts
+     * external storage through).
+     *
+     * <p>On such a file system {@code new File(dir, "test").renameTo(new File(
+     * dir, "tESt"))} resolves the destination to the <em>same</em> entry as the
+     * source, so the rename is treated as renaming a file onto itself: it
+     * reports success but the stored name never changes. A rename that also adds
+     * or removes characters works, which is exactly the reported symptom
+     * (test -> tESt fails, test -> tEStt works). To force the directory entry to
+     * be rewritten, a case-only rename is performed in two hops through a unique
+     * temporary name in the same directory.</p>
+     *
+     * @return true if the entry now has the requested name
+     */
+    public static boolean renameInPlace(@NonNull File source, @NonNull String newName) {
+        if (newName.isEmpty()) return false;
+        File parent = source.getParentFile();
+        if (parent == null) return false;
+        File target = new File(parent, newName);
+
+        if (source.getName().equals(newName)) {
+            // Already the exact name (including case); nothing to do.
+            return true;
+        }
+
+        boolean caseOnlyChange = source.getName().equalsIgnoreCase(newName);
+        if (!caseOnlyChange) {
+            // Different name (not just case): a plain rename is correct. Refuse to
+            // clobber an unrelated existing entry.
+            if (target.exists() && !sameCanonicalFile(source, target)) return false;
+            return source.renameTo(target);
+        }
+
+        // Case-only change: hop through a unique temporary name so the file
+        // system actually rewrites the entry instead of collapsing source and
+        // destination to the same inode.
+        File temp = null;
+        for (int i = 0; i < 10000; i++) {
+            File candidate = new File(parent, ".rwrename_" + System.nanoTime() + "_" + i);
+            if (!candidate.exists()) {
+                temp = candidate;
+                break;
+            }
+        }
+        if (temp == null) return false;
+
+        if (!source.renameTo(temp)) {
+            return false;
+        }
+        if (temp.renameTo(target)) {
+            return true;
+        }
+        // Second hop failed: restore the original name so we don't leave the
+        // entry stranded under the temporary name.
+        //noinspection ResultOfMethodCallIgnored
+        temp.renameTo(source);
+        return false;
+    }
+
     public static boolean move(@NonNull File source,
                                @NonNull File destination,
                                boolean overwrite) {

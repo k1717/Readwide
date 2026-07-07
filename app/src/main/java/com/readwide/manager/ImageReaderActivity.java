@@ -51,6 +51,7 @@ import com.readwide.manager.image.ImageDecodeHelper;
 import com.readwide.manager.image.ImageInfo;
 import com.readwide.manager.image.ImageInfoReader;
 import com.readwide.manager.image.LoadedImage;
+import com.readwide.manager.util.FileSystemOps;
 import com.readwide.manager.util.ImageSequenceNavigationMath;
 import com.readwide.manager.util.ImageSequenceState;
 import com.readwide.manager.util.FileSortUtils;
@@ -1638,7 +1639,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             File parent = file.getParentFile();
             if (parent == null) return;
             File newFile = new File(parent, newName);
-            if (file.renameTo(newFile)) {
+            if (FileSystemOps.renameInPlace(file, newName)) {
                 filePath = newFile.getAbsolutePath();
                 int renamedIndex = ImageSequenceState.applyRename(
                         imagePaths,

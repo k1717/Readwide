@@ -74,6 +74,9 @@ public class PdfPageView extends View {
     // the current page (see PdfTextSearchEngine).
     @Nullable private List<RectF> highlightRects;
     @Nullable private RectF currentHighlightRect;
+    // Read-aloud sentence highlight, page-normalized [0..1]. Independent of the
+    // search highlights above so speaking and searching don't clobber each other.
+    @Nullable private List<RectF> ttsHighlightRects;
     private final Paint highlightFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint highlightStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint currentHighlightFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -163,6 +166,21 @@ public class PdfPageView extends View {
     }
 
     /** Remove all search highlights. */
+    /** Set the read-aloud sentence highlight (page-normalized rects), or null to clear. */
+    public void setTtsHighlights(@Nullable List<RectF> normRects) {
+        boolean changed = (ttsHighlightRects != null) != (normRects != null)
+                || (normRects != null && !normRects.equals(ttsHighlightRects));
+        ttsHighlightRects = normRects;
+        if (changed) invalidate();
+    }
+
+    public void clearTtsHighlights() {
+        if (ttsHighlightRects != null) {
+            ttsHighlightRects = null;
+            invalidate();
+        }
+    }
+
     public void clearHighlights() {
         boolean had = highlightRects != null || currentHighlightRect != null || revealLiftPx != 0f;
         highlightRects = null;
@@ -387,9 +405,17 @@ public class PdfPageView extends View {
      */
     private void drawHighlights(Canvas canvas) {
         if (fitBitmap == null || fitBitmap.isRecycled()) return;
-        if (highlightRects == null && currentHighlightRect == null) return;
+        if (highlightRects == null && currentHighlightRect == null
+                && ttsHighlightRects == null) return;
         float bmpW = fitBitmap.getWidth();
         float bmpH = fitBitmap.getHeight();
+        if (ttsHighlightRects != null) {
+            for (RectF n : ttsHighlightRects) {
+                tmpHighlight.set(n.left * bmpW, n.top * bmpH, n.right * bmpW, n.bottom * bmpH);
+                matrix.mapRect(tmpHighlight);
+                canvas.drawRect(tmpHighlight, highlightFillPaint);
+            }
+        }
         if (highlightRects != null) {
             for (RectF n : highlightRects) {
                 if (n == currentHighlightRect) continue; // drawn emphasized below

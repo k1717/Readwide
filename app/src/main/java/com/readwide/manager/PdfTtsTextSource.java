@@ -137,7 +137,25 @@ final class PdfTtsTextSource implements TtsTextSource {
     @Override
     public int getCurrentCharPosition() {
         if (pageCount() <= 0) return 0;
-        return pageStartOffsets[clampedCurrentPage()];
+        // Normally the current page's start offset, but if a one-shot resume
+        // anchor is set and falls within the current page, begin from that exact
+        // saved position instead so "continue reading aloud" resumes mid-page.
+        // The anchor is validated against the current page bounds so a stale
+        // anchor (page changed) is ignored rather than mispositioning playback.
+        int page = clampedCurrentPage();
+        int pageStart = pageStartOffsets[page];
+        int anchor = activity.pagedTtsResumeAnchorCharPosition;
+        if (anchor > pageStart) {
+            int pageEnd = pageStartOffsets[page + 1];
+            if (anchor < pageEnd) {
+                // One-shot: consume on read. The resume queue reads it exactly
+                // once to start mid-page; leaving it armed made the dialog's
+                // "page" restart begin from the saved spot instead of the top.
+                activity.pagedTtsResumeAnchorCharPosition = -1;
+                return anchor;
+            }
+        }
+        return pageStart;
     }
 
     @Override
@@ -148,11 +166,27 @@ final class PdfTtsTextSource implements TtsTextSource {
 
     @Override
     public void setTtsHighlightRange(int startChar, int endChar) {
-        // No glyph-level highlight surface on the bitmap page yet (see class Javadoc).
+        if (pageCount() <= 0 || endChar <= startChar) return;
+        int page = pageIndexForChar(startChar);
+        int pageStart = pageStartOffsets[page];
+        // The buffer appends one '\n' separator after every page's text (see
+        // build); the page's real content ends just before it. The glyph
+        // extraction sees only the page content, so both the expected text and
+        // the char range must exclude the separator or the alignment check
+        // would always fail and the highlight would never appear.
+        int contentEnd = pageStartOffsets[page + 1] - 1;
+        if (contentEnd <= pageStart) return; // empty (e.g. image-only) page
+        int relStart = Math.max(0, startChar - pageStart);
+        int relEnd = Math.max(relStart, Math.min(endChar, contentEnd) - pageStart);
+        if (relEnd <= relStart) return;
+        // The expected text lets the highlighter verify its glyph extraction
+        // lines up with this buffer before trusting any coordinates.
+        activity.pdfTtsHighlight().highlight(page, relStart, relEnd,
+                fullText.substring(pageStart, contentEnd));
     }
 
     @Override
     public void clearTtsHighlight() {
-        // No-op; nothing is ever highlighted.
+        activity.pdfTtsHighlight().clear();
     }
 }

@@ -1,4 +1,4 @@
-# F-Droid submission notes for Readwide 1.0.12
+# F-Droid submission notes for Readwide 1.0.13
 
 This document records the project-side preparation for an F-Droid Data merge request.
 
@@ -6,8 +6,8 @@ This document records the project-side preparation for an F-Droid Data merge req
 
 - App name: Readwide
 - Android application ID: `com.readwide.manager`
-- Version name: `1.0.12`
-- Version code: `10012`
+- Version name: `1.0.13`
+- Version code: `10013`
 - First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
@@ -30,10 +30,10 @@ metadata/com.readwide.manager.yml
 Create and push the immutable release tag before opening the merge request:
 
 ```text
-v1.0.12
+v1.0.13
 ```
 
-The metadata pins each release build by the tag's commit hash. The `1.0.11` build entry already carries its real release commit hash (`5d75fda36a4c0a92a9ca81e1d997e1b62cae1289`); the `1.0.12` entry still holds a `REPLACE_WITH_v1.0.12_FULL_COMMIT_HASH` placeholder that must be set to the `v1.0.12` tag's full 40-character commit hash before the metadata is copied into fdroiddata. Note that fdroiddata upstream currently tracks only up to `1.0.10 / versionCode 10010`; a merge request may either add both `1.0.11` and `1.0.12` (both hashes required - 1.0.11's is filled, 1.0.12's is pending its tag) or start from the upstream metadata and add only the `1.0.12` build block with `CurrentVersion: 1.0.12` / `CurrentVersionCode: 10012`. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the new tag and add the build entry automatically.
+The metadata pins each release build by the tag's commit hash. The fdroiddata upstream already contains Readwide builds through `1.0.12`, so a `1.0.13` merge request should start from the current upstream `metadata/com.readwide.manager.yml`, add only the `1.0.13` build block, and update `CurrentVersion: 1.0.13` / `CurrentVersionCode: 10013`. The local draft metadata mirrors the upstream `1.0.11` and `1.0.12` hashes and leaves only the `1.0.13` entry as `REPLACE_WITH_v1.0.13_FULL_COMMIT_HASH`; replace that placeholder with the full 40-character commit hash that the `v1.0.13` tag points to before submission. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the new tag and add the build entry automatically.
 
 ## F-Droid-facing baseline
 
@@ -84,7 +84,7 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These provide title, short description, full description, and versionCode `10012` changelog text.
+These provide title, short description, full description, and versionCode `10013` changelog text.
 
 ## Conservative support wording for review
 
@@ -93,7 +93,7 @@ Use conservative wording in the merge request:
 - RAR/CBR support is limited and not complete.
 - Encrypted RAR, broad split RAR, SFX, VM-filtered RAR, and full RAR compatibility are not claimed.
 - HWP/HWPX support is text-first reading only; no Hancom layout parity, editing, writing, cloud/server conversion, or password/encrypted HWP support is claimed.
-- Legacy `.doc` files are recognized under the Word filter but are not rendered yet.
+- Legacy `.doc` files have basic read-only rendering through a self-contained pure-Java parser; layout fidelity is limited compared with OOXML `.docx`.
 
 ## Files reviewers should inspect
 
@@ -101,8 +101,8 @@ Use conservative wording in the merge request:
 - `PRIVACY.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_12.md`
-- `docs/SBOM_READWIDE_1_0_12.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_13.md`
+- `docs/SBOM_READWIDE_1_0_13.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `fdroid/metadata/com.readwide.manager.yml`
@@ -119,6 +119,6 @@ All bundled native components are permissive/FOSS-compatible, and no copyleft ob
 ## Remaining submitter tasks
 
 - Confirm a clean network-enabled Gradle build from the tagged source.
-- Confirm the metadata `commit` field is the full 40-character commit hash of the `v1.0.12` release tag (this app's maintainer requires a full commit hash, not the tag name). The `1.0.11` entry already carries its real hash; earlier entries through 1.0.10 do as well.
+- Confirm the metadata `commit` field is the full 40-character commit hash of the `v1.0.13` release tag (this app's maintainer requires a full commit hash, not the tag name). The upstream metadata already contains entries through `1.0.12`; only the `1.0.13` entry still needs the final release commit hash in a 1.0.13 merge request.
 - Confirm no optional local jars are present in `app/libs`.
 - Confirm native dependency notices for `libarchive-android` / libarchive and `zstd-jni` / Zstandard are included with binary release materials if APK assets are published outside F-Droid.

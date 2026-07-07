@@ -87,6 +87,7 @@ final class DocumentWebViewController {
                 activity.scheduleMarkdownSourceAnchorUpdate();
                 activity.installDocumentContentAnchorScript();
                 activity.restoreDocumentContentAnchorAfterLoadIfNeeded(view);
+                activity.documentTtsHighlight().installScript();
                 if (activity.isRenderedContentAnchorDocument()) {
                     activity.webView.postDelayed(() -> activity.updateDocumentContentAnchorFromWebView(activity::saveReadingState), 180);
                 }

@@ -73,4 +73,4 @@ on Apache-2.0 Java libraries plus small project-local adapter code.
 
 ## Word filter note
 
-The compact `Word` filter also includes legacy `.doc` files for classification/filtering consistency. Legacy binary `.doc` rendering is not part of the HWP/HWPX backend and remains unsupported in this release.
+Historical note: in Readwide 1.0.2, the compact `Word` filter included legacy `.doc` files only for classification/filtering consistency, and legacy binary `.doc` rendering was not supported. Since Readwide 1.0.11, legacy `.doc` files have a basic read-only pure-Java rendering path. This file remains the HWP/HWPX backend scope and license note, not the current Word `.doc` support matrix.

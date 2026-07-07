@@ -3,6 +3,7 @@ package com.readwide.manager.model;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -341,7 +342,7 @@ public class Bookmark {
     private String getFileTypeLabel() {
         String name = fileName != null && !fileName.isEmpty() ? fileName : filePath;
         if (name == null) return "TXT";
-        String lower = name.toLowerCase();
+        String lower = name.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".pdf")) return "PDF";
         if (lower.endsWith(".epub")) return "EPUB";
         if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "MARKDOWN";
@@ -362,7 +363,7 @@ public class Bookmark {
     private String getPcEditPositionType() {
         String name = fileName != null && !fileName.isEmpty() ? fileName : filePath;
         if (name == null) return "TXT logical line (1-based)";
-        String lower = name.toLowerCase();
+        String lower = name.toLowerCase(Locale.ROOT);
         if (lower.endsWith(".pdf")) return "PDF page (1-based)";
         if (lower.endsWith(".epub")) return "EPUB section/page (1-based)";
         if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "Markdown source line (1-based); rendered page is cached display metadata";

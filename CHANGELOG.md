@@ -1,5 +1,21 @@
 # Changelog
 
+## Readwide 1.0.13 - 2026-07-04
+
+### Read-aloud (TTS) - sentence highlight in the document viewer
+
+- The document viewer (EPUB, Word, HWP/HWPX, Markdown) and the PDF viewer now highlight the sentence being read aloud, like the text reader already did. The document viewer also scrolls it into view.
+- Read-aloud no longer speaks each page's title before the content in EPUB and similar documents.
+- Markdown read-aloud starts from the first line on screen instead of the top of the document, and restarting continues from the sentence that was being heard.
+
+### File actions - case-only rename
+
+- Renaming a file or folder to the same name in a different case (for example `test` to `tESt`, or Title Case to lowercase) now works. It previously appeared to succeed but left the name unchanged on storage that treats upper- and lowercase names as the same.
+
+### Read-aloud (TTS) - "continue reading aloud" fixes for document and PDF viewers
+
+- Resuming from the main-screen "continue reading aloud" prompt now works correctly in every viewer. Markdown opened in the plain-text reader instead of the document viewer (the view visibly changed); EPUB, Word, and PDF resumed from the top of the saved page instead of the exact spot playback stopped; and PDF did not auto-start at all.
+
 ## Readwide 1.0.12 - 2026-07-04
 
 ### Main screen - double-tap open

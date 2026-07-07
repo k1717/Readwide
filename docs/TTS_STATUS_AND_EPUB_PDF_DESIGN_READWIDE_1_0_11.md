@@ -168,12 +168,11 @@ drives the existing `scrollMarkdownToSourceOffset` (WebView JS
 Because the controller only issues `ttsJumpToAbsoluteCharPosition` at page-
 prefetch boundaries - which never fire for Markdown's single page - the
 follow is instead driven per segment: `DocumentTtsTextSource.setTtsHighlightRange`
-(a no-op for rendering, since there is no glyph highlight yet) forwards to
-`DocumentPageActivity.onDocumentTtsSegmentSpoken`, which recomputes the source
-offset and scrolls, throttled so it only moves when the position crosses roughly
-half a visual page (no jerk per sentence). This is "approximate following" by
-design - the view lands near the spoken paragraph, not on the exact glyph. It is
-covered by `MarkdownTtsFollowMathTest`.
+forwards to `DocumentPageActivity.onDocumentTtsSegmentSpoken`, which recomputes
+the source offset, scrolls, and lets the document highlight controller update the
+visible range where the WebView path supports it. Markdown following remains
+approximate by design - the view lands near the spoken paragraph, not on exact
+source glyphs. It is covered by `MarkdownTtsFollowMathTest`.
 
 ### Autostart on resume
 
@@ -231,3 +230,22 @@ document stays the single design reference.
   viewer's equivalent is `PdfTtsIntegrationController` (dialog entry, text
   extraction/build, button visibility); `PdfReaderActivity` keeps the `TtsHost`
   implementation and thin delegates.
+
+## 1.0.13 addendum - "continue reading aloud" resume fixes
+
+The main-screen resume prompt had three viewer-specific bugs, all fixed in 1.0.13:
+
+- **Markdown routed to the wrong viewer.** The prompt tested `isTextFile()`
+  first, which matches `.md`, so Markdown went to the plain-text reader instead
+  of the document viewer. The document formats are now tested before the text
+  check (matching the normal open funnel).
+- **Paged documents (EPUB/Word) resumed from the page top.**
+  `getCurrentCharPosition()` returned the page-start offset, so resume found the
+  right page but read from its first character. A one-shot within-page resume
+  anchor (`pagedTtsResumeAnchorCharPosition`) now carries the exact saved
+  offset; it is validated against the current page bounds and cleared by
+  `showPage` when the page changes. This is the paged-document analogue of the
+  Markdown speech anchor.
+- **PDF did not auto-start.** The prompt now passes `EXTRA_AUTOSTART_TTS` to the
+  PDF viewer, and `PdfTtsIntegrationController` has the same arm/poll/build/
+  resume auto-start path as the document viewer.

@@ -206,8 +206,7 @@ final class MainFileActionDialogController {
             if (newName.isEmpty()) return;
             File parent = file.getParentFile();
             if (parent == null) return;
-            File newFile = new File(parent, newName);
-            if (file.renameTo(newFile)) {
+            if (FileSystemOps.renameInPlace(file, newName)) {
                 if (ref[0] != null) ref[0].dismiss();
                 activity.refreshVisibleFileListAfterFileSystemChange();
                 ShortToast.show(activity, activity.getString(R.string.renamed));

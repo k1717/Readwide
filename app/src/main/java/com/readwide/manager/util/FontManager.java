@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -232,7 +233,7 @@ public class FontManager {
                 continue;
             }
             visitedFileCount[0]++;
-            String name = f.getName().toLowerCase();
+            String name = f.getName().toLowerCase(Locale.ROOT);
             for (String ext : FONT_EXTENSIONS) {
                 if (name.endsWith(ext)) {
                     try {

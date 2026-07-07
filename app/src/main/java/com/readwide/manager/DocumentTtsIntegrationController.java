@@ -87,6 +87,7 @@ final class DocumentTtsIntegrationController {
         textBuilding = false;
         lastMarkdownTtsFollowOffset = -1;
         activity.markdownTtsAnchorCharPosition = -1;
+        activity.pagedTtsResumeAnchorCharPosition = -1;
         // A new document invalidates any autostart still pending for the previous
         // one; loadFromIntent re-arms it when the new intent carries the extra.
         pendingAutoStartTts = false;
@@ -100,6 +101,12 @@ final class DocumentTtsIntegrationController {
      * owning activity.
      */
     void showDialogEntry() {
+        // Refresh the viewport anchor now: by the time the user taps play in the
+        // dialog, the async update has landed and the start position reflects
+        // exactly what is on screen (character-precise, not block-start).
+        if (activity.isMarkdownDocument()) {
+            activity.updateMarkdownSourceAnchorFromWebView();
+        }
         if (!activity.documentSupportsTts()) return;
         TtsPlaybackBridge.register(activity);
         if (activity.documentTtsTextSource != null) {
@@ -230,10 +237,13 @@ final class DocumentTtsIntegrationController {
                 || activity.markdownSourceText == null || activity.markdownSourceText.isEmpty()) {
             return;
         }
-        // Track progress past the segment being spoken, so a stop/restart
-        // continues from here and the end-of-document state is reachable.
+        // Track the START of the segment being spoken: a stop/restart then
+        // re-reads the sentence the listener was hearing. Advancing to the
+        // segment END here (at utterance START) made every restart skip the
+        // interrupted sentence - the anchor already pointed past it while it
+        // was still being spoken.
         activity.markdownTtsAnchorCharPosition =
-                Math.max(activity.markdownTtsAnchorCharPosition, segmentEndChar);
+                Math.max(activity.markdownTtsAnchorCharPosition, charPosition);
         String plain = activity.documentTtsTextSource.getTextContent();
         if (plain == null || plain.isEmpty()) return;
         int sourceOffset = activity.clampMarkdownSourceOffset(

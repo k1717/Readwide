@@ -30,6 +30,99 @@ final class PdfTtsIntegrationController {
         this.activity = activity;
     }
 
+    /** True while an EXTRA_AUTOSTART_TTS intent is waiting for the PDF to load. */
+    private boolean pendingAutoStartTts = false;
+    /** The autostart extra is honored once per activity instance. */
+    private boolean autoStartTtsConsumed = false;
+    private int autoStartTtsAttempts = 0;
+
+    /**
+     * Arms auto-start when the launching intent carries
+     * {@link PdfReaderActivity#EXTRA_AUTOSTART_TTS} (the "continue reading aloud"
+     * resume from the main screen), honored once per activity instance. Called
+     * from the activity as it reads its intent.
+     */
+    void onLoadFromIntent(android.content.Intent intent) {
+        if (!autoStartTtsConsumed && intent != null
+                && intent.getBooleanExtra(PdfReaderActivity.EXTRA_AUTOSTART_TTS, false)) {
+            autoStartTtsConsumed = true;
+            pendingAutoStartTts = true;
+            autoStartTtsAttempts = 0;
+            scheduleAutoStartCheck();
+        }
+    }
+
+    /**
+     * Polls until the PDF is loaded (has pages), then extracts the text buffer
+     * off-thread and begins playback, resuming from the saved position when one
+     * exists for this file. Gives up quietly after a few seconds.
+     */
+    private void scheduleAutoStartCheck() {
+        View anchor = activity.getWindow().getDecorView();
+        anchor.postDelayed(() -> {
+            if (activity.activityDestroyed || !pendingAutoStartTts) return;
+            if (activity.pdfSupportsTts()) {
+                pendingAutoStartTts = false;
+                autostart();
+            } else if (++autoStartTtsAttempts <= 40) {
+                scheduleAutoStartCheck();
+            } else {
+                pendingAutoStartTts = false;
+            }
+        }, 150L);
+    }
+
+    private void autostart() {
+        if (!activity.pdfSupportsTts()) return;
+        TtsPlaybackBridge.register(activity);
+        boolean continuous = activity.prefs != null && activity.prefs.getTtsLastContinuous();
+        if (activity.pdfTtsTextSource != null) {
+            if (activity.pdfTtsTextSource.hasAnyText()) {
+                activity.pdfTts().autoStartOrResume(continuous);
+            }
+            return;
+        }
+        if (textBuilding) {
+            final int retryGeneration = activity.renderGeneration;
+            View anchor = activity.getWindow().getDecorView();
+            anchor.postDelayed(() -> {
+                if (!activity.activityDestroyed && retryGeneration == activity.renderGeneration) {
+                    autostart();
+                }
+            }, 150L);
+            return;
+        }
+        // Build the buffer, then resume/start. Reuses the same off-thread build
+        // as the dialog entry point.
+        textBuilding = true;
+        final File file = activity.localFile;
+        final int count = activity.pageCount;
+        final int generation = activity.renderGeneration;
+        final boolean continuousMode = continuous;
+        activity.executor.execute(() -> {
+            PdfTtsTextSource builtOrNull;
+            try {
+                builtOrNull = PdfTtsTextSource.build(activity, file, count);
+            } catch (Throwable t) {
+                android.util.Log.w("ReadwideTts", "PDF TTS autostart build failed", t);
+                builtOrNull = null;
+            }
+            final PdfTtsTextSource built = builtOrNull;
+            activity.handler.post(() -> {
+                if (activity.activityDestroyed) return;
+                textBuilding = false;
+                if (generation != activity.renderGeneration) return;
+                if (built != null) activity.pdfTtsTextSource = built;
+                if (built == null || !built.hasAnyText()) {
+                    // Scanned/image-only: nothing to auto-play. Stay silent
+                    // rather than showing the scanned toast on an automatic path.
+                    return;
+                }
+                activity.pdfTts().autoStartOrResume(continuousMode);
+            });
+        });
+    }
+
     /**
      * True while the extraction/build is in flight; the activity's
      * {@code isTtsTextTemporarilyUnavailable()} (TtsHost) reports this so the

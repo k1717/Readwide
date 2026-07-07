@@ -80,6 +80,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private static final long BACKGROUND_MEMORY_TRIM_DELAY_MS = 420_000L;
 
     public static final String EXTRA_FILE_PATH = ReaderActivity.EXTRA_FILE_PATH;
+    public static final String EXTRA_AUTOSTART_TTS = "autostart_tts";
     public static final String EXTRA_FILE_URI = ReaderActivity.EXTRA_FILE_URI;
     public static final String EXTRA_JUMP_TO_PAGE = ReaderActivity.EXTRA_JUMP_TO_POSITION;
     public static final String EXTRA_CONTENT_ANCHOR_JSON = "pdf_content_anchor_json";
@@ -236,6 +237,15 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     int pageCount = 0;
     String pendingPdfContentAnchorJson = "";
     int currentPage = 0;
+    /**
+     * One-shot within-page resume anchor for read-aloud (mirrors the document
+     * viewer's `pagedTtsResumeAnchorCharPosition`): the exact saved char position
+     * to begin speaking from so "continue reading aloud" resumes mid-page instead
+     * of at the top of the saved page. -1 = none. Consumed once - cleared by
+     * goToPage when the displayed page actually changes. Read by
+     * {@link PdfTtsTextSource#getCurrentCharPosition}.
+     */
+    int pagedTtsResumeAnchorCharPosition = -1;
     private float zoom = 1.0f;
     private float renderedZoom = 1.0f;
     private int pendingPageSlideDirection = 0;
@@ -2365,6 +2375,9 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         int jumpPage = getIntent().getIntExtra(EXTRA_JUMP_TO_PAGE, -1);
         pendingPdfContentAnchorJson = getIntent().getStringExtra(EXTRA_CONTENT_ANCHOR_JSON);
         if (pendingPdfContentAnchorJson == null) pendingPdfContentAnchorJson = "";
+        // "Continue reading aloud" resume from the main screen: arm auto-start so
+        // playback begins (from the saved position) once the PDF has loaded.
+        pdfTtsIntegration().onLoadFromIntent(getIntent());
 
         executor.execute(() -> {
             try {
@@ -2470,7 +2483,23 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             }
             return;
         }
-
+        // Moving to a different page: invalidate the one-shot resume anchor once
+        // we leave the page it points into, so subsequent pages speak from their
+        // start. The resume path sets the anchor and calls goToPage(anchorPage);
+        // if that is the current page this early-returns above and keeps it.
+        if (pagedTtsResumeAnchorCharPosition >= 0 && pdfTtsTextSource != null) {
+            int anchorPage = pdfTtsTextSource.pageIndexForChar(
+                    pagedTtsResumeAnchorCharPosition);
+            if (target != anchorPage) {
+                pagedTtsResumeAnchorCharPosition = -1;
+            }
+        }
+        // Read-aloud sentence highlight is page-specific; drop it on page change.
+        // (Guarded so a viewer that never used read-aloud doesn't create the
+        // controller just to clear nothing.)
+        if (pdfTtsHighlightController != null) {
+            pdfTtsHighlightController.onPageChanged();
+        }
         boolean zoomReset = !verticalPageSlideMode && resetPdfZoomForPageNavigationIfNeeded();
         pendingPageSlideDirection = direction == 0 ? Integer.compare(target, currentPage) : direction;
         currentPage = target;
@@ -3532,11 +3561,12 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     //
     // PdfRenderer has no text layer, so text comes from PdfBox via
     // PdfTtsTextSource (a page-indexed plain-text buffer, extracted once off the
-    // main thread on first use). The playback controller is the same
-    // ReaderTtsController the text reader and document viewer use; this activity
-    // is its TtsHost. Continuous playback follows pages through goToPage; there
-    // is no glyph highlight in v1. Scanned/image-only PDFs extract no text and
-    // get a clear message instead of silent playback.
+    // main thread on first use) and PdfTtsHighlightController (page-indexed glyph
+    // rectangles mapped onto the PdfRenderer page bitmap). The playback
+    // controller is the same ReaderTtsController the text reader and document
+    // viewer use; this activity is its TtsHost. Continuous playback follows
+    // pages through goToPage. Scanned/image-only PDFs extract no text and get a
+    // clear message instead of silent playback.
 
     ReaderTtsController pdfTtsController;
     PdfTtsTextSource pdfTtsTextSource;
@@ -3550,6 +3580,16 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             pdfTtsController = new ReaderTtsController(this);
         }
         return pdfTtsController;
+    }
+
+    private PdfTtsHighlightController pdfTtsHighlightController;
+
+    /** Highlights the currently spoken sentence on the page bitmap. */
+    PdfTtsHighlightController pdfTtsHighlight() {
+        if (pdfTtsHighlightController == null) {
+            pdfTtsHighlightController = new PdfTtsHighlightController(this);
+        }
+        return pdfTtsHighlightController;
     }
 
     /** Read-aloud integration (dialog entry, off-thread build, button visibility). */
@@ -3658,6 +3698,10 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         if (pdfTtsTextSource == null || pageCount <= 0) return;
         int target = Math.max(0, Math.min(pageCount - 1,
                 pdfTtsTextSource.pageIndexForChar(charPosition)));
+        // Remember the exact within-page position so playback resumes there, not
+        // at the page's first character. goToPage clears it when the page really
+        // changes so later manual page turns are unaffected.
+        pagedTtsResumeAnchorCharPosition = charPosition;
         if (target != currentPage) {
             goToPage(target, Integer.signum(target - currentPage));
         }

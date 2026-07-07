@@ -2022,6 +2022,16 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         return documentTtsIntegrationController;
     }
 
+    private DocumentTtsHighlightController documentTtsHighlightController;
+
+    /** Highlights the currently spoken sentence in the WebView. */
+    DocumentTtsHighlightController documentTtsHighlight() {
+        if (documentTtsHighlightController == null) {
+            documentTtsHighlightController = new DocumentTtsHighlightController(this);
+        }
+        return documentTtsHighlightController;
+    }
+
     boolean documentSupportsTts() {
         return !pages.isEmpty();
     }
@@ -2145,6 +2155,11 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         if (pages.isEmpty()) return;
         int target = Math.max(0, Math.min(pages.size() - 1,
                 documentTtsTextSource.pageIndexForChar(charPosition)));
+        // Remember the exact within-page position so playback resumes there, not
+        // at the page's first character. Consumed by the next speakCurrentPage
+        // via the text source; showPage clears it when the page really changes so
+        // later manual page turns are unaffected.
+        pagedTtsResumeAnchorCharPosition = charPosition;
         if (target != currentPage) {
             showPage(target, Integer.signum(target - currentPage));
         }
@@ -2171,6 +2186,17 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
      * {@link DocumentTtsTextSource#getCurrentCharPosition}.
      */
     int markdownTtsAnchorCharPosition = -1;
+
+    /**
+     * One-shot resume anchor for paged documents (EPUB/Word/HWP): the exact
+     * saved char position to begin speaking from, so "continue reading aloud"
+     * resumes mid-page instead of from the top of the saved page. -1 = none.
+     * Unlike the Markdown anchor this is consumed once: {@code showPage} clears
+     * it whenever the displayed page actually changes, so ordinary page turns
+     * after the resume speak from the page start as before. Read by
+     * {@link DocumentTtsTextSource#getCurrentCharPosition} for paged documents.
+     */
+    int pagedTtsResumeAnchorCharPosition = -1;
 
     @Override
     public void ttsJumpToAbsoluteCharPosition(int charPosition, int displayPage, int totalPages) {
@@ -2542,6 +2568,21 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         evaluateMarkdownAnchorJavascript(
                 "(function(){try{"
                         + "window.__rwMdBlocks=function(){return Array.prototype.slice.call(document.querySelectorAll('[data-rw-src-offset]'));};"
+                        + "window.__rwMdTextAtTop=function(){"
+                        + "try{var ok=function(c){return c&&c.startContainer&&c.startContainer.nodeType===3&&(c.startContainer.nodeValue||'').trim();};"
+                        + "var r=null,ys=[8,24,48,80,120],hy=-1;"
+                        + "for(var i=0;i<ys.length&&!r;i++){var c=document.caretRangeFromPoint(Math.floor(window.innerWidth/2),ys[i]);"
+                        + "if(ok(c)){r=c;hy=ys[i];}}"
+                        + "if(!r)return '';"
+                        // The center-x hit lands mid-line; sweep x left-to-right at
+                        // the same y and take the LEFTMOST text hit = line start.
+                        + "var xs=[6,14,28,56,Math.floor(window.innerWidth/4)];"
+                        + "for(var j=0;j<xs.length;j++){var c2=document.caretRangeFromPoint(xs[j],hy);"
+                        + "if(ok(c2)){r=c2;break;}}"
+                        + "var out='',w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null,false);"
+                        + "w.currentNode=r.startContainer;var cur=r.startContainer,off=r.startOffset;"
+                        + "while(cur&&out.length<200){out+=(cur.nodeValue||'').substring(off);off=0;cur=w.nextNode();}"
+                        + "return out.replace(/\\s+/g,' ').trim().substring(0,160);}catch(e){return '';}};"
                         + "window.__rwMdAnchorAtTop=function(){"
                         + "var blocks=window.__rwMdBlocks();if(!blocks.length)return {offset:0,line:1,text:''};"
                         + "var threshold=10,best=blocks[0];"
@@ -2583,14 +2624,18 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             return;
         }
         evaluateMarkdownAnchorJavascript(
-                "(function(){try{return window.__rwMdAnchorAtTop?window.__rwMdAnchorAtTop():{offset:0,line:1,text:''};}catch(e){return {offset:0,line:1,text:''};}})()",
+                "(function(){try{var a=window.__rwMdAnchorAtTop?window.__rwMdAnchorAtTop():{offset:0,line:1,text:''};"
+                        + "a.vtext=window.__rwMdTextAtTop?window.__rwMdTextAtTop():'';return a;}catch(e){return {offset:0,line:1,text:'',vtext:''};}})()",
                 value -> {
                     try {
                         if (value != null && !value.trim().isEmpty() && !"null".equals(value)) {
                             JSONObject obj = new JSONObject(value);
                             lastMarkdownSourceOffset = clampMarkdownSourceOffset(obj.optInt("offset", 0));
                             lastMarkdownSourceLine = Math.max(1, obj.optInt("line", markdownSourceLineForOffset(lastMarkdownSourceOffset)));
-                            lastMarkdownAnchorText = obj.optString("text", "");
+                            // Prefer the character-precise viewport-top text
+                            // (caret-based); fall back to the block's text.
+                            String vtext = obj.optString("vtext", "");
+                            lastMarkdownAnchorText = !vtext.isEmpty() ? vtext : obj.optString("text", "");
                         }
                     } catch (Exception ignored) {
                     } finally {
@@ -2673,6 +2718,17 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     void showPage(int page, int direction) {
+        // Invalidate the one-shot resume anchor once we move to a page other than
+        // the one it points into. The resume path sets the anchor and then calls
+        // showPage(anchorPage), which keeps it (same page); any later turn to a
+        // different page clears it so subsequent pages speak from their start.
+        if (pagedTtsResumeAnchorCharPosition >= 0 && documentTtsTextSource != null) {
+            int anchorPage = documentTtsTextSource.pageIndexForChar(
+                    pagedTtsResumeAnchorCharPosition);
+            if (page != anchorPage) {
+                pagedTtsResumeAnchorCharPosition = -1;
+            }
+        }
         updateDocumentTtsButtonVisibility();
         pageDisplay().showPage(page, direction);
     }
