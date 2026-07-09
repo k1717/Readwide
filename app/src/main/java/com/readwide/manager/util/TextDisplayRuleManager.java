@@ -22,7 +22,23 @@ public final class TextDisplayRuleManager {
         return PrefsManager.getInstance(context).getPrefs();
     }
 
+    /**
+     * Parsed-rules memo. The large-TXT partition reader calls getActiveRules on
+     * every partition read (including prefetches), which used to re-read prefs
+     * and re-parse the JSON each time. Volatile immutable-by-convention list:
+     * every caller that mutates already copies first; saveRules invalidates.
+     */
+    private static volatile List<TextDisplayRule> cachedRules;
+    /** Bumped whenever the rules change; the partition forward-cursor keys on it. */
+    private static volatile int rulesVersion = 0;
+
+    public static int getRulesVersion() {
+        return rulesVersion;
+    }
+
     public static List<TextDisplayRule> getRules(Context context) {
+        List<TextDisplayRule> memo = cachedRules;
+        if (memo != null) return memo;
         ArrayList<TextDisplayRule> rules = new ArrayList<>();
         if (context == null) return rules;
         String raw = prefs(context).getString(PREF_KEY, "[]");
@@ -35,6 +51,7 @@ public final class TextDisplayRuleManager {
         } catch (Exception ignored) {
             // Broken user-edited JSON should not break opening TXT files.
         }
+        cachedRules = rules;
         return rules;
     }
 
@@ -47,6 +64,8 @@ public final class TextDisplayRuleManager {
     }
 
     public static void saveRules(Context context, List<TextDisplayRule> rules) {
+        cachedRules = null; // rules changed; next read re-parses
+        rulesVersion++;
         if (context == null) return;
         JSONArray arr = new JSONArray();
         if (rules != null) {

@@ -75,7 +75,7 @@
     <TextView
         android:id="@+id/reader_file_title"
         android:layout_width="match_parent"
-        android:layout_height="30dp"
+        android:layout_height="wrap_content"
         android:layout_gravity="top"
         android:background="#000000"
         android:ellipsize="middle"

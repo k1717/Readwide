@@ -225,6 +225,85 @@ public final class LargeTextPartitionReader {
                                                                          int lookaheadLines,
                                                                          int lookbehindLines,
                                                                          boolean includeLookbehind) throws IOException {
+        return readPartitionAtStartLine(context, file, encoding, collapseBlankLines, requestedStartLine,
+                knownTotalLines, knownTotalChars, partitionLines, lookaheadLines, lookbehindLines,
+                includeLookbehind, null);
+    }
+
+    /**
+     * Session-scoped forward read cursor. A partition's first load used to
+     * stream the file from line 1 every time, so sequential reading of a huge
+     * file cost O(N^2) total decode work. The cursor keeps the session's
+     * reader open together with the tiny streaming state (next canonical line,
+     * emitted-char total, the blank-collapse flag, and the one already-decoded
+     * carry line consumed past the previous window), so FORWARD requests
+     * continue from where the last read stopped; backward jumps, file or
+     * encoding or collapse changes, and display-rule edits (versioned) reset
+     * it to a fresh scan, which also re-primes it. Owner (the read controller)
+     * must serialize access and close it on teardown.
+     */
+    public static final class ForwardCursor {
+        String filePath;
+        long fileLength;
+        long fileModified;
+        String encoding;
+        boolean collapseBlankLines;
+        int rulesVersion;
+        BufferedReader reader;
+        /** Number of the first line represented by {@link #queue}. */
+        int queueStartLine;
+        /** Emitted chars (len+1 each) of every line below {@link #queueStartLine}. */
+        long charsBeforeQueue;
+        boolean prevEmittedBlank;
+        /**
+         * Already-decoded emitted lines numbered consecutively from
+         * {@link #queueStartLine}: the last lookbehind-many lines BELOW the
+         * body-end checkpoint (manual-scroll handoffs request windows that
+         * start a lookbehind BEFORE the next body), then the previous read's
+         * lookahead region, then its carry line. Consecutive partitions
+         * overlap by these regions and a BufferedReader cannot rewind - but
+         * emitted text can simply be replayed, which is what makes forward
+         * continuation possible at all.
+         */
+        java.util.ArrayDeque<String> queue = new java.util.ArrayDeque<>();
+
+        public void closeQuietly() {
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (IOException ignored) {
+                }
+                reader = null;
+            }
+            filePath = null;
+            queue.clear();
+        }
+
+        boolean canResume(File file, String enc, boolean collapse, int rulesVer, int windowStartLine) {
+            return (reader != null || !queue.isEmpty())
+                    && filePath != null
+                    && filePath.equals(file.getAbsolutePath())
+                    && fileLength == file.length()
+                    && fileModified == file.lastModified()
+                    && encoding != null && encoding.equals(enc)
+                    && collapseBlankLines == collapse
+                    && rulesVersion == rulesVer
+                    && queueStartLine <= windowStartLine;
+        }
+    }
+
+    public static LargeTextLinePartitionResult readPartitionAtStartLine(@NonNull Context context,
+                                                                         @NonNull File file,
+                                                                         @NonNull String encoding,
+                                                                         boolean collapseBlankLines,
+                                                                         int requestedStartLine,
+                                                                         int knownTotalLines,
+                                                                         int knownTotalChars,
+                                                                         int partitionLines,
+                                                                         int lookaheadLines,
+                                                                         int lookbehindLines,
+                                                                         boolean includeLookbehind,
+                                                                         ForwardCursor cursor) throws IOException {
         LargeTextContinuityMath.PartitionWindow window =
                 LargeTextContinuityMath.partitionWindowForStartLine(
                         requestedStartLine,
@@ -247,18 +326,71 @@ public final class LargeTextPartitionReader {
 
         List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
                 context.getApplicationContext(), file.getAbsolutePath());
-        TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
-        try (BufferedReader reader = openReader(file, encoding)) {
-            String lineText;
-            boolean firstCapturedLine = true;
-            while ((lineText = reader.readLine()) != null) {
-                String normalized = FileUtils.enforceTextPresentationSelectors(lineText);
-                normalized = TextDisplayRuleManager.apply(normalized, activeRules);
-                String emitted = collapseFilter.accept(normalized);
-                if (emitted == null) continue;
-                normalized = emitted;
-                int lineChars = normalized.length() + 1;
+        int rulesVersion = TextDisplayRuleManager.getRulesVersion();
+        TxtBlankLineCollapser.Filter collapseFilter;
+        BufferedReader reader;
+        java.util.ArrayDeque<String> pending;
+        boolean resumed = cursor != null
+                && cursor.canResume(file, encoding, collapseBlankLines, rulesVersion, windowStartLine);
+        if (resumed) {
+            reader = cursor.reader;
+            cursor.reader = null; // this read owns it now; reattached on suspend
+            pending = cursor.queue;
+            cursor.queue = new java.util.ArrayDeque<>();
+            line = cursor.queueStartLine;
+            baseChars = cursor.charsBeforeQueue;
+            collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines, cursor.prevEmittedBlank);
+        } else {
+            if (cursor != null) cursor.closeQuietly();
+            reader = openReader(file, encoding);
+            pending = new java.util.ArrayDeque<>();
+            collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
+        }
 
+        // Emitted lines processed past bodyEndLine this read (the lookahead
+        // region), collected so the cursor can replay them next time.
+        java.util.ArrayList<String> lookaheadEmitted = cursor != null ? new java.util.ArrayList<>() : null;
+        // The last lookbehind-many emitted lines at or below bodyEndLine, kept
+        // so a following manual-handoff window (which starts a lookbehind
+        // BEFORE the next body) can still resume instead of rescanning.
+        int tailKeep = cursor != null ? Math.max(0, lookbehindLines) : 0;
+        java.util.ArrayDeque<String> tailBuf = cursor != null ? new java.util.ArrayDeque<>() : null;
+        long tailChars = 0L;
+        String carryText = null;
+        boolean hitEof = false;
+        try {
+            boolean firstCapturedLine = true;
+            while (true) {
+                String emitted;
+                boolean fromPending = !pending.isEmpty();
+                if (fromPending) {
+                    // Already normalized, rule-applied, and collapse-accepted in
+                    // the previous read; never re-filter.
+                    emitted = pending.pollFirst();
+                } else {
+                    if (reader == null) { // resumed queue exhausted at a prior EOF
+                        hitEof = true;
+                        break;
+                    }
+                    String lineText = reader.readLine();
+                    if (lineText == null) {
+                        hitEof = true;
+                        break;
+                    }
+                    String normalized = FileUtils.enforceTextPresentationSelectors(lineText);
+                    normalized = TextDisplayRuleManager.apply(normalized, activeRules);
+                    emitted = collapseFilter.accept(normalized);
+                    if (emitted == null) continue;
+                }
+                int lineChars = emitted.length() + 1; // TextView normalizes line breaks to '\n'.
+
+                if (tailBuf != null && line <= bodyEndLine && tailKeep > 0) {
+                    tailBuf.addLast(emitted);
+                    tailChars += lineChars;
+                    if (tailBuf.size() > tailKeep) {
+                        tailChars -= tailBuf.pollFirst().length() + 1;
+                    }
+                }
                 if (line < windowStartLine) {
                     baseChars += lineChars;
                 } else if (line <= captureEndLine) {
@@ -274,14 +406,78 @@ public final class LargeTextPartitionReader {
                     if (line == startLine) {
                         bodyStartCharCount = out.length();
                     }
-                    out.append(normalized);
+                    out.append(emitted);
                     if (line <= bodyEndLine) {
                         bodyCharCount = out.length();
+                    } else if (lookaheadEmitted != null) {
+                        lookaheadEmitted.add(emitted);
                     }
                 } else {
+                    // First emitted line beyond the capture window.
+                    carryText = emitted;
                     break;
                 }
                 line++;
+            }
+        } catch (IOException e) {
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (IOException ignored) {
+                }
+            }
+            if (cursor != null) cursor.closeQuietly();
+            throw e;
+        }
+
+        if (cursor != null) {
+            // Checkpoint at the END OF THE BODY, not the capture end:
+            // consecutive partitions overlap by the lookahead, so the replay
+            // queue below is what lets the next forward read resume. Every
+            // emitted line below the checkpoint is accounted for: pre-window
+            // lines in baseChars, window lines up to the body end in
+            // bodyCharCount (k joined lines always total length+1 chars).
+            int checkpointLine = Math.min(bodyEndLine + 1, line);
+            java.util.ArrayDeque<String> nextQueue = new java.util.ArrayDeque<>();
+            int tailSize = tailBuf != null ? tailBuf.size() : 0;
+            if (tailBuf != null) nextQueue.addAll(tailBuf);
+            if (lookaheadEmitted != null) nextQueue.addAll(lookaheadEmitted);
+            if (carryText != null) nextQueue.addLast(carryText);
+            nextQueue.addAll(pending); // unprocessed remainder keeps its order
+            boolean sourceLeft = !hitEof || !nextQueue.isEmpty();
+            if (sourceLeft) {
+                cursor.filePath = file.getAbsolutePath();
+                cursor.fileLength = file.length();
+                cursor.fileModified = file.lastModified();
+                cursor.encoding = encoding;
+                cursor.collapseBlankLines = collapseBlankLines;
+                cursor.rulesVersion = rulesVersion;
+                if (hitEof && reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException ignored) {
+                    }
+                    reader = null;
+                }
+                cursor.reader = reader;
+                cursor.queueStartLine = checkpointLine - tailSize;
+                cursor.charsBeforeQueue =
+                        baseChars + (capturedAny ? bodyCharCount + 1L : 0L) - tailChars;
+                cursor.prevEmittedBlank = collapseFilter.isPrevEmittedBlank();
+                cursor.queue = nextQueue;
+            } else {
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+                cursor.closeQuietly();
+            }
+        } else if (reader != null) {
+            try {
+                reader.close();
+            } catch (IOException ignored) {
             }
         }
 

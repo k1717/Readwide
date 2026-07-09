@@ -1,11 +1,11 @@
-# Readwide 1.0.13 Build / Release Notes
+# Readwide 1.0.14 Build / Release Notes
 
-This file records source-build notes for the current public package: **Readwide 1.0.13**.
+This file records source-build notes for the current public package: **Readwide 1.0.14**.
 
 ## Version metadata
 
-- Android metadata is `versionCode 10013`, `versionName "1.0.13"`.
-- The Android package/application ID has been `com.readwide.manager` since 1.0.4. 1.0.13 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (previous key) still requires uninstalling first, installing 1.0.13, then migrating data with the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Earlier builds using `com.textview.reader` likewise install as a separate app.
+- Android metadata is `versionCode 10014`, `versionName "1.0.14"`.
+- The Android package/application ID has been `com.readwide.manager` since 1.0.4. 1.0.14 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.13, 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (previous key) still requires uninstalling first, installing 1.0.14, then migrating data with the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Earlier builds using `com.textview.reader` likewise install as a separate app.
 - The default source package is Junrar-free, UnRAR-license-fallback-free, analytics-free, ads-free, and does not request the `INTERNET` permission.
 
 ## Stale removed-source cleanup
@@ -59,5 +59,5 @@ zstd-jni desktop resource binaries (`win/**`, `darwin/**`, `linux/**`, `freebsd/
 
 - The default source package contains no optional decoder jar under `app/libs`.
 - Release signing is conditional, so source-build review can run `assembleRelease` without a private developer keystore.
-- `fdroid/metadata/com.readwide.manager.yml` is a draft metadata file. The fdroiddata upstream already contains builds through `1.0.12`; for a `1.0.13` merge request, start from upstream metadata, add only the `1.0.13` build block, and set its `commit` field to the full 40-character commit hash of the `v1.0.13` release tag (this app's maintainer requires a full commit hash, not the tag name).
+- `fdroid/metadata/com.readwide.manager.yml` is a draft metadata file. The fdroiddata upstream already contains builds through `1.0.12`; for a `1.0.14` merge request, start from upstream metadata, add only the `1.0.14` build block, and set its `commit` field to the full 40-character commit hash of the `v1.0.14` release tag (this app's maintainer requires a full commit hash, not the tag name).
 - If any local jar or native binary is added later, re-audit that custom build before describing it as FOSS.

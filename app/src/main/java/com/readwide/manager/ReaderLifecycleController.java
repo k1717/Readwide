@@ -77,6 +77,7 @@ final class ReaderLifecycleController {
             activity.cacheLoadedTextSnapshot();
         }
         activity.releaseReaderMemory();
+        activity.partitionReader().closeForwardCursor();
         activity.executor.shutdownNow();
         activity.largeTextPartitionExecutor.shutdownNow();
         activity.largeTextSearchExecutor.shutdownNow();

@@ -112,13 +112,15 @@ final class ReaderLoadedTextSnapshotController {
 
         activity.activityDestroyed = false;
         activity.hideLoadingWindow();
+        // Restoring an ongoing session: keep whatever chrome state the reader
+        // was in - never force the controls open over a resumed read.
+        activity.chromeRevealedForPath = snapshot.filePath;
 
         activity.filePath = snapshot.filePath;
         activity.appliedTextDisplayRuleSignature =
                 activity.textContentTransformSignatureForPath(activity.filePath);
-        activity.fileName = snapshot.fileName != null
-                ? snapshot.fileName
-                : activity.getString(R.string.app_name);
+        activity.fileName = com.readwide.manager.util.FileUtils.displayNameOrBasename(
+                snapshot.fileName, snapshot.filePath, activity.getString(R.string.app_name));
         activity.fileContent = snapshot.fileContent;
         activity.totalChars = snapshot.totalChars;
         activity.totalLines = snapshot.totalLines;

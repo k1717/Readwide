@@ -97,6 +97,7 @@ final class ReaderActionController {
         if (activity.bottomBar != null) activity.bottomBar.setVisibility(View.GONE);
         if (activity.readerPageStatus != null) activity.readerPageStatus.setVisibility(View.VISIBLE);
         activity.updateReaderFileTitleVisibility();
+        activity.applyReaderTopBandColors();
         activity.updateBottomMenuBackground();
         activity.handler.post(() -> {
             if (activity.activityDestroyed) return;

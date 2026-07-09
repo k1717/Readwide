@@ -5,10 +5,10 @@ Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF
 [![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)](https://github.com/k1717/Readwide/releases)
 [![Downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)](https://github.com/k1717/Readwide/releases)
 
-Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4, and 1.0.13 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.13, then restoring bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
+Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4, and 1.0.14 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.13, 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.14, then restoring bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
 
-- Current public version: **1.0.13**
-- Android metadata: `versionCode 10013`, `versionName "1.0.13"`
+- Current public version: **1.0.14**
+- Android metadata: `versionCode 10014`, `versionName "1.0.14"`
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
 - Release page: `https://github.com/k1717/Readwide/releases`
@@ -29,11 +29,12 @@ See `PRIVACY.md` for the full local-data and cache policy.
 
 ## Main features
 
-- TXT reader with exact page/bookmark continuity for large files and shared find-in-page options.
+- TXT reader with exact page/bookmark continuity for large files and shared find-in-page options; sequential reading of very large files is O(N) (each line decoded once), so page turns and scrolling stay fast from the first page to the last.
 - Markdown reader through a themed WebView visual page model; TXT remains on the exact source-page model.
 - TXT-style find-in-page options for TXT, Markdown, EPUB, HWP/HWPX, and Word-family document viewers: case-sensitive, whole-word, regex, nth-match jump, and current/total match status where supported.
 - PDF reader with single-page and vertical-continuous modes, bookmark restore, slider/page controls, inertial pan behavior while zoomed, and in-document text find for digital (text-based) PDFs.
 - EPUB reader through the document WebView path, including reflow/fixed-layout handling boundaries and reader-theme integration.
+- Landscape two-page viewing for EPUB and PDF: in landscape orientation, EPUB pages and PDF single-page mode automatically show two pages side by side, on phones and tablets alike; portrait stays single-page, page controls move one spread at a time (with a `3-4 / 20` style page indicator), and PDF vertical continuous mode is unchanged.
 - Word-family document filter:
   - OOXML Word: `.docx`, `.docm`, `.dotx`, `.dotm`
   - HWP/HWPX: `.hwp`, `.hwpx`
@@ -83,7 +84,7 @@ The same image extension set is also what the image viewer opens (including imag
 
 ## FOSS / F-Droid preparation
 
-Readwide 1.0.13 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
+Readwide 1.0.14 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
 
 - First-party code is Apache-2.0.
 - The default build does not bundle Junrar or RARLAB UnRAR-license code.
@@ -119,10 +120,10 @@ Release signing is conditional. If the `READWIDE_*` (or legacy `TEXTVIEW_*`) sig
 - `CHANGELOG.md` — public changelog.
 - `PATCHNOTES.md` — detailed public release notes.
 - `GITHUB_UPLOAD_NOTES.md` — GitHub upload checklist.
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_13.md` — copy-ready GitHub release notes (per-version notes back through 1.0.2 are retained alongside).
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_14.md` — copy-ready GitHub release notes (per-version notes back through 1.0.2 are retained alongside).
 - `docs/FDROID_SUBMISSION.md` — F-Droid submission notes.
 - `docs/TXT_SEARCH_USAGE.md` — reader find-in-page options for TXT and WebView document readers (case sensitive, whole word, regular expression).
 - `docs/FOSS_STATUS.md` — FOSS boundary and caveats.
-- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — historical archive compatibility baseline and support-label glossary; use this README and current release notes for 1.0.13 support claims.
+- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — historical archive compatibility baseline and support-label glossary; use this README and current release notes for 1.0.14 support claims.
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md` — HWP/HWPX scope and license notes; its legacy `.doc` remarks are historical because `.doc` gained a basic read-only path in 1.0.11.
-- `docs/LICENSE_REPORT_READWIDE_1_0_13.md` and `docs/SBOM_READWIDE_1_0_13.spdx.json` — direct-dependency license/SBOM drafts.
+- `docs/LICENSE_REPORT_READWIDE_1_0_14.md` and `docs/SBOM_READWIDE_1_0_14.spdx.json` — direct-dependency license/SBOM drafts.

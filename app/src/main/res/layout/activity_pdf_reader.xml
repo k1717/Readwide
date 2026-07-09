@@ -13,35 +13,6 @@
         android:background="#121212"
         android:orientation="vertical">
 
-    <com.google.android.material.appbar.AppBarLayout
-        android:id="@+id/pdf_appbar"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="#000000">
-
-        <androidx.appcompat.widget.Toolbar
-            android:id="@+id/toolbar"
-            android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
-            android:background="#000000"
-            app:titleTextColor="#FFFFFFFF" />
-
-        <com.readwide.manager.ui.PageCounterTextView
-            android:id="@+id/pdf_top_page_status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="#121212"
-            android:gravity="center"
-            android:minHeight="32dp"
-            android:paddingTop="0dp"
-            android:paddingBottom="0dp"
-            android:textColor="#E0E0E0"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:visibility="gone" />
-
-    </com.google.android.material.appbar.AppBarLayout>
-
     <FrameLayout
         android:id="@+id/pdf_viewport"
         android:layout_width="match_parent"
@@ -106,6 +77,36 @@
         android:visibility="gone" />
 
     </LinearLayout>
+
+    <com.google.android.material.appbar.AppBarLayout
+        android:id="@+id/pdf_appbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="#000000">
+
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="#000000"
+            app:titleTextColor="#FFFFFFFF" />
+
+        <com.readwide.manager.ui.PageCounterTextView
+            android:id="@+id/pdf_top_page_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#121212"
+            android:gravity="center"
+            android:minHeight="32dp"
+            android:paddingTop="0dp"
+            android:paddingBottom="0dp"
+            android:textColor="#E0E0E0"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+    </com.google.android.material.appbar.AppBarLayout>
 
     <LinearLayout
         android:id="@+id/pdf_bottom_bar"

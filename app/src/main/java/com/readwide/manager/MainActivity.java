@@ -2050,6 +2050,12 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         } catch (Exception e) {
             displayName = FileUtils.normalizeDisplayFileName(uri.getLastPathSegment());
         }
+        if (displayName == null || displayName.trim().isEmpty()) {
+            // A provider without a display name resolves to an empty string
+            // (not an exception), which would fail every extension check below
+            // and misroute the file; fall back like the catch branch does.
+            displayName = FileUtils.normalizeDisplayFileName(uri.getLastPathSegment());
+        }
         String mime = null;
         try {
             mime = getContentResolver().getType(uri);

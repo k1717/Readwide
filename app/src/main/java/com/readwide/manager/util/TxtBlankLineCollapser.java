@@ -45,6 +45,17 @@ public final class TxtBlankLineCollapser {
             this.enabled = enabled;
         }
 
+        /** Restores a filter mid-stream (forward read cursor continuation). */
+        public Filter(boolean enabled, boolean prevEmittedBlank) {
+            this.enabled = enabled;
+            this.prevEmittedBlank = prevEmittedBlank;
+        }
+
+        /** Current stream state, for suspending into a forward read cursor. */
+        public boolean isPrevEmittedBlank() {
+            return prevEmittedBlank;
+        }
+
         public String accept(String line) {
             if (!enabled) return line;
             boolean blank = isBlankLine(line);

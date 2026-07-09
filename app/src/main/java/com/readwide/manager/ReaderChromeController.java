@@ -54,7 +54,9 @@ final class ReaderChromeController {
         activity.currentReaderBackgroundColor = backgroundColor;
         activity.currentReaderTextColor = textColor;
         activity.currentReaderToolbarColor = toolbarColor;
-        activity.getWindow().setStatusBarColor(backgroundColor);
+        // Status-bar color is owned by applyTopBandColors (called at the tail),
+        // which knows the toolbar-band state; setting it here too briefly
+        // painted the wrong color and split the ownership.
         if (activity.readerRoot != null) {
             activity.readerRoot.setBackgroundColor(backgroundColor);
         }
@@ -62,23 +64,20 @@ final class ReaderChromeController {
             activity.readerView.setBackgroundColor(backgroundColor);
         }
 
-        WindowInsetsControllerCompat controller =
-                WindowCompat.getInsetsController(activity.getWindow(), activity.getWindow().getDecorView());
-
-        // Status-bar/title/page backgrounds follow the reader background, not the toolbar color.
-        controller.setAppearanceLightStatusBars(activity.isLightColor(backgroundColor));
 
         if (activity.readerPageStatus != null) {
-            activity.readerPageStatus.setBackgroundColor(backgroundColor);
+            // Background is owned by applyTopBandColors (tail of this method).
             activity.readerPageStatus.setTextColor(textColor);
         }
         if (activity.readerFileTitle != null) {
-            activity.readerFileTitle.setBackgroundColor(backgroundColor);
             activity.readerFileTitle.setTextColor(textColor);
-            activity.readerFileTitle.setTextSize(14f);
+            // Text size is owned by fitReaderFileTitleTextToStrip (it
+            // re-baselines to 14sp on every mask update); setting it here too
+            // could undo a fitted size between theme apply and the next mask.
         }
 
         activity.updateLoadingIndicatorColors(backgroundColor);
+        applyTopBandColors();
         updateBottomMenuBackground();
         applyBottomToolbarForegroundColors(textColor, toolbarColor);
         updateNavigationBarForBottomMenu();
@@ -267,11 +266,21 @@ final class ReaderChromeController {
                 applyPageStatusAlignment(topInset);
             }
             if (activity.readerFileTitle != null) {
+                // TOP vertical alignment: the strip's top is positioned so the
+                // title's baseline lands exactly on the body row's baseline (see
+                // updateReaderFileTitleMaskBounds); horizontal centering stays.
                 activity.readerFileTitle.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-                activity.readerFileTitle.setIncludeFontPadding(false);
+                // Match the body layout's include-pad convention so the probe
+                // compensation below is exact.
+                activity.readerFileTitle.setIncludeFontPadding(true);
                 // Keep the mask at the first-line row, but pin the title text to the
                 // top of that row so it sits closer to the page indicator.
-                activity.readerFileTitle.setPadding(activity.dpToPx(36), 0, activity.dpToPx(36), 0);
+                // Horizontal padding only: the vertical top padding is owned by
+                // updateReaderFileTitleMaskBounds (it positions the text within
+                // the band); resetting it to 0 here made the title jump up
+                // whenever the theme path ran between mask updates.
+                activity.readerFileTitle.setPadding(activity.dpToPx(36),
+                        activity.readerFileTitle.getPaddingTop(), activity.dpToPx(36), 0);
                 updateReaderFileTitleMaskBounds();
                 updateReaderFileTitleVisibility();
             }
@@ -302,12 +311,33 @@ final class ReaderChromeController {
         ViewCompat.requestApplyInsets(activity.readerRoot);
     }
 
+    /** Fast-path key of the last applied mask inputs (see below). */
+    private long lastTitleMaskInputKey = Long.MIN_VALUE;
+
     void updateReaderFileTitleMaskBounds() {
         if (activity.readerFileTitle == null || activity.readerView == null) return;
+        if (activity.readerFileTitle.getVisibility() != View.VISIBLE) {
+            // Nothing to lay out; also invalidate the fast-path key so the next
+            // reveal recomputes from scratch.
+            lastTitleMaskInputKey = Long.MIN_VALUE;
+            return;
+        }
         if (activity.readerView.getWidth() <= 0 || activity.readerView.getHeight() <= 0) {
             activity.readerView.post(this::updateReaderFileTitleMaskBounds);
             return;
         }
+        // This runs on EVERY scroll event (onScrollChanged), but its inputs -
+        // row geometry, status height, and the body font - change rarely.
+        // Recomputing unconditionally would set text size/typeface and build a
+        // probe StaticLayout per scroll frame; skip all of it when the inputs
+        // are unchanged.
+        long inputKey = ((long) activity.readerView.getStableFirstRowTopInView() << 42)
+                ^ ((long) activity.readerView.getStableFirstRowBottomInView() << 21)
+                ^ getReaderPageStatusVisualHeight()
+                ^ ((long) Float.floatToIntBits(activity.readerView.getContentTextSizePx()) << 7)
+                ^ System.identityHashCode(activity.readerView.getContentTypeface());
+        if (inputKey == lastTitleMaskInputKey) return;
+        lastTitleMaskInputKey = inputKey;
 
         FrameLayout.LayoutParams titleLp = (FrameLayout.LayoutParams) activity.readerFileTitle.getLayoutParams();
 
@@ -319,12 +349,109 @@ final class ReaderChromeController {
         int rowTop = activity.readerView.getStableFirstRowTopInView();
         int rowBottom = activity.readerView.getStableFirstRowBottomInView();
         int top = Math.max(pageStatusBottom, rowTop);
-        int bottom = Math.max(top + activity.dpToPx(24), rowBottom + activity.dpToPx(2));
+        // The strip is HARD-CAPPED to the first-row slot: covering row one is
+        // the intended masking, and the strip must never extend into row two.
+        // When the title font's line is taller than the slot, the TEXT is
+        // shrunk to fit (see below) instead of growing the strip - growing it
+        // clipped the second content row under large font scales or title
+        // fonts with unusual metrics. Only when the row metrics are unusable
+        // does the strip fall back to one full line of the title's own font.
+        android.graphics.Paint.FontMetricsInt titleFm =
+                activity.readerFileTitle.getPaint().getFontMetricsInt();
+        int titleLinePx = Math.max(1, titleFm.bottom - titleFm.top) + activity.dpToPx(6);
+        int bottom;
+        if (rowBottom > rowTop && rowBottom > top) {
+            // The strip ends at the MIDDLE of the row's trailing leading (the
+            // empty space below the glyphs inside the row box), keeping a
+            // clear margin from the second line: the row box carries its
+            // inter-line space at the bottom, so ending exactly at rowBottom
+            // hugged line two.
+            android.text.TextPaint bodyProbe = new android.text.TextPaint();
+            bodyProbe.setTypeface(activity.readerView.getContentTypeface());
+            bodyProbe.setTextSize(activity.readerView.getContentTextSizePx());
+            android.graphics.Paint.FontMetricsInt bodyFm = bodyProbe.getFontMetricsInt();
+            int leading = Math.max(0, (rowBottom - rowTop) - (bodyFm.bottom - bodyFm.top));
+            // Per tuning: the mid-leading edge still read as sitting low; one
+            // extra dp up.
+            bottom = Math.max(top + 1, rowBottom - leading / 2 - activity.dpToPx(1));
+        } else {
+            bottom = top + titleLinePx;
+        }
         bottom = Math.min(activity.readerView.getHeight(), bottom);
 
-        titleLp.topMargin = top;
-        titleLp.height = Math.max(activity.dpToPx(24), bottom - top);
+        // Fit first so the compensation below is measured with the FINAL text
+        // size, then align baselines: a TextView's single line is a layout
+        // "first line" and carries extra top font padding versus the normal
+        // body row it replaces, so it would sit visibly lower. Extend the
+        // strip upward by exactly that measured difference (probe layout with
+        // the title's own paint, body spacing conventions): with TOP gravity
+        // the title's baseline then lands where the masked row's baseline was.
+        fitReaderFileTitleTextToStrip(Math.max(activity.dpToPx(16), bottom - top));
+        // The compensation is measured with the BODY's paint so the strip (the
+        // masking region) is fixed by the row's own metrics and never moves
+        // when the title's size differs from the body's.
+        int comp = activity.readerView.getFirstLinePadCompensationPx();
+        // Lower the title by half its natural float: the smaller (-2sp) title
+        // rides above the masked row's baseline by the difference of the two
+        // fonts' first-line baseline offsets; sinking half of that reads as
+        // the requested slight drop while keeping some of the balance lift.
+        int floatUp = Math.max(0,
+                activity.readerView.getFirstLineBaselineOffsetPx()
+                        - activity.readerView.getFirstLineBaselineOffsetPx(
+                                activity.readerFileTitle.getPaint()));
+        int textTop = Math.max(pageStatusBottom, top - comp + floatUp / 2);
+        // The band starts right under the page-status bar so the toolbar-on
+        // coloring is one seamless block; the text keeps its exact position
+        // via top padding (TOP gravity), so the baseline alignment on the
+        // masked row is untouched.
+        int stripTop = Math.min(pageStatusBottom, textTop);
+
+        titleLp.topMargin = stripTop;
+        titleLp.height = Math.max(activity.dpToPx(16), bottom - stripTop);
         activity.readerFileTitle.setLayoutParams(titleLp);
+        activity.readerFileTitle.setPadding(
+                activity.dpToPx(36), textTop - stripTop, activity.dpToPx(36), 0);
+    }
+
+    /**
+     * Fits the title text inside the strip: baseline 14sp, proportionally
+     * shrunk (never below 8dp) whenever one full line of the title font would
+     * exceed the strip's height. This is what keeps unusual-metric fonts and
+     * large system font scales from spilling out, without ever growing the
+     * strip beyond the first-row slot.
+     */
+    private void fitReaderFileTitleTextToStrip(int stripHeightPx) {
+        if (activity.readerFileTitle == null) return;
+        // Match the body text: same typeface and same size, so the title's
+        // line height tracks the body font and fills the first-row slot the
+        // way a body line would. Centering within the strip is unchanged; the
+        // shrink guard below still applies when the font's full extents exceed
+        // the slot (tight line spacing, unusual metrics).
+        if (activity.readerView != null) {
+            activity.readerFileTitle.setTypeface(activity.readerView.getContentTypeface());
+            // One app font-size step (1sp) below the body: the title reads as
+            // subtly distinct from content. With TOP gravity the smaller line's
+            // shorter first-line offset floats the text slightly upward within
+            // the unchanged strip, balancing the space above and below.
+            float oneSp = android.util.TypedValue.applyDimension(
+                    android.util.TypedValue.COMPLEX_UNIT_SP, 1f,
+                    activity.getResources().getDisplayMetrics());
+            float titlePx = Math.max(activity.dpToPx(8),
+                    activity.readerView.getContentTextSizePx() - 2f * oneSp);
+            activity.readerFileTitle.setTextSize(
+                    android.util.TypedValue.COMPLEX_UNIT_PX, titlePx);
+        } else {
+            activity.readerFileTitle.setTextSize(14f);
+        }
+        android.graphics.Paint.FontMetricsInt fm =
+                activity.readerFileTitle.getPaint().getFontMetricsInt();
+        int line = fm.bottom - fm.top;
+        int budget = stripHeightPx - activity.dpToPx(2);
+        if (line > budget && line > 0 && budget > 0) {
+            float fittedPx = activity.readerFileTitle.getTextSize() * budget / (float) line;
+            activity.readerFileTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                    Math.max(activity.dpToPx(8), fittedPx));
+        }
     }
 
     private boolean shouldShowReaderFileTitle() {
@@ -394,6 +521,33 @@ final class ReaderChromeController {
         return getReaderPageStatusVisualHeight() + activity.dpToPx(8);
     }
 
+    /**
+     * Top band coloring, toolbar-state dependent (user-directed): with the
+     * bottom toolbar ON, the whole top region - the status-bar/camera-cutout
+     * area (window status bar color), the page-status bar, and the title
+     * strip (which the mask-bounds pass extends up to the page-status bottom,
+     * sealing the gap) - is painted in the toolbar color as one solid band,
+     * like the document viewer's app-bar region. With the toolbar OFF,
+     * everything reverts to the reader background as before. Solid colors
+     * only: the title strip is a mask, so it must stay fully opaque.
+     */
+    void applyTopBandColors() {
+        boolean band = activity.toolbarVisible;
+        int bandColor = band
+                ? activity.currentReaderToolbarColor
+                : activity.currentReaderBackgroundColor;
+        activity.getWindow().setStatusBarColor(bandColor);
+        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
+                activity.getWindow(), activity.getWindow().getDecorView());
+        controller.setAppearanceLightStatusBars(activity.isLightColor(bandColor));
+        if (activity.readerPageStatus != null) {
+            activity.readerPageStatus.setBackgroundColor(bandColor);
+        }
+        if (activity.readerFileTitle != null) {
+            activity.readerFileTitle.setBackgroundColor(bandColor);
+        }
+    }
+
     void applyPageStatusAlignment(int topInset) {
         if (activity.readerPageStatus == null) return;
 
@@ -451,8 +605,10 @@ final class ReaderChromeController {
     void updateReaderFileTitleVisibility() {
         if (activity.readerFileTitle == null) return;
         boolean showTitle = shouldShowReaderFileTitle();
-        if (showTitle) updateReaderFileTitleMaskBounds();
+        // Visibility FIRST: the mask update fast-path no-ops while the view is
+        // not visible, so it must already be VISIBLE when the bounds compute.
         activity.readerFileTitle.setVisibility(showTitle ? View.VISIBLE : View.GONE);
+        if (showTitle) updateReaderFileTitleMaskBounds();
         updateReaderContentTopPadding();
         if (showTitle) {
             activity.readerFileTitle.bringToFront();

@@ -1,5 +1,35 @@
 # Changelog
 
+## Readwide 1.0.14 - 2026-07-08
+
+### Release scope
+
+- Android metadata is `versionCode 10014` and `versionName "1.0.14"`. It keeps the `com.readwide.manager` applicationId and the `readwide` release signing key, so 1.0.14 updates in place over 1.0.13 and earlier compatible Readwide builds.
+
+### EPUB and PDF - landscape two-page view
+
+- EPUB documents now switch automatically to a side-by-side two-page spread in landscape orientation on phones and tablets. Portrait remains single-page.
+- PDF single-page mode now renders a side-by-side two-page spread in landscape orientation on phones and tablets. PDF vertical continuous mode remains unchanged.
+- Page buttons, tap zones, and page-swipe gestures advance by one spread in landscape two-page mode. The page indicator shows the visible range, such as `3-4 / 20`, and direct page jumps still land on the requested page.
+- In landscape two-page mode, the controls overlay the spread instead of shrinking or re-rendering it. Portrait keeps the existing below-the-bar layout.
+- EPUB taps, tap-zone page turns, and swipes work on both halves of the spread. The far page edges turn pages, and the center area, including the seam, toggles the controls.
+
+### Documents - rotation correctness
+
+- Markdown recomputes its visual pages when the device rotates, so the page count, page turns, and read-aloud start position match the new orientation.
+
+### TXT reader - title, chrome, and line endings
+
+- Text files now open with the reader controls and theme-colored file title visible, matching the document and PDF viewers. Tapping the page hides them as before, and restored sessions keep their previous chrome state.
+- With controls visible, the text reader's top area becomes one solid theme-colored band covering the status/camera area, page indicator, and title strip. The title uses the body font at a smaller size and is clamped to the masked first-line row.
+- Text files with old-Mac CR or Windows CRLF line endings display and position correctly in whole-file view. Saved positions, search, and read-aloud offsets now use the same character space as the large-file engine.
+- Text files opened from apps or storage providers that do not report a display name now fall back to the file's own name instead of showing a blank title or misrouting the file.
+
+### Large TXT and image-viewer efficiency
+
+- Sequential large-TXT partition reads avoid repeatedly re-reading the file from the beginning during forward movement. Backward movement and setting changes reset the forward path safely.
+- Revisiting a page in the image viewer no longer re-decodes it when a full-quality cached bitmap is still available. Re-decode is reserved for pages evicted under memory pressure.
+
 ## Readwide 1.0.13 - 2026-07-04
 
 ### Read-aloud (TTS) - sentence highlight in the document viewer

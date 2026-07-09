@@ -51,6 +51,10 @@ final class PdfTtsHighlightController {
      */
     void highlight(int pageIndex, int startChar, int endChar, @NonNull String expectedPageText) {
         if (activity.activityDestroyed) return;
+        if (activity.isPdfTwoPageSpreadMode()) {
+            clear();
+            return;
+        }
         if (pageIndex != activity.currentPage) {
             // Segment for a page that isn't displayed (e.g. right around a page
             // turn); the next segment on the visible page will highlight.

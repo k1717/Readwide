@@ -139,6 +139,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     View documentNavBarSpacer;
     boolean documentChromeVisible = true;
     WebView webView;
+    WebView rightWebView;
+    LinearLayout documentSpreadContainer;
     View ttsFloatingCard;
     android.widget.ImageButton ttsFloatingPlayPause;
     android.widget.ImageButton ttsFloatingStop;
@@ -554,6 +556,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             }
         }
         if (webView != null) webView.setBackgroundColor(readerBg);
+        if (rightWebView != null) rightWebView.setBackgroundColor(readerBg);
+        if (documentSpreadContainer != null) documentSpreadContainer.setBackgroundColor(readerBg);
         if (pageStatus != null) pageStatus.setTextColor(readerFg);
         if (topPageStatus != null) {
             topPageStatus.setTextColor(readerFg);
@@ -708,11 +712,31 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         // tap landing on a visible chrome bar must not also page the document
         // underneath it. Skip paging when the tap falls within a shown bar.
         if (tapIntersectsVisibleChrome(e)) return TapZoneMath.ACTION_MENU;
+        float x = e.getX();
+        float y = e.getY();
+        int w = webView.getWidth();
+        int h = webView.getHeight();
+        // In the landscape two-page spread, taps arrive from either WebView with
+        // view-relative coordinates, so per-view zones would put paging zones at
+        // the center of the SCREEN (the seam is the left view's trailing zone and
+        // the right view's leading zone) - a center tap turned the page instead
+        // of toggling the controls. Compute the zones against the whole spread
+        // instead: leading zone at the far left page edge, trailing zone at the
+        // far right, and the middle - including the seam - toggles the controls.
+        if (isLandscapeTwoPageDocumentMode() && documentSpreadContainer != null
+                && documentSpreadContainer.getWidth() > 0) {
+            int[] loc = new int[2];
+            documentSpreadContainer.getLocationOnScreen(loc);
+            x = e.getRawX() - loc[0];
+            y = e.getRawY() - loc[1];
+            w = documentSpreadContainer.getWidth();
+            h = documentSpreadContainer.getHeight();
+        }
         return TapZoneMath.actionForTap(
-                e.getX(),
-                e.getY(),
-                webView.getWidth(),
-                webView.getHeight(),
+                x,
+                y,
+                w,
+                h,
                 true,
                 true,
                 prefs.getTapZoneMode(),
@@ -771,10 +795,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             pageMarkdownBy(direction);
             return;
         }
-        int target = currentPage + direction;
-        if (target >= 0 && target < pages.size()) {
-            showPage(target, direction);
-        }
+        turnDocumentDisplayPageBy(direction);
     }
 
     private void toggleDocumentChrome() {
@@ -855,6 +876,22 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         } finally {
             webView = null;
         }
+        // The spread's right WebView has its own lifecycle handling in
+        // pause/resume; it must be destroyed here too or it leaks its renderer.
+        if (rightWebView != null) {
+            try {
+                rightWebView.setOnTouchListener(null);
+                rightWebView.setWebViewClient(null);
+                rightWebView.stopLoading();
+                rightWebView.loadUrl("about:blank");
+                rightWebView.clearHistory();
+                rightWebView.removeAllViews();
+                rightWebView.destroy();
+            } catch (Throwable ignored) {
+            } finally {
+                rightWebView = null;
+            }
+        }
     }
 
     void closeResourceZip() {
@@ -892,14 +929,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     void setupButtons() {
         setupDocumentPageSeekBar();
-        prevButton.setOnClickListener(v -> {
-            if (isMarkdownDocument()) pageMarkdownBy(-1);
-            else if (currentPage > 0) showPage(currentPage - 1, -1);
-        });
-        nextButton.setOnClickListener(v -> {
-            if (isMarkdownDocument()) pageMarkdownBy(1);
-            else if (currentPage < pages.size() - 1) showPage(currentPage + 1, 1);
-        });
+        prevButton.setOnClickListener(v -> turnDocumentDisplayPageBy(-1));
+        nextButton.setOnClickListener(v -> turnDocumentDisplayPageBy(1));
         if (searchButton != null) searchButton.setOnClickListener(v -> showDocumentSearchDialog());
         if (pageButton != null) pageButton.setOnClickListener(v -> showGoToPageDialog());
         bookmarkButton.setOnClickListener(v -> showBookmarksDialog());
@@ -940,6 +971,18 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         super.onConfigurationChanged(newConfig);
         updateRotationButtonIcon();
         applyDocumentThemeToViews();
+        if (isMarkdownDocument()) {
+            // Orientation changes the metrics the Markdown visual-page model is
+            // computed from. Drop the stable caches (the same reset the
+            // text-zoom path performs) so the page count, page turns, and the
+            // read-aloud start anchor are recomputed for the new orientation
+            // instead of reusing the previous orientation's viewport height.
+            lastStableMarkdownContentHeightPx = 0;
+            lastStableMarkdownViewportHeightPx = 0;
+        }
+        if (!pages.isEmpty() && webView != null) {
+            showPage(currentPage, 0);
+        }
         View documentRoot = findViewById(R.id.document_root);
         if (documentRoot != null) androidx.core.view.ViewCompat.requestApplyInsets(documentRoot);
     }
@@ -1060,6 +1103,23 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 return true;
             }
         });
+
+        if (rightWebView != null) {
+            rightWebView.setOnTouchListener((v, event) -> {
+                // The spread's right page. Route taps and flings through the same
+                // shared gesture pipeline so the chrome toggle, tap-zone paging,
+                // and swipe paging work on both halves of the landscape spread -
+                // without this, taps on the right page did nothing. The
+                // Word-selection/word-swipe machinery stays left-view only (the
+                // spread is EPUB-only), and returning false lets the right
+                // WebView keep scrolling tall pages itself. In portrait the view
+                // is GONE, so this never fires.
+                if (handleFastDocumentTapPaging(event)) {
+                    return true;
+                }
+                return !documentTapPagingSequence && handleDocumentTapGesture(event);
+            });
+        }
 
         webView.setOnTouchListener((v, event) -> {
             if (handleFastDocumentTapPaging(event)) {
@@ -1258,11 +1318,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             pageMarkdownBy(direction);
             return;
         }
-        if (direction > 0 && currentPage < pages.size() - 1) {
-            showPage(currentPage + 1, 1);
-        } else if (direction < 0 && currentPage > 0) {
-            showPage(currentPage - 1, -1);
-        }
+        turnDocumentDisplayPageBy(direction);
     }
 
     private void checkWordSelectionAfterScroll() {
@@ -1438,12 +1494,15 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             lastAppliedEpubBottomPaddingDp = 0;
             lastAppliedEpubBottomToolbarHeightPx = 0;
             lastAppliedEpubEffectiveBottomMarginPx = 0;
-            ViewGroup.LayoutParams rawLp = webView.getLayoutParams();
-            if (rawLp instanceof ViewGroup.MarginLayoutParams) {
-                ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) rawLp;
-                if (lp.leftMargin != 0 || lp.topMargin != 0 || lp.rightMargin != 0 || lp.bottomMargin != 0) {
-                    lp.setMargins(0, 0, 0, 0);
-                    webView.setLayoutParams(lp);
+            for (WebView v : new WebView[]{webView, rightWebView}) {
+                if (v == null) continue;
+                ViewGroup.LayoutParams rawLp = v.getLayoutParams();
+                if (rawLp instanceof ViewGroup.MarginLayoutParams) {
+                    ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) rawLp;
+                    if (lp.leftMargin != 0 || lp.topMargin != 0 || lp.rightMargin != 0 || lp.bottomMargin != 0) {
+                        lp.setMargins(0, 0, 0, 0);
+                        v.setLayoutParams(lp);
+                    }
                 }
             }
             return;
@@ -1469,17 +1528,23 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         lastAppliedEpubBottomToolbarHeightPx = bottomToolbarHeightPx;
         lastAppliedEpubEffectiveBottomMarginPx = effectiveBottomMarginPx;
 
-        ViewGroup.LayoutParams rawLp = webView.getLayoutParams();
-        if (rawLp instanceof ViewGroup.MarginLayoutParams) {
-            ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) rawLp;
-            int leftPx = left;
-            int rightPx = right;
-            int topPx = top;
-            int bottomPx = effectiveBottomMarginPx;
-            if (lp.leftMargin != leftPx || lp.rightMargin != rightPx
-                    || lp.topMargin != topPx || lp.bottomMargin != bottomPx) {
-                lp.setMargins(leftPx, topPx, rightPx, bottomPx);
-                webView.setLayoutParams(lp);
+        // Apply to both spread halves so the landscape two-page view stays
+        // symmetric; in portrait the right view is GONE and the margins are
+        // simply parked on it.
+        for (WebView v : new WebView[]{webView, rightWebView}) {
+            if (v == null) continue;
+            ViewGroup.LayoutParams rawLp = v.getLayoutParams();
+            if (rawLp instanceof ViewGroup.MarginLayoutParams) {
+                ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) rawLp;
+                int leftPx = left;
+                int rightPx = right;
+                int topPx = top;
+                int bottomPx = effectiveBottomMarginPx;
+                if (lp.leftMargin != leftPx || lp.rightMargin != rightPx
+                        || lp.topMargin != topPx || lp.bottomMargin != bottomPx) {
+                    lp.setMargins(leftPx, topPx, rightPx, bottomPx);
+                    v.setLayoutParams(lp);
+                }
             }
         }
     }
@@ -2667,6 +2732,43 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 });
     }
 
+    boolean isLandscapeTwoPageDocumentMode() {
+        return "EPUB".equals(docType)
+                && pages.size() > 1
+                && getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+    }
+
+    int documentDisplayPageStep() {
+        return com.readwide.manager.util.SpreadMath.displayStep(isLandscapeTwoPageDocumentMode());
+    }
+
+    int documentRightSpreadPageIndex() {
+        return com.readwide.manager.util.SpreadMath.rightIndex(
+                currentPage, pages.size(), isLandscapeTwoPageDocumentMode());
+    }
+
+    boolean hasVisibleDocumentRightSpreadPage() {
+        return documentRightSpreadPageIndex() >= 0;
+    }
+
+    int clampDocumentPageIndex(int page) {
+        return com.readwide.manager.util.SpreadMath.clampIndex(page, pages.size());
+    }
+
+    void turnDocumentDisplayPageBy(int direction) {
+        if (direction == 0 || documentPageCount() <= 1) return;
+        if (isMarkdownDocument()) {
+            pageMarkdownBy(direction);
+            return;
+        }
+        int target = com.readwide.manager.util.SpreadMath.turnTarget(
+                currentPage, direction, pages.size(), isLandscapeTwoPageDocumentMode());
+        if (target != currentPage) {
+            showPage(target, Integer.signum(direction));
+        }
+    }
+
     int currentDisplayDocumentPageIndex() {
         return isMarkdownDocument() ? markdownVisualCurrentPage : currentPage;
     }
@@ -2676,6 +2778,12 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     String documentPageStatusLabel(int page, int total) {
+        if (!isMarkdownDocument() && hasVisibleDocumentRightSpreadPage()) {
+            int right = Math.min(total, currentPage + 2);
+            if (right > page) {
+                return String.format(Locale.getDefault(), "%d-%d / %d", page, right, total);
+            }
+        }
         return String.format(Locale.getDefault(), "%d / %d", page, total);
     }
 
@@ -2715,6 +2823,63 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     /** Toolbar read-aloud button visibility; see the integration controller. */
     void updateDocumentTtsButtonVisibility() {
         documentTtsIntegration().updateButtonVisibility();
+    }
+
+    String documentBaseUrlForPage(@NonNull Page p) {
+        String baseUrl = "https://" + LOCAL_HOST + "/";
+        if ("EPUB".equals(docType) && p.sourcePath != null) {
+            String parent = parentPath(p.sourcePath);
+            baseUrl = "https://" + LOCAL_HOST + EPUB_PREFIX + parent;
+            if (!baseUrl.endsWith("/")) baseUrl += "/";
+        }
+        return baseUrl;
+    }
+
+    String documentHtmlForDisplay(@NonNull Page p, int pageIndex) {
+        String htmlForDisplay = p.html;
+        if ("EPUB".equals(docType) && epubFixedLayoutLike) {
+            htmlForDisplay = prepareFixedLayoutEpubHtml(htmlForDisplay);
+        }
+        htmlForDisplay = applyDocumentSearchMarkupForDisplay(htmlForDisplay, pageIndex);
+        return applyReaderThemeCss(htmlForDisplay);
+    }
+
+    void updateDocumentSpreadVisibility() {
+        if (rightWebView == null) return;
+        boolean showRight = hasVisibleDocumentRightSpreadPage();
+        rightWebView.setVisibility(showRight ? View.VISIBLE : View.GONE);
+        rightWebView.setBackgroundColor(readerBg);
+        if (webView != null) webView.setBackgroundColor(readerBg);
+        if (documentSpreadContainer != null) {
+            documentSpreadContainer.setBackgroundColor(readerBg);
+        }
+    }
+
+    /** True while the right spread view holds real page content. */
+    private boolean rightWebViewHasContent;
+
+    void loadDocumentRightSpreadPageIfNeeded() {
+        if (rightWebView == null) return;
+        int right = documentRightSpreadPageIndex();
+        if (right < 0) {
+            // No right page (portrait, non-EPUB, or the last odd page). Blank the
+            // view only if it actually holds content: in portrait this runs on
+            // every page turn, and an unconditional loadUrl would ping the
+            // renderer each time for nothing.
+            if (rightWebViewHasContent) {
+                rightWebViewHasContent = false;
+                rightWebView.loadUrl("about:blank");
+            }
+            return;
+        }
+        rightWebViewHasContent = true;
+        Page p = pages.get(right);
+        rightWebView.loadDataWithBaseURL(
+                documentBaseUrlForPage(p),
+                documentHtmlForDisplay(p, right),
+                "text/html",
+                "UTF-8",
+                null);
     }
 
     void showPage(int page, int direction) {

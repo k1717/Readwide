@@ -273,6 +273,70 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     private int leftTextInsetPx = 0;
     private int rightTextInsetPx = 0;
     private Typeface typeface = Typeface.DEFAULT;
+
+    /** Content typeface currently used to draw body text. */
+    public Typeface getContentTypeface() {
+        return typeface;
+    }
+
+    /** Content text size in pixels currently used to draw body text. */
+    public float getContentTextSizePx() {
+        return paint.getTextSize();
+    }
+
+    /**
+     * Extra top font padding a layout's FIRST line carries versus a normal
+     * line, measured with the given paint under this view's line-spacing and
+     * include-pad conventions. An overlay TextView whose single line must sit
+     * exactly where a body row sits (the reader's title strip) is always a
+     * "first line", so it renders lower by this amount unless compensated.
+     */
+    /** Compensation measured with the BODY's own paint - row-metric based. */
+    public int getFirstLinePadCompensationPx() {
+        return getFirstLinePadCompensationPx(paint);
+    }
+
+    /** First-line baseline offset (baseline - line top) with the BODY paint. */
+    public int getFirstLineBaselineOffsetPx() {
+        return getFirstLineBaselineOffsetPx(paint);
+    }
+
+    /**
+     * First-line baseline offset (baseline - line top) for the given paint
+     * under this view's spacing/include-pad conventions, via the same probe
+     * layout as the pad compensation.
+     */
+    public int getFirstLineBaselineOffsetPx(android.text.TextPaint overlayPaint) {
+        try {
+            android.text.StaticLayout probe = android.text.StaticLayout.Builder
+                    .obtain("Ag\nAg", 0, 5, overlayPaint, 4096)
+                    .setLineSpacing(0f, lineSpacingMultiplier)
+                    .setIncludePad(true)
+                    .build();
+            if (probe.getLineCount() >= 1) {
+                return probe.getLineBaseline(0) - probe.getLineTop(0);
+            }
+        } catch (Throwable ignored) {
+        }
+        return Math.round(-overlayPaint.getFontMetrics().ascent);
+    }
+
+    public int getFirstLinePadCompensationPx(android.text.TextPaint overlayPaint) {
+        try {
+            android.text.StaticLayout probe = android.text.StaticLayout.Builder
+                    .obtain("Ag\nAg", 0, 5, overlayPaint, 4096)
+                    .setLineSpacing(0f, lineSpacingMultiplier)
+                    .setIncludePad(true)
+                    .build();
+            if (probe.getLineCount() >= 2) {
+                int first = probe.getLineBaseline(0) - probe.getLineTop(0);
+                int normal = probe.getLineBaseline(1) - probe.getLineTop(1);
+                return Math.max(0, first - normal);
+            }
+        } catch (Throwable ignored) {
+        }
+        return 0;
+    }
     private String searchQuery = "";
     private SearchOptions searchOptions = SearchOptions.literal();
     private int activeSearchIndex = -1;

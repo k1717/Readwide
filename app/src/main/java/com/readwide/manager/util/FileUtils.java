@@ -146,6 +146,32 @@ public class FileUtils {
         return TextStringUtils.enforceTextPresentationSelectors(text);
     }
 
+    /**
+     * Canonical display-space normalization for WHOLE-FILE text loads, making
+     * the small-file path's character coordinates identical to the large-text
+     * engine's (which streams through BufferedReader.readLine):
+     * CRLF and lone CR become '\n' (readLine's line splitting - StaticLayout
+     * does not treat a lone CR as a line break, so old-Mac files rendered as
+     * one merged line, and CRLF files carried a stray char per line that
+     * shifted bookmark/search/TTS offsets against the normalized space);
+     * a single trailing newline is dropped (readLine never yields a final
+     * empty line, and the partition joiner adds no trailing separator); and
+     * the presentation-selector enforcement the streaming paths apply per
+     * line is applied here too, since it inserts characters and therefore
+     * must run in every coordinate-bearing path or none.
+     */
+    public static String normalizeTextForDisplay(String text) {
+        if (text == null || text.isEmpty()) return text != null ? text : "";
+        String normalized = text;
+        if (normalized.indexOf('\r') >= 0) {
+            normalized = normalized.replace("\r\n", "\n").replace('\r', '\n');
+        }
+        if (normalized.endsWith("\n")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return enforceTextPresentationSelectors(normalized);
+    }
+
 
     /**
      * Get filename from URI.
@@ -823,6 +849,21 @@ public class FileUtils {
 
     private static String lowerName(String fileName) {
         return normalizeDisplayFileName(fileName).toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Resolves a display name with blank-safety: a non-blank {@code name} wins,
+     * else the basename of {@code path} when non-blank, else {@code fallback}.
+     * Exists because a missing provider display name arrives as an EMPTY string
+     * (never null), which used to slip past null-only fallbacks.
+     */
+    public static String displayNameOrBasename(String name, String path, String fallback) {
+        if (name != null && !name.trim().isEmpty()) return name;
+        if (path != null && !path.isEmpty()) {
+            String base = new java.io.File(path).getName();
+            if (!base.trim().isEmpty()) return base;
+        }
+        return fallback;
     }
 
     public static String normalizeDisplayFileName(String fileName) {

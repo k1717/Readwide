@@ -150,9 +150,17 @@ final class ReaderFileLoadController {
         if (uriStr != null) {
             Uri uri = Uri.parse(uriStr);
             String loadedFileName = FileUtils.getFileNameFromUri(appContext, uri);
+            // A provider without a display name can resolve to an empty string
+            // (not null), which used to slip past every fallback and leave the
+            // toolbar title blank. Treat blank as missing, and fall back to the
+            // local copy's name so a title is always shown.
+            if (loadedFileName != null && loadedFileName.trim().isEmpty()) {
+                loadedFileName = null;
+            }
             File localFile = FileUtils.copyUriToLocal(appContext, uri,
                     loadedFileName != null ? loadedFileName : "opened_file.txt");
-            return new LoadedTarget(localFile, localFile.getAbsolutePath(), loadedFileName);
+            return new LoadedTarget(localFile, localFile.getAbsolutePath(),
+                    loadedFileName != null ? loadedFileName : localFile.getName());
         }
         throw new IllegalArgumentException("No file selected");
     }
@@ -257,6 +265,9 @@ final class ReaderFileLoadController {
         } else {
             rawContent = FileUtils.readReadableFile(appContext, fileToRead);
         }
+        // Same display coordinate space as the large-text engine: CR/CRLF ->
+        // '\n', readLine-equivalent trailing newline, selector enforcement.
+        rawContent = FileUtils.normalizeTextForDisplay(rawContent);
         String processedContent = TextDisplayRuleManager.apply(appContext, rawContent, finalFilePath);
         if (activity.largeTextActiveCollapseBlankLines) {
             processedContent = TxtBlankLineCollapser.collapse(processedContent);

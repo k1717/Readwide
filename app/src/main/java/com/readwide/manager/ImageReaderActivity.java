@@ -161,6 +161,13 @@ public class ImageReaderActivity extends AppCompatActivity {
     // cache OWNS these bitmaps: they are recycled only on eviction/clear, never
     // by the normal display swap, so a cached page is always safe to re-show.
     private android.util.LruCache<Integer, Bitmap> decodedBitmapCache;
+    /**
+     * Indexes whose cached bitmap is already full quality (an original-quality
+     * preview, or a completed detail decode), so a cache hit can skip the
+     * detail refine pass instead of re-decoding on every revisit. Main-thread
+     * only, like every cache mutation; entryRemoved clears stale members.
+     */
+    private final java.util.HashSet<Integer> fullQualityCachedIndices = new java.util.HashSet<>();
     private final java.util.Set<Integer> bitmapPrefetchInFlight =
             java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 
@@ -189,6 +196,10 @@ public class ImageReaderActivity extends AppCompatActivity {
             }
             @Override protected void entryRemoved(boolean evicted, Integer key,
                                                   Bitmap oldValue, Bitmap newValue) {
+                // The stored bitmap for this index changed or left the cache;
+                // its quality record is stale either way. Put sites re-add it
+                // right after a replacing put when the new bitmap qualifies.
+                fullQualityCachedIndices.remove(key);
                 // Never recycle the bitmap currently shown on screen; the display
                 // swap path owns that one until it is replaced.
                 if (oldValue != null && oldValue != newValue
@@ -273,6 +284,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             decodedBitmapCache.evictAll(); // recycles all cached bitmaps
             decodedBitmapCache = null;
         }
+        fullQualityCachedIndices.clear();
         persistArchiveImageProgress();
         persistImageReadingProgress();
         ViewerRegistry.unregister(this);
@@ -864,14 +876,19 @@ public class ImageReaderActivity extends AppCompatActivity {
         // won't overwrite us, and present from cache.
         ++imageLoadGeneration;
         detailRequestGeneration = -1;
-        currentImageDetailLoaded = false;
+        boolean cachedIsFullQuality = fullQualityCachedIndices.contains(index);
+        currentImageDetailLoaded = cachedIsFullQuality;
         String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, index);
         LoadedImage cachedLoaded = LoadedImage.forBitmap(
-                cached, false, cached.getWidth(), cached.getHeight(), 1);
+                cached, cachedIsFullQuality, cached.getWidth(), cached.getHeight(), 1);
         applyLoadedImage(cachedLoaded, false, index, filePath, entryPath);
         setLoading(false, null);
-        // A cached preview may be lower quality; let the detail pass refine it.
-        requestDetailImageForCurrent();
+        // A cached preview may be lower quality; refine it once - but skip the
+        // detail pass entirely when the cached bitmap is known full quality
+        // (an original-quality preview or an already-completed detail decode).
+        if (!cachedIsFullQuality) {
+            requestDetailImageForCurrent();
+        }
         return true;
     }
 
@@ -914,6 +931,7 @@ public class ImageReaderActivity extends AppCompatActivity {
                     if (result.bitmap != null && !result.bitmap.isRecycled()
                             && decodedBitmapCache != null) {
                         decodedBitmapCache.put(index, result.bitmap);
+                        if (result.originalQuality) fullQualityCachedIndices.add(index);
                     }
                     applyLoadedImage(result, false, index, path, entryPath);
                     currentImageDetailLoaded = result.originalQuality;
@@ -972,6 +990,16 @@ public class ImageReaderActivity extends AppCompatActivity {
                     // re-requesting the same detail decode on every later zoom only wastes
                     // CPU and can briefly replace the retained detail bitmap path.
                     currentImageDetailLoaded = true;
+                    // Cache the detail bitmap so revisiting this page shows full
+                    // quality immediately instead of re-running the detail decode.
+                    // Safe to replace the preview entry here: the display already
+                    // swapped to the detail bitmap, so the evict hook can recycle
+                    // the preview (and it guards currentBitmap regardless).
+                    if (result.bitmap != null && !result.bitmap.isRecycled()
+                            && decodedBitmapCache != null) {
+                        decodedBitmapCache.put(index, result.bitmap);
+                        fullQualityCachedIndices.add(index);
+                    }
                 }
             });
         });
@@ -1225,6 +1253,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             LoadedImage decoded = ImageDecodeHelper.decodePreview(appContext, path, null, displayName);
             if (decoded == null || decoded.bitmap == null || decoded.bitmap.isRecycled()) return;
             final Bitmap bmp = decoded.bitmap;
+            final boolean fullQuality = decoded.originalQuality;
             mainHandler.post(() -> {
                 if (destroyed || decodedBitmapCache == null || bmp.isRecycled()) {
                     if (!bmp.isRecycled()) bmp.recycle();
@@ -1235,6 +1264,7 @@ public class ImageReaderActivity extends AppCompatActivity {
                     return;
                 }
                 decodedBitmapCache.put(index, bmp);
+                if (fullQuality) fullQualityCachedIndices.add(index);
             });
         } catch (Exception ignored) {
             // Prefetch is best-effort; a failed neighbor just decodes on demand.

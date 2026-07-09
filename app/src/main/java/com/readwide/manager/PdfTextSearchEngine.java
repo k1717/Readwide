@@ -274,16 +274,7 @@ final class PdfTextSearchEngine {
     }
 
     private static RectF glyphBox(TextPosition tp) {
-        float left = tp.getXDirAdj();
-        float width = tp.getWidthDirAdj();
-        float h = tp.getHeightDir();
-        // getHeightDir is roughly the cap height, which alone looks like a thin
-        // band. Pad up past the ascenders and down past the baseline so the
-        // highlight covers the full line height including descenders. The earlier
-        // 0.18/0.30 padding still read as too small on device, so widen it.
-        float top = tp.getYDirAdj() - h - h * 0.32f;
-        float bottom = tp.getYDirAdj() + h * 0.42f;
-        return new RectF(left, top, left + width, bottom);
+        return com.readwide.manager.util.PdfGlyphBoxMath.glyphBox(tp);
     }
 
     private static final class DocStripper extends PDFTextStripper {

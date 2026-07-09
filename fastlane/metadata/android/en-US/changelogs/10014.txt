@@ -1,0 +1,5 @@
+- Landscape two-page viewing for EPUB and PDF (portrait stays single-page).
+- Much faster page turns and scrolling in very large text files.
+- Text files open with the controls and a title bar visible; with controls on, the top area uses the toolbar color.
+- Files shared without a name now show a title and open in the right viewer.
+- Revisited images do not require re-decoding.

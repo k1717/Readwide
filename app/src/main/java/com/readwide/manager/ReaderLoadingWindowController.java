@@ -68,6 +68,10 @@ final class ReaderLoadingWindowController {
 
     void hideLoadingWindow() {
         activity.loadingWindowPartitionJumpGeneration = -1;
+        // The show path paints the status bar in the plain background for the
+        // loading screen; restore the toolbar-state band (toolbar tone incl.
+        // the camera region when the controls are on) as the loading UI goes.
+        activity.applyReaderTopBandColors();
         if (activity.progressBar != null) {
             activity.progressBar.setVisibility(View.GONE);
         }

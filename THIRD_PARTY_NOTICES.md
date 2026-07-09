@@ -2,11 +2,11 @@
 
 Readwide first-party source code is licensed under the Apache License 2.0. Keep this file with source releases and with binary release materials such as APK/AAB release assets.
 
-This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.13 build. It does not replace a fully resolved transitive dependency report.
+This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.14 build. It does not replace a fully resolved transitive dependency report.
 
 ## Default build boundary
 
-The default Readwide 1.0.13 package is the FOSS-oriented public line:
+The default Readwide 1.0.14 package is the FOSS-oriented public line:
 
 - first-party source: Apache-2.0;
 - no Junrar or RARLAB UnRAR-license code bundled;
@@ -16,7 +16,7 @@ The default Readwide 1.0.13 package is the FOSS-oriented public line:
 - no Hancom proprietary SDK, LibreOffice bundle, or server conversion service;
 - no ads, analytics, telemetry SDK, account system, or network update checker in the default app.
 
-See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_13.md`, and `docs/SBOM_READWIDE_1_0_13.spdx.json`.
+See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_14.md`, and `docs/SBOM_READWIDE_1_0_14.spdx.json`.
 
 ## Runtime dependencies
 
@@ -160,5 +160,5 @@ The Gradle packaging block may exclude duplicate dependency `META-INF/LICENSE*` 
 - `LICENSE`
 - `NOTICE`
 - `THIRD_PARTY_NOTICES.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_13.md`
-- `docs/SBOM_READWIDE_1_0_13.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_14.md`
+- `docs/SBOM_READWIDE_1_0_14.spdx.json`

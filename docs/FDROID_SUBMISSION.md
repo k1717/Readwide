@@ -1,4 +1,4 @@
-# F-Droid submission notes for Readwide 1.0.13
+# F-Droid submission notes for Readwide 1.0.14
 
 This document records the project-side preparation for an F-Droid Data merge request.
 
@@ -6,8 +6,8 @@ This document records the project-side preparation for an F-Droid Data merge req
 
 - App name: Readwide
 - Android application ID: `com.readwide.manager`
-- Version name: `1.0.13`
-- Version code: `10013`
+- Version name: `1.0.14`
+- Version code: `10014`
 - First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
@@ -30,10 +30,10 @@ metadata/com.readwide.manager.yml
 Create and push the immutable release tag before opening the merge request:
 
 ```text
-v1.0.13
+v1.0.14
 ```
 
-The metadata pins each release build by the tag's commit hash. The fdroiddata upstream already contains Readwide builds through `1.0.12`, so a `1.0.13` merge request should start from the current upstream `metadata/com.readwide.manager.yml`, add only the `1.0.13` build block, and update `CurrentVersion: 1.0.13` / `CurrentVersionCode: 10013`. The local draft metadata mirrors the upstream `1.0.11` and `1.0.12` hashes and leaves only the `1.0.13` entry as `REPLACE_WITH_v1.0.13_FULL_COMMIT_HASH`; replace that placeholder with the full 40-character commit hash that the `v1.0.13` tag points to before submission. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the new tag and add the build entry automatically.
+The metadata pins each release build by the tag's commit hash. The fdroiddata upstream already contains Readwide builds through `1.0.12`, so a `1.0.14` merge request should start from the current upstream `metadata/com.readwide.manager.yml`, add only the `1.0.14` build block, and update `CurrentVersion: 1.0.14` / `CurrentVersionCode: 10014`. The local draft metadata mirrors the upstream `1.0.11` and `1.0.12` hashes and leaves only the `1.0.14` entry as `REPLACE_WITH_v1.0.14_FULL_COMMIT_HASH`; replace that placeholder with the full 40-character commit hash that the `v1.0.14` tag points to before submission. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the new tag and add the build entry automatically.
 
 ## F-Droid-facing baseline
 
@@ -84,7 +84,7 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These provide title, short description, full description, and versionCode `10013` changelog text.
+These provide title, short description, full description, and versionCode `10014` changelog text.
 
 ## Conservative support wording for review
 
@@ -101,8 +101,8 @@ Use conservative wording in the merge request:
 - `PRIVACY.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_13.md`
-- `docs/SBOM_READWIDE_1_0_13.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_14.md`
+- `docs/SBOM_READWIDE_1_0_14.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `fdroid/metadata/com.readwide.manager.yml`
@@ -119,6 +119,6 @@ All bundled native components are permissive/FOSS-compatible, and no copyleft ob
 ## Remaining submitter tasks
 
 - Confirm a clean network-enabled Gradle build from the tagged source.
-- Confirm the metadata `commit` field is the full 40-character commit hash of the `v1.0.13` release tag (this app's maintainer requires a full commit hash, not the tag name). The upstream metadata already contains entries through `1.0.12`; only the `1.0.13` entry still needs the final release commit hash in a 1.0.13 merge request.
+- Confirm the metadata `commit` field is the full 40-character commit hash of the `v1.0.14` release tag (this app's maintainer requires a full commit hash, not the tag name). The upstream metadata already contains entries through `1.0.12`; only the `1.0.14` entry still needs the final release commit hash in a 1.0.14 merge request.
 - Confirm no optional local jars are present in `app/libs`.
 - Confirm native dependency notices for `libarchive-android` / libarchive and `zstd-jni` / Zstandard are included with binary release materials if APK assets are published outside F-Droid.

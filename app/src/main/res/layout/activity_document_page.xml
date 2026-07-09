@@ -33,11 +33,29 @@
             android:layout_height="0dp"
             android:layout_weight="1"
             android:background="#121212">
-            <WebView
-                android:id="@+id/document_webview"
+            <LinearLayout
+                android:id="@+id/document_spread_container"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:background="#121212" />
+                android:baselineAligned="false"
+                android:background="#121212"
+                android:orientation="horizontal">
+
+                <WebView
+                    android:id="@+id/document_webview"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:background="#121212" />
+
+                <WebView
+                    android:id="@+id/document_webview_right"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:background="#121212"
+                    android:visibility="gone" />
+            </LinearLayout>
             <LinearLayout
                 android:id="@+id/loading_box"
                 android:layout_width="wrap_content"

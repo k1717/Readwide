@@ -1,10 +1,10 @@
 # Archive support matrix for Readwide 1.0.2
 
-> **Note (current as of 1.0.13):** This file is the original 1.0.2 wording snapshot and is kept for history. Since 1.0.2 the archive support has grown: Zstandard and LZ4 were added to the TAR family and as single-compressor streams (`.tar.zst`/`.tzst`/`.tar.lz4`/`.zst`/`.lz4`), ALZ and EGG gained split-volume and ZipCrypto-encrypted-entry support, and the RAR/7z encryption boundaries were re-audited against real archives. For the current recognized-extension list see `README.md`; for the current RAR/7z encryption boundaries (including the finding that RAR5 header-encryption is unsupported by every bundled backend and that RAR5 stored/compressed AES is first-party-verified) see `docs/RAR_7Z_SPLIT_ENCRYPTION_REVALIDATION_READWIDE_1_0_11.md`. The labels and general structure below still describe the model accurately.
+> **Note (current as of 1.0.14):** This file is the original 1.0.2 wording snapshot and is kept for history. Since 1.0.2 the archive support has grown: Zstandard and LZ4 were added to the TAR family and as single-compressor streams (`.tar.zst`/`.tzst`/`.tar.lz4`/`.zst`/`.lz4`), ALZ and EGG gained split-volume and ZipCrypto-encrypted-entry support, and the RAR/7z encryption boundaries were re-audited against real archives. For the current recognized-extension list see `README.md`; for the current RAR/7z encryption boundaries (including the finding that RAR5 header-encryption is unsupported by every bundled backend and that RAR5 stored/compressed AES is first-party-verified) see `docs/RAR_7Z_SPLIT_ENCRYPTION_REVALIDATION_READWIDE_1_0_11.md`. The labels and general structure below still describe the model accurately.
 
 - Stream extraction safety: unknown-size decoded streams, including single-file compressed payloads and 7z entry extraction loops, now enforce the existing extraction safety limit while bytes are written.
 
-This historical matrix is not the sole current wording source for archive support claims. For Readwide 1.0.13, use `README.md`, current release notes, and the RAR/7z revalidation note for user-facing claims; the tables below remain a 1.0.2 baseline for terminology and conservative support-label definitions.
+This historical matrix is not the sole current wording source for archive support claims. For Readwide 1.0.14, use `README.md`, current release notes, and the RAR/7z revalidation note for user-facing claims; the tables below remain a 1.0.2 baseline for terminology and conservative support-label definitions.
 
 ## Support labels
 

@@ -38,31 +38,26 @@ final class DocumentPageDisplayController {
         activity.snapDocumentPageTopAfterLoad = direction != 0;
         activity.currentPage = page;
         DocumentPageActivity.Page p = activity.pages.get(page);
-        String baseUrl = "https://" + DocumentPageActivity.LOCAL_HOST + "/";
-        if ("EPUB".equals(activity.docType) && p.sourcePath != null) {
-            String parent = activity.parentPath(p.sourcePath);
-            baseUrl = "https://" + DocumentPageActivity.LOCAL_HOST + DocumentPageActivity.EPUB_PREFIX + parent;
-            if (!baseUrl.endsWith("/")) baseUrl += "/";
-        }
         resetDocumentPageTransform();
         activity.wordSelectionActive = false;
         activity.webView.removeCallbacks(activity.checkWordSelectionAfterScrollRunnable);
         activity.webView.getSettings().setJavaScriptEnabled("Word".equals(activity.docType)
                 || ("EPUB".equals(activity.docType) && activity.epubFixedLayoutLike));
+        if (activity.rightWebView != null) {
+            activity.rightWebView.getSettings().setJavaScriptEnabled(
+                    "EPUB".equals(activity.docType) && activity.epubFixedLayoutLike);
+        }
         activity.configureWebViewForCurrentPage();
         activity.applyEpubBoundaryMarginsIfNeeded();
         activity.lastAppliedDocumentThemeSignature = activity.documentThemeSignature();
-        String htmlForDisplay = p.html;
-        if ("EPUB".equals(activity.docType) && activity.epubFixedLayoutLike) {
-            htmlForDisplay = activity.prepareFixedLayoutEpubHtml(htmlForDisplay);
-        }
-        htmlForDisplay = activity.applyDocumentSearchMarkupForDisplay(htmlForDisplay, page);
+        activity.updateDocumentSpreadVisibility();
         activity.webView.loadDataWithBaseURL(
-                baseUrl,
-                activity.applyReaderThemeCss(htmlForDisplay),
+                activity.documentBaseUrlForPage(p),
+                activity.documentHtmlForDisplay(p, page),
                 "text/html",
                 "UTF-8",
                 null);
+        activity.loadDocumentRightSpreadPageIfNeeded();
         updateStatus();
         if (!activity.isMarkdownDocument() && !activity.isRenderedContentAnchorDocument()) {
             activity.saveReadingState();

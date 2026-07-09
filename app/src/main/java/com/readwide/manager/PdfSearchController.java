@@ -41,6 +41,8 @@ final class PdfSearchController {
         int currentPage();
         @Nullable PdfPageView pageView();
         void runOnUi(Runnable r);
+        /** True while the landscape two-page spread composite is displayed. */
+        boolean twoPageSpreadActive();
     }
 
     /** Status updates for the dialog, delivered on the main thread. */
@@ -185,6 +187,15 @@ final class PdfSearchController {
     private void applyHighlights(int pageIndex, int pageWpts, int pageHpts) {
         PdfPageView pv = host.pageView();
         if (pv == null || engine == null || !active || pageWpts <= 0 || pageHpts <= 0) {
+            return;
+        }
+        if (host.twoPageSpreadActive()) {
+            // The two-page spread shows a composite bitmap of two pages; these
+            // rectangles are normalized against a single page, so painting them
+            // would stretch across the whole spread. Match navigation still
+            // works (the target page becomes the left page); the overlay is
+            // simply not drawn in spread mode.
+            pv.clearHighlights();
             return;
         }
         List<RectF> ptsRects = engine.matchesOnPage(pageIndex);

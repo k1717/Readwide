@@ -12,8 +12,36 @@ import java.io.IOException;
 final class ReaderLargeTextPartitionReadController {
     private final ReaderActivity activity;
 
+    /**
+     * Forward read cursor for sequential partition loads. Reads can arrive
+     * from different single-thread executors (main partition loads vs the
+     * prefetch executor), so every cursor-aware read serializes on this lock;
+     * that also lets a prefetch continue exactly where the foreground load
+     * stopped. readForChar (jumps) deliberately bypasses the cursor and the
+     * lock, keeping jump latency independent of an in-flight prefetch.
+     */
+    private final Object forwardCursorLock = new Object();
+    private LargeTextPartitionReader.ForwardCursor forwardCursor;
+
     ReaderLargeTextPartitionReadController(@NonNull ReaderActivity activity) {
         this.activity = activity;
+    }
+
+    /** Closes the session's forward cursor (activity teardown / file switch). */
+    void closeForwardCursor() {
+        synchronized (forwardCursorLock) {
+            if (forwardCursor != null) {
+                forwardCursor.closeQuietly();
+                forwardCursor = null;
+            }
+        }
+    }
+
+    private LargeTextPartitionReader.ForwardCursor cursorLocked() {
+        if (forwardCursor == null) {
+            forwardCursor = new LargeTextPartitionReader.ForwardCursor();
+        }
+        return forwardCursor;
     }
 
     float estimateBytesPerChar(@NonNull File file) {
@@ -51,15 +79,22 @@ final class ReaderLargeTextPartitionReadController {
 
     LargeTextLinePartitionResult readAtStartLine(@NonNull File file,
                                                  int requestedStartLine) throws IOException {
-        return LargeTextPartitionReader.readPartitionAtStartLine(
-                activity.getApplicationContext(),
-                file,
-                activity.resolveTextEncodingForFile(file),
-                activity.largeTextActiveCollapseBlankLines,
-                requestedStartLine,
-                activity.getLargeTextPartitionLines(),
-                activity.getLargeTextPartitionLookaheadLines(),
-                activity.getLargeTextPartitionLookbehindLines());
+        // Mirrors the reader's stats+clamp convenience overload, but routes the
+        // partition read itself through the forward cursor.
+        com.readwide.manager.model.LargeTextLineStats stats =
+                LargeTextPartitionReader.scanLineStats(
+                        activity.getApplicationContext(),
+                        file,
+                        activity.resolveTextEncodingForFile(file),
+                        activity.largeTextActiveCollapseBlankLines,
+                        0);
+        int startLine = com.readwide.manager.util.LargeTextContinuityMath
+                .partitionStartLineForLine(requestedStartLine, activity.getLargeTextPartitionLines());
+        if (startLine > stats.totalLines) {
+            startLine = com.readwide.manager.util.LargeTextContinuityMath
+                    .partitionStartLineForLine(stats.totalLines, activity.getLargeTextPartitionLines());
+        }
+        return readAtStartLine(file, startLine, stats.totalLines, stats.totalChars, false);
     }
 
     LargeTextLinePartitionResult readAtStartLine(@NonNull File file,
@@ -67,17 +102,20 @@ final class ReaderLargeTextPartitionReadController {
                                                  int knownTotalLines,
                                                  int knownTotalChars,
                                                  boolean includeLookbehind) throws IOException {
-        return LargeTextPartitionReader.readPartitionAtStartLine(
-                activity.getApplicationContext(),
-                file,
-                activity.resolveTextEncodingForFile(file),
-                activity.largeTextActiveCollapseBlankLines,
-                requestedStartLine,
-                knownTotalLines,
-                knownTotalChars,
-                activity.getLargeTextPartitionLines(),
-                activity.getLargeTextPartitionLookaheadLines(),
-                activity.getLargeTextPartitionLookbehindLines(),
-                includeLookbehind);
+        synchronized (forwardCursorLock) {
+            return LargeTextPartitionReader.readPartitionAtStartLine(
+                    activity.getApplicationContext(),
+                    file,
+                    activity.resolveTextEncodingForFile(file),
+                    activity.largeTextActiveCollapseBlankLines,
+                    requestedStartLine,
+                    knownTotalLines,
+                    knownTotalChars,
+                    activity.getLargeTextPartitionLines(),
+                    activity.getLargeTextPartitionLookaheadLines(),
+                    activity.getLargeTextPartitionLookbehindLines(),
+                    includeLookbehind,
+                    cursorLocked());
+        }
     }
 }

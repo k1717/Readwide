@@ -127,7 +127,7 @@ final class PdfReaderStartupController {
         // Reserve space for the floating toolbar on first load so the initial
         // page is not hidden behind it when chrome starts visible.
         if (activity.pdfViewport != null) {
-            activity.pdfViewport.post(activity::applyPdfViewportBottomInset);
+            activity.pdfViewport.post(activity::applyPdfViewportBarInsets);
         }
     }
 

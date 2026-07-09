@@ -1,5 +1,59 @@
 # Patch Notes
 
+## Readwide 1.0.14 - 2026-07-08
+
+### Release scope
+
+- Android metadata is `versionCode 10014` and `versionName "1.0.14"`. The package remains `com.readwide.manager`, and the release signing lineage remains the Readwide key introduced in 1.0.6.
+- No new Android permission or runtime dependency was added. The default build still has no `INTERNET` permission, no ads, no analytics SDKs, no account system, no cloud sync, and no telemetry.
+
+### EPUB - landscape two-page spread
+
+- EPUB pages now enter a two-page side-by-side spread automatically whenever the device is in landscape orientation, on both phones and tablets. Portrait keeps the previous single-page WebView path.
+- The left WebView remains the primary page host. The right WebView is used only for the second EPUB page in the spread and does not install the text-selection bridge or primary scroll listeners.
+- Spread navigation uses one visible spread per page turn. Next/previous buttons, tap zones, and swipe paging advance by the spread step, while direct page jumps still land on the requested page.
+- The right half of the spread now participates in the same tap and swipe pipeline as the left half. In spread mode, tap zones are calculated across the full spread container: far edges page, and the center area, including the seam, toggles the controls.
+- EPUB boundary margins are mirrored onto both pages so the spread stays visually symmetric. The final odd page hides the missing right page instead of showing stale content.
+
+### PDF - landscape two-page spread
+
+- PDF single-page mode now renders a combined two-page bitmap spread in landscape orientation. Phone landscape and tablet landscape use the same rule.
+- PDF vertical continuous mode is deliberately excluded and keeps the existing RecyclerView/continuous-scroll behavior.
+- In spread mode, page buttons, tap zones, and swipes advance by one spread. The page indicator displays the visible page range, such as `3-4 / 20`.
+- The bottom controls and the PDF title bar overlay the spread instead of changing the render area. Toggling controls therefore does not re-fit or re-render both pages just because chrome visibility changed.
+- Search and read-aloud highlight overlays avoid drawing incorrect single-page rectangles on a combined spread. Coordinate mapping for per-page highlight rectangles can be refined separately.
+
+### Markdown and document rotation
+
+- Markdown visual-page caches are reset on orientation change, matching the reset already used for document load and text-zoom changes. This keeps visual page count, page turns, and read-aloud start anchors aligned with the current viewport after rotation.
+- Word, HWP/HWPX, and Markdown remain single-page in landscape. The 1.0.14 spread gate is intentionally EPUB-only for the document viewer.
+
+### TXT reader - initial chrome and title band
+
+- The TXT reader now opens with controls and the file title visible, matching the document and PDF viewers. The reveal is keyed to the file path so a second file opened in the same activity still gets its own initial title reveal, while reloads and restored sessions do not force controls open again.
+- The visible TXT top chrome is rendered as one solid theme-colored band across the status/camera area, page indicator, and title strip. The title is positioned over the masked first text row, uses the body font at a smaller size, and shrinks to fit the available slot.
+- Empty display names from content providers are treated as missing. The TXT reader, restore path, and main open-from-app router fall back to the local file name or URI basename instead of leaving the title blank or failing extension routing.
+
+### TXT reader - CR/CRLF whole-file consistency
+
+- Whole-file TXT loading now normalizes CRLF and old-Mac CR line endings into the same newline character space used by the large-file engine. This prevents lone-CR files from rendering as one merged line and keeps saved positions, search hits, and read-aloud offsets consistent across file size modes.
+
+### Large TXT - forward partition read path
+
+- Sequential large-TXT forward reads use a forward cursor so ordinary forward movement does not repeatedly scan the file from the beginning for every section.
+- The forward path is reset when moving backward or when encoding, blank-line collapse, or display-rule settings change. The exact page-index path remains a separate full-file scan.
+- Because page-count and partition-boundary correctness are more important than speed, future edits to this area should compare the cursor path against the full-scan path for `content`, `baseCharOffset`, `bodyStartCharCount`, and `bodyCharCount` equivalence.
+
+### Image viewer - revisiting cached pages
+
+- The image cache now records when a cached bitmap is already full quality, including after a completed detail decode. Returning to that page displays the cached bitmap immediately instead of launching another detail decode.
+- The full-quality marker is invalidated on cache eviction, so memory-pressure eviction cannot leave a stale “already full quality” state behind.
+
+### Code map and release-document cleanup
+
+- `docs/CODE_MAP.md` was updated to match the current 1.0.14 structure: `util/` class count, `ReaderRestoreTargetMath`, spread helpers, archive backend wording, and the non-final status of the large-TXT forward cursor equivalence claim.
+- Release documentation keeps the 1.0.14 F-Droid commit placeholder intentionally unresolved until the final `v1.0.14` tag hash is known.
+
 ## Readwide 1.0.13 - 2026-07-04
 
 ### Read-aloud (TTS) - spoken-sentence highlight in the document viewer

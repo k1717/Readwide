@@ -64,6 +64,10 @@ final class DocumentPageStartupController {
             activity.webView.onResume();
             activity.webView.resumeTimers();
         }
+        if (activity.rightWebView != null) {
+            activity.rightWebView.onResume();
+            activity.rightWebView.resumeTimers();
+        }
         activity.applyDocumentSystemBarColors();
         ButtonOrderManager.applyOrder(activity, activity.prefs, ButtonOrderManager.GROUP_DOCUMENT_VIEWER);
         activity.applyDocumentThemeToViews();
@@ -78,6 +82,10 @@ final class DocumentPageStartupController {
             activity.webView.removeCallbacks(activity.releasePageTurnRunnable);
             activity.webView.onPause();
             activity.webView.pauseTimers();
+        }
+        if (activity.rightWebView != null) {
+            activity.rightWebView.onPause();
+            activity.rightWebView.pauseTimers();
         }
     }
 
@@ -153,7 +161,9 @@ final class DocumentPageStartupController {
         activity.toolbar.setTitleTextColor(Color.WHITE);
         activity.toolbar.setBackgroundColor(Color.BLACK);
 
+        activity.documentSpreadContainer = activity.findViewById(R.id.document_spread_container);
         activity.webView = activity.findViewById(R.id.document_webview);
+        activity.rightWebView = activity.findViewById(R.id.document_webview_right);
         activity.loadingBox = activity.findViewById(R.id.loading_box);
         activity.progressBar = activity.findViewById(R.id.loading_progress);
         activity.progressText = activity.findViewById(R.id.loading_text);

@@ -231,14 +231,8 @@ final class PdfPlainTextExtractor {
             }
         }
 
-        /** Same box formula as the search engine's glyphBox. */
         private static android.graphics.RectF glyphBox(com.tom_roush.pdfbox.text.TextPosition tp) {
-            float left = tp.getXDirAdj();
-            float width = tp.getWidthDirAdj();
-            float h = tp.getHeightDir();
-            float top = tp.getYDirAdj() - h - h * 0.32f;
-            float bottom = tp.getYDirAdj() + h * 0.42f;
-            return new android.graphics.RectF(left, top, left + width, bottom);
+            return com.readwide.manager.util.PdfGlyphBoxMath.glyphBox(tp);
         }
     }
 

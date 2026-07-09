@@ -94,12 +94,21 @@ final class ReaderFileApplyController {
         activity.filePath = loadedFilePath;
         activity.appliedTextDisplayRuleSignature =
                 activity.textContentTransformSignatureForPath(activity.filePath);
-        activity.fileName = loadedFileName != null
-                ? loadedFileName
-                : activity.getString(R.string.app_name);
+        activity.fileName = com.readwide.manager.util.FileUtils.displayNameOrBasename(
+                loadedFileName, loadedFilePath, activity.getString(R.string.app_name));
         activity.updateReaderFileTitle();
         if (activity.getSupportActionBar() != null) {
             activity.getSupportActionBar().setTitle(activity.fileName);
+        }
+        // Open with the controls (and the theme-colored file title) visible,
+        // matching the document and PDF viewers - the text reader was the only
+        // viewer that opened fully immersive, which read as "this file has no
+        // title". Keyed by file path: a different file arriving via
+        // onNewIntent (singleTop) reveals again; reloads and encoding changes
+        // of the same file never force the controls back on.
+        if (!java.util.Objects.equals(activity.chromeRevealedForPath, activity.filePath)) {
+            activity.chromeRevealedForPath = activity.filePath;
+            activity.showToolbar();
         }
         activity.fileContent = content != null ? content : "";
         activity.totalChars = activity.fileContent.length();

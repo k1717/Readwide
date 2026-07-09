@@ -147,6 +147,13 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     ThemeManager themeManager;
 
     boolean toolbarVisible = false;
+    /**
+     * File path the initial controls reveal has already happened for. Keyed by
+     * path (not a one-shot boolean) because this activity is singleTop: a new
+     * file arriving through onNewIntent should reveal the controls again,
+     * while reloads/encoding changes of the same file should not.
+     */
+    String chromeRevealedForPath = null;
     int currentReaderBackgroundColor = Color.BLACK;
     int currentReaderTextColor = Color.rgb(224, 224, 224);
     int currentReaderToolbarColor = Color.rgb(32, 32, 32);
@@ -435,7 +442,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
         return readerLargeTextExactAnchorBuildController;
     }
 
-    private ReaderLargeTextPartitionReadController partitionReader() {
+    ReaderLargeTextPartitionReadController partitionReader() {
         if (readerLargeTextPartitionReadController == null) {
             readerLargeTextPartitionReadController =
                     new ReaderLargeTextPartitionReadController(this);
@@ -621,10 +628,18 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
             preferencesController = new ReaderPreferencesController(this);
         }
         preferencesController.applyPreferences();
+        // Font size / typeface / line spacing changes move the first-row
+        // geometry; refresh the title strip even when the scroll position
+        // (and thus onScrollChanged) doesn't move.
+        updateReaderFileTitleVisibility();
     }
 
     void applyStatusBarVisibilityPreference() {
         chrome().applyStatusBarVisibilityPreference();
+    }
+
+    void applyReaderTopBandColors() {
+        chrome().applyTopBandColors();
     }
 
 
