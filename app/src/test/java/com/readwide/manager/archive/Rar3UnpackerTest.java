@@ -83,13 +83,13 @@ public class Rar3UnpackerTest {
 
 
     @Test
-    public void unpack_realSample3PpmdFixtureStopsAtPpmdGap() throws Exception {
-        assertPpmdGap("sample-3.rar", 95, 1363150, 1376878, 0x715fa904L, "sample3-ppmd-gap.out");
+    public void unpack_realSample3PpmdFixturePassesCrc() throws Exception {
+        decodeRealFixture("sample-3.rar", 95, 1363150, 1376878, 0x715fa904L, "sample3-ppmd.out");
     }
 
     @Test
-    public void unpack_realSample4PpmdFixtureStopsAtPpmdGap() throws Exception {
-        assertPpmdGap("sample-4.rar", 84, 480547, 1043365, 0x35705f9dL, "sample4-ppmd-gap.out");
+    public void unpack_realSample4PpmdFixturePassesCrc() throws Exception {
+        decodeRealFixture("sample-4.rar", 84, 480547, 1043365, 0x35705f9dL, "sample4-ppmd.out");
     }
 
     @Test
@@ -108,30 +108,9 @@ public class Rar3UnpackerTest {
     }
 
     @Test
-    public void unpack_realSample5DocFixtureStopsAtVmFilterGap() throws Exception {
-        File sample = externalFixture("sample-5.rar");
-        File out = tempFolder.newFile("sample5-doc-vm-gap.out");
-        assertTrue(out.delete());
-        Rar3UnpackContext context = Rar3UnpackContext.forEntry(
-                sample,
-                6730,
-                6033,
-                23552,
-                0x33,
-                false,
-                false,
-                false,
-                false,
-                0x4ab9b212L);
-
-        try {
-            Rar3Unpacker.unpack(context, out, null);
-        } catch (RarArchiveReader.UnsupportedRarFeatureException expected) {
-            assertTrue(expected.getMessage().contains("VM filters"));
-            assertFalse(out.exists());
-            return;
-        }
-        throw new AssertionError("sample-5.doc should remain a precise VM-filter first-party gap");
+    public void unpack_realSample5DocFixturePassesCrcWithVmFilter() throws Exception {
+        decodeRealFixture("sample-5.rar", 6730, 6033, 23552, 0x4ab9b212L,
+                "sample5-doc-vm-filter.out");
     }
 
 
@@ -349,7 +328,9 @@ public class Rar3UnpackerTest {
 
 
 
-    private void assertPpmdGap(String fixtureName, long offset, long packedSize, long unpackedSize, long expectedCrc, String outName) throws Exception {
+    private void decodeRealFixture(String fixtureName, long offset, long packedSize,
+                                   long unpackedSize, long expectedCrc,
+                                   String outName) throws Exception {
         File sample = externalFixture(fixtureName);
         File out = tempFolder.newFile(outName);
         assertTrue(out.delete());
@@ -365,15 +346,9 @@ public class Rar3UnpackerTest {
                 false,
                 expectedCrc);
 
-        try {
-            Rar3Unpacker.unpack(context, out, null);
-        } catch (RarArchiveReader.UnsupportedRarFeatureException expected) {
-            assertTrue(expected.getMessage().contains("PPMd"));
-            assertTrue(expected.getMessage().contains("first-party"));
-            assertFalse(out.exists());
-            return;
-        }
-        throw new AssertionError(fixtureName + " should remain a precise PPMd first-party gap");
+        Rar3Unpacker.unpack(context, out, null);
+
+        assertEquals(unpackedSize, Files.size(out.toPath()));
     }
 
     private void decodeRealSample5Entry(String outName, long offset, long packedSize, long unpackedSize, long expectedCrc) throws Exception {

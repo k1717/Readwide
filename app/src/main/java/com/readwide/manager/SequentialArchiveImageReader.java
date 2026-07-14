@@ -17,9 +17,11 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BooleanSupplier;
 
 /**
- * Session-scoped forward reader for solid/sequential archives (7z and the TAR family).
+ * Session-scoped forward reader for solid/sequential archives (RAR/7z and the TAR family).
  *
  * <p>Solid/sequential archives have no cheap random per-entry access: extracting one image at
  * a time re-opens the archive and re-decompresses the shared stream from the start up to that
@@ -44,9 +46,12 @@ final class SequentialArchiveImageReader implements Closeable {
 
     @NonNull private final Context appContext;
     @NonNull private final File archiveFile;
+    @NonNull private final String archivePathSnapshot;
+    private final long archiveLengthSnapshot;
+    private final long archiveLastModifiedSnapshot;
     private final boolean sensitiveCache;
     @Nullable private final char[] password;
-    @Nullable private final Set<String> verifiedSensitivePaths;
+    @Nullable private Set<String> verifiedSensitivePaths;
 
     private final Object lock = new Object();
     // Every image entry the reader has already advanced past, by sanitized path. A
@@ -68,9 +73,18 @@ final class SequentialArchiveImageReader implements Closeable {
                                          @Nullable Set<String> verifiedSensitivePaths) {
         this.appContext = context.getApplicationContext();
         this.archiveFile = archiveFile;
+        this.archivePathSnapshot = archiveFile.getAbsolutePath();
+        this.archiveLengthSnapshot = archiveFile.length();
+        this.archiveLastModifiedSnapshot = archiveFile.lastModified();
         this.password = PasswordChars.cloneOf(password);
         this.sensitiveCache = sensitiveCache;
-        this.verifiedSensitivePaths = verifiedSensitivePaths;
+        // A prepared password-backed reader may be created before
+        // ImageReaderActivity owns its session verification set. Keep an
+        // internal concurrent set until handoff so successfully decoded pages
+        // are reusable without weakening the sensitive-cache gate.
+        this.verifiedSensitivePaths = sensitiveCache && verifiedSensitivePaths == null
+                ? ConcurrentHashMap.<String>newKeySet()
+                : verifiedSensitivePaths;
     }
 
     /** Creates a reader for forward-readable archives only; returns null otherwise. */
@@ -98,7 +112,8 @@ final class SequentialArchiveImageReader implements Closeable {
                                     boolean sensitiveCache,
                                     @Nullable Set<String> verifiedSensitivePaths,
                                     @Nullable SequentialArchiveImageReader sessionReader) {
-        if (ArchiveImageEntryCache.isReadyImageFileForHandoff(entryPath, outFile)) {
+        if (ArchiveImageEntryCache.shouldReuseReadyImageFile(
+                entryPath, outFile, sensitiveCache, verifiedSensitivePaths)) {
             return ArchiveSupport.ExtractionResult.success();
         }
         if (ArchiveSupport.isForwardImageReadableType(archiveFile)) {
@@ -138,16 +153,34 @@ final class SequentialArchiveImageReader implements Closeable {
      * is waiting for the same lock; the behind page is left for the on-demand path instead.</p>
      */
     boolean ensureExtracted(@NonNull String entryPath, boolean extractBehindFrontier) {
+        return ensureExtracted(entryPath, extractBehindFrontier, null);
+    }
+
+    /**
+     * Prefetch variant with a cooperative checkpoint. A forward decoder cannot
+     * abandon an entry halfway through without corrupting solid state, so the
+     * checkpoint is evaluated before the first header and between fully drained
+     * entries. On-demand calls pass {@code null} and never yield.
+     */
+    boolean ensureExtracted(@NonNull String entryPath,
+                            boolean extractBehindFrontier,
+                            @Nullable BooleanSupplier keepAdvancing) {
         File outFile = ArchivePreviewCache.outputFileForEntry(appContext, archiveFile, entryPath, sensitiveCache);
-        if (ArchiveImageEntryCache.isReadyImageFileForHandoff(entryPath, outFile)) {
+        if (ArchiveImageEntryCache.shouldReuseReadyImageFile(
+                entryPath, outFile, sensitiveCache, verifiedSensitivePaths)) {
             return true;
         }
+        ArchiveImageEntryCache.discardUnverifiedSensitiveReadyCache(
+                outFile, sensitiveCache, verifiedSensitivePaths);
         synchronized (lock) {
             if (closed || broken) return false;
             // Another thread may have cached this entry while we waited for the lock.
-            if (ArchiveImageEntryCache.isReadyImageFileForHandoff(entryPath, outFile)) {
+            if (ArchiveImageEntryCache.shouldReuseReadyImageFile(
+                    entryPath, outFile, sensitiveCache, verifiedSensitivePaths)) {
                 return true;
             }
+            ArchiveImageEntryCache.discardUnverifiedSensitiveReadyCache(
+                    outFile, sensitiveCache, verifiedSensitivePaths);
             if (passedEntries.contains(entryPath)) {
                 // Behind the open forward stream: the entry was passed earlier and its
                 // cache file has since been evicted (or it never extracted). Re-read just
@@ -157,9 +190,44 @@ final class SequentialArchiveImageReader implements Closeable {
                 return extractPassedEntryLocked(entryPath, outFile);
             }
             if (exhausted) return false;
+            if (!shouldKeepAdvancing(keepAdvancing)) return false;
             if (!ensureOpenLocked()) return false;
-            return advanceUntilLocked(entryPath);
+            return advanceUntilLocked(entryPath, keepAdvancing);
         }
+    }
+
+    /** Switches a prepared sensitive reader to the viewer-owned verification set. */
+    void attachVerifiedSensitivePaths(@Nullable Set<String> viewerVerifiedPaths) {
+        if (!sensitiveCache || viewerVerifiedPaths == null) return;
+        synchronized (lock) {
+            if (verifiedSensitivePaths != null && verifiedSensitivePaths != viewerVerifiedPaths) {
+                viewerVerifiedPaths.addAll(verifiedSensitivePaths);
+            }
+            verifiedSensitivePaths = viewerVerifiedPaths;
+        }
+    }
+
+    boolean isReusableForHandoff(@NonNull File expectedArchive) {
+        synchronized (lock) {
+            return !closed
+                    && !broken
+                    && !exhausted
+                    && reader != null
+                    && matchesArchiveSnapshot(
+                    expectedArchive,
+                    archivePathSnapshot,
+                    archiveLengthSnapshot,
+                    archiveLastModifiedSnapshot);
+        }
+    }
+
+    static boolean matchesArchiveSnapshot(@NonNull File expectedArchive,
+                                          @NonNull String pathSnapshot,
+                                          long lengthSnapshot,
+                                          long lastModifiedSnapshot) {
+        return pathSnapshot.equals(expectedArchive.getAbsolutePath())
+                && lengthSnapshot == expectedArchive.length()
+                && lastModifiedSnapshot == expectedArchive.lastModified();
     }
 
     private boolean ensureOpenLocked() {
@@ -186,25 +254,34 @@ final class SequentialArchiveImageReader implements Closeable {
         return true;
     }
 
-    private boolean advanceUntilLocked(@NonNull String targetEntryPath) {
+    private boolean advanceUntilLocked(@NonNull String targetEntryPath,
+                                       @Nullable BooleanSupplier keepAdvancing) {
         ArchiveSupport.ForwardArchiveReader activeReader = reader;
         if (activeReader == null) return false;
         byte[] buffer = new byte[BUFFER_SIZE];
         try {
-            ArchiveSupport.ForwardEntry entry;
-            while ((entry = activeReader.nextEntry()) != null) {
+            while (true) {
+                if (!shouldKeepAdvancing(keepAdvancing)) return false;
+                ArchiveSupport.ForwardEntry entry = activeReader.nextEntry();
+                if (entry == null) {
+                    exhausted = true;
+                    return false;
+                }
                 String path = entry.path;
                 if (path == null || entry.directory || !entry.hasData || !FileUtils.isImageFile(path)) {
-                    drainCurrentLocked(activeReader, buffer);
+                    skipOrDrainCurrentLocked(activeReader, buffer);
                     continue;
                 }
                 File outFile = ArchivePreviewCache.outputFileForEntry(appContext, archiveFile, path, sensitiveCache);
                 boolean extracted;
-                if (ArchiveImageEntryCache.isReadyImageFileForHandoff(path, outFile)) {
+                if (ArchiveImageEntryCache.shouldReuseReadyImageFile(
+                        path, outFile, sensitiveCache, verifiedSensitivePaths)) {
                     // Already cached, but the stream must still be consumed to advance.
-                    drainCurrentLocked(activeReader, buffer);
+                    skipOrDrainCurrentLocked(activeReader, buffer);
                     extracted = true;
                 } else {
+                    ArchiveImageEntryCache.discardUnverifiedSensitiveReadyCache(
+                            outFile, sensitiveCache, verifiedSensitivePaths);
                     extracted = extractCurrentLocked(activeReader, path, outFile, buffer);
                 }
                 // Mark this image as passed (cached, freshly extracted, or unreadable):
@@ -212,8 +289,6 @@ final class SequentialArchiveImageReader implements Closeable {
                 passedEntries.add(path);
                 if (path.equals(targetEntryPath)) return extracted;
             }
-            exhausted = true;
-            return false;
         } catch (IOException | RuntimeException e) {
             // A mid-entry failure leaves the stream misaligned; abandon the reader so the
             // caller falls back to whole-archive extraction.
@@ -225,6 +300,37 @@ final class SequentialArchiveImageReader implements Closeable {
             Log.w(TAG, "Forward image reader failed mid-archive, falling back to whole-archive: "
                     + archiveFile.getName(), e);
             return false;
+        }
+    }
+
+    private static boolean shouldKeepAdvancing(@Nullable BooleanSupplier checkpoint) {
+        if (checkpoint == null) return true;
+        try {
+            return checkpoint.getAsBoolean();
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private void skipOrDrainCurrentLocked(
+            @NonNull ArchiveSupport.ForwardArchiveReader activeReader,
+            @NonNull byte[] buffer) throws IOException {
+        drainSkippedEntry(activeReader, buffer, MAX_ENTRY_BYTES);
+    }
+
+    static void drainSkippedEntry(@NonNull ArchiveSupport.ForwardArchiveReader activeReader,
+                                  @NonNull byte[] buffer,
+                                  long maxEntryBytes) throws IOException {
+        if (activeReader.skipsUnreadEntryOnAdvance()) return;
+        if (activeReader.drainCurrentEntry(maxEntryBytes)) return;
+
+        long total = 0L;
+        int read;
+        while ((read = activeReader.read(buffer)) > 0) {
+            total += read;
+            if (total > maxEntryBytes) {
+                throw new IOException("Sequential archive entry exceeds the extraction safety limit");
+            }
         }
     }
 

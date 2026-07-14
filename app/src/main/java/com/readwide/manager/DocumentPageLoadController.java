@@ -30,6 +30,7 @@ final class DocumentPageLoadController {
         activity.wordRelationships.clear();
         activity.epubHasDocumentFont = false;
         activity.epubFixedLayoutLike = false;
+        activity.epubImagePageLike = false;
         activity.wordHasDocumentFont = false;
         activity.wordDefaultFontFamily = null;
         activity.documentFontOverride = null;

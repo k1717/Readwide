@@ -24,9 +24,8 @@
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
 
-# Zstandard support is bundled through com.github.luben:zstd-jni for Commons Compress ZIP fallback.
-# Keep its JNI-facing classes/members in release builds.
--keep class com.github.luben.zstd.** { *; }
+# zstd-jni is JVM-test-only. Commons Compress retains optional references to its
+# classes, while Android Zstandard decoding routes through libarchive.
 -dontwarn com.github.luben.zstd.**
 
 # libarchive-android exposes a JNI binding layer. Keep the full package so R8 cannot

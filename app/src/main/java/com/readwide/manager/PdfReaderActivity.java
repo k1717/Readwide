@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
+import android.graphics.RectF;
 import android.graphics.pdf.PdfRenderer;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -25,6 +26,7 @@ import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewConfiguration;
+import android.view.ViewTreeObserver;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
@@ -51,6 +53,7 @@ import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.model.Theme;
 import com.readwide.manager.util.BookmarkManager;
 import com.readwide.manager.util.FileUtils;
+import com.readwide.manager.util.PdfSpreadHighlightMath;
 import com.readwide.manager.util.PrefsManager;
 import com.readwide.manager.util.TapZoneMath;
 import com.readwide.manager.util.ThemeManager;
@@ -113,15 +116,25 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private int lastPdfBottomBarHeight = 0;
     View pdfNavBarSpacer;
     boolean pdfChromeVisible = true;
-    /** Compact top page-strip height, cached while it is visible (chrome off). */
-    private int lastPdfTopStripHeightPx = 0;
+    /** Expanded app-bar height captured while PDF chrome is visible. */
+    private int lastPdfExpandedTopBarHeightPx = 0;
     ImageView pageImage;
     RecyclerView pdfContinuousList;
+    View pdfFastScrollRail;
+    View pdfFastScrollThumb;
     PdfContinuousPageAdapter pdfContinuousAdapter;
+    private ProportionalFastScrollController pdfFastScrollController;
     private RecyclerView.OnScrollListener continuousScrollListener;
     private boolean suppressContinuousScrollSync = false;
     private Runnable pendingContinuousScrollRunnable = null;
     private Runnable pendingContinuousSettleRunnable = null;
+    private int continuousNavigationGeneration = 0;
+    private int continuousFastScrollCommitGeneration = 0;
+    private RecyclerView pendingContinuousFastScrollCommitTarget = null;
+    private ViewTreeObserver pendingContinuousFastScrollObserver = null;
+    private ViewTreeObserver.OnPreDrawListener pendingContinuousFastScrollPreDrawListener = null;
+    private Runnable pendingContinuousFastScrollCommitRunnable = null;
+    private final Runnable continuousScrollSaveRunnable = this::saveContinuousReadingStateIfActive;
     ProgressBar progressBar;
     TextView pageStatus;
     SeekBar pdfPageSeekBar;
@@ -138,6 +151,10 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     PdfPageView pdfPageMatrixView;
     private volatile int lastRenderedPageWidthPts = 1;
     private volatile int lastRenderedPageHeightPts = 1;
+    /** Supersedes stale sharpen requests for the same page after pan/zoom changes. */
+    private int sharpenRenderGeneration = 0;
+    /** Invalidates speculative single-page renders without reading View state off-thread. */
+    private volatile int singlePageGeometryGeneration = 0;
     private ScaleGestureDetector scaleGestureDetector;
     private GestureDetector gestureDetector;
     private OverScroller pdfFlingScroller;
@@ -153,6 +170,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private boolean gestureStartedInViewport = false;
     private boolean gestureSawMultiTouch = false;
     private boolean viewportPanConsumed = false;
+    private boolean gestureStartedOnPdfFastScroll = false;
     private float lastPanRawX;
     private float lastPanRawY;
     int touchSlop;
@@ -195,6 +213,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     volatile boolean activityDestroyed = false;
     com.readwide.manager.controller.ReaderToolbarController pdfToolbarController;
     PdfSearchController pdfSearchController;
+    @Nullable private android.app.Dialog activePdfSearchDialog;
     final Object rendererLock = new Object();
     // A second, independent PdfRenderer over the same file, used only by the
     // prefetch thread. PdfRenderer can't render two pages concurrently on one
@@ -207,6 +226,34 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private ParcelFileDescriptor prefetchParcelFileDescriptor;
     private PdfRenderer prefetchRenderer;
     private Bitmap currentBitmap;
+
+    /**
+     * Exact placement of both source pages inside the currently displayed
+     * landscape composite bitmap. Search and read-aloud rectangles originate
+     * in one page's normalized coordinate space; retaining the renderer's
+     * actual (post pixel-cap) bounds is the only lossless way to project them
+     * onto a composite whose pages may have different sizes/orientations.
+     */
+    @Nullable private PdfSpreadHighlightMath.Layout pdfSpreadBitmapLayout;
+
+    private static final class SinglePageCacheMetadata {
+        final int pageWidthPts;
+        final int pageHeightPts;
+        final int intendedDisplayWidthPx;
+
+        SinglePageCacheMetadata(int pageWidthPts, int pageHeightPts,
+                                int intendedDisplayWidthPx) {
+            this.pageWidthPts = Math.max(1, pageWidthPts);
+            this.pageHeightPts = Math.max(1, pageHeightPts);
+            this.intendedDisplayWidthPx = Math.max(1, intendedDisplayWidthPx);
+        }
+    }
+
+    /** Geometry paired with each cached bitmap; cache hits must not reuse the
+     * previous page's point dimensions or display width. */
+    private final android.util.SparseArray<SinglePageCacheMetadata> singlePageCacheMetadata =
+            new android.util.SparseArray<>();
+
     // Single-page (horizontal) mode prerender cache: neighbor pages rendered
     // ahead at the current fit width so a page turn shows instantly instead of
     // rendering on demand (which made horizontal turns slower than vertical,
@@ -222,6 +269,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 }
                 @Override protected void entryRemoved(boolean evicted, Integer key,
                                                       Bitmap oldValue, Bitmap newValue) {
+                    if (key != null) singlePageCacheMetadata.remove(key);
                     if (oldValue != null && oldValue != newValue
                             && oldValue != currentBitmap && !oldValue.isRecycled()) {
                         oldValue.recycle();
@@ -253,6 +301,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private float renderedZoom = 1.0f;
     private int pendingPageSlideDirection = 0;
     int renderGeneration = 0;
+    /** Rejects a stale async path/URI resolution after a newer singleTop intent. */
+    private int pdfDocumentLoadGeneration = 0;
     private boolean backgroundPdfBitmapsReleased = false;
     private final Runnable backgroundPdfMemoryTrimRunnable = () -> trimPdfBitmapsForBackground(false);
     private PdfReaderStartupController startupController;
@@ -294,6 +344,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             @Override
             public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
                 syncCurrentPageFromContinuousList(false);
+                if (dx != 0 || dy != 0) {
+                    notifyPdfFastScrollActivity();
+                } else {
+                    schedulePdfFastScrollUpdate();
+                }
             }
 
             @Override
@@ -304,6 +359,165 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             }
         };
         pdfContinuousList.addOnScrollListener(continuousScrollListener);
+    }
+
+    void installPdfFastScroll() {
+        if (pdfFastScrollController != null
+                || pdfFastScrollRail == null
+                || pdfFastScrollThumb == null) {
+            return;
+        }
+        pdfFastScrollController = new ProportionalFastScrollController(
+                pdfFastScrollRail,
+                pdfFastScrollThumb,
+                new ProportionalFastScrollController.ScrollSource() {
+                    @Override
+                    public boolean isEnabled() {
+                        return verticalPageSlideMode
+                                && pdfContinuousList != null
+                                && pdfContinuousList.getVisibility() == View.VISIBLE;
+                    }
+
+                    @Override
+                    public long scrollRange() {
+                        if (pdfContinuousList == null) return 0L;
+                        RecyclerView.LayoutManager manager = pdfContinuousList.getLayoutManager();
+                        if (pdfContinuousAdapter != null && manager instanceof LinearLayoutManager) {
+                            return pdfContinuousAdapter.getEstimatedScrollRangePx();
+                        }
+                        return pdfContinuousList.computeVerticalScrollRange();
+                    }
+
+                    @Override
+                    public long scrollExtent() {
+                        if (pdfContinuousList == null) return 0L;
+                        return Math.max(0, pdfContinuousList.getHeight()
+                                - pdfContinuousList.getPaddingTop()
+                                - pdfContinuousList.getPaddingBottom());
+                    }
+
+                    @Override
+                    public long scrollOffset() {
+                        if (pdfContinuousList == null) return 0L;
+                        RecyclerView.LayoutManager manager = pdfContinuousList.getLayoutManager();
+                        if (pdfContinuousAdapter != null && manager instanceof LinearLayoutManager) {
+                            return pdfContinuousAdapter.getEstimatedScrollOffsetPx(
+                                    (LinearLayoutManager) manager,
+                                    pdfContinuousList.getPaddingTop());
+                        }
+                        return pdfContinuousList.computeVerticalScrollOffset();
+                    }
+
+                    @Override
+                    public void scrollToFraction(float fraction) {
+                        if (pdfContinuousList == null) return;
+                        RecyclerView.LayoutManager manager = pdfContinuousList.getLayoutManager();
+                        if (pdfContinuousAdapter != null && manager instanceof LinearLayoutManager) {
+                            int extent = Math.max(1, pdfContinuousList.getHeight()
+                                    - pdfContinuousList.getPaddingTop()
+                                    - pdfContinuousList.getPaddingBottom());
+                            pdfContinuousAdapter.scrollToFraction(
+                                    (LinearLayoutManager) manager, fraction, extent);
+                            return;
+                        }
+                        int range = pdfContinuousList.computeVerticalScrollRange();
+                        int extent = pdfContinuousList.computeVerticalScrollExtent();
+                        int maxOffset = Math.max(0, range - extent);
+                        int target = Math.round(Math.max(0f, Math.min(1f, fraction)) * maxOffset);
+                        int currentOffset = pdfContinuousList.computeVerticalScrollOffset();
+                        pdfContinuousList.scrollBy(0, target - currentOffset);
+                    }
+
+                    @Override
+                    public void onFastScrollStart() {
+                        cancelPendingContinuousNavigation();
+                        if (pdfContinuousList != null) pdfContinuousList.stopScroll();
+                        if (pdfContinuousAdapter != null) pdfContinuousAdapter.beginFastScroll();
+                    }
+
+                    @Override
+                    public void onFastScrollStop() {
+                        if (pdfContinuousAdapter != null) pdfContinuousAdapter.endFastScroll();
+                        // scrollToPositionWithOffset() can move an already-idle RecyclerView,
+                        // so no later SCROLL_STATE_IDLE callback is guaranteed. It can also
+                        // leave a pending layout at ACTION_UP, which makes an immediate read
+                        // observe the old row. Commit after that layout (with a bounded fallback
+                        // when the last MOVE already laid out) so page and within-page yRatio
+                        // both persist at the actual thumb destination.
+                        scheduleContinuousFastScrollCommit();
+                    }
+                });
+        pdfFastScrollController.install();
+    }
+
+    private void scheduleContinuousFastScrollCommit() {
+        clearPendingContinuousFastScrollCommit();
+        if (pdfContinuousList == null || !verticalPageSlideMode || activityDestroyed) return;
+
+        final RecyclerView target = pdfContinuousList;
+        final int navigationGeneration = continuousNavigationGeneration;
+        final int commitGeneration = ++continuousFastScrollCommitGeneration;
+        pendingContinuousFastScrollCommitTarget = target;
+        pendingContinuousFastScrollObserver = target.getViewTreeObserver();
+        pendingContinuousFastScrollPreDrawListener = () -> {
+            commitContinuousFastScrollAfterLayout(
+                    target, navigationGeneration, commitGeneration);
+            return true;
+        };
+        pendingContinuousFastScrollCommitRunnable = () ->
+                commitContinuousFastScrollAfterLayout(
+                        target, navigationGeneration, commitGeneration);
+        pendingContinuousFastScrollObserver.addOnPreDrawListener(
+                pendingContinuousFastScrollPreDrawListener);
+        target.postDelayed(pendingContinuousFastScrollCommitRunnable, 180L);
+    }
+
+    private void commitContinuousFastScrollAfterLayout(@NonNull RecyclerView target,
+                                                       int navigationGeneration,
+                                                       int commitGeneration) {
+        if (commitGeneration != continuousFastScrollCommitGeneration) return;
+        clearPendingContinuousFastScrollCommit();
+        if (target != pdfContinuousList
+                || !isCurrentContinuousNavigation(navigationGeneration)) {
+            return;
+        }
+        syncCurrentPageFromContinuousList(true);
+    }
+
+    private void clearPendingContinuousFastScrollCommit() {
+        RecyclerView target = pendingContinuousFastScrollCommitTarget;
+        ViewTreeObserver observer = pendingContinuousFastScrollObserver;
+        if (observer != null
+                && observer.isAlive()
+                && pendingContinuousFastScrollPreDrawListener != null) {
+            observer.removeOnPreDrawListener(pendingContinuousFastScrollPreDrawListener);
+        }
+        if (target != null) {
+            if (pendingContinuousFastScrollCommitRunnable != null) {
+                target.removeCallbacks(pendingContinuousFastScrollCommitRunnable);
+            }
+        }
+        pendingContinuousFastScrollCommitTarget = null;
+        pendingContinuousFastScrollObserver = null;
+        pendingContinuousFastScrollPreDrawListener = null;
+        pendingContinuousFastScrollCommitRunnable = null;
+    }
+
+    private void cancelPendingContinuousFastScrollCommit() {
+        continuousFastScrollCommitGeneration++;
+        clearPendingContinuousFastScrollCommit();
+    }
+
+    void schedulePdfFastScrollUpdate() {
+        if (pdfFastScrollController != null) {
+            pdfFastScrollController.scheduleMetricsUpdate();
+        }
+    }
+
+    void notifyPdfFastScrollActivity() {
+        if (pdfFastScrollController != null) {
+            pdfFastScrollController.notifyScrollActivity();
+        }
     }
 
     private void syncCurrentPageFromContinuousList(boolean force) {
@@ -336,12 +550,24 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         int nextPage = clampPage(bestPage);
         if (force || nextPage != currentPage) {
             currentPage = nextPage;
-            saveReadingState();
             updatePageStatus();
+            handler.removeCallbacks(continuousScrollSaveRunnable);
+            if (force) {
+                saveReadingState();
+            } else {
+                handler.postDelayed(continuousScrollSaveRunnable, 240L);
+            }
+        }
+    }
+
+    private void saveContinuousReadingStateIfActive() {
+        if (!activityDestroyed && verticalPageSlideMode) {
+            saveReadingState();
         }
     }
 
     private void applyPdfDisplayMode() {
+        cancelPendingContinuousNavigation();
         boolean continuous = verticalPageSlideMode;
         pendingPageSlideDirection = 0;
         stopPdfViewportFling();
@@ -376,13 +602,12 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             zoom = 1.0f;
             renderedZoom = 1.0f;
             if (pdfPageMatrixView != null) pdfPageMatrixView.detachBitmaps();
-            singlePageCache.evictAll();
+            clearSinglePageRenderCache();
             singlePageCacheZoom = 1.0f;
-            singlePageCacheWidth = -1;
-            singlePageCacheHeight = -1;
             resetContinuousPageViews(true);
             renderCurrentPage(currentBitmap == null);
         }
+        schedulePdfFastScrollUpdate();
     }
 
     private void resetContinuousPageViews(boolean keepAdapterAttached) {
@@ -428,6 +653,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         }
 
         pdfContinuousAdapter.configure(pageCount, viewportWidth, zoom);
+        schedulePdfFastScrollUpdate();
         return true;
     }
 
@@ -440,25 +666,16 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     }
 
     private void scrollContinuousListToCurrentPage(boolean smooth) {
-        if (pdfContinuousList == null || pageCount <= 0) return;
+        if (!verticalPageSlideMode || pdfContinuousList == null || pageCount <= 0) return;
+        cancelPendingContinuousNavigation();
+        final int navigationGeneration = continuousNavigationGeneration;
         final int target = clampPage(currentPage);
         suppressContinuousScrollSync = true;
         pdfContinuousList.stopScroll();
 
-        // Cancel any still-pending scroll/settle work from a previous (rapid) tap
-        // so only the latest target is honored. Without this, stacked timers fire
-        // out of order and re-assert stale pages, making the counter bounce around
-        // the target before settling.
-        if (pendingContinuousScrollRunnable != null) {
-            pdfContinuousList.removeCallbacks(pendingContinuousScrollRunnable);
-        }
-        if (pendingContinuousSettleRunnable != null) {
-            pdfContinuousList.removeCallbacks(pendingContinuousSettleRunnable);
-        }
-
         pendingContinuousScrollRunnable = () -> {
+            if (!isCurrentContinuousNavigation(navigationGeneration)) return;
             pendingContinuousScrollRunnable = null;
-            if (activityDestroyed || pdfContinuousList == null) return;
 
             pdfContinuousList.stopScroll();
             RecyclerView.LayoutManager manager = pdfContinuousList.getLayoutManager();
@@ -473,8 +690,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             }
 
             pendingContinuousSettleRunnable = () -> {
+                if (!isCurrentContinuousNavigation(navigationGeneration)) return;
                 pendingContinuousSettleRunnable = null;
-                if (activityDestroyed || pdfContinuousList == null) return;
                 // Re-assert the target as the current page AFTER the scroll has
                 // settled. scrollToPositionWithOffset lays out over several frames
                 // and can emit late onScrolled callbacks; without re-asserting,
@@ -489,15 +706,52 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         pdfContinuousList.post(pendingContinuousScrollRunnable);
     }
 
+    private void cancelPendingContinuousNavigation() {
+        continuousNavigationGeneration++;
+        cancelPendingContinuousFastScrollCommit();
+        if (pdfContinuousList != null) {
+            if (pendingContinuousScrollRunnable != null) {
+                pdfContinuousList.removeCallbacks(pendingContinuousScrollRunnable);
+            }
+            if (pendingContinuousSettleRunnable != null) {
+                pdfContinuousList.removeCallbacks(pendingContinuousSettleRunnable);
+            }
+        }
+        pendingContinuousScrollRunnable = null;
+        pendingContinuousSettleRunnable = null;
+        suppressContinuousScrollSync = false;
+        handler.removeCallbacks(continuousScrollSaveRunnable);
+    }
+
+    private boolean isCurrentContinuousNavigation(int generation) {
+        return !activityDestroyed
+                && verticalPageSlideMode
+                && pdfContinuousList != null
+                && generation == continuousNavigationGeneration;
+    }
+
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            gestureStartedOnPdfFastScroll = verticalPageSlideMode
+                    && pdfFastScrollController != null
+                    && pdfFastScrollController.shouldHandleTouch(
+                    event.getRawX(), event.getRawY());
+        }
+        if (gestureStartedOnPdfFastScroll) {
+            boolean handled = super.dispatchTouchEvent(event);
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                gestureStartedOnPdfFastScroll = false;
+            }
+            return handled;
+        }
         // Stage-1 Matrix zoom: in single-page mode the Matrix view owns all page
         // gestures (zoom/pan/double-tap/tap). Let touches reach it directly instead
         // of the legacy scroll-based handler. Touches on visible chrome bars still
         // go through the legacy path so toolbar/seekbar controls keep working.
         if (pdfPageMatrixView != null && pdfPageMatrixView.getVisibility() == View.VISIBLE
                 && !verticalPageSlideMode) {
-            int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
                 boolean onChrome = pdfChromeVisible
                         && (isEventInsideView(pdfBottomBar, event) || isEventInsideView(pdfAppBar, event));
@@ -878,11 +1132,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         int action = stillTap ? getPdfTapPagingAction(event) : TapZoneMath.ACTION_MENU;
         pdfTapPagingSequence = false;
         if (action == TapZoneMath.ACTION_PREVIOUS) {
-            goToPage(currentPage - 1, -1);
+            turnPdfDisplayPageBy(-1);
             return true;
         }
         if (action == TapZoneMath.ACTION_NEXT) {
-            goToPage(currentPage + 1, 1);
+            turnPdfDisplayPageBy(1);
             return true;
         }
         return false;
@@ -920,11 +1174,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private boolean handlePdfTapPaging(@NonNull MotionEvent event) {
         int action = getPdfTapPagingAction(event);
         if (action == TapZoneMath.ACTION_PREVIOUS) {
-            goToPage(currentPage - 1, -1);
+            turnPdfDisplayPageBy(-1);
             return true;
         }
         if (action == TapZoneMath.ACTION_NEXT) {
-            goToPage(currentPage + 1, 1);
+            turnPdfDisplayPageBy(1);
             return true;
         }
         return false;
@@ -955,22 +1209,26 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     }
 
     private void setPdfChromeVisible(boolean visible) {
+        if (pdfChromeVisible && !visible) captureExpandedPdfChromeReserves();
         pdfChromeVisible = visible;
         applyPdfChromeFillColors();
         int toolbarVisibility = visible ? View.VISIBLE : View.GONE;
+        int appBarVisibility = visible ? View.VISIBLE : View.GONE;
         int bottomVisibility = visible ? View.VISIBLE : View.GONE;
-        int topStatusVisibility = visible ? View.GONE : View.VISIBLE;
 
-        if (pdfAppBar != null && pdfAppBar.getVisibility() != View.VISIBLE) {
-            pdfAppBar.setVisibility(View.VISIBLE);
+        if (pdfAppBar != null && pdfAppBar.getVisibility() != appBarVisibility) {
+            pdfAppBar.setVisibility(appBarVisibility);
         }
         if (pdfToolbar == null) pdfToolbar = findViewById(R.id.toolbar);
         if (pdfToolbar != null && pdfToolbar.getVisibility() != toolbarVisibility) {
             pdfToolbar.setVisibility(toolbarVisibility);
         }
+        // Collapsed PDF chrome is a real fullscreen state. Keeping the compact
+        // page strip visible still covered the top of landscape pages and made
+        // the reading canvas smaller than the user-selected fullscreen view.
         if (pdfTopPageStatus == null) pdfTopPageStatus = findViewById(R.id.pdf_top_page_status);
-        if (pdfTopPageStatus != null && pdfTopPageStatus.getVisibility() != topStatusVisibility) {
-            pdfTopPageStatus.setVisibility(topStatusVisibility);
+        if (pdfTopPageStatus != null && pdfTopPageStatus.getVisibility() != View.GONE) {
+            pdfTopPageStatus.setVisibility(View.GONE);
         }
         if (pdfBottomBar != null && pdfBottomBar.getVisibility() != bottomVisibility) {
             pdfBottomBar.setVisibility(bottomVisibility);
@@ -979,98 +1237,106 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         updatePageStatus();
         androidx.core.view.ViewCompat.requestApplyInsets(root);
         applyPdfViewportBarInsets();
-        // The bar's height changes with the child swap (toolbar <-> page strip);
-        // reapply the top reserve after the layout pass settles it.
-        if (pdfAppBar != null) {
-            pdfAppBar.post(this::applyPdfViewportBarInsets);
+        if (visible) {
+            // Reapply once the bars have their final measured height. The setter
+            // is idempotent and refits the existing bitmap without PDF rerendering.
+            if (pdfAppBar != null) pdfAppBar.post(this::applyPdfViewportBarInsets);
+            if (pdfBottomBar != null) pdfBottomBar.post(this::applyPdfViewportBarInsets);
         }
-        if (pdfViewport != null) pdfViewport.requestLayout();
-        if (!verticalPageSlideMode && pdfViewport != null && currentBitmap != null
-                && !isPdfTwoPageSpreadMode()) {
-            // In the two-page spread the bottom reserve is always 0, so showing or
-            // hiding the controls changes nothing about the layout - skip the
-            // re-fit/re-render (the spread has no cache, so it would re-render
-            // both pages on every toolbar toggle for no visual change).
-            fitCurrentSinglePageBitmapToViewport();
-            pdfViewport.post(() -> {
-                fitCurrentSinglePageBitmapToViewport();
-                renderCurrentPage(false);
-            });
+    }
+
+    private void captureExpandedPdfChromeReserves() {
+        // Landscape uses the toolbar-OFF canvas. Do not let its short control
+        // measurements overwrite the canonical portrait toolbar-ON frame.
+        if (isLandscapeOrientation()) return;
+        refreshPortraitPdfChromeReserveIdentity();
+        int liveTop = pdfAppBar != null ? pdfAppBar.getHeight() : 0;
+        int liveBottom = calculateVisiblePdfBottomBarReserve();
+        if (lastPdfExpandedTopBarHeightPx <= 0
+                && isCompletePortraitPdfTopMeasurement(liveTop)) {
+            lastPdfExpandedTopBarHeightPx = liveTop;
+        }
+        if (lastPdfBottomBarHeight <= 0
+                && isCompletePortraitPdfBottomMeasurement(liveBottom)) {
+            lastPdfBottomBarHeight = liveBottom;
         }
     }
 
     /**
-     * Reserve the visible bottom toolbar at fit zoom so a single PDF page never
-     * sits under it. When chrome is hidden, release the reserve and fit into the
-     * larger viewport.
+     * Chrome visibility never selects the PDF frame. Portrait always uses the
+     * cached toolbar-ON frame; landscape always uses the toolbar-OFF frame. Thus
+     * a middle tap cannot move/refit the portrait page or shrink a landscape page.
      */
     void applyPdfViewportBarInsets() {
         if (pdfViewport == null) return;
-        // Top reserve: the app bar is a root-level overlay (it no longer takes
-        // column space). Outside the landscape two-page spread the viewport is
-        // padded down by the bar's current height, reproducing the previous
-        // below-the-bar layout in portrait single-page and continuous modes for
-        // BOTH chrome states (the bar swaps between the toolbar and the compact
-        // page strip). In the spread the reserve is the compact page strip's
-        // height in BOTH chrome states: the rendering is pinned to the
-        // controls-hidden layout, so toggling the controls never re-renders -
-        // the taller title toolbar simply overlays the strip area and the top
-        // sliver of the pages while it is shown.
-        if (isPdfTwoPageSpreadMode()) {
-            setPdfViewportTopPadding(pdfTopStripReservePx());
-        } else if (pdfAppBar != null) {
-            int barHeight = pdfAppBar.getHeight();
-            if (barHeight > 0) {
-                if (!pdfChromeVisible) {
-                    lastPdfTopStripHeightPx = barHeight;
-                }
-                setPdfViewportTopPadding(barHeight);
-            } else {
-                // Not measured yet (first layout / visibility just changed).
-                pdfAppBar.post(() -> {
-                    if (pdfAppBar != null && !isPdfTwoPageSpreadMode()
-                            && pdfAppBar.getHeight() > 0) {
-                        if (!pdfChromeVisible) {
-                            lastPdfTopStripHeightPx = pdfAppBar.getHeight();
-                        }
-                        setPdfViewportTopPadding(pdfAppBar.getHeight());
-                    }
-                });
-            }
+        boolean landscape = isLandscapeOrientation();
+        int liveTop = pdfAppBar != null ? pdfAppBar.getHeight() : 0;
+        int liveBottom = calculateVisiblePdfBottomBarReserve();
+        if (!landscape) refreshPortraitPdfChromeReserveIdentity();
+        // Capture only the first valid portrait measurement. Later system-bar
+        // visibility/layout callbacks must not change the canonical frame.
+        if (!landscape && lastPdfExpandedTopBarHeightPx <= 0
+                && isCompletePortraitPdfTopMeasurement(liveTop)) {
+            lastPdfExpandedTopBarHeightPx = liveTop;
         }
-        // When zoomed in, the page is meant to be panned/scrolled over the whole
-        // viewport — including the area the toolbar would reserve. Drop the reserve
-        // so the bottom of an enlarged page is reachable instead of being cut off
-        // by dead padding. The reserve only matters at fit zoom (to keep the whole
-        // page above the toolbar). The landscape two-page spread also skips the
-        // reserve: the toolbar overlays the spread instead of shrinking it, so
-        // toggling the controls never resizes the two pages.
-        if (zoom > 1.05f || !pdfChromeVisible || isPdfTwoPageSpreadMode()) {
-            setPdfViewportBottomPadding(0);
-            return;
+        if (!landscape && lastPdfBottomBarHeight <= 0
+                && isCompletePortraitPdfBottomMeasurement(liveBottom)) {
+            lastPdfBottomBarHeight = liveBottom;
         }
-        // Remember the actual overlay area covered by the bottom bar. Computing
-        // it from screen coordinates avoids guessing which parts of the bar's
-        // inset padding are visually covering the PDF.
-        if (pdfBottomBar != null && pdfBottomBar.getVisibility() == View.VISIBLE
-                && pdfBottomBar.getHeight() > 0) {
-            lastPdfBottomBarHeight = calculateVisiblePdfBottomBarReserve();
-            setPdfViewportBottomPadding(lastPdfBottomBarHeight);
-            return;
-        }
-        if (lastPdfBottomBarHeight > 0) {
-            setPdfViewportBottomPadding(lastPdfBottomBarHeight);
-            return;
-        }
-        // First time, before the bar has ever been measured: measure then apply.
-        if (pdfBottomBar != null) {
-            pdfBottomBar.post(() -> {
-                if (pdfBottomBar != null && pdfBottomBar.getHeight() > 0) {
-                    lastPdfBottomBarHeight = calculateVisiblePdfBottomBarReserve();
-                    setPdfViewportBottomPadding(lastPdfBottomBarHeight);
+        int completeLiveTop = isCompletePortraitPdfTopMeasurement(liveTop) ? liveTop : 0;
+        int completeLiveBottom = isCompletePortraitPdfBottomMeasurement(liveBottom)
+                ? liveBottom : 0;
+
+        int targetTop = ReaderChromeLayoutMath.pdfTopReserve(
+                landscape,
+                hiddenPdfTopSafeInsetPx(),
+                lastPdfExpandedTopBarHeightPx,
+                completeLiveTop,
+                portraitPdfTopFallbackPx());
+        int targetBottom = ReaderChromeLayoutMath.pdfBottomReserve(
+                landscape,
+                lastPdfBottomBarHeight,
+                completeLiveBottom,
+                portraitPdfBottomFallbackPx());
+
+        setPdfViewportPadding(targetTop, targetBottom);
+
+        if (!landscape && pdfChromeVisible && pdfAppBar != null
+                && lastPdfExpandedTopBarHeightPx <= 0
+                && !isCompletePortraitPdfTopMeasurement(liveTop)) {
+            pdfAppBar.post(() -> {
+                if (pdfChromeVisible && !isLandscapeOrientation()
+                        && lastPdfExpandedTopBarHeightPx <= 0
+                        && pdfAppBar != null
+                        && isCompletePortraitPdfTopMeasurement(pdfAppBar.getHeight())) {
+                    lastPdfExpandedTopBarHeightPx = pdfAppBar.getHeight();
+                    applyPdfViewportBarInsets();
                 }
             });
         }
+        if (!landscape && pdfChromeVisible && pdfBottomBar != null
+                && lastPdfBottomBarHeight <= 0
+                && !isCompletePortraitPdfBottomMeasurement(liveBottom)) {
+            pdfBottomBar.post(() -> {
+                if (pdfChromeVisible && !isLandscapeOrientation()
+                        && lastPdfBottomBarHeight <= 0
+                        && pdfBottomBar != null
+                        && isCompletePortraitPdfBottomMeasurement(
+                                calculateVisiblePdfBottomBarReserve())) {
+                    lastPdfBottomBarHeight = calculateVisiblePdfBottomBarReserve();
+                    applyPdfViewportBarInsets();
+                }
+            });
+        }
+    }
+
+    /** Drops measurements captured under a different status/navigation frame. */
+    private void refreshPortraitPdfChromeReserveIdentity() {
+        int tolerancePx = Math.max(1, dpToPx(2));
+        lastPdfExpandedTopBarHeightPx = ReaderChromeLayoutMath.compatibleCachedReserve(
+                lastPdfExpandedTopBarHeightPx, portraitPdfTopFallbackPx(), tolerancePx);
+        lastPdfBottomBarHeight = ReaderChromeLayoutMath.compatibleCachedReserve(
+                lastPdfBottomBarHeight, portraitPdfBottomFallbackPx(), tolerancePx);
     }
 
     private int calculateVisiblePdfBottomBarReserve() {
@@ -1078,72 +1344,164 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         return pdfBottomBar.getHeight();
     }
 
-    /**
-     * Height of the compact top page strip, used as the spread's constant top
-     * reserve. Cached while the strip is visible; before it has ever been shown
-     * it is force-measured (the view is GONE while the toolbar shows), with the
-     * strip's 32dp minHeight as the final fallback.
-     */
-    private int pdfTopStripReservePx() {
-        if (lastPdfTopStripHeightPx > 0) return lastPdfTopStripHeightPx;
-        if (pdfTopPageStatus == null) pdfTopPageStatus = findViewById(R.id.pdf_top_page_status);
-        if (pdfTopPageStatus != null) {
-            int width = pdfViewport != null && pdfViewport.getWidth() > 0
-                    ? pdfViewport.getWidth() : dpToPx(360);
-            pdfTopPageStatus.measure(
-                    View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-            int measured = pdfTopPageStatus.getMeasuredHeight();
-            if (measured > 0) {
-                lastPdfTopStripHeightPx = measured;
-                return measured;
-            }
-        }
-        return dpToPx(32);
+    private boolean isCompletePortraitPdfTopMeasurement(int measuredPx) {
+        int tolerancePx = Math.max(1, dpToPx(2));
+        // Reject both the pre-inset bare toolbar and an over-tall transient
+        // system-bar layout; either would permanently poison the fixed frame.
+        return measuredPx > 0
+                && Math.abs((long) measuredPx - portraitPdfTopFallbackPx()) <= tolerancePx;
     }
 
-    private void setPdfViewportTopPadding(int topPx) {
-        if (pdfViewport == null) return;
-        if (pdfViewport.getPaddingTop() == topPx) return;
-        if (!verticalPageSlideMode) {
-            ++renderGeneration;
-            singlePageCache.evictAll();
-            singlePagePrefetchInFlight.clear();
-            singlePageCacheWidth = -1;
-            singlePageCacheHeight = -1;
+    private boolean isCompletePortraitPdfBottomMeasurement(int measuredPx) {
+        if (isPdfImeVisible()) return false;
+        int tolerancePx = Math.max(1, dpToPx(2));
+        // The fallback already includes the stable navigation inset, so a
+        // complete measurement should match it rather than merely exceed it.
+        return measuredPx > 0
+                && Math.abs((long) measuredPx - portraitPdfBottomFallbackPx()) <= tolerancePx;
+    }
+
+    private boolean isPdfImeVisible() {
+        View insetRoot = root != null ? root : pdfViewport;
+        androidx.core.view.WindowInsetsCompat insets =
+                androidx.core.view.ViewCompat.getRootWindowInsets(insetRoot);
+        return insets != null && insets.isVisible(
+                androidx.core.view.WindowInsetsCompat.Type.ime());
+    }
+
+    private int hiddenPdfTopSafeInsetPx() {
+        View insetRoot = root != null ? root : pdfViewport;
+        androidx.core.view.WindowInsetsCompat insets =
+                androidx.core.view.ViewCompat.getRootWindowInsets(insetRoot);
+        int top = 0;
+        if (insets != null) {
+            androidx.core.graphics.Insets cutout = insets.getInsetsIgnoringVisibility(
+                    androidx.core.view.WindowInsetsCompat.Type.displayCutout());
+            top = Math.max(0, cutout.top);
+            if (prefs != null && prefs.getShowStatusBar()) {
+                androidx.core.graphics.Insets status = insets.getInsetsIgnoringVisibility(
+                        androidx.core.view.WindowInsetsCompat.Type.statusBars());
+                top = Math.max(top, status.top);
+            }
         }
+        if (prefs != null && prefs.getShowStatusBar()) {
+            top = Math.max(top, androidSystemBarDimensionPx("status_bar_height"));
+        }
+        return top;
+    }
+
+    /**
+     * Portrait must use the toolbar-ON frame even when the viewer was opened in
+     * landscape or rotated while chrome was already hidden. In that path there is
+     * no live portrait toolbar measurement yet, so a zero fallback would make the
+     * first chrome reveal shrink and move the page.
+     */
+    private int portraitPdfTopFallbackPx() {
+        return pdfToolbarBaseHeightPx() + hiddenPdfTopSafeInsetPx();
+    }
+
+    /** XML uses ?attr/actionBarSize; 56dp is only the theme-resolution fallback. */
+    private int pdfToolbarBaseHeightPx() {
+        android.util.TypedValue value = new android.util.TypedValue();
+        if (getTheme().resolveAttribute(androidx.appcompat.R.attr.actionBarSize, value, true)
+                || getTheme().resolveAttribute(android.R.attr.actionBarSize, value, true)) {
+            try {
+                if (value.resourceId != 0) {
+                    return Math.max(1, getResources().getDimensionPixelSize(value.resourceId));
+                }
+                if (value.type == android.util.TypedValue.TYPE_DIMENSION) {
+                    return Math.max(1, android.util.TypedValue.complexToDimensionPixelSize(
+                            value.data, getResources().getDisplayMetrics()));
+                }
+            } catch (android.content.res.Resources.NotFoundException ignored) {
+            }
+        }
+        return dpToPx(56);
+    }
+
+    private int portraitPdfBottomFallbackPx() {
+        int navigationInset = 0;
+        View insetRoot = root != null ? root : pdfViewport;
+        androidx.core.view.WindowInsetsCompat insets =
+                androidx.core.view.ViewCompat.getRootWindowInsets(insetRoot);
+        if (insets != null) {
+            navigationInset = Math.max(0, insets.getInsetsIgnoringVisibility(
+                    androidx.core.view.WindowInsetsCompat.Type.navigationBars()).bottom);
+        }
+        // During a landscape-to-portrait configuration callback the root may still
+        // expose the old side-navigation inset for one layout pass. The platform
+        // dimension supplies the portrait bottom inset until the new WindowInsets
+        // arrive; the viewport listener then replaces it with the exact value.
+        if (navigationInset <= 0) {
+            navigationInset = androidSystemBarDimensionPx("navigation_bar_height");
+        }
+        // activity_pdf_reader.xml: 8dp + 22dp + 34dp + 66dp + 6dp.
+        return dpToPx(136) + navigationInset;
+    }
+
+    private int androidSystemBarDimensionPx(@NonNull String resourceName) {
+        int id = getResources().getIdentifier(resourceName, "dimen", "android");
+        if (id == 0) return 0;
+        try {
+            return Math.max(0, getResources().getDimensionPixelSize(id));
+        } catch (android.content.res.Resources.NotFoundException ignored) {
+            return 0;
+        }
+    }
+
+    private boolean isLandscapeOrientation() {
+        return getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+    }
+
+    /**
+     * Applies both axes in one layout transaction so rotation has no half-updated frame.
+     *
+     * <p>A chrome-only height change must not invalidate or rerender the PDF bitmap.
+     * {@link PdfPageView} refits its existing bitmap from {@code onSizeChanged()}, and
+     * the legacy ImageView fallback can likewise be resized from the already-rendered
+     * bitmap. Rerendering here caused a visible flash and unnecessary PDF decoding on
+     * every toolbar show/hide in landscape mode.</p>
+     */
+    private void setPdfViewportPadding(int topPx, int bottomPx) {
+        if (pdfViewport == null) return;
+        topPx = Math.max(0, topPx);
+        bottomPx = Math.max(0, bottomPx);
+        if (pdfViewport.getPaddingTop() == topPx
+                && pdfViewport.getPaddingBottom() == bottomPx) return;
+
+        if (!verticalPageSlideMode) {
+            // Cancel only speculative renders made for the old viewport geometry.
+            // Keep the visible bitmap and cache intact; the next real page change
+            // will invalidate stale cache geometry through
+            // invalidateSinglePageCacheIfNeeded().
+            singlePageGeometryGeneration++;
+            if (pendingSinglePagePrefetch != null) {
+                handler.removeCallbacks(pendingSinglePagePrefetch);
+                pendingSinglePagePrefetch = null;
+            }
+        }
+
         pdfViewport.setPadding(
                 pdfViewport.getPaddingLeft(),
                 topPx,
                 pdfViewport.getPaddingRight(),
-                pdfViewport.getPaddingBottom());
-        pdfViewport.requestLayout();
-        if (pageImage != null) pageImage.post(this::applySinglePageVerticalOffset);
-        if (!verticalPageSlideMode) {
-            pdfViewport.post(() -> renderCurrentPage(false));
-        }
-    }
-
-    private void setPdfViewportBottomPadding(int bottomPx) {
-        if (pdfViewport == null) return;
-        if (pdfViewport.getPaddingBottom() == bottomPx) return;
-        if (!verticalPageSlideMode) {
-            ++renderGeneration;
-            singlePageCache.evictAll();
-            singlePagePrefetchInFlight.clear();
-            singlePageCacheWidth = -1;
-            singlePageCacheHeight = -1;
-        }
-        pdfViewport.setPadding(
-                pdfViewport.getPaddingLeft(),
-                pdfViewport.getPaddingTop(),
-                pdfViewport.getPaddingRight(),
                 bottomPx);
-        if (pdfViewport != null) pdfViewport.requestLayout();
-        if (pageImage != null) pageImage.post(this::applySinglePageVerticalOffset);
-        if (!verticalPageSlideMode && pdfViewport != null) {
-            pdfViewport.post(() -> renderCurrentPage(false));
-        }
+        pdfViewport.requestLayout();
+        pdfViewport.post(() -> {
+            if (activityDestroyed) return;
+            if (!verticalPageSlideMode) {
+                // PdfPageView normally refits itself through onSizeChanged(). The
+                // requestLayout covers parent implementations that defer child size
+                // propagation; the fallback ImageView is fitted explicitly.
+                if (pdfPageMatrixView != null) {
+                    pdfPageMatrixView.requestLayout();
+                    pdfPageMatrixView.invalidate();
+                }
+                fitCurrentSinglePageBitmapToViewport();
+            }
+            applySinglePageVerticalOffset();
+        });
     }
 
     private void fitCurrentSinglePageBitmapToViewport() {
@@ -1338,6 +1696,9 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             TtsPlaybackBridge.register(this);
         }
         startup().onResume();
+        if (pdfFastScrollController != null) {
+            pdfFastScrollController.resume();
+        }
     }
 
     void resolveReaderThemeColors() {
@@ -1380,6 +1741,15 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
             }
             getWindow().getDecorView().setSystemUiVisibility(flags);
+        }
+        View insetRoot = root != null ? root : findViewById(R.id.pdf_root);
+        if (insetRoot != null) {
+            com.readwide.manager.util.EdgeToEdgeUtil.applyReaderSystemBarVisibility(
+                    this,
+                    insetRoot,
+                    pdfChromeVisible,
+                    prefs != null && prefs.getShowStatusBar());
+            if (pdfViewport != null) pdfViewport.post(this::applyPdfViewportBarInsets);
         }
         applyPdfChromeFillColors();
     }
@@ -1552,9 +1922,12 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         super.onConfigurationChanged(newConfig);
         updateRotationButtonIcon();
         styleControls();
-        // Orientation flips the spread mode on or off; reapply the viewport
-        // reserves so the bars overlay in the spread and reserve space again in
-        // portrait (post once more for the bar's post-rotation height).
+        // Rotation can reset immersive visibility on OEM builds. Reapply the
+        // current policy before selecting the orientation frame so a transient
+        // navigation bar cannot become part of the landscape PDF canvas.
+        applyDocumentSystemBarColors();
+        // Rotation changes the measured app-bar and bottom-bar reserves.
+        // Reapply after the rotated controls have completed measurement.
         applyPdfViewportBarInsets();
         if (pdfAppBar != null) {
             pdfAppBar.post(this::applyPdfViewportBarInsets);
@@ -1575,9 +1948,22 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 if (!fromUser) return;
                 int total = Math.max(1, pageCount);
                 int safe = Math.max(0, Math.min(total - 1, progress));
-                pageStatus.setText(String.format(Locale.getDefault(), "%d / %d", safe + 1, total));
-                if (prevButton != null) prevButton.setEnabled(safe > 0);
-                if (nextButton != null) nextButton.setEnabled(safe < total - 1);
+                boolean spread = isPdfTwoPageSpreadMode();
+                int end = com.readwide.manager.util.SpreadMath.visibleEndIndex(
+                        safe, total, spread);
+                String preview = end > safe
+                        ? String.format(Locale.getDefault(), "%d-%d / %d", safe + 1, end + 1, total)
+                        : String.format(Locale.getDefault(), "%d / %d", safe + 1, total);
+                if (pageStatus != null) pageStatus.setText(preview);
+                if (pdfTopPageStatus != null) pdfTopPageStatus.setText(preview);
+                if (prevButton != null) {
+                    prevButton.setEnabled(com.readwide.manager.util.SpreadMath.canTurn(
+                            safe, -1, total, spread));
+                }
+                if (nextButton != null) {
+                    nextButton.setEnabled(com.readwide.manager.util.SpreadMath.canTurn(
+                            safe, 1, total, spread));
+                }
             }
 
             @Override
@@ -1703,7 +2089,6 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         }
         zoom = Math.max(0.55f, Math.min(4.5f, targetZoom));
         if (verticalPageSlideMode) {
-            if (pdfContinuousAdapter != null) pdfContinuousAdapter.clearBitmaps();
             renderContinuousPages();
             return;
         }
@@ -1711,13 +2096,10 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         // don't coexist with the big zoomed bitmap and exhaust the heap. The
         // currently shown bitmap is protected from recycle by entryRemoved.
         if (zoom > 1.05f && singlePageCache.size() > 0) {
-            singlePageCache.evictAll();
-            singlePagePrefetchInFlight.clear();
-            singlePageCacheWidth = -1;
-            singlePageCacheHeight = -1;
+            clearSinglePageRenderCache();
         }
-        // Update the bottom reserve for the new zoom: dropped when zoomed in so the
-        // page can scroll into the full height, restored at fit zoom.
+        // Reapply the current chrome reserves after zoom state changes. Visible
+        // controls keep their measured space; hidden controls keep the immersive canvas.
         applyPdfViewportBarInsets();
         if (focusEvent != null) {
             prepareDoubleTapZoomFocus(focusEvent);
@@ -2048,8 +2430,18 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         if (pdfSearchController != null) return;
         pdfSearchController = new PdfSearchController(this, new PdfSearchController.Host() {
             @Override
-            public boolean twoPageSpreadActive() {
-                return isPdfTwoPageSpreadMode();
+            public int visibleRightPageIndex() {
+                return displayedPdfRightSpreadPageIndex();
+            }
+
+            @Override
+            public boolean isPagePartOfCurrentDisplay(int pageIndex) {
+                return isPdfPageVisibleInCurrentDisplay(pageIndex);
+            }
+
+            @Override
+            public RectF mapPageRectToDisplayedBitmap(int pageIndex, RectF pageNormalizedRect) {
+                return mapPdfPageRectToDisplayedBitmap(pageIndex, pageNormalizedRect);
             }
 
             @Override public void goToPage(int pageIndex) {
@@ -2064,7 +2456,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     private void showPdfSearchDialog() {
         if (pageCount <= 0) return;
+        if (activePdfSearchDialog != null) {
+            activePdfSearchDialog.dismiss();
+        }
         ensurePdfSearchController();
+        final PdfSearchController searchController = pdfSearchController;
 
         final int bg = dialogBg();
         final int fg = dialogFg();
@@ -2139,24 +2535,28 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
             @Override public void afterTextChanged(android.text.Editable e) {
-                pdfSearchController.startQuery(e.toString());
+                searchController.startQuery(e.toString());
             }
         });
-        prevButton.setOnClickListener(v -> pdfSearchController.move(false));
-        nextButton.setOnClickListener(v -> pdfSearchController.move(true));
+        prevButton.setOnClickListener(v -> searchController.move(false));
+        nextButton.setOnClickListener(v -> searchController.move(true));
         closeButton.setOnClickListener(v -> dialog.dismiss());
         input.setOnEditorActionListener((v, actionId, event) -> {
-            pdfSearchController.move(true);
+            searchController.move(true);
             return true;
         });
 
-        pdfSearchController.setStatusListener((ordinal, total) ->
+        searchController.setStatusListener((ordinal, total) ->
                 status.setText(total == 0 ? "0 / 0" : (ordinal + " / " + total)));
-        pdfSearchController.setActive(true);
+        searchController.setActive(true);
+        activePdfSearchDialog = dialog;
         dialog.setOnDismissListener(d -> {
-            pdfSearchController.setStatusListener(null);
-            pdfSearchController.setActive(false);
-            if (pdfPageMatrixView != null) pdfPageMatrixView.setSearchSafeBottom(0);
+            if (activePdfSearchDialog == dialog) {
+                searchController.setStatusListener(null);
+                searchController.setActive(false);
+                activePdfSearchDialog = null;
+                if (pdfPageMatrixView != null) pdfPageMatrixView.setSearchSafeBottom(0);
+            }
         });
         dialog.show();
         // Once the dialog is laid out, tell the page view where the dialog's top
@@ -2474,6 +2874,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     void loadPdfFromIntent() {
         if (activityDestroyed) return;
+        resetPdfDocumentScopedState();
+        final int loadGeneration = ++pdfDocumentLoadGeneration;
         updateLoadingIndicatorTheme();
         progressBar.setVisibility(View.VISIBLE);
         pageStatus.setText(getString(R.string.loading));
@@ -2506,14 +2908,64 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 final File finalFile = pdfFile;
                 final String finalName = loadedName;
                 handler.post(() -> {
-                    if (!activityDestroyed) openPdfFile(finalFile, finalName, jumpPage);
+                    if (!activityDestroyed && loadGeneration == pdfDocumentLoadGeneration) {
+                        openPdfFile(finalFile, finalName, jumpPage);
+                    }
                 });
             } catch (Exception e) {
                 handler.post(() -> {
-                    if (!activityDestroyed) showLoadError(e);
+                    if (!activityDestroyed && loadGeneration == pdfDocumentLoadGeneration) {
+                        showLoadError(e);
+                    }
                 });
             }
         });
+    }
+
+    /**
+     * Drops every controller/cache whose identity belongs to the previous PDF.
+     * PdfReaderActivity is singleTop, so a new intent can replace the document
+     * without destroying the Activity; renderer cleanup alone is not enough.
+     */
+    private void resetPdfDocumentScopedState() {
+        // Close immediately rather than waiting for the replacement path/URI to
+        // resolve. If that load fails, the old PDF must not remain visible or
+        // retain its renderer behind the new error state.
+        closeRenderer();
+        if (pdfTtsIntegrationController != null) {
+            pdfTtsIntegrationController.onDocumentChanged();
+        }
+        if (activePdfSearchDialog != null) {
+            activePdfSearchDialog.dismiss();
+            activePdfSearchDialog = null;
+        }
+        if (pdfPageMatrixView != null) pdfPageMatrixView.setSearchSafeBottom(0);
+        if (pdfSearchController != null) {
+            pdfSearchController.setActive(false);
+            pdfSearchController.close();
+            pdfSearchController = null;
+        }
+        if (pdfTtsController != null) {
+            pdfTtsController.release();
+            pdfTtsController = null;
+        }
+        if (pdfTtsHighlightController != null) {
+            pdfTtsHighlightController.onPageChanged();
+            pdfTtsHighlightController = null;
+        }
+        pdfTtsTextSource = null;
+        pagedTtsResumeAnchorCharPosition = -1;
+        TtsPlaybackBridge.unregister(this);
+
+        // Clear the old document identity as well as its renderer. If resolving
+        // the replacement path/URI fails and onPause/onDestroy follows,
+        // saveReadingState() must not overwrite the previous PDF's saved
+        // position with this reset state.
+        localFile = null;
+        filePath = null;
+        fileName = null;
+        currentPage = 0;
+        pageCount = 0;
     }
 
     private void openPdfFile(@NonNull File pdfFile, String loadedName, int jumpPage) {
@@ -2561,6 +3013,19 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             // overwrite the precise PDF coordinate with a page-only fallback.
             applyPdfDisplayMode();
         } catch (Exception e) {
+            // A descriptor may already be open even when PdfRenderer creation
+            // or page-count validation fails. Release every partial handle and
+            // clear the identity so onPause cannot persist a zero-page state for
+            // a document that never opened successfully.
+            closeRenderer();
+            localFile = null;
+            filePath = null;
+            fileName = null;
+            currentPage = 0;
+            pageCount = 0;
+            if (getSupportActionBar() != null) {
+                getSupportActionBar().setTitle(getString(R.string.app_name));
+            }
             showLoadError(e);
         }
     }
@@ -2569,7 +3034,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         if (activityDestroyed) return;
         progressBar.setVisibility(View.GONE);
         String message = getString(R.string.error_prefix) + (e.getMessage() != null ? e.getMessage() : e.toString());
-        pageStatus.setText(message);
+        if (pageStatus != null) pageStatus.setText(message);
+        if (pdfTopPageStatus != null) pdfTopPageStatus.setText(message);
         ShortToast.show(this, message);
     }
 
@@ -2586,10 +3052,6 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
     }
 
-    int pdfDisplayPageStep() {
-        return com.readwide.manager.util.SpreadMath.displayStep(isPdfTwoPageSpreadMode());
-    }
-
     int pdfRightSpreadPageIndex() {
         return com.readwide.manager.util.SpreadMath.rightIndex(
                 currentPage, pageCount, isPdfTwoPageSpreadMode());
@@ -2599,13 +3061,65 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         return pdfRightSpreadPageIndex() >= 0;
     }
 
-    int clampPdfDisplayTarget(int page) {
-        return clampPage(page);
+    /** Right page whose geometry belongs to the bitmap currently on screen. */
+    int displayedPdfRightSpreadPageIndex() {
+        PdfSpreadHighlightMath.Layout layout = validCurrentPdfSpreadLayout();
+        return layout != null ? layout.rightPageIndex : -1;
+    }
+
+    /**
+     * True when a PDF page is part of the current display. During an in-flight
+     * spread render the right page is considered visible so an asynchronous TTS
+     * glyph request is retained; the overlay is applied as soon as the winning
+     * render commits its exact bitmap geometry.
+     */
+    boolean isPdfPageVisibleInCurrentDisplay(int pageIndex) {
+        if (verticalPageSlideMode || pageIndex < 0) return false;
+        if (pageIndex == currentPage) return true;
+        PdfSpreadHighlightMath.Layout layout = validCurrentPdfSpreadLayout();
+        if (layout != null) return pageIndex == layout.rightPageIndex;
+        return pageIndex == pdfRightSpreadPageIndex();
+    }
+
+    /**
+     * Converts a rectangle normalized to one source PDF page into coordinates
+     * normalized to the bitmap displayed by {@link PdfPageView}. Single pages
+     * are already in that space; a real spread uses the committed per-half
+     * placement including its gap and vertical centering offsets.
+     */
+    @Nullable
+    RectF mapPdfPageRectToDisplayedBitmap(int pageIndex, @NonNull RectF pageNormalizedRect) {
+        if (verticalPageSlideMode) return null;
+        PdfSpreadHighlightMath.Layout layout = validCurrentPdfSpreadLayout();
+        if (layout != null) {
+            float[] mapped = layout.map(pageIndex,
+                    pageNormalizedRect.left, pageNormalizedRect.top,
+                    pageNormalizedRect.right, pageNormalizedRect.bottom);
+            return mapped != null ? new RectF(mapped[0], mapped[1], mapped[2], mapped[3]) : null;
+        }
+        // A spread render without committed geometry must never fall back to an
+        // identity mapping: that would stretch a page rectangle over both pages.
+        if (hasVisiblePdfRightSpreadPage()) return null;
+        return pageIndex == currentPage ? new RectF(pageNormalizedRect) : null;
+    }
+
+    @Nullable
+    private PdfSpreadHighlightMath.Layout validCurrentPdfSpreadLayout() {
+        PdfSpreadHighlightMath.Layout layout = pdfSpreadBitmapLayout;
+        Bitmap bitmap = currentBitmap;
+        if (layout == null || verticalPageSlideMode || layout.leftPageIndex != currentPage
+                || bitmap == null || bitmap.isRecycled()
+                || bitmap.getWidth() != layout.bitmapWidth
+                || bitmap.getHeight() != layout.bitmapHeight) {
+            return null;
+        }
+        return layout;
     }
 
     void turnPdfDisplayPageBy(int direction) {
         if (direction == 0 || pageCount <= 1) return;
-        int target = clampPdfDisplayTarget(currentPage + direction * pdfDisplayPageStep());
+        int target = com.readwide.manager.util.SpreadMath.turnTarget(
+                currentPage, direction, pageCount, isPdfTwoPageSpreadMode());
         if (target != currentPage) {
             goToPage(target, Integer.signum(direction));
         }
@@ -2661,6 +3175,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     private void releaseSinglePageBitmap() {
         ++renderGeneration;
+        pdfSpreadBitmapLayout = null;
         if (pdfPageMatrixView != null) pdfPageMatrixView.detachBitmaps();
         if (pendingSinglePagePrefetch != null) {
             handler.removeCallbacks(pendingSinglePagePrefetch);
@@ -2672,10 +3187,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         }
         Bitmap shown = currentBitmap;
         currentBitmap = null; // clear before evict so entryRemoved may recycle it
-        singlePageCache.evictAll();
-        singlePagePrefetchInFlight.clear();
-        singlePageCacheWidth = -1;
-        singlePageCacheHeight = -1;
+        clearSinglePageRenderCache();
         if (shown != null && !shown.isRecycled()) {
             shown.recycle();
         }
@@ -2692,6 +3204,14 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         return singlePageCache.snapshot().containsValue(bitmap);
     }
 
+    private void clearSinglePageRenderCache() {
+        singlePageGeometryGeneration++;
+        singlePageCache.evictAll();
+        singlePagePrefetchInFlight.clear();
+        singlePageCacheWidth = -1;
+        singlePageCacheHeight = -1;
+    }
+
     private void invalidateSinglePageCacheIfNeeded(float zoomNow, int widthNow, int heightNow) {
         if (widthNow <= 0) return;
         if (Math.abs(zoomNow - singlePageCacheZoom) > 0.001f
@@ -2699,6 +3219,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 || heightNow != singlePageCacheHeight) {
             // Cached bitmaps were rendered at a different scale; drop them. evictAll
             // recycles each (except the on-screen one, guarded in entryRemoved).
+            singlePageGeometryGeneration++;
             singlePageCache.evictAll();
             singlePagePrefetchInFlight.clear();
             singlePageCacheZoom = zoomNow;
@@ -2711,6 +3232,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private void showSinglePageBitmap(@NonNull Bitmap cached, float zoomForDisplay) {
         Bitmap old = currentBitmap;
         currentBitmap = cached;
+        pdfSpreadBitmapLayout = null;
         renderedZoom = zoomForDisplay;
         // Stage-1 Matrix zoom: feed the Matrix view and skip the legacy ImageView
         // path (which produced the flicker/jump). The Matrix view owns zoom/pan.
@@ -2724,6 +3246,9 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             if (pdfSearchController != null) {
                 pdfSearchController.onPageShown(currentPage,
                         lastRenderedPageWidthPts, lastRenderedPageHeightPts);
+            }
+            if (pdfTtsHighlightController != null) {
+                pdfTtsHighlightController.onDisplayedBitmapChanged();
             }
             if (old != null && old != cached && !old.isRecycled()
                     && !isBitmapInSinglePageCache(old)) {
@@ -2743,7 +3268,10 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         }
         pageImage.setImageBitmap(cached);
         android.view.ViewGroup.LayoutParams ip = pageImage.getLayoutParams();
-        int displayWidth = Math.max(1, Math.round(cached.getWidth() / PDF_SUPERSAMPLE));
+        SinglePageCacheMetadata cachedMetadata = singlePageCacheMetadata.get(currentPage);
+        int displayWidth = cachedMetadata != null
+                ? cachedMetadata.intendedDisplayWidthPx
+                : Math.max(1, Math.round(cached.getWidth() / PDF_SUPERSAMPLE));
         if (pendingZoomFocus) {
             pendingZoomRevealWidth = displayWidth;
         }
@@ -2779,18 +3307,23 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             handler.removeCallbacks(pendingSinglePagePrefetch);
         }
         final int dir = pendingPageSlideDirection;
+        final int geometryGeneration = singlePageGeometryGeneration;
         pendingSinglePagePrefetch = () -> {
             pendingSinglePagePrefetch = null;
             if (activityDestroyed || verticalPageSlideMode) return;
             if (currentPage != centerPage) return; // user moved on
             pendingPageSlideDirection = dir;
-            prefetchAdjacentSinglePages(centerPage, zoomForRender, viewportWidth, viewportHeight);
+            if (geometryGeneration != singlePageGeometryGeneration) return;
+            prefetchAdjacentSinglePages(centerPage, zoomForRender, viewportWidth, viewportHeight,
+                    geometryGeneration);
         };
         handler.postDelayed(pendingSinglePagePrefetch, 16L);
     }
 
     /** Renders the next/previous page into the cache off the main thread. */
-    private void prefetchAdjacentSinglePages(int centerPage, float zoomForRender, int viewportWidth, int viewportHeight) {
+    private void prefetchAdjacentSinglePages(int centerPage, float zoomForRender,
+                                             int viewportWidth, int viewportHeight,
+                                             int geometryGeneration) {
         if (verticalPageSlideMode || prefetchRenderer == null || pageCount <= 1 || viewportWidth <= 0) return;
         // Only prefetch at (or near) the fit zoom. Zoomed-in pages produce very
         // large bitmaps; caching several of them at once can exhaust the heap and
@@ -2818,13 +3351,17 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             final float zoomSnap = zoomForRender;
             final int widthSnap = viewportWidth;
             final int heightSnap = viewportHeight;
+            final int geometrySnap = geometryGeneration;
             prefetchExecutor.execute(() -> {
                 Bitmap bmp = null;
+                int pageWidthPts = 0;
+                int pageHeightPts = 0;
+                int intendedDisplayWidthPx = 0;
                 try {
                     // Skip if the user has already moved on or zoom/width changed,
                     // so prefetch work never competes with the visible render for
                     // pages that no longer matter.
-                    if (destroyedOrZoomChanged(zoomSnap, widthSnap)
+                    if (singlePageRenderGeometryChanged(zoomSnap, geometrySnap)
                             || Math.abs(currentPage - centerPage) > 3) {
                         return;
                     }
@@ -2832,25 +3369,25 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                         if (prefetchRenderer == null) return;
                         PdfRenderer.Page pdfPage = prefetchRenderer.openPage(page);
                         try {
-                            int baseWidth = Math.max(1, widthSnap - dpToPx(24));
-                            float fitScale = baseWidth / (float) pdfPage.getWidth();
-                            // Match the visible render: when not zoomed, also bound
-                            // by available height so prefetched pages fit between the
-                            // title bar and toolbar instead of being too tall.
-                            if (zoomSnap <= 1.05f && heightSnap > 0) {
-                                float baseHeight = Math.max(1, heightSnap - dpToPx(16));
-                                fitScale = Math.min(fitScale, baseHeight / (float) pdfPage.getHeight());
-                            }
-                            float renderScale = Math.max(0.2f, fitScale * zoomSnap * PDF_SUPERSAMPLE);
-                            int w = Math.max(1, Math.round(pdfPage.getWidth() * renderScale));
-                            int h = Math.max(1, Math.round(pdfPage.getHeight() * renderScale));
-                            long pixels = (long) w * (long) h;
-                            long maxPixels = 22000000L;
-                            if (pixels > maxPixels) {
-                                float shrink = (float) Math.sqrt(maxPixels / (double) pixels);
-                                w = Math.max(1, Math.round(w * shrink));
-                                h = Math.max(1, Math.round(h * shrink));
-                            }
+                            pageWidthPts = Math.max(1, pdfPage.getWidth());
+                            pageHeightPts = Math.max(1, pdfPage.getHeight());
+                            // Prefetch uses the same fit geometry as the visible
+                            // path. Only the allocation cap is lower because several
+                            // neighbors may be resident at once.
+                            PdfPageRenderPlan.Plan plan = PdfPageRenderPlan.create(
+                                    pageWidthPts,
+                                    pageHeightPts,
+                                    widthSnap,
+                                    heightSnap,
+                                    zoomSnap,
+                                    PDF_SUPERSAMPLE,
+                                    dpToPx(24),
+                                    dpToPx(16),
+                                    zoomSnap <= 1.05f && heightSnap > 0,
+                                    6_000_000L);
+                            intendedDisplayWidthPx = plan.intendedDisplayWidthPx;
+                            int w = plan.bitmapWidthPx;
+                            int h = plan.bitmapHeightPx;
                             bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
                             bmp.eraseColor(Color.WHITE);
                             pdfPage.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
@@ -2859,14 +3396,28 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                         }
                     }
                     final Bitmap done = bmp;
+                    final SinglePageCacheMetadata doneMetadata =
+                            new SinglePageCacheMetadata(pageWidthPts, pageHeightPts,
+                                    intendedDisplayWidthPx);
                     handler.post(() -> {
                         if (activityDestroyed || done == null || done.isRecycled()
-                                || destroyedOrZoomChanged(zoomSnap, widthSnap)
+                                || singlePageRenderGeometryChanged(zoomSnap, geometrySnap)
                                 || singlePageCache.get(page) != null) {
                             if (done != null && !done.isRecycled()) done.recycle();
                             return;
                         }
                         singlePageCache.put(page, done);
+                        if (singlePageCache.get(page) == done) {
+                            singlePageCacheMetadata.put(page, doneMetadata);
+                        }
+                    });
+                } catch (OutOfMemoryError oom) {
+                    if (bmp != null && !bmp.isRecycled()) bmp.recycle();
+                    // A failed speculative render must never take down the reader.
+                    // Drop cached neighbors to release pressure and let the visible
+                    // on-demand path retry with its own tighter sizing policy.
+                    handler.post(() -> {
+                        if (!activityDestroyed) singlePageCache.evictAll();
                     });
                 } catch (Exception ignored) {
                     if (bmp != null && !bmp.isRecycled()) bmp.recycle();
@@ -2879,10 +3430,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     /** Page-turn requested by a horizontal swipe in the Matrix page view. */
     boolean onMatrixPageSwipe(int direction) {
-        if (verticalPageSlideMode || pageCount <= 0) return false;
-        int target = currentPage + (direction > 0 ? pdfDisplayPageStep() : -pdfDisplayPageStep());
-        if (target < 0 || target >= pageCount) return false;
-        goToPage(target, direction);
+        if (verticalPageSlideMode || pageCount <= 0 || direction == 0) return false;
+        int target = com.readwide.manager.util.SpreadMath.turnTarget(
+                currentPage, direction, pageCount, isPdfTwoPageSpreadMode());
+        if (target == currentPage) return false;
+        goToPage(target, Integer.signum(direction));
         return true;
     }
 
@@ -2949,13 +3501,16 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         final int pageIndex = currentPage;
         final int pageCountSnap = pageCount;
         if (pageIndex < 0 || pageIndex >= pageCountSnap) return;
+        final int requestGeneration = ++sharpenRenderGeneration;
+        final int baseRenderGeneration = renderGeneration;
         // Cap the patch resolution so we never allocate a huge bitmap.
         final long maxPatchPixels = 8_000_000L;
         executor.execute(() -> {
             Bitmap patch = null;
             try {
                 synchronized (rendererLock) {
-                    if (pdfRenderer == null || activityDestroyed) return;
+                    if (pdfRenderer == null || activityDestroyed
+                            || baseRenderGeneration != renderGeneration) return;
                     PdfRenderer.Page page = pdfRenderer.openPage(pageIndex);
                     try {
                         int pw = page.getWidth();
@@ -2970,12 +3525,10 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                         float scale = Math.max(0.2f, displayScale);
                         int outW = Math.max(1, Math.round(regionWpts * scale));
                         int outH = Math.max(1, Math.round(regionHpts * scale));
-                        long px = (long) outW * outH;
-                        if (px > maxPatchPixels) {
-                            float shrink = (float) Math.sqrt(maxPatchPixels / (double) px);
-                            outW = Math.max(1, Math.round(outW * shrink));
-                            outH = Math.max(1, Math.round(outH * shrink));
-                        }
+                        PdfRenderSize.Dimensions capped = PdfRenderSize.capToPixels(
+                                outW, outH, maxPatchPixels);
+                        outW = capped.width;
+                        outH = capped.height;
                         Bitmap bmp = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888);
                         bmp.eraseColor(Color.WHITE);
                         // Transform: map the region (in page points) onto the output
@@ -2991,6 +3544,10 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                         page.close();
                     }
                 }
+            } catch (OutOfMemoryError ignored) {
+                if (patch != null && !patch.isRecycled()) { patch.recycle(); patch = null; }
+                // A sharpening patch is optional. Under memory pressure retain the
+                // fit bitmap instead of terminating the reader.
             } catch (Exception ignored) {
                 if (patch != null && !patch.isRecycled()) { patch.recycle(); patch = null; }
             }
@@ -2998,6 +3555,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             final float fnl = nl, fnt = nt, fnr = nr, fnb = nb;
             handler.post(() -> {
                 if (activityDestroyed || verticalPageSlideMode || result == null || result.isRecycled()
+                        || requestGeneration != sharpenRenderGeneration
+                        || baseRenderGeneration != renderGeneration
                         || pdfPageMatrixView == null || currentPage != pageIndex) {
                     if (result != null && !result.isRecycled()) result.recycle();
                     return;
@@ -3007,10 +3566,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         });
     }
 
-    private boolean destroyedOrZoomChanged(float zoomSnap, int widthSnap) {
-        return activityDestroyed || verticalPageSlideMode
-                || Math.abs(zoom - zoomSnap) > 0.001f
-                || (pdfViewport != null && pdfViewport.getWidth() != widthSnap);
+    private boolean singlePageRenderGeometryChanged(float zoomSnap, int geometrySnap) {
+        return activityDestroyed
+                || verticalPageSlideMode
+                || geometrySnap != singlePageGeometryGeneration
+                || Math.abs(zoom - zoomSnap) > 0.001f;
     }
 
     private void renderCurrentPage(boolean showLoadingIndicator) {
@@ -3037,6 +3597,12 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             if (viewportWidthNow > 0) {
                 Bitmap cached = singlePageCache.get(pageToRender);
                 if (cached != null && !cached.isRecycled()) {
+                    SinglePageCacheMetadata cachedMetadata =
+                            singlePageCacheMetadata.get(pageToRender);
+                    if (cachedMetadata != null) {
+                        lastRenderedPageWidthPts = cachedMetadata.pageWidthPts;
+                        lastRenderedPageHeightPts = cachedMetadata.pageHeightPts;
+                    }
                     ++renderGeneration; // cancel any in-flight render for the old page
                     progressBar.setVisibility(View.GONE);
                     showSinglePageBitmap(cached, zoomToRender);
@@ -3069,6 +3635,9 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         executor.execute(() -> {
             Bitmap bitmap = null;
             final int[] intendedDisplayWidthHolder = {0};
+            final int[] renderedPageWidthPtsHolder = {1};
+            final int[] renderedPageHeightPtsHolder = {1};
+            final PdfSpreadHighlightMath.Layout[] spreadLayoutHolder = {null};
             try {
                 // Abandon this render if the user already moved past this page.
                 // Without this, rapid taps queue a full render per page and the
@@ -3078,110 +3647,124 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 synchronized (rendererLock) {
                     if (pdfRenderer == null || generation != renderGeneration) return;
                     if (spreadToRender && rightPageToRender >= 0) {
-                        Bitmap leftBitmap = null;
-                        Bitmap rightBitmap = null;
+                        int leftWpt;
+                        int leftHpt;
+                        int rightWpt;
+                        int rightHpt;
+                        PdfRenderer.Page measurePage = pdfRenderer.openPage(pageToRender);
                         try {
-                            int leftWpt;
-                            int leftHpt;
-                            int rightWpt;
-                            int rightHpt;
-                            PdfRenderer.Page measurePage = pdfRenderer.openPage(pageToRender);
-                            try {
-                                leftWpt = Math.max(1, measurePage.getWidth());
-                                leftHpt = Math.max(1, measurePage.getHeight());
-                            } finally {
-                                measurePage.close();
-                            }
-                            measurePage = pdfRenderer.openPage(rightPageToRender);
-                            try {
-                                rightWpt = Math.max(1, measurePage.getWidth());
-                                rightHpt = Math.max(1, measurePage.getHeight());
-                            } finally {
-                                measurePage.close();
-                            }
-                            lastRenderedPageWidthPts = leftWpt + rightWpt;
-                            lastRenderedPageHeightPts = Math.max(leftHpt, rightHpt);
-
-                            int displayGapPx = dpToPx(12);
-                            int baseWidth = Math.max(1, viewportWidth - dpToPx(24));
-                            int slotWidth = Math.max(1, (baseWidth - displayGapPx) / 2);
-                            float fitScale = Math.min(slotWidth / (float) leftWpt, slotWidth / (float) rightWpt);
-                            if (viewportHeight > 0) {
-                                float baseHeight = Math.max(1, viewportHeight - dpToPx(16));
-                                fitScale = Math.min(fitScale, baseHeight / (float) leftHpt);
-                                fitScale = Math.min(fitScale, baseHeight / (float) rightHpt);
-                            }
-                            fitScale = Math.max(0.05f, fitScale);
-                            float renderScale = Math.max(0.2f, fitScale * PDF_SUPERSAMPLE);
-                            int leftW = Math.max(1, Math.round(leftWpt * renderScale));
-                            int leftH = Math.max(1, Math.round(leftHpt * renderScale));
-                            int rightW = Math.max(1, Math.round(rightWpt * renderScale));
-                            int rightH = Math.max(1, Math.round(rightHpt * renderScale));
-                            int gapBitmapPx = Math.max(1, Math.round(displayGapPx * renderScale / fitScale));
-                            long pixels = (long) leftW * leftH + (long) rightW * rightH;
-                            long maxPixels = 22000000L;
-                            if (pixels > maxPixels) {
-                                float shrink = (float) Math.sqrt(maxPixels / (double) pixels);
-                                leftW = Math.max(1, Math.round(leftW * shrink));
-                                leftH = Math.max(1, Math.round(leftH * shrink));
-                                rightW = Math.max(1, Math.round(rightW * shrink));
-                                rightH = Math.max(1, Math.round(rightH * shrink));
-                                gapBitmapPx = Math.max(1, Math.round(gapBitmapPx * shrink));
-                            }
-                            PdfRenderer.Page renderPage = pdfRenderer.openPage(pageToRender);
-                            try {
-                                leftBitmap = Bitmap.createBitmap(leftW, leftH, Bitmap.Config.ARGB_8888);
-                                leftBitmap.eraseColor(Color.WHITE);
-                                renderPage.render(leftBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-                            } finally {
-                                renderPage.close();
-                            }
-                            renderPage = pdfRenderer.openPage(rightPageToRender);
-                            try {
-                                rightBitmap = Bitmap.createBitmap(rightW, rightH, Bitmap.Config.ARGB_8888);
-                                rightBitmap.eraseColor(Color.WHITE);
-                                renderPage.render(rightBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-                            } finally {
-                                renderPage.close();
-                            }
-
-                            int compositeW = leftW + gapBitmapPx + rightW;
-                            int compositeH = Math.max(leftH, rightH);
-                            bitmap = Bitmap.createBitmap(compositeW, compositeH, Bitmap.Config.ARGB_8888);
-                            bitmap.eraseColor(readerBg);
-                            Canvas canvas = new Canvas(bitmap);
-                            canvas.drawBitmap(leftBitmap, 0, (compositeH - leftH) / 2f, null);
-                            canvas.drawBitmap(rightBitmap, leftW + gapBitmapPx, (compositeH - rightH) / 2f, null);
-                            intendedDisplayWidthHolder[0] = Math.max(1, Math.round(
-                                    leftWpt * fitScale + displayGapPx + rightWpt * fitScale));
+                            leftWpt = Math.max(1, measurePage.getWidth());
+                            leftHpt = Math.max(1, measurePage.getHeight());
                         } finally {
-                            if (leftBitmap != null && !leftBitmap.isRecycled()) leftBitmap.recycle();
-                            if (rightBitmap != null && !rightBitmap.isRecycled()) rightBitmap.recycle();
+                            measurePage.close();
                         }
+                        measurePage = pdfRenderer.openPage(rightPageToRender);
+                        try {
+                            rightWpt = Math.max(1, measurePage.getWidth());
+                            rightHpt = Math.max(1, measurePage.getHeight());
+                        } finally {
+                            measurePage.close();
+                        }
+                        renderedPageWidthPtsHolder[0] = leftWpt + rightWpt;
+                        renderedPageHeightPtsHolder[0] = Math.max(leftHpt, rightHpt);
+
+                        int displayGapPx = dpToPx(12);
+                        int baseWidth = Math.max(1, viewportWidth - dpToPx(24));
+                        int slotWidth = Math.max(1, (baseWidth - displayGapPx) / 2);
+                        float fitScale = Math.min(slotWidth / (float) leftWpt,
+                                slotWidth / (float) rightWpt);
+                        if (viewportHeight > 0) {
+                            float baseHeight = Math.max(1, viewportHeight - dpToPx(16));
+                            fitScale = Math.min(fitScale, baseHeight / (float) leftHpt);
+                            fitScale = Math.min(fitScale, baseHeight / (float) rightHpt);
+                        }
+                        fitScale = Math.max(0.05f, fitScale);
+                        float renderScale = Math.max(0.2f, fitScale * PDF_SUPERSAMPLE);
+                        int leftW = Math.max(1, Math.round(leftWpt * renderScale));
+                        int leftH = Math.max(1, Math.round(leftHpt * renderScale));
+                        int rightW = Math.max(1, Math.round(rightWpt * renderScale));
+                        int rightH = Math.max(1, Math.round(rightHpt * renderScale));
+                        int gapBitmapPx = Math.max(1,
+                                Math.round(displayGapPx * renderScale / fitScale));
+
+                        // Bound the actual composite allocation, not merely the two
+                        // temporary page areas. The old path held left + right +
+                        // composite bitmaps simultaneously and could exceed 180 MB.
+                        int compositeW = leftW + gapBitmapPx + rightW;
+                        int compositeH = Math.max(leftH, rightH);
+                        long compositePixels = (long) compositeW * compositeH;
+                        long maxCompositePixels = 12000000L;
+                        if (compositePixels > maxCompositePixels) {
+                            float shrink = (float) Math.sqrt(
+                                    maxCompositePixels / (double) compositePixels);
+                            leftW = Math.max(1, Math.round(leftW * shrink));
+                            leftH = Math.max(1, Math.round(leftH * shrink));
+                            rightW = Math.max(1, Math.round(rightW * shrink));
+                            rightH = Math.max(1, Math.round(rightH * shrink));
+                            gapBitmapPx = Math.max(1, Math.round(gapBitmapPx * shrink));
+                            compositeW = leftW + gapBitmapPx + rightW;
+                            compositeH = Math.max(leftH, rightH);
+                        }
+
+                        bitmap = Bitmap.createBitmap(
+                                compositeW, compositeH, Bitmap.Config.ARGB_8888);
+                        bitmap.eraseColor(readerBg);
+
+                        // PdfRenderer does not paint an opaque paper background for
+                        // every PDF. Rendering a text-only page directly into the
+                        // themed composite therefore exposed the reader background,
+                        // and combining a destination clip with a translated matrix
+                        // could trim the page at the top or bottom. Render one full
+                        // page at a time onto an opaque white bitmap, draw it into the
+                        // spread, then recycle it before rendering the other page.
+                        Canvas spreadCanvas = new Canvas(bitmap);
+                        Bitmap pageBitmap = null;
+                        try {
+                            int leftTop = (compositeH - leftH) / 2;
+                            pageBitmap = renderPdfPageBitmapLocked(pageToRender, leftW, leftH);
+                            spreadCanvas.drawBitmap(pageBitmap, 0f, leftTop, null);
+                            pageBitmap.recycle();
+                            pageBitmap = null;
+
+                            int rightLeft = leftW + gapBitmapPx;
+                            int rightTop = (compositeH - rightH) / 2;
+                            pageBitmap = renderPdfPageBitmapLocked(
+                                    rightPageToRender, rightW, rightH);
+                            spreadCanvas.drawBitmap(pageBitmap, rightLeft, rightTop, null);
+
+                            spreadLayoutHolder[0] = new PdfSpreadHighlightMath.Layout(
+                                    pageToRender, rightPageToRender,
+                                    compositeW, compositeH,
+                                    0, leftTop, leftW, leftH,
+                                    rightLeft, rightTop, rightW, rightH);
+                        } finally {
+                            if (pageBitmap != null && !pageBitmap.isRecycled()) {
+                                pageBitmap.recycle();
+                            }
+                        }
+
+                        intendedDisplayWidthHolder[0] = Math.max(1, Math.round(
+                                leftWpt * fitScale + displayGapPx + rightWpt * fitScale));
                     } else {
                         PdfRenderer.Page page = pdfRenderer.openPage(pageToRender);
                         try {
-                            lastRenderedPageWidthPts = Math.max(1, page.getWidth());
-                            lastRenderedPageHeightPts = Math.max(1, page.getHeight());
-                            int baseWidth = Math.max(1, viewportWidth - dpToPx(24));
-                            float fitScale = baseWidth / (float) page.getWidth();
-                            if (zoomToRender <= 1.05f && viewportHeight > 0) {
-                                float baseHeight = Math.max(1, viewportHeight - dpToPx(16));
-                                float heightFit = baseHeight / (float) page.getHeight();
-                                fitScale = Math.min(fitScale, heightFit);
-                            }
-                            float renderScale = Math.max(0.2f, fitScale * zoomToRender * PDF_SUPERSAMPLE);
-                            intendedDisplayWidthHolder[0] = Math.max(1,
-                                    Math.round(page.getWidth() * fitScale * zoomToRender));
-                            int width = Math.max(1, Math.round(page.getWidth() * renderScale));
-                            int height = Math.max(1, Math.round(page.getHeight() * renderScale));
-                            long pixels = (long) width * (long) height;
-                            long maxPixels = zoomToRender > 1.05f ? 16000000L : 22000000L;
-                            if (pixels > maxPixels) {
-                                float shrink = (float) Math.sqrt(maxPixels / (double) pixels);
-                                width = Math.max(1, Math.round(width * shrink));
-                                height = Math.max(1, Math.round(height * shrink));
-                            }
+                            renderedPageWidthPtsHolder[0] = Math.max(1, page.getWidth());
+                            renderedPageHeightPtsHolder[0] = Math.max(1, page.getHeight());
+                            long maxPixels = zoomToRender > 1.05f ? 16_000_000L : 22_000_000L;
+                            PdfPageRenderPlan.Plan plan = PdfPageRenderPlan.create(
+                                    page.getWidth(),
+                                    page.getHeight(),
+                                    viewportWidth,
+                                    viewportHeight,
+                                    zoomToRender,
+                                    PDF_SUPERSAMPLE,
+                                    dpToPx(24),
+                                    dpToPx(16),
+                                    zoomToRender <= 1.05f && viewportHeight > 0,
+                                    maxPixels);
+                            intendedDisplayWidthHolder[0] = plan.intendedDisplayWidthPx;
+                            int width = plan.bitmapWidthPx;
+                            int height = plan.bitmapHeightPx;
 
                             bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
                             bitmap.eraseColor(Color.WHITE);
@@ -3201,15 +3784,32 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                         }
                         return;
                     }
+                    // Commit renderer metadata only after this render wins the
+                    // generation check. A canceled background render must not
+                    // overwrite the dimensions used by the currently visible page.
+                    lastRenderedPageWidthPts = Math.max(1, renderedPageWidthPtsHolder[0]);
+                    lastRenderedPageHeightPts = Math.max(1, renderedPageHeightPtsHolder[0]);
+
                     // Cache this freshly rendered page for instant re-display.
                     if (!spreadToRender && finalBitmap != null && !finalBitmap.isRecycled() && viewportWidth > 0) {
                         singlePageCacheZoom = zoomToRender;
                         singlePageCacheWidth = viewportWidth;
                         singlePageCacheHeight = viewportHeight;
                         singlePageCache.put(pageToRender, finalBitmap);
+                        if (singlePageCache.get(pageToRender) == finalBitmap) {
+                            singlePageCacheMetadata.put(pageToRender,
+                                    new SinglePageCacheMetadata(
+                                            renderedPageWidthPtsHolder[0],
+                                            renderedPageHeightPtsHolder[0],
+                                            intendedDisplayWidthHolder[0] > 0
+                                                    ? intendedDisplayWidthHolder[0]
+                                                    : Math.max(1, Math.round(
+                                                            finalBitmap.getWidth() / PDF_SUPERSAMPLE))));
+                        }
                     }
                     Bitmap old = currentBitmap;
                     currentBitmap = finalBitmap;
+                    pdfSpreadBitmapLayout = spreadToRender ? spreadLayoutHolder[0] : null;
                     renderedZoom = zoomToRender;
                     pageImage.animate().cancel();
                     // Apply bitmap + new width BEFORE resetting scale, so the visual
@@ -3261,12 +3861,12 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                         pdfPageMatrixView.setFitBitmap(finalBitmap, PDF_SUPERSAMPLE,
                                 lastRenderedPageWidthPts, lastRenderedPageHeightPts, newPage);
                         showMatrixPageView();
-                        if (spreadToRender) {
-                            pdfPageMatrixView.clearHighlights();
-                            pdfPageMatrixView.clearTtsHighlights();
-                        } else if (pdfSearchController != null) {
+                        if (pdfSearchController != null) {
                             pdfSearchController.onPageShown(currentPage,
                                     lastRenderedPageWidthPts, lastRenderedPageHeightPts);
+                        }
+                        if (pdfTtsHighlightController != null) {
+                            pdfTtsHighlightController.onDisplayedBitmapChanged();
                         }
                     }
                     runPageSlideInAnimation();
@@ -3282,13 +3882,40 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                         scheduleAdjacentSinglePagePrefetch(pageToRender, zoomToRender, viewportWidth, viewportHeight);
                     }
                 });
+            } catch (OutOfMemoryError oom) {
+                if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+                Exception error = new Exception(oom);
+                handler.post(() -> {
+                    if (!activityDestroyed && generation == renderGeneration) {
+                        showLoadError(error);
+                    }
+                });
             } catch (Exception e) {
                 if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
                 handler.post(() -> {
-                    if (!activityDestroyed) showLoadError(e);
+                    if (!activityDestroyed && generation == renderGeneration) {
+                        showLoadError(e);
+                    }
                 });
             }
         });
+    }
+
+    /** Caller must hold rendererLock. */
+    private Bitmap renderPdfPageBitmapLocked(int pageIndex, int width, int height) {
+        Bitmap pageBitmap = Bitmap.createBitmap(
+                Math.max(1, width), Math.max(1, height), Bitmap.Config.ARGB_8888);
+        pageBitmap.eraseColor(Color.WHITE);
+        PdfRenderer.Page page = pdfRenderer.openPage(pageIndex);
+        boolean rendered = false;
+        try {
+            page.render(pageBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+            rendered = true;
+            return pageBitmap;
+        } finally {
+            page.close();
+            if (!rendered && !pageBitmap.isRecycled()) pageBitmap.recycle();
+        }
     }
 
     private void restoreDoubleTapZoomFocusAfterRender() {
@@ -3403,19 +4030,25 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     void updatePageStatus() {
         updatePdfTtsButtonVisibility();
-        if (pageStatus == null && pdfTopPageStatus == null) return;
         if (pageCount <= 0) {
             if (pageStatus != null) pageStatus.setText("");
             if (pdfTopPageStatus != null) pdfTopPageStatus.setText("");
+            if (pdfPageSeekBar != null) {
+                pdfPageSeekBar.setMax(0);
+                pdfPageSeekBar.setProgress(0);
+                pdfPageSeekBar.setEnabled(false);
+            }
+            if (prevButton != null) prevButton.setEnabled(false);
+            if (nextButton != null) nextButton.setEnabled(false);
             return;
         }
-        String statusText;
-        if (hasVisiblePdfRightSpreadPage()) {
-            statusText = String.format(Locale.getDefault(), "%d-%d / %d",
-                    currentPage + 1, Math.min(pageCount, currentPage + 2), pageCount);
-        } else {
-            statusText = String.format(Locale.getDefault(), "%d / %d", currentPage + 1, pageCount);
-        }
+        boolean spread = isPdfTwoPageSpreadMode();
+        int endIndex = com.readwide.manager.util.SpreadMath.visibleEndIndex(
+                currentPage, pageCount, spread);
+        String statusText = endIndex > currentPage
+                ? String.format(Locale.getDefault(), "%d-%d / %d",
+                        currentPage + 1, endIndex + 1, pageCount)
+                : String.format(Locale.getDefault(), "%d / %d", currentPage + 1, pageCount);
         if (pageStatus != null) pageStatus.setText(statusText);
         if (pdfTopPageStatus != null) pdfTopPageStatus.setText(statusText);
         if (pdfPageSeekBar != null && !pdfPageSeekBarUserTracking) {
@@ -3428,8 +4061,14 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             pdfPageSeekBar.setEnabled(pageCount > 1);
         }
         updatePdfSlideModeButton();
-        prevButton.setEnabled(currentPage > 0);
-        nextButton.setEnabled(currentPage < pageCount - 1);
+        if (prevButton != null) {
+            prevButton.setEnabled(com.readwide.manager.util.SpreadMath.canTurn(
+                    currentPage, -1, pageCount, spread));
+        }
+        if (nextButton != null) {
+            nextButton.setEnabled(com.readwide.manager.util.SpreadMath.canTurn(
+                    currentPage, 1, pageCount, spread));
+        }
     }
 
     private PdfBookmarkDialogController pdfBookmarkDialogs;
@@ -3597,10 +4236,12 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         }
         final float clampedX = Math.max(0f, Math.min(1f, xRatio));
         final float clampedY = Math.max(0f, Math.min(1f, yRatio));
+        cancelPendingContinuousNavigation();
+        final int navigationGeneration = continuousNavigationGeneration;
         suppressContinuousScrollSync = true;
         pdfContinuousList.stopScroll();
         pdfContinuousList.post(() -> {
-            if (activityDestroyed || pdfContinuousList == null) return;
+            if (!isCurrentContinuousNavigation(navigationGeneration)) return;
             int pageHeight = pdfContinuousAdapter != null
                     ? Math.max(1, pdfContinuousAdapter.getRenderedHeightForPage(targetPage))
                     : Math.max(1, pdfContinuousList.getHeight());
@@ -3612,7 +4253,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 pdfContinuousList.scrollToPosition(targetPage);
             }
             pdfContinuousList.post(() -> {
-                if (activityDestroyed || pdfContinuousList == null) return;
+                if (!isCurrentContinuousNavigation(navigationGeneration)) return;
                 if (pdfContinuousAdapter != null) {
                     int pageWidth = Math.max(1, pdfContinuousAdapter.getRenderedWidthForPage(targetPage));
                     pdfContinuousAdapter.setPageHorizontalPanOffset(targetPage, Math.round(pageWidth * clampedX));
@@ -3701,14 +4342,17 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     private void closeRenderer() {
         renderGeneration++;
+        pdfSpreadBitmapLayout = null;
+        if (pdfPageMatrixView != null) {
+            // Detach before recycling currentBitmap; PdfPageView otherwise keeps
+            // a reference to the old document bitmap across a singleTop reload.
+            pdfPageMatrixView.detachBitmaps();
+        }
         resetContinuousPageViews(false);
         synchronized (rendererLock) {
             Bitmap shown = currentBitmap;
             currentBitmap = null;
-            singlePageCache.evictAll();
-            singlePagePrefetchInFlight.clear();
-            singlePageCacheWidth = -1;
-            singlePageCacheHeight = -1;
+            clearSinglePageRenderCache();
             if (shown != null && !shown.isRecycled()) {
                 shown.recycle();
             }
@@ -3740,6 +4384,9 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     @Override
     protected void onPause() {
+        if (pdfFastScrollController != null) {
+            pdfFastScrollController.suspend();
+        }
         super.onPause();
         saveReadingState();
     }
@@ -4035,8 +4682,13 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     protected void onDestroy() {
         stopPdfViewportFling();
         cancelPdfBackgroundMemoryTrim();
+        cancelPendingContinuousNavigation();
         ViewerRegistry.unregister(this);
         activityDestroyed = true;
+        if (pdfFastScrollController != null) {
+            pdfFastScrollController.destroy();
+            pdfFastScrollController = null;
+        }
         ++renderGeneration;
         handler.removeCallbacksAndMessages(null);
         saveReadingState();

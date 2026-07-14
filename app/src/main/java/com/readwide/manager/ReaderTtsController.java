@@ -76,8 +76,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     private int pausedSegmentIndex = 0;             // segment to resume from
     private int currentSpeechGeneration = 0;        // generation of the queued page
 
-    // Cross-page pre-buffering: how much of the next page to queue ahead, and the
-    // index in queuedSegments where the prefetched next-page segments begin
+    // Resident-text pre-buffering: how much text beyond the current queue to add, and the
+    // index in queuedSegments where the prefetched segments begin
     // (-1 = nothing prefetched). When speech crosses this boundary the UI page is
     // turned to follow, and the normal end-of-page advance is skipped because the
     // next page is already playing from the same queue.
@@ -495,12 +495,12 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
             return;
         }
         applySpeechParameters();
-        // The paused queue may already contain prefetched next-page segments.
-        // Rather than reconstruct the boundary bookkeeping across a pause, just
-        // replay the queue as-is; the end-of-queue advance handles the following
-        // page and a fresh page queue re-arms prefetch.
-        prefetchedNextPageBoundaryIndex = -1;
-        crossedPrefetchBoundary = false;
+        // Preserve prefetch-boundary bookkeeping across pause/resume. If the
+        // paused queue already contains the next page, clearing this boundary
+        // lets audio cross pages while the UI stays behind; the end-of-queue path
+        // then turns the page and repeats the prefetched opening from the start.
+        // When playback had already crossed the boundary, onStart cleared it
+        // before the pause, so keeping the current state is safe in both cases.
         int from = Math.max(0, Math.min(pausedSegmentIndex, queuedSegments.size() - 1));
         speakQueuedFrom(from);
         updatePlaybackNotification(true);
@@ -589,8 +589,16 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         host.ttsJumpToAbsoluteCharPosition(charPosition,
                 host.ttsHostPrefs().getTtsLastPageNumber(),
                 host.ttsDisplayedTotalPageCount());
+        // Make the delayed restart cancellable. A Stop command or a newer resume
+        // request increments speechGeneration, so this task cannot resurrect TTS
+        // after the user has explicitly stopped it while the page is settling.
+        int resumeRequestGeneration = ++speechGeneration;
         host.ttsHostHandler().postDelayed(() -> {
-            if (!host.isTtsHostDestroyed()) start(resumeContinuous);
+            if (!host.isTtsHostDestroyed()
+                    && speechGeneration == resumeRequestGeneration
+                    && !active && !paused) {
+                start(resumeContinuous);
+            }
         }, 420L);
     }
 
@@ -772,7 +780,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     private void speakCurrentPage(int generation, int partitionRetryCount) {
-        if (!active || generation != speechGeneration || host.isTtsHostDestroyed()) return;
+        if (!active || paused || generation != speechGeneration || host.isTtsHostDestroyed()) return;
 
         if (host.isTtsTextTemporarilyUnavailable()) {
             if (partitionRetryCount == 0) {
@@ -790,16 +798,30 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
         VisiblePage page = currentVisiblePage();
         if (page.isEmpty()) {
-            if (continuous && canAdvancePage()) {
-                advanceAndSpeakNextPage(generation);
-            } else {
-                stop(false);
-                ShortToast.show(activity, R.string.tts_no_text);
-            }
+            handleNoSpeakableTextOnCurrentPage(generation);
             return;
         }
 
         queueSpeechSegments(page, generation);
+    }
+
+    private void handleNoSpeakableTextOnCurrentPage(int generation) {
+        if (continuous && canAdvancePage()) {
+            advanceAndSpeakNextPage(generation);
+            return;
+        }
+        if (continuous) {
+            // Reaching a blank final page is still a normal end-of-document,
+            // not a "no text" error for the whole book.
+            if (host.ttsHostPrefs() != null) host.ttsHostPrefs().clearTtsLastPlaybackState();
+            stop(false);
+            clearTtsHighlight();
+            TtsPlaybackService.stop(activity.getApplicationContext());
+            ShortToast.show(activity, R.string.tts_finished);
+            return;
+        }
+        stop(false);
+        ShortToast.show(activity, R.string.tts_no_text);
     }
 
     private void queueSpeechSegments(@NonNull VisiblePage page, int generation) {
@@ -811,7 +833,9 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 ttsSegmentChars(),
                 ttsPauseReduction());
         if (segments.isEmpty()) {
-            stop(false);
+            // A page can contain only separators/whitespace (for example an
+            // image-only PDF page inside an otherwise searchable document).
+            handleNoSpeakableTextOnCurrentPage(generation);
             return;
         }
 
@@ -850,17 +874,17 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     /**
-     * Append the beginning of the next page's text to the live queue so playback
+     * Append the next resident slice of text to the live queue so playback
      * does not stall at the page seam. No-op unless continuous mode is on, the
      * document is not the lazily partitioned large-text kind, and the reader can
-     * hand us the full text with a known boundary.
+     * hand us the full text. This may continue within the final page as well as
+     * across a page boundary.
      */
     private void maybePrefetchNextPageSegments(int generation) {
-        if (!continuous || tts == null) return;
+        if (!continuous || paused || tts == null) return;
         if (!host.isTtsTextFullyResident()) return; // text is not fully resident
         TtsTextSource source = host.ttsTextSource();
         if (source == null) return;
-        if (!canAdvancePage()) return;
         if (queuedSegments.isEmpty()) return;
 
         String content = source.getTextContent();
@@ -875,35 +899,42 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 nextText, nextStart, ttsSegmentChars(), ttsPauseReduction());
         if (nextSegments.isEmpty()) return;
 
-        prefetchedNextPageBoundaryIndex = queuedSegments.size();
-        android.util.Log.d(TTS_LOG_TAG, "prefetch next page: " + nextSegments.size()
-                + " segments from char " + nextStart);
         int base = queuedSegments.size();
+        prefetchedNextPageBoundaryIndex = base;
+        android.util.Log.d(TTS_LOG_TAG, "prefetch resident text: " + nextSegments.size()
+                + " segments from char " + nextStart);
         queuedSegments.addAll(nextSegments);
-        lastQueuedUtteranceId = utteranceId(generation, queuedSegments.size() - 1);
+        int successful = 0;
         for (int i = 0; i < nextSegments.size(); i++) {
             Bundle params = new Bundle();
             String utteranceId = utteranceId(generation, base + i);
             int result = tts.speak(nextSegments.get(i).speechText,
                     TextToSpeech.QUEUE_ADD, params, utteranceId);
             if (result == TextToSpeech.ERROR) {
-                // Non-fatal: the current page is already queued and will play;
-                // drop the prefetch and let the normal page-turn path continue.
+                // Keep every utterance the engine already accepted. Removing those
+                // entries only from our list made their later callbacks invisible
+                // while the engine still spoke them in the background.
                 android.util.Log.d(TTS_LOG_TAG, "speak() ERROR at prefetch segment " + i
-                        + "/" + nextSegments.size() + " (non-fatal, dropping prefetch)");
-                while (queuedSegments.size() > base) {
+                        + "/" + nextSegments.size() + " (keeping " + successful
+                        + " accepted segments)");
+                int keepSize = base + successful;
+                while (queuedSegments.size() > keepSize) {
                     queuedSegments.remove(queuedSegments.size() - 1);
                 }
-                prefetchedNextPageBoundaryIndex = -1;
+                if (successful == 0) {
+                    prefetchedNextPageBoundaryIndex = -1;
+                }
                 lastQueuedUtteranceId = utteranceId(generation, queuedSegments.size() - 1);
                 return;
             }
+            successful++;
+            lastQueuedUtteranceId = utteranceId;
         }
     }
 
     private void handleUtteranceStart(String utteranceId) {
         activity.runOnUiThread(() -> {
-            if (host.isTtsHostDestroyed() || !active || utteranceId == null) return;
+            if (host.isTtsHostDestroyed() || !active || paused || utteranceId == null) return;
             // Sleep timer: account for the segment that just finished, then stop at
             // this sentence boundary if the playback-time target has been reached.
             sleepTimerAccrueSegment();
@@ -928,7 +959,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                 // Defer the follow-on prefetch until after the reader has settled
                 // on the new page so canAdvancePage()/getTextContent() reflect it.
                 host.ttsHostHandler().post(() -> {
-                    if (!active || host.isTtsHostDestroyed()
+                    if (!active || paused || host.isTtsHostDestroyed()
                             || generation != currentSpeechGeneration) return;
                     crossedPrefetchBoundary = false;
                     maybePrefetchNextPageSegments(generation);
@@ -955,10 +986,14 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     private void handleUtteranceDone(String utteranceId) {
         activity.runOnUiThread(() -> {
-            if (host.isTtsHostDestroyed() || !active || !TextUtils.equals(utteranceId, lastQueuedUtteranceId)) return;
+            if (host.isTtsHostDestroyed() || !active || paused
+                    || !TextUtils.equals(utteranceId, lastQueuedUtteranceId)) return;
             sleepTimerAccrueSegment();
             if (sleepTimerCheckAndMaybeStop()) return;
             int generation = speechGeneration;
+            if (continuous && continueFromUnqueuedResidentText(generation)) {
+                return;
+            }
             if (continuous && canAdvancePage()) {
                 advanceAndSpeakNextPage(generation);
             } else {
@@ -977,7 +1012,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         activity.runOnUiThread(() -> {
             android.util.Log.d(TTS_LOG_TAG, "onError: id=" + utteranceId
                     + ", active=" + active + ", gen=" + speechGeneration);
-            if (host.isTtsHostDestroyed() || !active || !isCurrentGenerationUtterance(utteranceId)) return;
+            if (host.isTtsHostDestroyed() || !active || paused
+                    || !isCurrentGenerationUtterance(utteranceId)) return;
             stop(false);
             clearTtsHighlight();
             ShortToast.show(activity, R.string.tts_engine_unavailable);
@@ -994,13 +1030,35 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         return sb.append(']').toString();
     }
 
+    /**
+     * Continue from the exact end of the accepted queue when fully resident text
+     * still remains. This covers the final page (where canAdvancePage() is false)
+     * and recovery after an engine accepts only part of a prefetch batch.
+     */
+    private boolean continueFromUnqueuedResidentText(int generation) {
+        if (!host.isTtsTextFullyResident() || queuedSegments.isEmpty()) return false;
+        TtsTextSource source = host.ttsTextSource();
+        if (source == null) return false;
+        String content = source.getTextContent();
+        if (content == null || content.isEmpty()) return false;
+        int resumeChar = queuedSegments.get(queuedSegments.size() - 1).endChar;
+        if (resumeChar < 0 || resumeChar >= content.length()) return false;
+
+        host.ttsJumpToAbsoluteCharPosition(resumeChar);
+        host.ttsHostHandler().post(() -> {
+            if (!active || paused || generation != speechGeneration || host.isTtsHostDestroyed()) return;
+            speakCurrentPage(generation, 0);
+        });
+        return true;
+    }
+
     private void advanceAndSpeakNextPage(int generation) {
         int beforePage = host.ttsDisplayedCurrentPageNumber();
         int beforeChar = host.ttsCurrentCharPosition();
         clearTtsHighlight();
         host.ttsHostPageBy(+1);
         host.ttsHostHandler().postDelayed(() -> {
-            if (!active || generation != speechGeneration || host.isTtsHostDestroyed()) return;
+            if (!active || paused || generation != speechGeneration || host.isTtsHostDestroyed()) return;
             int afterPage = host.ttsDisplayedCurrentPageNumber();
             int afterChar = host.ttsCurrentCharPosition();
             if (afterPage == beforePage && afterChar == beforeChar && !canAdvancePage()) {
@@ -1016,9 +1074,14 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     private void movePageFromRemote(int direction) {
         boolean wasContinuous = continuous || (host.ttsHostPrefs() != null && host.ttsHostPrefs().getTtsLastContinuous());
         stopInternal(false, false);
+        int restartGeneration = speechGeneration;
         host.ttsHostPageBy(direction);
         host.ttsHostHandler().postDelayed(() -> {
-            if (!host.isTtsHostDestroyed()) start(wasContinuous);
+            if (!host.isTtsHostDestroyed()
+                    && speechGeneration == restartGeneration
+                    && !active && !paused) {
+                start(wasContinuous);
+            }
         }, NEXT_PAGE_DELAY_MS);
     }
 

@@ -572,7 +572,9 @@ final class DocumentSearchController {
     private void appendHighlightedTextSegment(String html, int start, int end, SearchMatcher matcher,
                                               int selectedOrdinal, int[] ordinal, StringBuilder out) {
         TextSegment segment = decodeHtmlTextSegment(html, start, end);
-        if (segment.text.isEmpty()) {
+        // CharSequence.isEmpty() is a platform API only from API 35. length()
+        // keeps this search path safe on the app's API-24 minimum.
+        if (segment.text.length() == 0) {
             out.append(html, start, end);
             return;
         }

@@ -1,16 +1,16 @@
 # Public release build checklist
 
-This file is the practical build and verification checklist for Readwide 1.0.14.
+This file is the practical build and verification checklist for Readwide 1.0.15.
 
 ## Version metadata
 
 ```text
 applicationId com.readwide.manager
-versionCode 10014
-versionName 1.0.14
+versionCode 10015
+versionName 1.0.15
 ```
 
-The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.14 keeps that key, so it installs in place over 1.0.13, 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.14, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
+The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.15 keeps that key, so it installs in place over 1.0.14, 1.0.13, 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.15, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
 
 ## Keystore policy
 
@@ -30,13 +30,15 @@ If these four values are absent, `assembleRelease` is expected to build an unsig
 Linux/macOS:
 
 ```bash
-./gradlew clean testDebugUnitTest assembleRelease
+./gradlew clean testDebugUnitTest assembleDebug lintDebug
+./gradlew clean assembleRelease
 ```
 
 Windows:
 
 ```powershell
-.\gradlew.bat clean testDebugUnitTest assembleRelease
+.\gradlew.bat clean testDebugUnitTest assembleDebug lintDebug
+.\gradlew.bat clean assembleRelease
 ```
 
 Optional source-builder check without private signing values:
@@ -55,22 +57,30 @@ Keep these files with source and binary release materials:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_14.md`
-- `docs/SBOM_READWIDE_1_0_14.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_15.md`
+- `docs/SBOM_READWIDE_1_0_15.spdx.json`
+
+The source-controlled native notice file at `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt` must also remain in the APK.
 
 ## APK verification
 
 ```bash
-apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk
+APK=app/build/outputs/apk/release/app-release.apk
+test -f "$APK" || APK=app/build/outputs/apk/release/app-release-unsigned.apk
+test -f "$APK"
 
-aapt dump xmltree app/build/outputs/apk/release/app-release.apk AndroidManifest.xml \
+aapt dump xmltree "$APK" AndroidManifest.xml \
   | grep -E "debuggable|usesCleartextTraffic|INTERNET|allowBackup"
 
-strings app/build/outputs/apk/release/app-release.apk \
+strings "$APK" \
   | grep -E "^/(home|Users|builds)/" | sort -u
 
-sha256sum app/build/outputs/apk/release/app-release.apk
+sha256sum "$APK"
+unzip -p "$APK" assets/open_source_licenses/libarchive_android_and_codecs.txt \
+  | grep -E "libarchive|bzip2|XZ Utils|LZ4|Zstandard|zlib|Mbed TLS"
 ```
+
+For a signed GitHub asset, additionally run `apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk`. Do not expect signature verification to pass for the intentionally unsigned source-builder artifact.
 
 Expected default release baseline:
 
@@ -80,16 +90,17 @@ Expected default release baseline:
 - `allowBackup="false"`;
 - no local user path strings are embedded;
 - no keystore/private signing material is embedded.
+- the native libarchive/codecs notice asset is present and readable.
 
 ## Source tree checks before tagging
 
 ```bash
 find . -type f \( -name "*.jks" -o -name "*.keystore" -o -name "*.p12" -o -name "*.apk" -o -name "*.aab" \)
 
-grep -RIn "C:\\Users\|/Users/\|/home/.*Downloads\|BEGIN PRIVATE KEY\|TEXTVIEW_KEYSTORE_PASSWORD\|READWIDE_KEYSTORE_PASSWORD" . \
+grep -RIn "C:\\Users\|/Users/\|/home/.*Downloads\|BEGIN PRIVATE KEY" . \
   --exclude-dir=.git --exclude-dir=.gradle --exclude-dir=build
 
-grep -RIn "com.github.junrar\|junrar\|RarJunrarFallback" app docs README.md CHANGELOG.md THIRD_PARTY_NOTICES.md || true
+grep -RInE "import com\\.github\\.junrar|com\\.github\\.junrar:" app/src app/build.gradle || true
 ```
 
 Expected result:
@@ -98,13 +109,26 @@ Expected result:
 - no accidental personal path strings in release docs/source;
 - no Junrar dependency or fallback source in the default build.
 
+## Source ZIP portability
+
+The public source ZIP must use `/` path separators and preserve POSIX modes. Store `gradlew` and `*.sh` as executable (`0755`) and ordinary source/document files as `0644`. After creating the archive, run a full CRC read and compare its normalized file list with the filtered source tree; exclude `.gradle/`, every `build/` directory, IDE state, local properties, signing material, and compiled artifacts.
+
+Gradle 9.4.1 integrity baseline:
+
+```text
+gradle-wrapper.jar SHA-256: 55243ef57851f12b070ad14f7f5bb8302daceeebc5bce5ece5fa6edb23e1145c
+gradle-9.4.1-bin.zip SHA-256: 2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb
+```
+
+The distribution hash is pinned with `distributionSha256Sum` in `gradle/wrapper/gradle-wrapper.properties`.
+
 ## F-Droid handoff
 
 Before opening an F-Droid Data merge request:
 
-1. Publish a final Git tag, e.g. `v1.0.14`.
-2. Replace the `1.0.14` commit placeholder in `fdroid/metadata/com.readwide.manager.yml` with the full 40-character commit hash that the `v1.0.14` tag points to (this app's F-Droid maintainer requires a full commit hash, not the tag name). Entries through 1.0.12 already carry their real release commit hashes; only the 1.0.14 entry still holds a placeholder until the final tag is created.
-3. The standard `gradle/wrapper/gradle-wrapper.jar` is kept; F-Droid verifies it against official Gradle hashes and builds with its own Gradle, so no `rm` rule is needed.
+1. Publish a final Git tag, e.g. `v1.0.15`.
+2. Start from current fdroiddata upstream (published builds through 1.0.13 as checked on 2026-07-14), add only the version actually submitted, and pin it to the final tag's full 40-character commit hash. The local mirror intentionally has no active 1.0.14/1.0.15 build until such a hash exists.
+3. Keep the verified official Gradle 9.4.1 wrapper; F-Droid checks known wrapper hashes, so no `rm` rule is needed.
 4. Confirm a no-private-keystore `assembleRelease` build works.
 5. Keep RAR and HWP/HWPX support wording conservative.
 
@@ -128,3 +152,5 @@ Optional external archive fixture tests can be run by setting:
 TEXTVIEW_EXTERNAL_ARCHIVE_FIXTURE_DIR=/path/to/archive-fixtures
 ./gradlew testDebugUnitTest
 ```
+
+This source handoff does not claim that these Gradle, unit-test, lint, APK, or device checks have run against the exact tree that will be tagged. Record their results only after running them on that tree.

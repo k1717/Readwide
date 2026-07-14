@@ -13,7 +13,7 @@ import java.io.RandomAccessFile;
  *
  * <p>This helper only detects the encrypted-header mode. RAR3/RAR4 header block decryption lives in
  * {@link Rar4HeaderEncryptedArchiveRewriter}; RAR5 header encryption ({@code -hp}) is decrypted
- * first party inside {@code RarArchiveReader.readRar5Entries} (the bundled libarchive 3.7.2 cannot
+ * first party inside {@code RarArchiveReader.readRar5Entries} (the bundled libarchive backend cannot
  * decrypt RAR5 headers - it reports "Encryption is not supported", verified against a real WinRAR
  * 7.00 {@code -hp} file - so first party is the only path). With that in place a RAR5 archive only
  * reaches this detector when header decryption itself failed after a correct password check, which
@@ -51,9 +51,10 @@ final class RarHeaderEncryptionDetector {
 
     /**
      * @return 4 or 5 for the first volume whose headers are encrypted, or 0 if none is.
-     *     Lets callers phrase the unsupported message precisely: RAR4 {@code -hp} has a
-     *     first-party header rewriter (a rewrite failure is the real fault), whereas RAR5
-     *     {@code -hp} has no decrypt path in either backend at all.
+     *     Lets callers phrase the failure precisely: RAR4 {@code -hp} has a first-party
+     *     header rewriter, while RAR5 {@code -hp} has a first-party header decryptor in
+     *     {@code RarArchiveReader}. Reaching this detector with a password therefore means
+     *     the corresponding first-party parser failed; libarchive cannot decrypt RAR5 headers.
      */
     static int headerEncryptedRarVersion(@NonNull File archive) throws IOException {
         for (File volume : RarArchiveLocator.collectVolumes(archive)) {

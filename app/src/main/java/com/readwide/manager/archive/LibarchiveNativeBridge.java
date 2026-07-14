@@ -679,6 +679,67 @@ final class LibarchiveNativeBridge {
         }
     }
 
+    /**
+     * Opens one compressor stream (for example a plain .zst file) with libarchive's
+     * raw/empty formats. Raw is intentionally not enabled on the generic archive
+     * reader because it would make arbitrary corrupt archives look like one file.
+     */
+    @NonNull
+    static ForwardStream openRawForwardStream(@NonNull String archivePath) throws IOException {
+        ensureAvailable();
+        String[] paths = validateArchivePaths(new String[]{archivePath});
+        Reader reader = openRawReader(paths[0]);
+        boolean handed = false;
+        try {
+            ForwardStream stream = new ForwardStream(reader);
+            handed = true;
+            return stream;
+        } finally {
+            if (!handed) closeQuietly(reader);
+        }
+    }
+
+    @NonNull
+    private static Reader openRawReader(@NonNull String archivePath)
+            throws ArchiveException, IOException {
+        long archive = Archive.readNew();
+        boolean opened = false;
+        try {
+            Archive.setCharset(archive, StandardCharsets.UTF_8.name().getBytes(StandardCharsets.UTF_8));
+            // A raw reader would otherwise accept arbitrary uncompressed bytes as one
+            // synthetic entry. Register only the requested codec and, after libarchive
+            // has bid/opened the stream, require that Zstandard was actually selected.
+            Archive.readSupportFilterZstd(archive);
+            try {
+                Archive.readSupportFormatRaw(archive);
+                Archive.readSupportFormatEmpty(archive);
+            } catch (LinkageError e) {
+                throw new ArchiveException(Archive.ERRNO_FATAL,
+                        "libarchive raw/empty format methods are not linkable", e);
+            }
+            Archive.readOpenFileName(
+                    archive,
+                    archivePath.getBytes(StandardCharsets.UTF_8),
+                    BLOCK_SIZE);
+            boolean selectedZstd = false;
+            int filterCount = Archive.filterCount(archive);
+            for (int index = 0; index < filterCount; index++) {
+                if (Archive.filterCode(archive, index) == Archive.FILTER_ZSTD) {
+                    selectedZstd = true;
+                    break;
+                }
+            }
+            if (!selectedZstd) {
+                throw new ArchiveException(Archive.ERRNO_FATAL,
+                        "Input is not a Zstandard-compressed stream");
+            }
+            opened = true;
+            return new Reader(archive, null);
+        } finally {
+            if (!opened) freeArchiveQuietly(archive);
+        }
+    }
+
     /** Metadata for the entry the {@link ForwardStream} is currently positioned on. */
     static final class ForwardStreamEntry {
         @Nullable final String path;
@@ -713,8 +774,8 @@ final class LibarchiveNativeBridge {
 
         /**
          * Advances to the next archive entry, returning its metadata, or null at end of archive.
-         * libarchive automatically skips any unread data of the previous entry, so the caller
-         * does not have to drain an entry it decided not to read.
+         * Callers must explicitly drain entries whose decoded bytes contribute to a solid
+         * dictionary before advancing; a header-level skip is not sufficient for every RAR.
          */
         @Nullable
         ForwardStreamEntry nextEntry() throws IOException {
@@ -759,6 +820,33 @@ final class LibarchiveNativeBridge {
             block.flip();
             block.get(out, 0, produced);
             return produced;
+        }
+
+        /**
+         * Decodes the current member into the reusable direct buffer and discards
+         * it. This primes solid RAR/7z state like a normal read while avoiding the
+         * extra direct-buffer-to-byte-array copy used by {@link #read(byte[])}.
+         */
+        boolean drainCurrentEntry(long maxDecodedBytes) throws IOException {
+            if (closed || !haveCurrentEntry) return true;
+            long total = 0L;
+            while (true) {
+                block.clear();
+                try {
+                    Archive.readData(reader.archive, block);
+                } catch (ArchiveException e) {
+                    throw toIOException("Could not drain archive entry data with libarchive", e);
+                }
+                int produced = block.position();
+                if (produced <= 0) {
+                    haveCurrentEntry = false;
+                    return true;
+                }
+                total += produced;
+                if (maxDecodedBytes >= 0L && total > maxDecodedBytes) {
+                    throw new IOException("Sequential archive entry exceeds the extraction safety limit");
+                }
+            }
         }
 
         void close() {

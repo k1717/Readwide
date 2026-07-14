@@ -2,12 +2,14 @@
 
 This matrix tracks the 1.0.3 L3 document-viewer fidelity cycle. It should be updated only when a fixture-backed implementation is added.
 
-| Format | Current baseline | 1.0.3 target | Current support claim |
+> **Historical baseline:** The support column below records the 1.0.3 cycle. Legacy `.doc` gained a basic read-only parser in 1.0.11; use the current README and release notes for present support claims.
+
+| Format | 1.0.3 baseline | 1.0.3 target | 1.0.3 support claim |
 | --- | --- | --- | --- |
 | DOCX / DOCM / DOTX / DOTM | L2-ish semantic HTML | L3 content-fidelity HTML | Existing converter supports semantic Word HTML. The new rendered bridge now covers paragraphs, run styling, `styles.xml` document/paragraph/character style inheritance, direct numbering.xml ordered/bullet lists, tables with basic width, grid, horizontal/vertical merge, border color and shading support, inline images with extent-derived size hints, floating-image block downgrade, referenced footnotes/endnotes as end-of-document sections, directly referenced headers/footers as reading-order sections, and page margins behind fallback. Table styles, complex style-linked numbering, complex border styles, dynamic fields/page numbers, exact per-page header/footer repetition, and exact floating layout are not yet verified. |
 | HWPX | L1 text-first fallback | L3 content-fidelity HTML after DOCX | HWPX text extraction exists, and the rendered path now carries header/run styles, page metrics, table color where directly present, and raster embedded images (PNG/JPEG/GIF/BMP/WebP) as data URIs at authored size (with a placeholder frame for unrenderable WMF/EMF/OLE pictures). Broad OWPML layout/style/table fidelity is still not claimed. |
 | HWP 5.x | L1 text-first fallback | Partial L3 after HWPX | HWP binary now converts section/paragraph/control structure into the rendered model: tables with column spans, proportional widths, per-edge cell borders, and authored cell heights; character size/bold/italic/color and underline; paragraph alignment; paragraph-head bullet markers; empty-paragraph spacing; GSO control lines as horizontal rules; and raster embedded pictures (PNG/JPEG/GIF/BMP/WebP) as data URIs at authored size, with a placeholder frame for unrenderable WMF/EMF/OLE pictures. The official-letter heuristic remains only as a fallback. Cell vertical alignment, cell background fill, non-picture non-line GSO shapes (rectangles/curves), and encrypted/password HWP are not yet claimed. |
-| Legacy `.doc` | recognized classification only | not targeted for L3 in this cycle | Rendering remains unsupported. |
+| Legacy `.doc` | recognized classification only | not targeted for L3 in this cycle | Rendering was unsupported in 1.0.3; a basic read-only parser was added in 1.0.11. |
 | EPUB | Existing EPUB WebView path | no fidelity-cycle changes | EPUB is not part of the 1.0.3 DOCX/HWP fidelity work. |
 | Markdown | Existing Markdown WebView path | no fidelity-cycle changes | Markdown is not part of the 1.0.3 DOCX/HWP fidelity work. |
 | PDF | Existing fixed-layout PDF path | no fidelity-cycle changes | PDF keeps separate fixed-layout behavior. |

@@ -90,7 +90,8 @@ its whole-archive path; random-access types keep direct per-entry extraction.
   `ForwardStream` and `ForwardStreamEntry`. `ForwardStream` wraps one open
   libarchive `Reader` (reusing the existing `openReader` / volume-input / SFX-offset
   path) and exposes forward iteration: `nextEntry()` calls `readNextHeader`
-  (libarchive auto-skips any unread data of the previous entry) and returns the
+  (libarchive can header-skip unread data; current callers first decode-drain
+  stateful solid entries, because header skipping alone is unsafe for some RARs) and returns the
   sanitized path, directory/regular-file flags, encryption flag, and size;
   `read(byte[])` calls `Archive.readData` into a reused 64 KiB direct buffer and
   returns the bytes read or -1 at end of the current entry; `close()` frees the

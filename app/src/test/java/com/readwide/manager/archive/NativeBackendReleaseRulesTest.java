@@ -19,9 +19,9 @@ public class NativeBackendReleaseRulesTest {
     }
 
     @Test
-    public void releaseRulesKeepZstdJniBindingPackage() throws IOException {
+    public void releaseRulesTreatZstdJniAsTestOnlyOptionalCodec() throws IOException {
         String rules = readProguardRules();
-        assertTrue(rules.contains("-keep class com.github.luben.zstd.** { *; }"));
+        assertTrue(!rules.contains("-keep class com.github.luben.zstd.** { *; }"));
         assertTrue(rules.contains("-dontwarn com.github.luben.zstd.**"));
     }
 
@@ -50,6 +50,28 @@ public class NativeBackendReleaseRulesTest {
         assertTrue(bridge.contains("Archive.readNextHeader(archive)"));
         assertTrue(!bridge.contains("Archive.readNextHeader2("));
         assertTrue(!bridge.contains("ArchiveEntry.new2("));
+    }
+
+    @Test
+    public void rawZstdReaderRequiresSelectedZstdFilter() throws IOException {
+        String bridge = readProjectFile("app/src/main/java/com/readwide/manager/archive/LibarchiveNativeBridge.java", "src/main/java/com/readwide/manager/archive/LibarchiveNativeBridge.java");
+        assertTrue(bridge.contains("Archive.readSupportFilterZstd(archive)"));
+        assertTrue(bridge.contains("Archive.filterCode(archive, index) == Archive.FILTER_ZSTD"));
+        assertTrue(bridge.contains("Input is not a Zstandard-compressed stream"));
+    }
+
+    @Test
+    public void apkSourceCarriesPinnedNativeBackendNotices() throws IOException {
+        String notices = readProjectFile(
+                "app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt",
+                "src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt");
+        assertTrue(notices.contains("d3ee9c472173fcaf28e737f59dd34ef6cf3d1c88"));
+        assertTrue(notices.contains("9525f90ca4bd14c7b335e2f8c84a4607b0af6bdf"));
+        assertTrue(notices.contains("bzip2 / libbzip2"));
+        assertTrue(notices.contains("XZ Utils / liblzma"));
+        assertTrue(notices.contains("Zstandard"));
+        assertTrue(notices.contains("Mbed TLS / libmbedcrypto"));
+        assertTrue(notices.contains("END OF TERMS AND CONDITIONS"));
     }
 
     private static String readProguardRules() throws IOException {

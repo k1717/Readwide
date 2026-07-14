@@ -14,6 +14,10 @@ import android.webkit.WebView;
  * text-selection pipeline and toolbar anchoring, but the user must hold longer.
  * If the finger starts moving, the real down event is forwarded immediately so
  * scrolling/panning still feels normal and accidental selection is avoided.
+ *
+ * Activity-level tap-zone listeners may consume ACTION_UP/CANCEL before
+ * onTouchEvent sees it. dispatchTouchEvent therefore performs a final cleanup so
+ * a delayed or already-forwarded DOWN cannot survive as a phantom long press.
  */
 public class LessSensitiveWebView extends WebView {
     private static final long EXTRA_STATIONARY_DELAY_MS = 350L;
@@ -47,6 +51,34 @@ public class LessSensitiveWebView extends WebView {
     public LessSensitiveWebView(Context context, AttributeSet attrs, int defStyleAttr) {
         super(context, attrs, defStyleAttr);
         touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event == null) return false;
+        int action = event.getActionMasked();
+        boolean terminal = action == MotionEvent.ACTION_UP
+                || action == MotionEvent.ACTION_CANCEL;
+        boolean handled = super.dispatchTouchEvent(event);
+
+        // When an OnTouchListener consumes the terminal event, this class's
+        // onTouchEvent() never receives it. Clear a not-yet-forwarded DOWN, or
+        // cancel a DOWN that was already delivered to native WebView, so no
+        // selection gesture leaks into the next page after a tap-zone turn.
+        if (terminal && fingerDown) {
+            if (!pendingDown) {
+                MotionEvent cancel = MotionEvent.obtain(event);
+                cancel.setAction(MotionEvent.ACTION_CANCEL);
+                try {
+                    super.onTouchEvent(cancel);
+                } finally {
+                    cancel.recycle();
+                }
+            }
+            fingerDown = false;
+            clearPendingDown();
+        }
+        return handled;
     }
 
     @Override

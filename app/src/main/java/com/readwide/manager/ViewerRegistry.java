@@ -34,6 +34,17 @@ final class ViewerRegistry {
         }
     }
 
+    static synchronized void notifyEpubBoundaryChanged() {
+        cleanupLocked();
+        for (WeakReference<Activity> ref : ACTIVE_VIEWERS) {
+            Activity activity = ref.get();
+            if (activity instanceof DocumentPageActivity && !activity.isFinishing()) {
+                DocumentPageActivity document = (DocumentPageActivity) activity;
+                document.runOnUiThread(document::applyAndReloadEpubBoundaryImmediately);
+            }
+        }
+    }
+
     private static void cleanupLocked() {
         Iterator<WeakReference<Activity>> it = ACTIVE_VIEWERS.iterator();
         while (it.hasNext()) {

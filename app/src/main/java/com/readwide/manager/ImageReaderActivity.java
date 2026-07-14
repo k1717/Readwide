@@ -97,9 +97,9 @@ public class ImageReaderActivity extends AppCompatActivity {
     // Parallel pool for pre-decoding neighbor pages into the bitmap cache. Kept
     // separate from extraction (sequenceExecutor) and from the on-demand decode
     // (executor) so prefetch decoding runs concurrently instead of queuing behind
-    // a slow archive extraction. Sized to the device's CPU budget, capped small.
-    private final ExecutorService prefetchDecodeExecutor = Executors.newFixedThreadPool(
-            Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() - 1)));
+    // a slow archive extraction. Two workers bound speculative bitmap allocation
+    // while still warming both reading directions in parallel.
+    private final ExecutorService prefetchDecodeExecutor = Executors.newFixedThreadPool(2);
     private final Object archiveExtractLock = new Object();
     private final Object deferredSequenceLock = new Object();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -149,6 +149,11 @@ public class ImageReaderActivity extends AppCompatActivity {
     // Bumped on every prefetch plan; a queued plan for an older center exits
     // early instead of walking its offsets after the user has moved on.
     private final java.util.concurrent.atomic.AtomicInteger prefetchPlanGeneration =
+            new java.util.concurrent.atomic.AtomicInteger();
+    // Bumped when the sequence's index-to-path mapping changes (deferred handoff,
+    // rename, or delete). Decode-prefetch work captures this token so a result
+    // produced for an older mapping can never populate the current index cache.
+    private final java.util.concurrent.atomic.AtomicInteger imageSequenceGeneration =
             new java.util.concurrent.atomic.AtomicInteger();
     private boolean currentImageDetailLoaded = true;
     private int detailRequestGeneration = -1;
@@ -233,6 +238,12 @@ public class ImageReaderActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        applyImageSystemBarVisibility();
+    }
+
+    @Override
     protected void onPause() {
         super.onPause();
         // Persist the latest reading position now. When returning to the main
@@ -267,6 +278,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         sequenceExecutor.shutdownNow();
         detailExecutor.shutdownNow();
         prefetchDecodeExecutor.shutdownNow();
+        bitmapPrefetchInFlight.clear();
         SequentialArchiveImageReader readerToClose;
         synchronized (sequentialReaderLock) {
             sequentialReaderClosed = true;
@@ -276,7 +288,8 @@ public class ImageReaderActivity extends AppCompatActivity {
         if (readerToClose != null) {
             readerToClose.close();
         }
-        if (currentDrawable instanceof AnimatedImageDrawable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && currentDrawable instanceof AnimatedImageDrawable) {
             ((AnimatedImageDrawable) currentDrawable).stop();
         }
         clearCurrentImageSurface(true);
@@ -404,6 +417,13 @@ public class ImageReaderActivity extends AppCompatActivity {
                 fallbackToSingleImageAfterDeferredSequenceFailure();
                 return;
             }
+            if (!sequence.matchesSourceArchiveSnapshot(sourceArchivePath)) {
+                // The archive was replaced after its preview paths were prepared.
+                // Never attach the old cache sequence or its positioned reader to
+                // the new source identity; the finally block closes that resource.
+                fallbackToSingleImageAfterDeferredSequenceFailure();
+                return;
+            }
             String currentPath = filePath != null ? new File(filePath).getAbsolutePath() : null;
             if (currentPath == null || currentPath.trim().isEmpty()) {
                 fallbackToSingleImageAfterDeferredSequenceFailure();
@@ -423,15 +443,18 @@ public class ImageReaderActivity extends AppCompatActivity {
             sourceEntryPaths.clear();
             sourceEntryPaths.addAll(sequence.entryPaths);
             ImageSequenceState.normalizeMetadataLists(imagePaths, sourceDisplayNames, sourceEntryPaths);
+            invalidateImageSequenceWork(true);
             synchronized (archiveExtractLock) {
                 PasswordChars.clear(sourceArchivePassword);
                 sourceArchivePassword = PasswordChars.cloneOf(sequence.archivePassword);
                 verifiedSensitiveArchiveCachePaths.clear();
-                seedVerifiedSensitiveArchiveCachePathsLocked();
+                verifiedSensitiveArchiveCachePaths.addAll(sequence.verifiedSensitivePaths);
+                seedSelectedSensitiveArchiveCachePathLocked(found);
             }
             currentIndex = ImageSequenceNavigationMath.clampIndex(found, imagePaths.size());
             filePath = imagePaths.get(currentIndex);
             fileUri = null;
+            adoptPreparedSequentialReader(sequence.takePreparedResource());
             updateToolbarTitle();
             applied = true;
         } finally {
@@ -475,20 +498,25 @@ public class ImageReaderActivity extends AppCompatActivity {
         loadImageAsync();
     }
 
-    private void seedVerifiedSensitiveArchiveCachePathsLocked() {
+    /**
+     * Trust only the page whose extraction succeeded before this handoff. A
+     * password's success for one member does not prove that every pre-existing
+     * ready file in a mixed-password archive belongs to the same session. The
+     * prepared forward reader separately merges the exact paths it decoded.
+     */
+    private void seedSelectedSensitiveArchiveCachePathLocked(int selectedIndex) {
         if (!PasswordChars.hasPassword(sourceArchivePassword)) return;
         if (sourceArchivePath == null || sourceArchivePath.trim().isEmpty()) return;
-        for (int i = 0; i < imagePaths.size(); i++) {
-            String path = imagePaths.get(i);
-            String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, i);
-            if (path == null || path.trim().isEmpty()
-                    || entryPath == null || entryPath.trim().isEmpty()) {
-                continue;
-            }
-            File cacheFile = new File(path);
-            if (ArchiveImageEntryCache.isReadyImageFileForHandoff(entryPath, cacheFile)) {
-                verifiedSensitiveArchiveCachePaths.add(cacheFile.getAbsolutePath());
-            }
+        if (selectedIndex < 0 || selectedIndex >= imagePaths.size()) return;
+        String path = imagePaths.get(selectedIndex);
+        String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, selectedIndex);
+        if (path == null || path.trim().isEmpty()
+                || entryPath == null || entryPath.trim().isEmpty()) {
+            return;
+        }
+        File cacheFile = new File(path);
+        if (ArchiveImageEntryCache.isReadyImageFileForHandoff(entryPath, cacheFile)) {
+            verifiedSensitiveArchiveCachePaths.add(cacheFile.getAbsolutePath());
         }
     }
 
@@ -619,10 +647,9 @@ public class ImageReaderActivity extends AppCompatActivity {
             systemRightInset = Math.max(0, bars.right);
             systemBottomInset = Math.max(0, bars.bottom);
 
-            // In gesture navigation the navigation inset is normally at the bottom,
-            // but in landscape 3-button navigation it can move to the right edge.
-            // Keep the image surface and chrome inside the safe system-bar area so
-            // the image, slider, and toolbar actions are not hidden behind that bar.
+            // Insets belong only to the overlay controls. The image canvas remains
+            // full-screen and stable, so showing/hiding chrome cannot change its
+            // fit matrix or make the page jump vertically.
             toolbar.setPadding(systemLeftInset, systemTopInset, systemRightInset, 0);
             ViewGroup.LayoutParams raw = toolbar.getLayoutParams();
             if (raw != null) {
@@ -635,10 +662,9 @@ public class ImageReaderActivity extends AppCompatActivity {
             if (sliderController != null) {
                 sliderController.applySystemInsets(systemLeftInset, systemRightInset, systemBottomInset);
             }
-            updateImageViewportBounds();
-            imageView.post(imageView::configureBaseMatrix);
             return insets;
         });
+        applyImageSystemBarVisibility();
         ViewCompat.requestApplyInsets(root);
         updateToolbarTitle();
     }
@@ -694,8 +720,8 @@ public class ImageReaderActivity extends AppCompatActivity {
     public void onConfigurationChanged(@NonNull Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         updateRotationMenuTitle(newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE);
+        applyImageSystemBarVisibility();
         if (rootView != null) ViewCompat.requestApplyInsets(rootView);
-        updateImageViewportBounds();
         if (imageView != null) imageView.post(imageView::configureBaseMatrix);
     }
 
@@ -759,45 +785,16 @@ public class ImageReaderActivity extends AppCompatActivity {
         chromeVisible = !chromeVisible;
         if (toolbar != null) toolbar.setVisibility(chromeVisible ? View.VISIBLE : View.GONE);
         if (sliderController != null) sliderController.update(currentIndex, imagePaths.size(), chromeVisible);
+        applyImageSystemBarVisibility();
     }
 
-    private void updateImageViewportBounds() {
-        if (imageView == null) return;
-        int top = dpToPx(48) + systemTopInset;
-        int sliderItemCountForBounds = shouldReserveImageSliderSpace()
-                ? Math.max(2, imagePaths.size())
-                : imagePaths.size();
-        int bottom = sliderController != null
-                ? sliderController.reservedViewportBottomInset(sliderItemCountForBounds)
-                : systemBottomInset;
-        // Reserve the toolbar (top) and slider (bottom) strips as PADDING rather
-        // than margins so the view still reaches the top and bottom screen edges
-        // and receives taps there. The image content stays inset between the bars
-        // exactly as before, but when the chrome is hidden both bars are GONE, so a
-        // tap on either strip now reaches the view for page turning instead of
-        // landing in dead space. While shown, the toolbar and slider each consume
-        // their own touches, so the image underneath is not paged through them.
-        imageView.setPadding(0, top, 0, bottom);
-        ViewGroup.LayoutParams raw = imageView.getLayoutParams();
-        if (raw instanceof FrameLayout.LayoutParams) {
-            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) raw;
-            if (lp.leftMargin != systemLeftInset
-                    || lp.topMargin != 0
-                    || lp.rightMargin != systemRightInset
-                    || lp.bottomMargin != 0) {
-                lp.leftMargin = systemLeftInset;
-                lp.topMargin = 0;
-                lp.rightMargin = systemRightInset;
-                lp.bottomMargin = 0;
-                imageView.setLayoutParams(lp);
-            }
-        }
-        imageView.post(imageView::configureBaseMatrix);
-    }
-
-    private boolean shouldReserveImageSliderSpace() {
-        return imagePaths.size() > 1
-                || (sequenceHandoffToken != null && !sequenceHandoffToken.trim().isEmpty());
+    private void applyImageSystemBarVisibility() {
+        if (rootView == null) return;
+        com.readwide.manager.util.EdgeToEdgeUtil.applyReaderSystemBarVisibility(
+                this,
+                rootView,
+                chromeVisible,
+                prefs != null && prefs.getShowStatusBar());
     }
 
     private void updateToolbarTitle() {
@@ -813,7 +810,6 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     private void updateImageSliderState() {
         if (sliderController != null) sliderController.update(currentIndex, imagePaths.size(), chromeVisible);
-        updateImageViewportBounds();
     }
 
     private String getDisplayName() {
@@ -883,12 +879,10 @@ public class ImageReaderActivity extends AppCompatActivity {
                 cached, cachedIsFullQuality, cached.getWidth(), cached.getHeight(), 1);
         applyLoadedImage(cachedLoaded, false, index, filePath, entryPath);
         setLoading(false, null);
-        // A cached preview may be lower quality; refine it once - but skip the
-        // detail pass entirely when the cached bitmap is known full quality
-        // (an original-quality preview or an already-completed detail decode).
-        if (!cachedIsFullQuality) {
-            requestDetailImageForCurrent();
-        }
+        // A display-sized prefetched bitmap is final for normal page viewing.
+        // Keep currentImageDetailLoaded=false when it is sampled so an explicit
+        // pinch/double-tap zoom can request detail, but never re-decode merely
+        // because the user turned onto the page.
         return true;
     }
 
@@ -926,14 +920,15 @@ public class ImageReaderActivity extends AppCompatActivity {
                     return;
                 }
                 if (result != null && (result.bitmap != null || result.drawable != null)) {
-                    // Cache the decoded bitmap (not animated drawables) so this
-                    // page can be re-shown instantly later.
-                    if (result.bitmap != null && !result.bitmap.isRecycled()
-                            && decodedBitmapCache != null) {
-                        decodedBitmapCache.put(index, result.bitmap);
-                        if (result.originalQuality) fullQualityCachedIndices.add(index);
-                    }
+                    // Present first, then offer the bitmap to the cache. A preview
+                    // can be larger than the cache budget on a low-memory device;
+                    // LruCache evicts such a value from inside put(). Presenting it
+                    // first makes entryRemoved recognize it as the live surface and
+                    // prevents an immediate recycle-before-display.
                     applyLoadedImage(result, false, index, path, entryPath);
+                    if (result.bitmap != null) {
+                        cacheDecodedBitmap(index, result.bitmap, result.originalQuality);
+                    }
                     currentImageDetailLoaded = result.originalQuality;
                     persistArchiveImageProgress();
                     scheduleImageReadingProgressSave();
@@ -941,7 +936,10 @@ public class ImageReaderActivity extends AppCompatActivity {
                     setLoading(false, null);
                 } else {
                     discardArchiveImageCacheAfterDecodeFailure(index, path);
-                    if (currentBitmap == null && currentDrawable == null) {
+                    // Keeping the old page visible while the next page decodes avoids
+                    // flicker, but a terminal failure must not leave that old page on
+                    // screen under the new page number.
+                    if (!isDisplayedImage(index, path, entryPath)) {
                         clearCurrentImageSurface(true);
                     }
                     setLoading(false, getString(R.string.image_open_failed));
@@ -997,8 +995,7 @@ public class ImageReaderActivity extends AppCompatActivity {
                     // the preview (and it guards currentBitmap regardless).
                     if (result.bitmap != null && !result.bitmap.isRecycled()
                             && decodedBitmapCache != null) {
-                        decodedBitmapCache.put(index, result.bitmap);
-                        fullQualityCachedIndices.add(index);
+                        cacheDecodedBitmap(index, result.bitmap, true);
                     }
                 }
             });
@@ -1019,6 +1016,37 @@ public class ImageReaderActivity extends AppCompatActivity {
         return !destroyed && generation == imageLoadGeneration;
     }
 
+    private boolean isDisplayedImage(int index,
+                                     @Nullable String path,
+                                     @Nullable String entryPath) {
+        return displayedImageIndex == index
+                && TextUtils.equals(displayedImagePath, path)
+                && TextUtils.equals(displayedImageEntryPath, entryPath)
+                && (currentBitmap != null || currentDrawable != null);
+    }
+
+    private boolean isCurrentSequenceItem(int index,
+                                          @Nullable String path,
+                                          @Nullable String entryPath) {
+        return index >= 0
+                && index < imagePaths.size()
+                && TextUtils.equals(path, imagePaths.get(index))
+                && TextUtils.equals(entryPath,
+                ImageSequenceState.entryPathAt(sourceEntryPaths, index));
+    }
+
+    /** Invalidates asynchronous work whose index keys belong to an older mapping. */
+    private void invalidateImageSequenceWork(boolean clearDecodedCache) {
+        ++imageLoadGeneration;
+        detailRequestGeneration = -1;
+        imageSequenceGeneration.incrementAndGet();
+        prefetchPlanGeneration.incrementAndGet();
+        if (clearDecodedCache && decodedBitmapCache != null) {
+            decodedBitmapCache.evictAll();
+            fullQualityCachedIndices.clear();
+        }
+    }
+
     private void applyLoadedImage(@NonNull LoadedImage result,
                                   boolean preserveViewport,
                                   int requestIndex,
@@ -1026,7 +1054,8 @@ public class ImageReaderActivity extends AppCompatActivity {
                                   @Nullable String requestEntryPath) {
         Bitmap oldBitmap = currentBitmap;
         Drawable oldDrawable = currentDrawable;
-        if (oldDrawable instanceof AnimatedImageDrawable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && oldDrawable instanceof AnimatedImageDrawable) {
             ((AnimatedImageDrawable) oldDrawable).stop();
         }
         if (result.drawable != null) {
@@ -1055,10 +1084,35 @@ public class ImageReaderActivity extends AppCompatActivity {
         return snapshot.containsValue(bitmap);
     }
 
+    /**
+     * Stores a decoded bitmap and updates its quality marker only when the cache
+     * actually retained that exact instance. LruCache may synchronously reject an
+     * item larger than its byte budget; recording quality after such a rejection
+     * would make a later low-resolution preview at the same index look full quality.
+     * All callers run on the main thread, matching entryRemoved's ownership checks.
+     */
+    private boolean cacheDecodedBitmap(int index,
+                                       @NonNull Bitmap bitmap,
+                                       boolean fullQuality) {
+        if (decodedBitmapCache == null || bitmap.isRecycled()) {
+            fullQualityCachedIndices.remove(index);
+            return false;
+        }
+        decodedBitmapCache.put(index, bitmap);
+        boolean retained = decodedBitmapCache.get(index) == bitmap && !bitmap.isRecycled();
+        if (retained && fullQuality) {
+            fullQualityCachedIndices.add(index);
+        } else {
+            fullQualityCachedIndices.remove(index);
+        }
+        return retained;
+    }
+
     private void clearCurrentImageSurface(boolean recycleBitmap) {
         Drawable oldDrawable = currentDrawable;
         Bitmap oldBitmap = currentBitmap;
-        if (oldDrawable instanceof AnimatedImageDrawable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && oldDrawable instanceof AnimatedImageDrawable) {
             ((AnimatedImageDrawable) oldDrawable).stop();
         }
         currentDrawable = null;
@@ -1148,6 +1202,39 @@ public class ImageReaderActivity extends AppCompatActivity {
         }
     }
 
+    private void adoptPreparedSequentialReader(@Nullable java.io.Closeable resource) {
+        if (!(resource instanceof SequentialArchiveImageReader)
+                || sourceArchivePath == null
+                || sourceArchivePath.trim().isEmpty()) {
+            closePreparedResource(resource);
+            return;
+        }
+        SequentialArchiveImageReader prepared = (SequentialArchiveImageReader) resource;
+        File archive = new File(sourceArchivePath);
+        if (!prepared.isReusableForHandoff(archive)) {
+            prepared.close();
+            return;
+        }
+        boolean adopted = false;
+        synchronized (sequentialReaderLock) {
+            if (!sequentialReaderClosed && sequentialImageReader == null) {
+                prepared.attachVerifiedSensitivePaths(verifiedSensitiveArchiveCachePaths);
+                sequentialImageReader = prepared;
+                sourceArchiveForwardReadable = true;
+                adopted = true;
+            }
+        }
+        if (!adopted) prepared.close();
+    }
+
+    private static void closePreparedResource(@Nullable java.io.Closeable resource) {
+        if (resource == null) return;
+        try {
+            resource.close();
+        } catch (Exception ignored) {
+        }
+    }
+
     private void discardArchiveImageCacheAfterDecodeFailure(int index, @Nullable String expectedPath) {
         if (sourceArchivePath == null || sourceArchivePath.trim().isEmpty()) return;
         if (expectedPath == null || expectedPath.trim().isEmpty()) return;
@@ -1166,6 +1253,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         final ArrayList<String> imagePathsSnapshot = new ArrayList<>(imagePaths);
         final ArrayList<String> entryPathsSnapshot = new ArrayList<>(sourceEntryPaths);
         final int total = imagePathsSnapshot.size();
+        final int sequenceGeneration = imageSequenceGeneration.get();
         // Bitmap warm-up stays at the nearest neighbors (decoded bitmaps cost
         // real memory); file extraction deepens ahead once the paging
         // direction is sustained, so the shared forward stream keeps working
@@ -1187,7 +1275,11 @@ public class ImageReaderActivity extends AppCompatActivity {
                 if (idx == centerIndex) continue;
                 final int decodeIndex = idx;
                 prefetchDecodeExecutor.execute(
-                        () -> prefetchDecodeIntoCache(decodeIndex, imagePathsSnapshot, entryPathsSnapshot));
+                        () -> prefetchDecodeIntoCache(
+                                decodeIndex,
+                                imagePathsSnapshot,
+                                entryPathsSnapshot,
+                                sequenceGeneration));
             }
             return;
         }
@@ -1216,14 +1308,26 @@ public class ImageReaderActivity extends AppCompatActivity {
                     if (forwardSequential && onDemandReaderWaiters.get() > 0) break;
                     int idx = ImageSequenceNavigationMath.nextIndex(centerIndex, off, total);
                     if (idx == centerIndex) continue;
-                    prefetchArchiveImageEntry(archivePathSnapshot, entryPathsSnapshot, imagePathsSnapshot, idx, passwordSnapshot, verifiedSensitiveArchiveCachePaths);
+                    boolean entryReady = prefetchArchiveImageEntry(
+                            archivePathSnapshot,
+                            entryPathsSnapshot,
+                            imagePathsSnapshot,
+                            idx,
+                            passwordSnapshot,
+                            verifiedSensitiveArchiveCachePaths,
+                            planGeneration,
+                            sequenceGeneration);
                     // Bitmap warm-up only for the nearest neighbors; the deep
                     // ahead run extracts files without holding decoded bitmaps.
                     boolean inDecodeWindow = Math.abs(off) <= 3;
-                    if (inDecodeWindow && !destroyed) {
+                    if (entryReady && inDecodeWindow && !destroyed) {
                         final int decodeIndex = idx;
                         prefetchDecodeExecutor.execute(
-                                () -> prefetchDecodeIntoCache(decodeIndex, imagePathsSnapshot, entryPathsSnapshot));
+                                () -> prefetchDecodeIntoCache(
+                                        decodeIndex,
+                                        imagePathsSnapshot,
+                                        entryPathsSnapshot,
+                                        sequenceGeneration));
                     }
                 }
             } finally {
@@ -1235,60 +1339,95 @@ public class ImageReaderActivity extends AppCompatActivity {
     /**
      * Decodes a neighbor page's preview bitmap into the cache (off the main
      * thread) so a later page turn to it is instant. No-op if already cached or
-     * already being decoded.
+     * already being decoded. This work is sequence/index/path scoped, not
+     * prefetch-plan scoped: a newer direction plan can still use the same
+     * display-sized bitmap, and invalidating it while its in-flight key is held
+     * would create a one-plan hole with no replacement decode.
      */
     private void prefetchDecodeIntoCache(int index,
                                          @NonNull ArrayList<String> imagePathsSnapshot,
-                                         @NonNull ArrayList<String> entryPathsSnapshot) {
-        if (destroyed || decodedBitmapCache == null) return;
+                                         @NonNull ArrayList<String> entryPathsSnapshot,
+                                         int sequenceGeneration) {
+        if (destroyed || decodedBitmapCache == null
+                || imageSequenceGeneration.get() != sequenceGeneration) return;
         if (index < 0 || index >= imagePathsSnapshot.size()) return;
         if (decodedBitmapCache.get(index) != null) return;
         Integer key = index;
         if (!bitmapPrefetchInFlight.add(key)) return;
         final String path = imagePathsSnapshot.get(index);
+        final String entryPath = ImageSequenceState.entryPathAt(entryPathsSnapshot, index);
         final String displayName = path != null ? new File(path).getName() : null;
         final Context appContext = getApplicationContext();
+        boolean handedOffToMain = false;
         try {
             if (path == null || !new File(path).exists()) return;
-            LoadedImage decoded = ImageDecodeHelper.decodePreview(appContext, path, null, displayName);
+            // Archive prefetch may fail while a stale or partial path is still
+            // present. Only a committed ready entry is eligible for decode;
+            // local filesystem sequences have an empty entry path and are
+            // intentionally unaffected.
+            if (entryPath != null && !entryPath.trim().isEmpty()
+                    && !ArchiveImageEntryCache.isReadyImageFileForHandoff(
+                    entryPath, new File(path))) {
+                return;
+            }
+            LoadedImage decoded = ImageDecodeHelper.decodePrefetch(
+                    appContext, path, null, displayName);
             if (decoded == null || decoded.bitmap == null || decoded.bitmap.isRecycled()) return;
             final Bitmap bmp = decoded.bitmap;
             final boolean fullQuality = decoded.originalQuality;
-            mainHandler.post(() -> {
-                if (destroyed || decodedBitmapCache == null || bmp.isRecycled()) {
-                    if (!bmp.isRecycled()) bmp.recycle();
-                    return;
+            boolean posted = mainHandler.post(() -> {
+                try {
+                    if (destroyed
+                            || decodedBitmapCache == null
+                            || bmp.isRecycled()
+                            || imageSequenceGeneration.get() != sequenceGeneration
+                            || !isCurrentSequenceItem(index, path, entryPath)) {
+                        if (!bmp.isRecycled()) bmp.recycle();
+                        return;
+                    }
+                    if (decodedBitmapCache.get(index) != null) {
+                        bmp.recycle(); // someone else cached it meanwhile
+                        return;
+                    }
+                    cacheDecodedBitmap(index, bmp, fullQuality);
+                } finally {
+                    bitmapPrefetchInFlight.remove(key);
                 }
-                if (decodedBitmapCache.get(index) != null) {
-                    bmp.recycle(); // someone else cached it meanwhile
-                    return;
-                }
-                decodedBitmapCache.put(index, bmp);
-                if (fullQuality) fullQualityCachedIndices.add(index);
             });
+            if (posted) {
+                handedOffToMain = true;
+                return;
+            }
+            if (!bmp.isRecycled()) bmp.recycle();
         } catch (Exception ignored) {
             // Prefetch is best-effort; a failed neighbor just decodes on demand.
         } finally {
-            bitmapPrefetchInFlight.remove(key);
+            if (!handedOffToMain) bitmapPrefetchInFlight.remove(key);
         }
     }
 
-    private void prefetchArchiveImageEntry(@NonNull String archivePath,
-                                           @NonNull ArrayList<String> entryPaths,
-                                           @NonNull ArrayList<String> imagePaths,
-                                           int index,
-                                           @Nullable char[] password,
-                                           @Nullable Set<String> verifiedSensitivePaths) {
-        if (index < 0 || index >= imagePaths.size() || index >= entryPaths.size()) return;
+    private boolean prefetchArchiveImageEntry(@NonNull String archivePath,
+                                              @NonNull ArrayList<String> entryPaths,
+                                              @NonNull ArrayList<String> imagePaths,
+                                              int index,
+                                              @Nullable char[] password,
+                                              @Nullable Set<String> verifiedSensitivePaths,
+                                              int planGeneration,
+                                              int sequenceGeneration) {
+        if (index < 0 || index >= imagePaths.size() || index >= entryPaths.size()) return false;
         String expectedPath = imagePaths.get(index);
         String entryPath = ImageSequenceState.entryPathAt(entryPaths, index);
         if (expectedPath == null || expectedPath.trim().isEmpty()
-                || entryPath == null || entryPath.trim().isEmpty()) return;
+                || entryPath == null || entryPath.trim().isEmpty()) return false;
         File archive = new File(archivePath);
-        if (!archive.exists() || !archive.isFile()) return;
+        if (!archive.exists() || !archive.isFile()) return false;
         File outFile = new File(expectedPath);
+        boolean sensitiveCache = PasswordChars.hasPassword(password);
         // Cheap cache-hit check first; applies whether or not this is a sequential archive.
-        if (ArchiveImageEntryCache.isReadyImageFileForHandoff(entryPath, outFile)) return;
+        if (ArchiveImageEntryCache.shouldReuseReadyImageFile(
+                entryPath, outFile, sensitiveCache, verifiedSensitivePaths)) return true;
+        ArchiveImageEntryCache.discardUnverifiedSensitiveReadyCache(
+                outFile, sensitiveCache, verifiedSensitivePaths);
         // Branch through the memoized sequential reader instead of re-detecting the archive type
         // on every prefetch (which, for RAR, would re-read the file signature each call).
         SequentialArchiveImageReader reader = ensureSequentialReader(archive);
@@ -1299,16 +1438,19 @@ public class ImageReaderActivity extends AppCompatActivity {
             // instead, so a background fetch never holds the reader lock for a single-entry decode
             // while an on-demand page waits. This keeps the reading frontier, not the whole
             // archive, as the extraction bound.
-            reader.ensureExtracted(entryPath, false);
-            return;
+            return reader.ensureExtracted(entryPath, false, () ->
+                    !destroyed
+                            && imageSequenceGeneration.get() == sequenceGeneration
+                            && prefetchPlanGeneration.get() == planGeneration
+                            && onDemandReaderWaiters.get() == 0);
         }
-        ArchiveImageEntryCache.ensureReady(
+        return ArchiveImageEntryCache.ensureReady(
                 archive,
                 entryPath,
                 outFile,
                 password,
-                PasswordChars.hasPassword(password),
-                verifiedSensitivePaths);
+                sensitiveCache,
+                verifiedSensitivePaths).success;
     }
 
     private void setLoading(boolean loading, @Nullable String message) {
@@ -1680,6 +1822,11 @@ public class ImageReaderActivity extends AppCompatActivity {
                 currentIndex = ImageSequenceNavigationMath.clampIndex(
                         renamedIndex >= 0 ? renamedIndex : currentIndex,
                         imagePaths.size());
+                invalidateImageSequenceWork(false);
+                if (displayedImageIndex == currentIndex
+                        && TextUtils.equals(displayedImagePath, file.getAbsolutePath())) {
+                    displayedImagePath = filePath;
+                }
                 updateToolbarTitle();
                 ShortToast.show(this, R.string.renamed);
                 dialog.dismiss();
@@ -1733,6 +1880,9 @@ public class ImageReaderActivity extends AppCompatActivity {
                         sourceEntryPaths,
                         oldPath,
                         currentIndex);
+                // Removing an item shifts every following index, so all index-keyed
+                // bitmaps are stale even if their source files are still valid.
+                invalidateImageSequenceWork(true);
                 ShortToast.show(this, R.string.deleted);
                 dialog.dismiss();
                 if (result.empty) {

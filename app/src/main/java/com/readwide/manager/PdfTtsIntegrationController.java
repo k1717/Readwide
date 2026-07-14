@@ -25,21 +25,32 @@ final class PdfTtsIntegrationController {
 
     /** True while the PDF text is being extracted/built off the main thread. */
     private boolean textBuilding = false;
+    /** Invalidates callbacks and autostart polls when singleTop replaces the PDF. */
+    private int documentGeneration = 0;
 
     PdfTtsIntegrationController(@NonNull PdfReaderActivity activity) {
         this.activity = activity;
     }
 
+    /** Clears document-scoped async state before a new PDF intent is loaded. */
+    void onDocumentChanged() {
+        documentGeneration++;
+        textBuilding = false;
+        pendingAutoStartTts = false;
+        autoStartTtsConsumed = false;
+        autoStartTtsAttempts = 0;
+    }
+
     /** True while an EXTRA_AUTOSTART_TTS intent is waiting for the PDF to load. */
     private boolean pendingAutoStartTts = false;
-    /** The autostart extra is honored once per activity instance. */
+    /** The autostart extra is honored once per loaded PDF intent. */
     private boolean autoStartTtsConsumed = false;
     private int autoStartTtsAttempts = 0;
 
     /**
      * Arms auto-start when the launching intent carries
      * {@link PdfReaderActivity#EXTRA_AUTOSTART_TTS} (the "continue reading aloud"
-     * resume from the main screen), honored once per activity instance. Called
+     * resume from the main screen), honored once per loaded PDF intent. Called
      * from the activity as it reads its intent.
      */
     void onLoadFromIntent(android.content.Intent intent) {
@@ -48,7 +59,7 @@ final class PdfTtsIntegrationController {
             autoStartTtsConsumed = true;
             pendingAutoStartTts = true;
             autoStartTtsAttempts = 0;
-            scheduleAutoStartCheck();
+            scheduleAutoStartCheck(documentGeneration);
         }
     }
 
@@ -57,15 +68,16 @@ final class PdfTtsIntegrationController {
      * off-thread and begins playback, resuming from the saved position when one
      * exists for this file. Gives up quietly after a few seconds.
      */
-    private void scheduleAutoStartCheck() {
+    private void scheduleAutoStartCheck(int generation) {
         View anchor = activity.getWindow().getDecorView();
         anchor.postDelayed(() -> {
-            if (activity.activityDestroyed || !pendingAutoStartTts) return;
+            if (activity.activityDestroyed || generation != documentGeneration
+                    || !pendingAutoStartTts) return;
             if (activity.pdfSupportsTts()) {
                 pendingAutoStartTts = false;
                 autostart();
             } else if (++autoStartTtsAttempts <= 40) {
-                scheduleAutoStartCheck();
+                scheduleAutoStartCheck(generation);
             } else {
                 pendingAutoStartTts = false;
             }
@@ -83,10 +95,11 @@ final class PdfTtsIntegrationController {
             return;
         }
         if (textBuilding) {
-            final int retryGeneration = activity.renderGeneration;
+            final int retryDocumentGeneration = documentGeneration;
             View anchor = activity.getWindow().getDecorView();
             anchor.postDelayed(() -> {
-                if (!activity.activityDestroyed && retryGeneration == activity.renderGeneration) {
+                if (!activity.activityDestroyed
+                        && retryDocumentGeneration == documentGeneration) {
                     autostart();
                 }
             }, 150L);
@@ -97,7 +110,7 @@ final class PdfTtsIntegrationController {
         textBuilding = true;
         final File file = activity.localFile;
         final int count = activity.pageCount;
-        final int generation = activity.renderGeneration;
+        final int sourceDocumentGeneration = documentGeneration;
         final boolean continuousMode = continuous;
         activity.executor.execute(() -> {
             PdfTtsTextSource builtOrNull;
@@ -109,9 +122,9 @@ final class PdfTtsIntegrationController {
             }
             final PdfTtsTextSource built = builtOrNull;
             activity.handler.post(() -> {
-                if (activity.activityDestroyed) return;
+                if (activity.activityDestroyed
+                        || sourceDocumentGeneration != documentGeneration) return;
                 textBuilding = false;
-                if (generation != activity.renderGeneration) return;
                 if (built != null) activity.pdfTtsTextSource = built;
                 if (built == null || !built.hasAnyText()) {
                     // Scanned/image-only: nothing to auto-play. Stay silent
@@ -168,7 +181,7 @@ final class PdfTtsIntegrationController {
         textBuilding = true;
         final File file = activity.localFile;
         final int count = activity.pageCount;
-        final int generation = activity.renderGeneration;
+        final int sourceDocumentGeneration = documentGeneration;
         activity.executor.execute(() -> {
             PdfTtsTextSource builtOrNull;
             try {
@@ -186,12 +199,9 @@ final class PdfTtsIntegrationController {
             }
             final PdfTtsTextSource built = builtOrNull;
             activity.handler.post(() -> {
-                if (activity.activityDestroyed) return;
+                if (activity.activityDestroyed
+                        || sourceDocumentGeneration != documentGeneration) return;
                 textBuilding = false;
-                if (generation != activity.renderGeneration) {
-                    // A different document loaded while we were extracting.
-                    return;
-                }
                 if (built != null) {
                     // Cache even a no-text result so a scanned PDF answers later
                     // taps from the fast path instead of re-extracting each time.

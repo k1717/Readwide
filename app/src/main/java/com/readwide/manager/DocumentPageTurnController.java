@@ -30,19 +30,19 @@ final class DocumentPageTurnController {
     }
 
     void pageBy(int direction) {
-        int pageCount = activity.documentPageCount();
-        if (pageCount <= 0) return;
-        if (activity.isMarkdownDocument()) {
-            activity.pageMarkdownBy(direction);
-            return;
-        }
-        int target = Math.max(0, Math.min(pageCount - 1, activity.currentPage + direction));
-        if (target != activity.currentPage) {
-            activity.showPage(target, Integer.compare(target, activity.currentPage));
-        }
+        if (activity.documentPageCount() <= 0) return;
+        activity.turnDocumentDisplayPageBy(direction);
     }
 
     private int pageTurnDirectionForKey(int keyCode) {
+        boolean rtlEpub = "EPUB".equals(activity.docType)
+                && activity.prefs != null
+                && activity.prefs.getEpubPageDirection()
+                == com.readwide.manager.util.PrefsManager.EPUB_PAGE_DIRECTION_RTL;
+        if (rtlEpub) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return +1;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) return -1;
+        }
         switch (keyCode) {
             case KeyEvent.KEYCODE_VOLUME_DOWN:
             case KeyEvent.KEYCODE_PAGE_DOWN:

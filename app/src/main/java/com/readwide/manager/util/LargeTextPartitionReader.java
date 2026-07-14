@@ -292,6 +292,17 @@ public final class LargeTextPartitionReader {
         }
     }
 
+    /**
+     * Per-line presentation transform used by the partition core. Keeping this
+     * tiny seam package-private lets the JVM regression suite execute the real
+     * full-scan/cursor implementation without constructing an Android Context.
+     * Production still supplies the exact selector + display-rule transform.
+     */
+    @FunctionalInterface
+    interface LineTransform {
+        String apply(String line);
+    }
+
     public static LargeTextLinePartitionResult readPartitionAtStartLine(@NonNull Context context,
                                                                          @NonNull File file,
                                                                          @NonNull String encoding,
@@ -304,6 +315,40 @@ public final class LargeTextPartitionReader {
                                                                          int lookbehindLines,
                                                                          boolean includeLookbehind,
                                                                          ForwardCursor cursor) throws IOException {
+        List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
+                context.getApplicationContext(), file.getAbsolutePath());
+        int rulesVersion = TextDisplayRuleManager.getRulesVersion();
+        return readPartitionAtStartLineTransformed(
+                file,
+                encoding,
+                collapseBlankLines,
+                requestedStartLine,
+                knownTotalLines,
+                knownTotalChars,
+                partitionLines,
+                lookaheadLines,
+                lookbehindLines,
+                includeLookbehind,
+                rulesVersion,
+                lineText -> TextDisplayRuleManager.apply(
+                        FileUtils.enforceTextPresentationSelectors(lineText), activeRules),
+                cursor);
+    }
+
+    static LargeTextLinePartitionResult readPartitionAtStartLineTransformed(
+            @NonNull File file,
+            @NonNull String encoding,
+            boolean collapseBlankLines,
+            int requestedStartLine,
+            int knownTotalLines,
+            int knownTotalChars,
+            int partitionLines,
+            int lookaheadLines,
+            int lookbehindLines,
+            boolean includeLookbehind,
+            int rulesVersion,
+            @NonNull LineTransform lineTransform,
+            ForwardCursor cursor) throws IOException {
         LargeTextContinuityMath.PartitionWindow window =
                 LargeTextContinuityMath.partitionWindowForStartLine(
                         requestedStartLine,
@@ -324,9 +369,6 @@ public final class LargeTextPartitionReader {
         int bodyCharCount = 0;
         boolean capturedAny = false;
 
-        List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
-                context.getApplicationContext(), file.getAbsolutePath());
-        int rulesVersion = TextDisplayRuleManager.getRulesVersion();
         TxtBlankLineCollapser.Filter collapseFilter;
         BufferedReader reader;
         java.util.ArrayDeque<String> pending;
@@ -377,8 +419,7 @@ public final class LargeTextPartitionReader {
                         hitEof = true;
                         break;
                     }
-                    String normalized = FileUtils.enforceTextPresentationSelectors(lineText);
-                    normalized = TextDisplayRuleManager.apply(normalized, activeRules);
+                    String normalized = lineTransform.apply(lineText);
                     emitted = collapseFilter.accept(normalized);
                     if (emitted == null) continue;
                 }

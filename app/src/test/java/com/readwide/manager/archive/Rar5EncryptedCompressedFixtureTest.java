@@ -17,8 +17,9 @@ import java.util.List;
 /**
  * End-to-end regression for AES-256 encrypted, compressed RAR5 extraction.
  *
- * <p>libarchive 3.7.2 cannot decrypt RAR5 at all (verified against real WinRAR
- * archives: it reports "Encryption is not supported"), so the only route for a
+ * <p>The bundled libarchive backend cannot decrypt RAR5 (initially verified with
+ * libarchive 3.7.2 against real WinRAR archives: it reports "Encryption is not
+ * supported"), so the only route for a
  * password-protected compressed RAR5 entry is the first-party path -
  * {@link Rar5CompressedArchiveExtractor} AES-decrypts each entry with
  * {@link Rar5Crypto} and then decodes it with {@link Rar5CompressedDecoder}.

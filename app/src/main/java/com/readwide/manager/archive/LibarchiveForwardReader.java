@@ -3,6 +3,7 @@ package com.readwide.manager.archive;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import java.io.Closeable;
 import java.io.IOException;
 
 /**
@@ -14,7 +15,7 @@ import java.io.IOException;
  * incremental, cache-as-you-go paging path as 7z and TAR instead of re-extracting the whole archive
  * on first access and on every later cache miss.</p>
  *
- * <p>This reader is used only for libarchive-eligible RAR (gated by
+ * <p>This reader is used for libarchive-eligible RAR and selected 7z paths (gated by
  * {@link ArchiveSupport#isForwardImageReadableType(java.io.File)}). Any libarchive limitation - an
  * encryption variant or a compression case it cannot decode - surfaces as an {@link IOException},
  * which makes the sequential reader abandon the stream and fall back to the existing whole-archive
@@ -25,9 +26,17 @@ final class LibarchiveForwardReader implements ArchiveSupport.ForwardArchiveRead
 
     @NonNull
     private final LibarchiveNativeBridge.ForwardStream stream;
+    @Nullable
+    private final Closeable owner;
 
     LibarchiveForwardReader(@NonNull LibarchiveNativeBridge.ForwardStream stream) {
+        this(stream, null);
+    }
+
+    LibarchiveForwardReader(@NonNull LibarchiveNativeBridge.ForwardStream stream,
+                            @Nullable Closeable owner) {
         this.stream = stream;
+        this.owner = owner;
     }
 
     @Override
@@ -48,7 +57,26 @@ final class LibarchiveForwardReader implements ArchiveSupport.ForwardArchiveRead
     }
 
     @Override
+    public boolean drainCurrentEntry(long maxDecodedBytes) throws IOException {
+        return stream.drainCurrentEntry(maxDecodedBytes);
+    }
+
+    @Override
+    public boolean skipsUnreadEntryOnAdvance() {
+        return canSkipUnreadEntryWithoutDecode();
+    }
+
+    /** Solid RAR/7z state requires decode-and-discard, not a header-only skip. */
+    static boolean canSkipUnreadEntryWithoutDecode() {
+        return false;
+    }
+
+    @Override
     public void close() throws IOException {
-        stream.close();
+        try {
+            stream.close();
+        } finally {
+            if (owner != null) owner.close();
+        }
     }
 }

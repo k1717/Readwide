@@ -172,7 +172,7 @@
 
                 <FrameLayout
                     android:id="@+id/recent_fast_scroll_rail"
-                    android:layout_width="32dp"
+                    android:layout_width="36dp"
                     android:layout_height="match_parent"
                     android:layout_gravity="end"
                     android:background="@android:color/transparent"
@@ -232,7 +232,7 @@
 
             <FrameLayout
                 android:id="@+id/file_fast_scroll_rail"
-                android:layout_width="32dp"
+                android:layout_width="36dp"
                 android:layout_height="match_parent"
                 android:layout_gravity="end"
                 android:background="@android:color/transparent"

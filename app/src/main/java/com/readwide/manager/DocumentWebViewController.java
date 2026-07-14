@@ -41,34 +41,38 @@ final class DocumentWebViewController {
         view.setLongClickable(primary);
         view.setHapticFeedbackEnabled(primary);
         view.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        view.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
+            if (primary && scrollY != oldScrollY) {
+                activity.notifyDocumentFastScrollActivity();
+            }
+            if (!primary) return;
+            if (activity.isMarkdownDocument() && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
+                activity.updateMarkdownVisualPageModel(false);
+                activity.scheduleMarkdownSourceAnchorUpdate();
+            }
+            if (activity.isRenderedContentAnchorDocument() && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
+                activity.scheduleDocumentContentAnchorUpdate();
+            }
+            if ("Word".equals(activity.docType)
+                    && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
+                activity.webView.removeCallbacks(activity.checkWordSelectionAfterScrollRunnable);
+                activity.webView.postDelayed(activity.checkWordSelectionAfterScrollRunnable, 90);
+            }
+        });
         if (primary) {
             view.addJavascriptInterface(activity.new WordSelectionBridge(), "ReadwideSelectionBridge");
-            view.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
-                if (activity.isMarkdownDocument() && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
-                    activity.updateMarkdownVisualPageModel(false);
-                    activity.scheduleMarkdownSourceAnchorUpdate();
-                }
-                if (activity.isRenderedContentAnchorDocument() && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
-                    activity.scheduleDocumentContentAnchorUpdate();
-                }
-                if ("Word".equals(activity.docType)
-                        && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
-                    activity.webView.removeCallbacks(activity.checkWordSelectionAfterScrollRunnable);
-                    activity.webView.postDelayed(activity.checkWordSelectionAfterScrollRunnable, 90);
-                }
-            });
         }
 
         view.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(@NonNull WebView view, @NonNull WebResourceRequest request) {
-                return activity.handleEpubInternalNavigation(request.getUrl());
+                return activity.handleEpubInternalNavigation(view, request.getUrl());
             }
 
             @Override
             @SuppressWarnings("deprecation")
             public boolean shouldOverrideUrlLoading(@NonNull WebView view, String url) {
-                return activity.handleEpubInternalNavigation(Uri.parse(url));
+                return activity.handleEpubInternalNavigation(view, Uri.parse(url));
             }
 
             @Override
@@ -79,9 +83,17 @@ final class DocumentWebViewController {
             }
 
             @Override
+            public void onScaleChanged(@NonNull WebView view, float oldScale, float newScale) {
+                super.onScaleChanged(view, oldScale, newScale);
+                if (primary) activity.scheduleDocumentFastScrollUpdate();
+            }
+
+            @Override
             public void onPageFinished(@NonNull WebView view, @NonNull String url) {
                 super.onPageFinished(view, url);
                 if (activity.activityDestroyed) return;
+                activity.applyEpubBoundaryCssToLoadedWebView(view);
+                activity.scheduleDocumentFastScrollUpdate();
                 if (!primary) {
                     return;
                 }
@@ -100,6 +112,7 @@ final class DocumentWebViewController {
                 activity.installDocumentContentAnchorScript();
                 activity.restoreDocumentContentAnchorAfterLoadIfNeeded(view);
                 activity.documentTtsHighlight().installScript();
+                activity.applyPendingEpubAnchorAfterPageLoad(view);
                 if (activity.isRenderedContentAnchorDocument()) {
                     activity.webView.postDelayed(() -> activity.updateDocumentContentAnchorFromWebView(activity::saveReadingState), 180);
                 }
@@ -115,7 +128,8 @@ final class DocumentWebViewController {
     private void configureOneWebView(WebView view) {
         if (view == null) return;
         WebSettings settings = view.getSettings();
-        boolean fixedLayout = "EPUB".equals(activity.docType) && activity.epubFixedLayoutLike;
+        boolean fixedLayout = "EPUB".equals(activity.docType)
+                && (activity.epubFixedLayoutLike || activity.epubImagePageLike);
         if (fixedLayout) {
             settings.setUseWideViewPort(false);
             settings.setLoadWithOverviewMode(false);

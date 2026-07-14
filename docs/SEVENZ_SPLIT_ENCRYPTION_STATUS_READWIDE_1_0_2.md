@@ -1,8 +1,8 @@
 # 7z / CB7 split and encryption status for Readwide 1.0.2
 
-This note keeps 7z wording conservative and tied to the current implementation.
+> **Historical baseline:** This note records the 1.0.2 implementation. Current 1.0.15 scope also includes first-party AES plus PPMd/BCJ2 paths and libarchive forward/fallback routing; use `README.md` and the 1.0.15 release/revalidation notes for current claims.
 
-## Current implementation
+## 1.0.2 implementation
 
 Readwide keeps the Java 7z path as the primary 7z/CB7 backend through Apache Commons Compress. The app passes the archive password to `SevenZFile` when the user provides one.
 

@@ -48,6 +48,9 @@ final class MainVerticalActionSheet {
         return box;
     }
 
+    // Layout.BREAK_STRATEGY_SIMPLE is valid from API 23; see the matching
+    // narrow suppression in MainPendingActionDropdownController.
+    @android.annotation.SuppressLint("WrongConstant")
     void addTitle(@NonNull LinearLayout box,
                   @NonNull String text,
                   int textColor,

@@ -18,7 +18,6 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 
 import kr.dogfoot.hwplib.object.HWPFile;
 import kr.dogfoot.hwplib.reader.HWPReader;
@@ -386,23 +385,7 @@ public final class HwpTextExtractor {
     }
 
     private static DocumentBuilder secureDocumentBuilder() throws Exception {
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        factory.setNamespaceAware(true);
-        setFeatureIfSupported(factory, "http://apache.org/xml/features/disallow-doctype-decl", true);
-        setFeatureIfSupported(factory, "http://xml.org/sax/features/external-general-entities", false);
-        setFeatureIfSupported(factory, "http://xml.org/sax/features/external-parameter-entities", false);
-        setFeatureIfSupported(factory, "http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-        factory.setXIncludeAware(false);
-        factory.setExpandEntityReferences(false);
-        return factory.newDocumentBuilder();
-    }
-
-    private static void setFeatureIfSupported(DocumentBuilderFactory factory, String feature, boolean value) {
-        try {
-            factory.setFeature(feature, value);
-        } catch (Exception ignored) {
-            // Android XML parser implementations vary; best-effort hardening.
-        }
+        return SecureXml.newDocumentBuilder(true);
     }
 
     private static void appendSectionText(StringBuilder out, String text) {

@@ -97,39 +97,50 @@ public final class EdgeToEdgeUtil {
         final int foldedExtraInset = dpToPx(activity, 6);
 
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
-            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()
-                    | WindowInsetsCompat.Type.displayCutout());
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            // A display cutout is a physical body constraint, not transient
+            // system chrome. Keep it reserved even while immersive bars hide.
+            Insets cutout = insets.getInsetsIgnoringVisibility(
+                    WindowInsetsCompat.Type.displayCutout());
             Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
             boolean imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
 
             boolean chromeVisible = chromeVisibilityProvider == null || chromeVisibilityProvider.isChromeVisible();
 
-            // Inset the whole viewer horizontally at the root so the side nav bar
-            // (3-button bar in landscape) and any display cutout get their own
-            // clear strip; appbar, document body and bottom bar all stay inside it.
-            root.setPadding(rootPad.left + bars.left, rootPad.top,
-                    rootPad.right + bars.right, rootPad.bottom);
+            // Keep the document canvas full-width in landscape. A side navigation
+            // bar belongs to the overlay controls; applying it to the root shrank
+            // each EPUB spread pane and broke fixed-layout scaling.
+            root.setPadding(rootPad.left + ReaderBodyInsetMath.bodySideInset(cutout.left),
+                    rootPad.top,
+                    rootPad.right + ReaderBodyInsetMath.bodySideInset(cutout.right),
+                    rootPad.bottom);
+
+            int controlLeft = ReaderBodyInsetMath.overlaySideInset(
+                    systemBars.left, cutout.left);
+            int controlRight = ReaderBodyInsetMath.overlaySideInset(
+                    systemBars.right, cutout.right);
+            int topInset = Math.max(systemBars.top, cutout.top);
 
             if (topBar != null) {
-                topBar.setPadding(topPad.left, topPad.top + bars.top,
-                        topPad.right, topPad.bottom);
+                topBar.setPadding(topPad.left + controlLeft, topPad.top + topInset,
+                        topPad.right + controlRight, topPad.bottom);
             }
             if (bottomContent != null) {
                 int bottomInset = keepBottomChromeFixedDuringIme
-                        ? bars.bottom
-                        : (imeVisible ? Math.max(bars.bottom, ime.bottom) : bars.bottom);
-                bottomContent.setPadding(bottomPad.left, bottomPad.top,
-                        bottomPad.right, bottomPad.bottom + bottomInset);
+                        ? systemBars.bottom
+                        : (imeVisible ? Math.max(systemBars.bottom, ime.bottom) : systemBars.bottom);
+                bottomContent.setPadding(bottomPad.left + controlLeft, bottomPad.top,
+                        bottomPad.right + controlRight, bottomPad.bottom + bottomInset);
             }
             if (foldedContent != null) {
                 int bottomInset = keepBottomChromeFixedDuringIme
-                        ? bars.bottom
-                        : (imeVisible ? 0 : bars.bottom);
+                        ? systemBars.bottom
+                        : (imeVisible ? 0 : systemBars.bottom);
                 boolean visibleTopStripOwnsInset = !chromeVisible
                         && topBar != null
                         && topBar.getVisibility() == View.VISIBLE
                         && topBar.getHeight() > 0;
-                int foldedTopInset = chromeVisible || visibleTopStripOwnsInset ? 0 : bars.top + foldedExtraInset;
+                int foldedTopInset = chromeVisible || visibleTopStripOwnsInset ? 0 : topInset + foldedExtraInset;
                 int foldedBottomInset = chromeVisible ? 0 : bottomInset + foldedExtraInset;
                 foldedContent.setPadding(foldedPad.left, foldedPad.top + foldedTopInset,
                         foldedPad.right, foldedPad.bottom + foldedBottomInset);
@@ -141,47 +152,54 @@ public final class EdgeToEdgeUtil {
 
 
     /**
-     * PDF keeps the bottom toolbar as an overlay like the other readers.  When that
-     * chrome is hidden, reserve the 3-button navigation area with a real layout
-     * spacer instead of tinting/masking over the page.  This gives the navigation
-     * bar the reader body color while collapsed.
+     * PDF keeps the bottom toolbar as an overlay like the other readers. Hidden
+     * chrome enters immersive navigation mode, so the old navigation spacer must
+     * stay collapsed instead of leaving a permanent blank strip below the page.
      */
     public static void applyPdfReaderInsets(Activity activity,
                                             View root,
                                             @Nullable View topBar,
                                             @Nullable View bottomContent,
-                                            @Nullable View hiddenNavigationSpacer,
-                                            @Nullable View pdfViewport,
-                                            ChromeVisibilityProvider chromeVisibilityProvider) {
+                                            @Nullable View hiddenNavigationSpacer) {
         prepareWindow(activity, root);
         final Padding rootPad = new Padding(root);
         final Padding topPad = topBar != null ? new Padding(topBar) : null;
         final Padding bottomPad = bottomContent != null ? new Padding(bottomContent) : null;
 
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
-            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()
-                    | WindowInsetsCompat.Type.displayCutout());
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            // Keep PDF body width tied to physical geometry rather than the
+            // current visibility of immersive system bars.
+            Insets cutout = insets.getInsetsIgnoringVisibility(
+                    WindowInsetsCompat.Type.displayCutout());
             Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
             boolean imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
-            boolean chromeVisible = chromeVisibilityProvider == null || chromeVisibilityProvider.isChromeVisible();
+            root.setPadding(rootPad.left + ReaderBodyInsetMath.bodySideInset(cutout.left),
+                    rootPad.top,
+                    rootPad.right + ReaderBodyInsetMath.bodySideInset(cutout.right),
+                    rootPad.bottom);
 
-            // Inset the whole reader horizontally at the root so the side nav bar
-            // (3-button bar in landscape) and any display cutout get their own
-            // clear strip; every child (top bar, page, bottom bar) stays inside it.
-            root.setPadding(rootPad.left + bars.left, rootPad.top,
-                    rootPad.right + bars.right, rootPad.bottom);
+            int controlLeft = ReaderBodyInsetMath.overlaySideInset(
+                    systemBars.left, cutout.left);
+            int controlRight = ReaderBodyInsetMath.overlaySideInset(
+                    systemBars.right, cutout.right);
+            int topInset = Math.max(systemBars.top, cutout.top);
 
             if (topBar != null) {
-                topBar.setPadding(topPad.left, topPad.top + bars.top,
-                        topPad.right, topPad.bottom);
+                topBar.setPadding(topPad.left + controlLeft, topPad.top + topInset,
+                        topPad.right + controlRight, topPad.bottom);
             }
             if (bottomContent != null) {
-                int bottomInset = imeVisible ? Math.max(bars.bottom, ime.bottom) : bars.bottom;
-                bottomContent.setPadding(bottomPad.left, bottomPad.top,
-                        bottomPad.right, bottomPad.bottom + bottomInset);
+                int bottomInset = imeVisible
+                        ? Math.max(systemBars.bottom, ime.bottom) : systemBars.bottom;
+                bottomContent.setPadding(bottomPad.left + controlLeft, bottomPad.top,
+                        bottomPad.right + controlRight, bottomPad.bottom + bottomInset);
             }
             if (hiddenNavigationSpacer != null) {
-                int spacerHeight = chromeVisible ? 0 : bars.bottom;
+                // Visible chrome owns bars.bottom through bottomContent padding.
+                // Hidden chrome is immersive and transient bars overlay content,
+                // so neither state needs an additional layout-height spacer.
+                int spacerHeight = 0;
                 android.view.ViewGroup.LayoutParams lp = hiddenNavigationSpacer.getLayoutParams();
                 if (lp != null && lp.height != spacerHeight) {
                     lp.height = spacerHeight;
@@ -191,6 +209,33 @@ public final class EdgeToEdgeUtil {
             }
             return insets;
         });
+        ViewCompat.requestApplyInsets(root);
+    }
+
+    /**
+     * Shared reader system-bar policy. Reader controls own the navigation bar while
+     * visible; collapsed controls hide it immersively and allow a swipe to reveal a
+     * transient overlay. The independent status-bar preference remains authoritative
+     * in both states.
+     */
+    public static void applyReaderSystemBarVisibility(Activity activity,
+                                                      View root,
+                                                      boolean chromeVisible,
+                                                      boolean showStatusBar) {
+        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
+                activity.getWindow(), root);
+        controller.setSystemBarsBehavior(
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        if (chromeVisible) {
+            controller.show(WindowInsetsCompat.Type.navigationBars());
+        } else {
+            controller.hide(WindowInsetsCompat.Type.navigationBars());
+        }
+        if (showStatusBar) {
+            controller.show(WindowInsetsCompat.Type.statusBars());
+        } else {
+            controller.hide(WindowInsetsCompat.Type.statusBars());
+        }
         ViewCompat.requestApplyInsets(root);
     }
 

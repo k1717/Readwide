@@ -27,8 +27,19 @@ import java.util.List;
  * search logic.</p>
  */
 public final class LargeTextSearchEngine {
+    private static final int MAX_INDEXED_MATCHES = 200_000;
+
     public interface ReaderOpener {
         BufferedReader open(@NonNull File file) throws IOException;
+    }
+
+    interface LineTransform {
+        @NonNull String apply(@NonNull String line);
+        @NonNull String signature();
+    }
+
+    interface LineTransformFactory {
+        @NonNull LineTransform create(@NonNull File file);
     }
 
     /**
@@ -40,13 +51,41 @@ public final class LargeTextSearchEngine {
         boolean isCancelled();
     }
 
-    private final Context appContext;
+    @Nullable private final Context appContext;
     private final ReaderOpener readerOpener;
+    private final LineTransformFactory lineTransformFactory;
+    @Nullable private volatile LargeTextMatchIndex cachedMatchIndex;
 
     public LargeTextSearchEngine(@NonNull Context context,
                                  @NonNull ReaderOpener readerOpener) {
         this.appContext = context.getApplicationContext();
         this.readerOpener = readerOpener;
+        this.lineTransformFactory = file -> {
+            List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
+                    appContext, file.getAbsolutePath());
+            String signature = ruleSignature(activeRules);
+            return new LineTransform() {
+                @NonNull
+                @Override
+                public String apply(@NonNull String line) {
+                    String normalized = FileUtils.enforceTextPresentationSelectors(line);
+                    return TextDisplayRuleManager.apply(normalized, activeRules);
+                }
+
+                @NonNull
+                @Override
+                public String signature() {
+                    return signature;
+                }
+            };
+        };
+    }
+
+    LargeTextSearchEngine(@NonNull ReaderOpener readerOpener,
+                          @NonNull LineTransformFactory lineTransformFactory) {
+        this.appContext = null;
+        this.readerOpener = readerOpener;
+        this.lineTransformFactory = lineTransformFactory;
     }
 
     public LargeTextSearchResult search(@NonNull File file,
@@ -82,6 +121,11 @@ public final class LargeTextSearchEngine {
         SearchMatcher matcher = SearchMatcher.compile(query, options);
         if (matcher == null) return new LargeTextSearchResult(-1, 1, 0, 0);
 
+        LineTransform lineTransform = lineTransformFactory.create(file);
+        LargeTextMatchIndex cached = getCachedIndex(
+                file, query, options, collapseBlankLines, lineTransform.signature());
+        if (cached != null) return cached.nearest(startPosition, forward);
+
         int start = Math.max(0, startPosition);
         int ordinal = 0;
 
@@ -99,7 +143,6 @@ public final class LargeTextSearchEngine {
 
         long charCount = 0L;
         int line = 1;
-        List<TextDisplayRule> activeRules = getActiveRules(file);
         TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
 
         try (BufferedReader reader = readerOpener.open(file)) {
@@ -109,7 +152,7 @@ public final class LargeTextSearchEngine {
                 if (cancel != null && (++scanned & 0x3FFL) == 0L && cancel.isCancelled()) {
                     return new LargeTextSearchResult(-1, 1, 0, 0);
                 }
-                String normalized = normalizeLine(lineText, activeRules);
+                String normalized = lineTransform.apply(lineText);
                 String emitted = collapseFilter.accept(normalized);
                 if (emitted == null) continue;
                 normalized = emitted;
@@ -180,7 +223,54 @@ public final class LargeTextSearchEngine {
                             boolean collapseBlankLines,
                             @Nullable CancelSignal cancel) throws IOException {
         if (query.isEmpty()) return 0;
-        return search(file, query, 0, true, Integer.MAX_VALUE, options, collapseBlankLines, cancel).total;
+        SearchMatcher matcher = SearchMatcher.compile(query, options);
+        if (matcher == null) return 0;
+
+        LineTransform lineTransform = lineTransformFactory.create(file);
+        long initialLength = file.length();
+        long initialLastModified = file.lastModified();
+        LargeTextMatchIndex.Builder indexBuilder = new LargeTextMatchIndex.Builder(MAX_INDEXED_MATCHES);
+        int[] total = new int[]{0};
+        long charCount = 0L;
+        int line = 1;
+        TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
+
+        try (BufferedReader reader = readerOpener.open(file)) {
+            String lineText;
+            long scanned = 0L;
+            while ((lineText = reader.readLine()) != null) {
+                if (cancel != null && (++scanned & 0x3FFL) == 0L && cancel.isCancelled()) {
+                    return -1;
+                }
+                String normalized = lineTransform.apply(lineText);
+                String emitted = collapseFilter.accept(normalized);
+                if (emitted == null) continue;
+                normalized = emitted;
+
+                final long lineBaseChar = charCount;
+                final int currentLine = line;
+                matcher.forEachMatch(normalized, (start, end) -> {
+                    if (total[0] < Integer.MAX_VALUE) total[0]++;
+                    indexBuilder.add(clampToInt(lineBaseChar + start), currentLine);
+                    return true;
+                });
+                charCount += normalized.length() + 1L;
+                line++;
+            }
+        }
+
+        if (cancel != null && cancel.isCancelled()) return -1;
+        if (!indexBuilder.overflowed()
+                && initialLength == file.length()
+                && initialLastModified == file.lastModified()) {
+            cachedMatchIndex = indexBuilder.build(
+                    file,
+                    query,
+                    options.signature(),
+                    collapseBlankLines,
+                    lineTransform.signature());
+        }
+        return total[0];
     }
 
     public LargeTextSearchResult search(@NonNull File file,
@@ -212,6 +302,15 @@ public final class LargeTextSearchEngine {
         SearchMatcher matcher = SearchMatcher.compile(query, options);
         if (matcher == null) return new LargeTextSearchResult(-1, 1, 0, 0);
 
+        LineTransform lineTransform = lineTransformFactory.create(file);
+        LargeTextMatchIndex cached = getCachedIndex(
+                file, query, options, collapseBlankLines, lineTransform.signature());
+        if (cached != null) {
+            return targetOccurrence > 0
+                    ? cached.occurrence(targetOccurrence)
+                    : cached.nearest(startPosition, forward);
+        }
+
         int start = Math.max(0, startPosition);
         int total = 0;
 
@@ -229,7 +328,6 @@ public final class LargeTextSearchEngine {
 
         long charCount = 0L;
         int line = 1;
-        List<TextDisplayRule> activeRules = getActiveRules(file);
         TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
 
         try (BufferedReader reader = readerOpener.open(file)) {
@@ -239,7 +337,7 @@ public final class LargeTextSearchEngine {
                 if (cancel != null && (++scanned & 0x3FFL) == 0L && cancel.isCancelled()) {
                     return new LargeTextSearchResult(-1, 1, 0, 0);
                 }
-                String normalized = normalizeLine(lineText, activeRules);
+                String normalized = lineTransform.apply(lineText);
                 String emitted = collapseFilter.accept(normalized);
                 if (emitted == null) continue;
                 normalized = emitted;
@@ -301,14 +399,45 @@ public final class LargeTextSearchEngine {
         return new LargeTextSearchResult(selectedChar, selectedLine, selectedOrdinal, total);
     }
 
-    private List<TextDisplayRule> getActiveRules(@NonNull File file) {
-        return TextDisplayRuleManager.getActiveRules(appContext, file.getAbsolutePath());
+    @Nullable
+    private LargeTextMatchIndex getCachedIndex(@NonNull File file,
+                                                @NonNull String query,
+                                                @NonNull SearchOptions options,
+                                                boolean collapseBlankLines,
+                                                @NonNull String transformSignature) {
+        LargeTextMatchIndex cached = cachedMatchIndex;
+        if (cached == null || !cached.matches(
+                file,
+                query,
+                options.signature(),
+                collapseBlankLines,
+                transformSignature)) {
+            return null;
+        }
+        return cached;
     }
 
-    private static String normalizeLine(@NonNull String lineText,
-                                        @NonNull List<TextDisplayRule> activeRules) {
-        String normalized = FileUtils.enforceTextPresentationSelectors(lineText);
-        return TextDisplayRuleManager.apply(normalized, activeRules);
+    @NonNull
+    private static String ruleSignature(@NonNull List<TextDisplayRule> rules) {
+        StringBuilder out = new StringBuilder(rules.size() * 48);
+        for (TextDisplayRule rule : rules) {
+            if (rule == null) continue;
+            appendSignatureField(out, rule.id);
+            appendSignatureField(out, rule.findText);
+            appendSignatureField(out, rule.replacementText);
+            appendSignatureField(out, rule.scope);
+            appendSignatureField(out, rule.filePath);
+            appendSignatureField(out, rule.sourceFilePath);
+            out.append(rule.enabled ? '1' : '0')
+                    .append(rule.caseSensitive ? '1' : '0')
+                    .append(rule.useRegex ? '1' : '0');
+        }
+        return out.toString();
+    }
+
+    private static void appendSignatureField(@NonNull StringBuilder out, @Nullable String value) {
+        String safe = value == null ? "" : value;
+        out.append(safe.length()).append(':').append(safe).append(';');
     }
 
     private static int clampToInt(long value) {

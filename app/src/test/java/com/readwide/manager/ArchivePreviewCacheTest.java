@@ -58,4 +58,29 @@ public class ArchivePreviewCacheTest {
         assertTrue(ArchiveImageEntryCache.canReuseReadyMarkerForCache(true, verified, cacheKey));
         assertFalse(ArchiveImageEntryCache.shouldDiscardUnverifiedSensitiveReadyCache(true, verified, cacheKey));
     }
+
+    @Test
+    public void forwardReadyFileGateDoesNotBypassSensitiveSessionVerification() throws Exception {
+        File ready = File.createTempFile("readwide-sensitive-ready", ".image");
+        File marker = new File(ready.getAbsolutePath() + ".ready");
+        try {
+            java.nio.file.Files.write(ready.toPath(), new byte[] {1, 2, 3});
+            assertTrue(marker.createNewFile());
+
+            assertFalse(ArchiveImageEntryCache.shouldReuseReadyImageFile(
+                    "page.image", ready, true, null));
+
+            Set<String> verified = new HashSet<>();
+            verified.add(ready.getAbsolutePath());
+            assertTrue(ArchiveImageEntryCache.shouldReuseReadyImageFile(
+                    "page.image", ready, true, verified));
+            assertTrue(ArchiveImageEntryCache.shouldReuseReadyImageFile(
+                    "page.image", ready, false, null));
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            marker.delete();
+            //noinspection ResultOfMethodCallIgnored
+            ready.delete();
+        }
+    }
 }

@@ -33,9 +33,7 @@ final class PdfReaderStartupController {
                 activity.findViewById(R.id.pdf_root),
                 activity.findViewById(R.id.pdf_appbar),
                 activity.findViewById(R.id.pdf_bottom_bar),
-                activity.findViewById(R.id.pdf_nav_bar_spacer),
-                activity.findViewById(R.id.pdf_viewport),
-                () -> activity.pdfChromeVisible);
+                activity.findViewById(R.id.pdf_nav_bar_spacer));
         activity.applyDocumentSystemBarColors();
 
         bindToolbar();
@@ -51,6 +49,7 @@ final class PdfReaderStartupController {
         ButtonOrderManager.applyOrder(activity, activity.prefs, ButtonOrderManager.GROUP_PDF_VIEWER);
 
         activity.setupContinuousPdfList();
+        activity.installPdfFastScroll();
         activity.bookmarkManager = BookmarkManager.getInstance(activity);
         activity.verticalPageSlideMode = activity.getSharedPreferences("pdf_reader", activity.MODE_PRIVATE)
                 .getBoolean("vertical_page_slide_mode", false);
@@ -104,6 +103,8 @@ final class PdfReaderStartupController {
         activity.pdfNavBarSpacer = activity.findViewById(R.id.pdf_nav_bar_spacer);
         activity.pageImage = activity.findViewById(R.id.pdf_page_image);
         activity.pdfContinuousList = activity.findViewById(R.id.pdf_continuous_list);
+        activity.pdfFastScrollRail = activity.findViewById(R.id.pdf_fast_scroll_rail);
+        activity.pdfFastScrollThumb = activity.findViewById(R.id.pdf_fast_scroll_thumb);
         activity.progressBar = activity.findViewById(R.id.pdf_progress);
         activity.pageStatus = activity.findViewById(R.id.pdf_page_status);
         activity.pdfPageSeekBar = activity.findViewById(R.id.pdf_page_seek_bar);
@@ -114,6 +115,16 @@ final class PdfReaderStartupController {
         activity.bookmarkButton = activity.findViewById(R.id.pdf_bookmark);
         activity.zoomMoreButton = activity.findViewById(R.id.pdf_zoom_more);
         activity.pdfViewport = activity.findViewById(R.id.pdf_viewport);
+        if (activity.pdfViewport != null) {
+            androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(
+                    activity.pdfViewport, (view, insets) -> {
+                        // Rotation can deliver the new portrait navigation inset
+                        // after onConfigurationChanged(). Re-evaluate the immutable
+                        // orientation frame once that exact inset is available.
+                        view.post(activity::applyPdfViewportBarInsets);
+                        return insets;
+                    });
+        }
         activity.pdfHScroll = activity.findViewById(R.id.pdf_h_scroll);
         activity.pdfVScroll = activity.findViewById(R.id.pdf_v_scroll);
         activity.pdfPageMatrixView = activity.findViewById(R.id.pdf_page_matrix_view);

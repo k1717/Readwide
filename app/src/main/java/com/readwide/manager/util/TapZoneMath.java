@@ -44,6 +44,25 @@ public final class TapZoneMath {
         return ACTION_MENU;
     }
 
+    /**
+     * Returns true only for a short, single-pointer, stationary release that may
+     * safely trigger a tap-zone action. Long presses belong to native text
+     * selection and must never be converted into page turns on ACTION_UP.
+     */
+    public static boolean isShortTapRelease(float deltaX,
+                                            float deltaY,
+                                            float touchSlop,
+                                            long durationMs,
+                                            long longPressTimeoutMs,
+                                            boolean selectionActive,
+                                            boolean swipeTriggered,
+                                            boolean hadMultiplePointers) {
+        if (selectionActive || swipeTriggered || hadMultiplePointers) return false;
+        if (touchSlop < 0f || durationMs < 0L || longPressTimeoutMs <= 0L) return false;
+        if (durationMs >= longPressTimeoutMs) return false;
+        return Math.abs(deltaX) <= touchSlop && Math.abs(deltaY) <= touchSlop;
+    }
+
     private static float clampF(float value, float min, float max) {
         return Math.max(min, Math.min(max, value));
     }

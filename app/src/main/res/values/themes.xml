@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Legacy theme name from the TextView Reader lineage, referenced by AndroidManifest
          (application/activity android:theme) and derived styles. Kept to avoid churn: renaming
          would require updating the manifest and every reference for no user-visible change. -->
@@ -20,7 +20,7 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
 
         <!--
             Override Samsung One UI 6+'s default text-selection handle drawables

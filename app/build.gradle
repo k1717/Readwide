@@ -34,8 +34,8 @@ android {
         applicationId "com.readwide.manager"
         minSdk 24
         targetSdk 35
-        versionCode 10014
-        versionName "1.0.14"
+        versionCode 10015
+        versionName "1.0.15"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         // Release APKs keep Android ARM ABIs only.
@@ -96,16 +96,7 @@ android {
                     'META-INF/LICENSE.txt',
                     'META-INF/NOTICE',
                     'META-INF/NOTICE.txt',
-                    'META-INF/INDEX.LIST',
-                    // zstd-jni publishes desktop native binaries as Java resources.
-                    // Android release APKs do not use these files; excluding them keeps
-                    // the APK focused on the Android ARM native payloads only.
-                    'win/**',
-                    'darwin/**',
-                    'linux/**',
-                    'freebsd/**',
-                    'aix/**',
-                    'sunos/**'
+                    'META-INF/INDEX.LIST'
             ]
         }
     }
@@ -158,8 +149,10 @@ dependencies {
     // Android libarchive backend for normal RAR3/RAR4 compressed extraction.
     implementation 'me.zhanghai.android.libarchive:library:1.1.6'
     implementation 'org.tukaani:xz:1.12'
-    // Enables Apache Commons Compress Zstandard streams and ZIP method 93 fallback.
-    implementation 'com.github.luben:zstd-jni:1.5.7-9'
+    // JVM archive fixtures use zstd-jni. Android Zstandard decoding is provided by
+    // the already-bundled libarchive backend, so desktop native resources do not
+    // enter the release APK.
+    testImplementation 'com.github.luben:zstd-jni:1.5.7-9'
     implementation 'net.lingala.zip4j:zip4j:2.11.6'
     // Apache-2.0 Hancom document libraries for scoped HWP/HWPX text extraction.
     implementation 'kr.dogfoot:hwplib:1.1.10'

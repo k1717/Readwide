@@ -1,6 +1,8 @@
 package com.readwide.manager.util;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -40,4 +42,21 @@ public class TapZoneMathTest {
         assertEquals(TapZoneMath.ACTION_MENU, TapZoneMath.actionForTap(
                 85, 50, 100, 100, true, true, PrefsManager.TAP_ZONE_HORIZONTAL, 80, 80));
     }
+    @Test
+    public void isShortTapRelease_acceptsOnlyShortStationarySinglePointerTap() {
+        assertTrue(TapZoneMath.isShortTapRelease(
+                2f, -3f, 8f, 120L, 500L, false, false, false));
+
+        assertFalse(TapZoneMath.isShortTapRelease(
+                0f, 0f, 8f, 500L, 500L, false, false, false));
+        assertFalse(TapZoneMath.isShortTapRelease(
+                9f, 0f, 8f, 120L, 500L, false, false, false));
+        assertFalse(TapZoneMath.isShortTapRelease(
+                0f, 0f, 8f, 120L, 500L, true, false, false));
+        assertFalse(TapZoneMath.isShortTapRelease(
+                0f, 0f, 8f, 120L, 500L, false, true, false));
+        assertFalse(TapZoneMath.isShortTapRelease(
+                0f, 0f, 8f, 120L, 500L, false, false, true));
+    }
+
 }

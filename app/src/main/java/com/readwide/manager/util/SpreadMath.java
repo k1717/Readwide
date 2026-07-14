@@ -33,11 +33,35 @@ public final class SpreadMath {
         return Math.min(page, pageCount - 1);
     }
 
+    /** Last visible page index for the current display (left page or right spread page). */
+    public static int visibleEndIndex(int currentPage, int pageCount, boolean spreadActive) {
+        int current = clampIndex(currentPage, pageCount);
+        int right = rightIndex(current, pageCount, spreadActive);
+        return right >= 0 ? right : current;
+    }
+
     /**
-     * Target page for a user page-turn: current + direction * step, clamped.
-     * The caller no-ops when the result equals the current page (both edges).
+     * Target page for a user page-turn. A forward spread turn is all-or-nothing:
+     * when there is no new page beyond the currently visible spread, it stays on
+     * the current page instead of clamping to the already-visible last page.
+     * This prevents an even-page document from showing its final page twice
+     * (first as the right page of the last spread, then again by itself).
      */
     public static int turnTarget(int currentPage, int direction, int pageCount, boolean spreadActive) {
-        return clampIndex(currentPage + direction * displayStep(spreadActive), pageCount);
+        int current = clampIndex(currentPage, pageCount);
+        int sign = Integer.signum(direction);
+        if (pageCount <= 0 || sign == 0) return current;
+        int step = displayStep(spreadActive);
+        if (sign > 0) {
+            int target = current + step;
+            return target < pageCount ? target : current;
+        }
+        return Math.max(0, current - step);
+    }
+
+    /** True when a user page-turn would move to a different display start page. */
+    public static boolean canTurn(int currentPage, int direction, int pageCount, boolean spreadActive) {
+        int current = clampIndex(currentPage, pageCount);
+        return turnTarget(current, direction, pageCount, spreadActive) != current;
     }
 }

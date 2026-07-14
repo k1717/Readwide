@@ -5,10 +5,10 @@ Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF
 [![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)](https://github.com/k1717/Readwide/releases)
 [![Downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)](https://github.com/k1717/Readwide/releases)
 
-Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4, and 1.0.14 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.13, 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.14, then restoring bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
+Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4, and 1.0.15 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.14, 1.0.13, 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.15, then restoring bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
 
-- Current public version: **1.0.14**
-- Android metadata: `versionCode 10014`, `versionName "1.0.14"`
+- Current source version: **1.0.15**
+- Android metadata: `versionCode 10015`, `versionName "1.0.15"`
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
 - Release page: `https://github.com/k1717/Readwide/releases`
@@ -34,7 +34,7 @@ See `PRIVACY.md` for the full local-data and cache policy.
 - TXT-style find-in-page options for TXT, Markdown, EPUB, HWP/HWPX, and Word-family document viewers: case-sensitive, whole-word, regex, nth-match jump, and current/total match status where supported.
 - PDF reader with single-page and vertical-continuous modes, bookmark restore, slider/page controls, inertial pan behavior while zoomed, and in-document text find for digital (text-based) PDFs.
 - EPUB reader through the document WebView path, including reflow/fixed-layout handling boundaries and reader-theme integration.
-- Landscape two-page viewing for EPUB and PDF: in landscape orientation, EPUB pages and PDF single-page mode automatically show two pages side by side, on phones and tablets alike; portrait stays single-page, page controls move one spread at a time (with a `3-4 / 20` style page indicator), and PDF vertical continuous mode is unchanged.
+- Landscape page viewing for EPUB and PDF: PDF single-page mode shows a two-page spread in landscape. EPUB uses a spread only when its spine is predominantly page-sized images (comic/scanned/PDF-like EPUB); ordinary reflowable or text-based EPUB remains a single, responsive-width page. Portrait stays single-page, spread controls move one spread at a time (with a `3-4 / 20` style indicator), and PDF vertical continuous mode is unchanged.
 - Word-family document filter:
   - OOXML Word: `.docx`, `.docm`, `.dotx`, `.dotm`
   - HWP/HWPX: `.hwp`, `.hwpx`
@@ -48,7 +48,7 @@ See `PRIVACY.md` for the full local-data and cache policy.
 
 ## Format support summary
 
-This table is a release-summary view. See the archive support matrix and the format-specific docs for precise boundaries.
+This table is the current release-summary view. Use the 1.0.15 release notes and format-specific documents for current precise boundaries; `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` is retained as a historical support-label baseline.
 
 | Family | Current public scope |
 | --- | --- |
@@ -60,10 +60,10 @@ This table is a release-summary view. See the archive support matrix and the for
 | HWP/HWPX | Text-first read-only extraction through `hwplib` / `hwpxlib`, including shared document search; no Hancom layout parity, editing, writing, or password/encrypted HWP support. |
 | Legacy DOC | Read-only rendering through a self-contained pure-Java parser (paragraph text with alignment and indents); layout fidelity is limited compared to `.docx`. |
 | ZIP/CBZ | Zip4j-primary listing/extraction, covered password and split cases, with Commons Compress fallback for selected non-encrypted methods. |
-| 7z/CB7 | Apache Commons Compress 7z path, password forwarding for covered variants, and standard `.001/.002/...` raw split chains. |
-| TAR family / single compressor streams | Commons Compress primary path for covered tar/compressor combinations and single streams. |
+| 7z/CB7 | Apache Commons Compress for common methods, first-party PPMd/BCJ2 including covered AES/header-encrypted variants, libarchive forward/fallback routing for covered unencrypted special-coder cases, and standard `.001/.002/...` split chains. |
+| TAR family / single compressor streams | Commons Compress for pure-Java covered combinations; Android Zstandard (`.tar.zst`/`.tzst`/`.zst`) routes through the bundled libarchive Zstd filter, including raw single-stream handling with the extraction-size cap. |
 | RAR/CBR | Limited extraction/read support. libarchive-android is the primary compressed-RAR backend; first-party Java handles covered stored entries, scoped RAR3/RAR4 PPMd cases, RAR5 v5.0 compressed/solid cases, and fixture-verified RAR5 AES visible-header multi-volume cases. No broad encrypted, split, SFX, VM-filtered, or complete RAR support claim. |
-| ALZ/EGG | First-party read/extraction paths for covered Store/Deflate/BZip2/LZMA/AZO cases with CRC checks, split volumes (EGG `.volN.egg`, ALZ `.a00`...), and ZipCrypto-encrypted entries. AES/LEA-encrypted and solid EGG remain unsupported. |
+| ALZ/EGG | First-party read/extraction paths for covered ALZ Store/Deflate/BZip2 and EGG Store/Deflate/BZip2/AZO/LZMA cases, with CRC checks and split-volume support (EGG `.volN.egg`, ALZ `.a00`...). Covered ZipCrypto entries, WinZip-AES-128/256 non-solid EGG entries, and unencrypted solid EGG archives extract. LEA-encrypted EGG entries and encrypted solid EGG archives remain unsupported. |
 
 ## Quick filter buttons
 
@@ -84,13 +84,13 @@ The same image extension set is also what the image viewer opens (including imag
 
 ## FOSS / F-Droid preparation
 
-Readwide 1.0.14 is prepared as a FOSS-friendly source package, but the final repository submission still needs the usual source-builder checks.
+Readwide 1.0.15 is structured as a FOSS-friendly source release. For publication or repository submission, use the immutable tagged commit and run the clean source-builder checks below.
 
 - First-party code is Apache-2.0.
 - The default build does not bundle Junrar or RARLAB UnRAR-license code.
 - HWP/HWPX support uses Apache-2.0 Java libraries.
 - `THIRD_PARTY_NOTICES.md`, `docs/FOSS_STATUS.md`, license reports, and SBOM drafts are included where available.
-- Draft F-Droid metadata is in `fdroid/metadata/com.readwide.manager.yml` and must be copied to `fdroiddata/metadata/com.readwide.manager.yml` with the final immutable release commit hash.
+- The local F-Droid metadata mirror in `fdroid/metadata/com.readwide.manager.yml` contains only published builds through 1.0.13. Add 1.0.15 to current fdroiddata only after the final tag exists, pinning it to the immutable 40-character release commit hash.
 
 F-Droid-facing notes are in `docs/FDROID_SUBMISSION.md`.
 
@@ -104,13 +104,15 @@ Requirements:
 Common local commands:
 
 ```bash
-./gradlew clean testDebugUnitTest assembleRelease
+./gradlew clean testDebugUnitTest assembleDebug lintDebug
+./gradlew clean assembleRelease
 ```
 
 On Windows:
 
 ```powershell
-.\gradlew.bat clean testDebugUnitTest assembleRelease
+.\gradlew.bat clean testDebugUnitTest assembleDebug lintDebug
+.\gradlew.bat clean assembleRelease
 ```
 
 Release signing is conditional. If the `READWIDE_*` (or legacy `TEXTVIEW_*`) signing environment values are absent, `assembleRelease` builds an unsigned release artifact for source-builder environments instead of requiring a private keystore. See `RELEASE_BUILD.md` for the release build and verification checklist.
@@ -120,10 +122,10 @@ Release signing is conditional. If the `READWIDE_*` (or legacy `TEXTVIEW_*`) sig
 - `CHANGELOG.md` — public changelog.
 - `PATCHNOTES.md` — detailed public release notes.
 - `GITHUB_UPLOAD_NOTES.md` — GitHub upload checklist.
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_14.md` — copy-ready GitHub release notes (per-version notes back through 1.0.2 are retained alongside).
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_15.md` — copy-ready GitHub release notes (per-version notes back through 1.0.2 are retained alongside).
 - `docs/FDROID_SUBMISSION.md` — F-Droid submission notes.
 - `docs/TXT_SEARCH_USAGE.md` — reader find-in-page options for TXT and WebView document readers (case sensitive, whole word, regular expression).
 - `docs/FOSS_STATUS.md` — FOSS boundary and caveats.
-- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — historical archive compatibility baseline and support-label glossary; use this README and current release notes for 1.0.14 support claims.
+- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — historical archive compatibility baseline and support-label glossary; use this README and current release notes for 1.0.15 support claims.
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md` — HWP/HWPX scope and license notes; its legacy `.doc` remarks are historical because `.doc` gained a basic read-only path in 1.0.11.
-- `docs/LICENSE_REPORT_READWIDE_1_0_14.md` and `docs/SBOM_READWIDE_1_0_14.spdx.json` — direct-dependency license/SBOM drafts.
+- `docs/LICENSE_REPORT_READWIDE_1_0_15.md` and `docs/SBOM_READWIDE_1_0_15.spdx.json` — direct-dependency license/SBOM drafts.

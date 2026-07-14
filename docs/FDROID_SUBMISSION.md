@@ -1,4 +1,4 @@
-# F-Droid submission notes for Readwide 1.0.14
+# F-Droid submission notes for Readwide 1.0.15
 
 This document records the project-side preparation for an F-Droid Data merge request.
 
@@ -6,8 +6,8 @@ This document records the project-side preparation for an F-Droid Data merge req
 
 - App name: Readwide
 - Android application ID: `com.readwide.manager`
-- Version name: `1.0.14`
-- Version code: `10014`
+- Version name: `1.0.15`
+- Version code: `10015`
 - First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
@@ -30,10 +30,10 @@ metadata/com.readwide.manager.yml
 Create and push the immutable release tag before opening the merge request:
 
 ```text
-v1.0.14
+v1.0.15
 ```
 
-The metadata pins each release build by the tag's commit hash. The fdroiddata upstream already contains Readwide builds through `1.0.12`, so a `1.0.14` merge request should start from the current upstream `metadata/com.readwide.manager.yml`, add only the `1.0.14` build block, and update `CurrentVersion: 1.0.14` / `CurrentVersionCode: 10014`. The local draft metadata mirrors the upstream `1.0.11` and `1.0.12` hashes and leaves only the `1.0.14` entry as `REPLACE_WITH_v1.0.14_FULL_COMMIT_HASH`; replace that placeholder with the full 40-character commit hash that the `v1.0.14` tag points to before submission. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the new tag and add the build entry automatically.
+As checked on 2026-07-14, current fdroiddata contains published Readwide builds through `1.0.13` (`10013`). The checked-in local mirror matches that published build list and contains no active unreleased build block. After `v1.0.15` is pushed, start from current upstream metadata, add only the `1.0.15` block, set its `commit` to the full 40-character hash that the final tag points to, and then update `CurrentVersion: 1.0.15` / `CurrentVersionCode: 10015`. A commented template is retained locally as guidance and must not be activated with a guessed or abbreviated hash. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the tag and propose the build entry automatically.
 
 ## F-Droid-facing baseline
 
@@ -50,9 +50,16 @@ The default build is intended to be reviewed as a local-first FOSS app:
 - HWP/HWPX support uses Apache-2.0 Java libraries (`hwplib`, `hwpxlib`) and is text-first/read-only.
 - Release signing is conditional; if private signing environment variables are absent, `assembleRelease` should produce an unsigned release artifact suitable for source-builder workflows.
 
-## Gradle wrapper jar handling
+## Gradle wrapper verification
 
-The source keeps the standard Gradle wrapper files. F-Droid's build verifies `gradle/wrapper/gradle-wrapper.jar` against the known-good hashes of official Gradle releases and builds with its own trusted Gradle, so the metadata does not need an `rm` rule for it. (1.0.7 built and published on F-Droid from this metadata without removing the wrapper jar.)
+The source keeps the standard Gradle 9.4.1 wrapper files. This source tree aligns the wrapper JAR with the configured distribution and pins the distribution checksum:
+
+```text
+gradle-wrapper.jar SHA-256: 55243ef57851f12b070ad14f7f5bb8302daceeebc5bce5ece5fa6edb23e1145c
+gradle-9.4.1-bin.zip SHA-256: 2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb
+```
+
+Both values are the official Gradle 9.4.1 checksums. F-Droid also verifies wrapper JARs against known-good official hashes and builds with trusted tooling, so the metadata does not need an `rm` rule for the wrapper. The release maintainer should still verify these values before tagging.
 
 ## Build command
 
@@ -84,7 +91,7 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These provide title, short description, full description, and versionCode `10014` changelog text.
+These provide title, short description, full description, and versionCode `10015` changelog text.
 
 ## Conservative support wording for review
 
@@ -101,24 +108,27 @@ Use conservative wording in the merge request:
 - `PRIVACY.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_14.md`
-- `docs/SBOM_READWIDE_1_0_14.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_15.md`
+- `docs/SBOM_READWIDE_1_0_15.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `fdroid/metadata/com.readwide.manager.yml`
 
 ## Native dependency provenance (for the merge request)
 
-Two Maven dependencies ship prebuilt native code embedded in their published artifacts. Both are unmodified upstream FOSS releases resolved from Maven Central by exact, pinned coordinates; no native source is vendored into this repository.
+One Android runtime dependency ships prebuilt native code in its published artifact. It is an unmodified upstream FOSS release resolved from Maven Central by an exact, pinned coordinate; no native source is vendored into this repository.
 
-- `me.zhanghai.android.libarchive:library:1.1.6` — Android wrapper, Apache-2.0 (© Google LLC / Hai Zhang), source at https://github.com/zhanghai/libarchive-android. The published `.aar` embeds an NDK-built native libarchive (BSD-2-Clause) compiled with libz (Zlib), libbz2 (BSD-style), liblzma/xz (public-domain / 0BSD), liblz4 (BSD-2-Clause), libzstd (BSD-3-Clause OR GPLv2, used under BSD-3-Clause), and Mbed TLS / libmbedcrypto (Apache-2.0). Used for RAR and backend-dependent archive decode paths.
-- `com.github.luben:zstd-jni:1.5.7-9` — JNI wrapper, BSD-2-Clause (© Luben Karavelov), source at https://github.com/luben/zstd-jni. The published `.jar` embeds the native Zstandard library (dual-licensed BSD-3-Clause OR GPLv2, used here under BSD-3-Clause, © Meta). Used for the Zstandard codec path under Commons Compress.
+- `me.zhanghai.android.libarchive:library:1.1.6` — Android wrapper, Apache-2.0 (© Google LLC / Hai Zhang), source at https://github.com/zhanghai/libarchive-android. The published `.aar` embeds an NDK-built native libarchive (BSD-2-Clause) compiled with libz (Zlib), libbz2 (BSD-style), liblzma/xz (public-domain / 0BSD), liblz4 (BSD-2-Clause), libzstd (BSD-3-Clause OR GPLv2, used under BSD-3-Clause), and Mbed TLS / libmbedcrypto (Apache-2.0). It provides RAR/backend-dependent decoding and the Android `.tar.zst`/raw `.zst` Zstandard paths.
 
-All bundled native components are permissive/FOSS-compatible, and no copyleft obligation is triggered because the dual-licensed pieces are taken under their BSD option. If the reviewer requires a fully source-built native chain, both upstreams publish buildable sources at the URLs above, and F-Droid's build server can resolve the same pinned artifacts from Maven Central.
+The upstream AAR does not carry dependency `LICENSE`/`NOTICE` entries. Readwide therefore packages `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt`, derived from the exact v1.1.6 tag and pinned native submodule commits, so the APK retains the applicable copyright, redistribution, and warranty-disclaimer terms.
+
+`com.github.luben:zstd-jni:1.5.7-9` remains only under `testImplementation` so plain-JVM archive fixtures can decode Zstandard. Its desktop native resources are not part of the Android release APK and are not required by the F-Droid release assembly path.
+
+All APK-bundled native components are permissive/FOSS-compatible, and no copyleft option is selected: Zstandard is used under its BSD option and Mbed TLS under Apache-2.0. If the reviewer requires a fully source-built native chain, libarchive-android publishes buildable source at the URL above.
 
 ## Remaining submitter tasks
 
 - Confirm a clean network-enabled Gradle build from the tagged source.
-- Confirm the metadata `commit` field is the full 40-character commit hash of the `v1.0.14` release tag (this app's maintainer requires a full commit hash, not the tag name). The upstream metadata already contains entries through `1.0.12`; only the `1.0.14` entry still needs the final release commit hash in a 1.0.14 merge request.
+- Confirm the submitted build's `commit` field is the full 40-character hash of the final `v1.0.15` release commit. Start from current upstream metadata and add only the version actually submitted.
 - Confirm no optional local jars are present in `app/libs`.
-- Confirm native dependency notices for `libarchive-android` / libarchive and `zstd-jni` / Zstandard are included with binary release materials if APK assets are published outside F-Droid.
+- Confirm the built APK contains `assets/open_source_licenses/libarchive_android_and_codecs.txt`. Keep the `zstd-jni` notice with source/test materials; it is not shipped in the APK.

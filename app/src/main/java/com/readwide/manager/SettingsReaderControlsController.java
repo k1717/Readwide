@@ -210,27 +210,27 @@ final class SettingsReaderControlsController {
         bindEpubBoundarySeekBar(
                 R.id.epub_left_spacing_seekbar,
                 R.id.epub_left_spacing_label,
-                prefs.getEpubLeftPaddingDp(),
+                prefs.getEpubLeftPaddingPx(),
                 R.string.epub_left_spacing_format,
-                prefs::setEpubLeftPaddingDp);
+                prefs::setEpubLeftPaddingPx);
         bindEpubBoundarySeekBar(
                 R.id.epub_right_spacing_seekbar,
                 R.id.epub_right_spacing_label,
-                prefs.getEpubRightPaddingDp(),
+                prefs.getEpubRightPaddingPx(),
                 R.string.epub_right_spacing_format,
-                prefs::setEpubRightPaddingDp);
+                prefs::setEpubRightPaddingPx);
         bindEpubBoundarySeekBar(
                 R.id.epub_top_spacing_seekbar,
                 R.id.epub_top_spacing_label,
-                prefs.getEpubTopPaddingDp(),
+                prefs.getEpubTopPaddingPx(),
                 R.string.epub_top_spacing_format,
-                prefs::setEpubTopPaddingDp);
+                prefs::setEpubTopPaddingPx);
         bindEpubBoundarySeekBar(
                 R.id.epub_bottom_spacing_seekbar,
                 R.id.epub_bottom_spacing_label,
-                prefs.getEpubBottomPaddingDp(),
+                prefs.getEpubBottomPaddingPx(),
                 R.string.epub_bottom_spacing_format,
-                prefs::setEpubBottomPaddingDp);
+                prefs::setEpubBottomPaddingPx);
     }
 
     private void bindEpubBoundarySeekBar(
@@ -251,11 +251,15 @@ final class SettingsReaderControlsController {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
                 int value = roundToInsetStep(progress * STEP_PX);
                 label.setText(activity.getString(labelFormatResId, value));
-                if (fromUser) setter.set(value);
+                if (fromUser) {
+                    setter.set(value);
+                    ViewerRegistry.notifyEpubBoundaryChanged();
+                }
             }
             @Override public void onStartTrackingTouch(SeekBar bar) {}
             @Override public void onStopTrackingTouch(SeekBar bar) {
                 setter.set(roundToInsetStep(bar.getProgress() * STEP_PX));
+                ViewerRegistry.notifyEpubBoundaryChanged();
             }
         });
     }

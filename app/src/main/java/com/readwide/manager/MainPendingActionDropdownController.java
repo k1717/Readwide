@@ -247,6 +247,9 @@ final class MainPendingActionDropdownController {
         }
     }
 
+    // Layout.BREAK_STRATEGY_SIMPLE is the documented TextView constant. Android
+    // 15 lint incorrectly expects the API-29 LineBreaker constant instead.
+    @android.annotation.SuppressLint("WrongConstant")
     private void addPendingActionDropdownRow(@NonNull LinearLayout box,
                                              @NonNull String label,
                                              @NonNull String fullPath,

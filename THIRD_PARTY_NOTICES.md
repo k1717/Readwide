@@ -2,11 +2,11 @@
 
 Readwide first-party source code is licensed under the Apache License 2.0. Keep this file with source releases and with binary release materials such as APK/AAB release assets.
 
-This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.14 build. It does not replace a fully resolved transitive dependency report.
+This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.15 build. It does not replace a fully resolved transitive dependency report.
 
 ## Default build boundary
 
-The default Readwide 1.0.14 package is the FOSS-oriented public line:
+The default Readwide 1.0.15 package is the FOSS-oriented public line:
 
 - first-party source: Apache-2.0;
 - no Junrar or RARLAB UnRAR-license code bundled;
@@ -16,7 +16,7 @@ The default Readwide 1.0.14 package is the FOSS-oriented public line:
 - no Hancom proprietary SDK, LibreOffice bundle, or server conversion service;
 - no ads, analytics, telemetry SDK, account system, or network update checker in the default app.
 
-See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_14.md`, and `docs/SBOM_READWIDE_1_0_14.spdx.json`.
+See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_15.md`, and `docs/SBOM_READWIDE_1_0_15.spdx.json`.
 
 ## Runtime dependencies
 
@@ -56,7 +56,7 @@ License: Apache License 2.0.
 - Purpose: Android libarchive Java/JNI backend used for RAR and other backend-dependent archive paths.
 - License position: Android library artifact under Apache License 2.0; bundled native libarchive under permissive BSD-style upstream notices.
 - 7z method note: 7z BCJ2 and PPMd entries (which neither Commons Compress nor a decryption-less libarchive can handle for AES-encrypted archives) are decoded by first-party Java in `SevenZBcj2ArchiveReader`/`SevenZBcj2Decoder`/`SevenZAesDecoder`/`SevenZPpmd7Decoder` (see `docs/SEVENZ_BCJ2_READER_READWIDE_1_0_11.md` and `docs/SEVENZ_PPMD_READER_READWIDE_1_0_11.md`). `SevenZPpmd7Decoder` is a Java port of the public-domain Ppmd7 reference - Dmitry Shkarin's PPMd var.H (2001, public domain) as maintained in Igor Pavlov's Ppmd7 codec (public domain) - obtained from pyppmd's source distribution; public-domain code carries no license obligations and is Apache-2.0 compatible. The bundled native libarchive also decodes unencrypted 7z PPMd as a fallback, via the same public-domain `Ppmd7.c` carried under libarchive's own BSD-style licensing. No code under the 7-Zip, UnRAR, or libarchive licenses is copied into the Readwide repository; test fixtures for these methods are self-made with p7zip from first-party content.
-- Binary-release requirement: keep libarchive-android/libarchive notices available with binary release materials.
+- Binary-release requirement: `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt` is packaged into the APK and reproduces the applicable wrapper, libarchive, UC Regents, BLAKE2, bzip2, liblzma, LZ4, Zstandard, zlib, Mbed TLS, and Apache-2.0 notices from the exact v1.1.6 native inputs. Keep this asset in binary builds and keep this project-level notice with source/release materials.
 
 ### XZ for Java
 
@@ -67,9 +67,9 @@ License: Apache License 2.0.
 ### zstd-jni
 
 - Artifact: `com.github.luben:zstd-jni:1.5.7-9`
-- Purpose: native Zstandard codec used by Apache Commons Compress for Zstandard streams / ZIP method fallback where applicable.
+- Purpose: JVM unit-test fixtures for Commons Compress Zstandard streams. It is a `testImplementation` dependency and is not packaged in the Android APK; Android runtime Zstandard uses libarchive's bundled filter.
 - License position: BSD-family licensing path for the JNI binding and bundled native Zstandard library.
-- Binary-release requirement: keep zstd-jni/Zstandard notices available with binary release materials.
+- Distribution note: no zstd-jni binary notice is required for the APK because its classes/native resources are not shipped there. Keep this source/test notice with the repository.
 
 ### Zip4j
 
@@ -160,5 +160,5 @@ The Gradle packaging block may exclude duplicate dependency `META-INF/LICENSE*` 
 - `LICENSE`
 - `NOTICE`
 - `THIRD_PARTY_NOTICES.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_14.md`
-- `docs/SBOM_READWIDE_1_0_14.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_15.md`
+- `docs/SBOM_READWIDE_1_0_15.spdx.json`

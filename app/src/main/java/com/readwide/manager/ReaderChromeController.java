@@ -32,22 +32,20 @@ import java.io.File;
  */
 final class ReaderChromeController {
     private final ReaderActivity activity;
+    /** Live system-bar sides belong to chrome overlays, never the TXT body. */
+    private int overlaySideInsetLeft;
+    private int overlaySideInsetRight;
 
     ReaderChromeController(@NonNull ReaderActivity activity) {
         this.activity = activity;
     }
 
     void applyStatusBarVisibilityPreference() {
-        WindowInsetsControllerCompat controller =
-                WindowCompat.getInsetsController(activity.getWindow(), activity.getWindow().getDecorView());
-
-        if (activity.prefs != null && activity.prefs.getShowStatusBar()) {
-            controller.show(WindowInsetsCompat.Type.statusBars());
-        } else {
-            controller.hide(WindowInsetsCompat.Type.statusBars());
-            controller.setSystemBarsBehavior(
-                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-        }
+        com.readwide.manager.util.EdgeToEdgeUtil.applyReaderSystemBarVisibility(
+                activity,
+                activity.readerRoot != null ? activity.readerRoot : activity.getWindow().getDecorView(),
+                activity.toolbarVisible,
+                activity.prefs != null && activity.prefs.getShowStatusBar());
     }
 
     void applyReaderSystemBarColors(int backgroundColor, int textColor, int toolbarColor) {
@@ -184,8 +182,8 @@ final class ReaderChromeController {
         // visibly toggle when the middle-tap menu opens/closes.
         if (activity.navBarSpacer != null) {
             activity.navBarSpacer.setBackgroundColor(navColor);
-            activity.navBarSpacer.setVisibility(View.VISIBLE);
-            activity.navBarSpacer.bringToFront();
+            activity.navBarSpacer.setVisibility(isBottomMenuOpen() ? View.VISIBLE : View.GONE);
+            if (isBottomMenuOpen()) activity.navBarSpacer.bringToFront();
         }
 
         // Keep the bottom menu above the spacer when open.
@@ -229,14 +227,19 @@ final class ReaderChromeController {
         final int baseRootBottom = activity.readerRoot.getPaddingBottom();
         ViewCompat.setOnApplyWindowInsetsListener(activity.readerRoot, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            Insets sideBars = insets.getInsets(WindowInsetsCompat.Type.systemBars()
-                    | WindowInsetsCompat.Type.displayCutout());
-            // Horizontal inset at the root clears the side nav bar / cutout for the
-            // whole reader in landscape; top/bottom keep the existing pagination logic.
-            activity.readerRoot.setPadding(baseRootLeft + sideBars.left, baseRootTop,
-                    baseRootRight + sideBars.right, baseRootBottom);
+            Insets cutout = insets.getInsetsIgnoringVisibility(
+                    WindowInsetsCompat.Type.displayCutout());
+            // Keep the TXT pagination width independent from toolbar/nav-bar
+            // visibility. Only a physical cutout reserves body width; a live
+            // landscape navigation side is applied to overlay controls below.
+            activity.readerRoot.setPadding(baseRootLeft + cutout.left, baseRootTop,
+                    baseRootRight + cutout.right, baseRootBottom);
+            // Children are already laid out inside root's cutout padding; add
+            // only the live navigation excess beyond that physical reserve.
+            overlaySideInsetLeft = Math.max(0, bars.left - cutout.left);
+            overlaySideInsetRight = Math.max(0, bars.right - cutout.right);
             int topInset = (activity.prefs != null && activity.prefs.getShowStatusBar()) ? bars.top : 0;
-            int bottomInset = bars.bottom;
+            int bottomInset = activity.toolbarVisible ? bars.bottom : 0;
             activity.lastReaderTopInset = topInset;
             activity.lastReaderBottomInset = bottomInset;
 
@@ -246,6 +249,7 @@ final class ReaderChromeController {
                 spacerLp.height = bottomInset;
                 spacerLp.gravity = Gravity.BOTTOM;
                 activity.navBarSpacer.setLayoutParams(spacerLp);
+                activity.navBarSpacer.setVisibility(bottomInset > 0 ? View.VISIBLE : View.GONE);
             }
 
             int readerLineHeight = getStableStatusOffTopPaddingPx();
@@ -279,8 +283,10 @@ final class ReaderChromeController {
                 // updateReaderFileTitleMaskBounds (it positions the text within
                 // the band); resetting it to 0 here made the title jump up
                 // whenever the theme path ran between mask updates.
-                activity.readerFileTitle.setPadding(activity.dpToPx(36),
-                        activity.readerFileTitle.getPaddingTop(), activity.dpToPx(36), 0);
+                activity.readerFileTitle.setPadding(
+                        activity.dpToPx(36) + overlaySideInsetLeft,
+                        activity.readerFileTitle.getPaddingTop(),
+                        activity.dpToPx(36) + overlaySideInsetRight, 0);
                 updateReaderFileTitleMaskBounds();
                 updateReaderFileTitleVisibility();
             }
@@ -289,9 +295,9 @@ final class ReaderChromeController {
 
             if (activity.bottomBar != null) {
                 activity.bottomBar.setPadding(
-                        activity.dpToPx(20),
+                        activity.dpToPx(20) + overlaySideInsetLeft,
                         activity.dpToPx(10),
-                        activity.dpToPx(20),
+                        activity.dpToPx(20) + overlaySideInsetRight,
                         activity.dpToPx(6));
 
                 FrameLayout.LayoutParams bottomLp =
@@ -410,7 +416,10 @@ final class ReaderChromeController {
         titleLp.height = Math.max(activity.dpToPx(16), bottom - stripTop);
         activity.readerFileTitle.setLayoutParams(titleLp);
         activity.readerFileTitle.setPadding(
-                activity.dpToPx(36), textTop - stripTop, activity.dpToPx(36), 0);
+                activity.dpToPx(36) + overlaySideInsetLeft,
+                textTop - stripTop,
+                activity.dpToPx(36) + overlaySideInsetRight,
+                0);
     }
 
     /**
@@ -589,7 +598,13 @@ final class ReaderChromeController {
         // Keep vertical placement independent from the Android status-bar inset.
         // The TextView is already one reader-row taller, so bottom gravity moves
         // the page indicator down while preserving stable TXT pagination.
-        activity.readerPageStatus.setPadding(startPadding, 0, endPadding, activity.dpToPx(1));
+        boolean rtl = ViewCompat.getLayoutDirection(activity.readerPageStatus)
+                == View.LAYOUT_DIRECTION_RTL;
+        int overlayStart = rtl ? overlaySideInsetRight : overlaySideInsetLeft;
+        int overlayEnd = rtl ? overlaySideInsetLeft : overlaySideInsetRight;
+        activity.readerPageStatus.setPaddingRelative(
+                startPadding + overlayStart, 0,
+                endPadding + overlayEnd, activity.dpToPx(1));
     }
 
     void updateReaderFileTitle() {

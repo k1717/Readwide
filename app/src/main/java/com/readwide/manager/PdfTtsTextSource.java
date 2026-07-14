@@ -19,9 +19,11 @@ import java.util.Map;
  * fully resident, the controller's cross-page prefetch works, so continuous
  * read-aloud keeps synthesizing across page turns.</p>
  *
- * <p>Highlight is a no-op in this first version: read-aloud follows pages, not
- * glyphs. (PdfBox does expose glyph rectangles - the search engine uses them -
- * so sentence highlight on the bitmap page is a possible later pass.)</p>
+ * <p>Read-aloud highlighting extracts glyph rectangles lazily for the spoken
+ * page and projects them through {@link PdfTtsHighlightController}. The same
+ * path supports a single-page bitmap and either half of a landscape spread;
+ * pages whose independently extracted text does not exactly match the resident
+ * TTS buffer are deliberately left unhighlighted rather than guessed.</p>
  *
  * <p>Scanned / image-only PDFs extract no text; {@link #hasAnyText()} lets the
  * caller show a clear "no selectable text" message instead of starting silent

@@ -57,7 +57,28 @@
             android:clipToPadding="false"
             android:paddingTop="8dp"
             android:paddingBottom="8dp"
+            android:scrollbars="none"
             android:visibility="gone" />
+
+        <FrameLayout
+            android:id="@+id/pdf_fast_scroll_rail"
+            android:layout_width="36dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="end"
+            android:background="@android:color/transparent"
+            android:clickable="false"
+            android:focusable="false"
+            android:paddingEnd="4dp"
+            android:visibility="gone">
+
+            <View
+                android:id="@+id/pdf_fast_scroll_thumb"
+                android:layout_width="8dp"
+                android:layout_height="wrap_content"
+                android:layout_gravity="end"
+                android:background="@drawable/fastscroll_thumb" />
+
+        </FrameLayout>
 
         <ProgressBar
             android:id="@+id/pdf_progress"

@@ -29,6 +29,8 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
     private int adapterGeneration = 0;
     private final SparseIntArray pageHeightCache = new SparseIntArray();
     private final SparseIntArray pagePanXCache = new SparseIntArray();
+    private long[] pageHeightDeltaTree = new long[1];
+    private long[] fastScrollHeightDeltaSnapshot;
     private final Set<String> pagesRendering = new HashSet<>();
     private final Set<Bitmap> displayedBitmaps = Collections.newSetFromMap(new IdentityHashMap<>());
     private final int cacheMaxKb;
@@ -69,7 +71,7 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
         adapterZoom = clampedZoom;
         if (changed) {
             adapterGeneration++;
-            clearCacheAndRenderingState();
+            clearAllState();
             notifyDataSetChanged();
         }
     }
@@ -82,23 +84,29 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
 
     void clearBitmaps() {
         adapterGeneration++;
-        clearCacheAndRenderingState();
+        clearBitmapAndRenderingState();
         if (!activity.activityDestroyed) notifyDataSetChanged();
     }
 
     void release() {
         adapterGeneration++;
         count = 0;
-        clearCacheAndRenderingState();
+        clearAllState();
     }
 
-    private void clearCacheAndRenderingState() {
+    private void clearBitmapAndRenderingState() {
         synchronized (pagesRendering) {
             pagesRendering.clear();
         }
+        bitmapCache.evictAll();
+    }
+
+    private void clearAllState() {
+        clearBitmapAndRenderingState();
         pageHeightCache.clear();
         pagePanXCache.clear();
-        bitmapCache.evictAll();
+        pageHeightDeltaTree = new long[Math.max(1, count + 1)];
+        fastScrollHeightDeltaSnapshot = null;
     }
 
     private boolean isBitmapStillCached(@NonNull Bitmap bitmap) {
@@ -160,15 +168,10 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
     }
 
     private int estimatePageRowHeight() {
-        int cached = pageHeightCache.get(Math.max(0, activity.currentPage), 0);
-        if (cached > 0) return cached;
         int baseWidth = Math.max(1, viewportWidth - activity.dpToPx(24));
         int estimated = Math.round(baseWidth * DEFAULT_PDF_PAGE_RATIO * adapterZoom);
-        long pixels = (long) baseWidth * (long) estimated;
-        if (pixels > activity.getContinuousPageMaxPixels()) {
-            float shrink = (float) Math.sqrt(activity.getContinuousPageMaxPixels() / (double) pixels);
-            estimated = Math.max(1, Math.round(estimated * shrink));
-        }
+        // Pixel caps reduce only bitmap resolution. They must not shrink the
+        // logical RecyclerView row, which represents the intended display size.
         return Math.max(activity.dpToPx(220), estimated);
     }
 
@@ -181,11 +184,84 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
         return getRenderedHeightForPage(pageIndex);
     }
 
+    long getEstimatedScrollRangePx() {
+        return estimatedContentHeightBefore(count, pageHeightDeltaTree);
+    }
+
+    long getEstimatedScrollOffsetPx(@NonNull LinearLayoutManager layoutManager,
+                                    int viewportPaddingTop) {
+        int first = layoutManager.findFirstVisibleItemPosition();
+        if (first == RecyclerView.NO_POSITION || first >= count) return 0L;
+        View firstView = layoutManager.findViewByPosition(first);
+        long offset = estimatedContentHeightBefore(first, pageHeightDeltaTree);
+        if (firstView != null) {
+            offset += (long) viewportPaddingTop - firstView.getTop();
+        }
+        long maxOffset = Math.max(0L, getEstimatedScrollRangePx() - 1L);
+        return Math.max(0L, Math.min(maxOffset, offset));
+    }
+
+    void beginFastScroll() {
+        fastScrollHeightDeltaSnapshot = pageHeightDeltaTree.clone();
+    }
+
+    void endFastScroll() {
+        fastScrollHeightDeltaSnapshot = null;
+    }
+
+    void scrollToFraction(@NonNull LinearLayoutManager layoutManager,
+                          float fraction,
+                          int viewportExtent) {
+        if (count <= 0) return;
+        long[] heightDeltas = fastScrollHeightDeltaSnapshot != null
+                ? fastScrollHeightDeltaSnapshot : pageHeightDeltaTree;
+        long totalHeight = estimatedContentHeightBefore(count, heightDeltas);
+        long maxOffset = Math.max(0L, totalHeight - Math.max(1, viewportExtent));
+        float clamped = Math.max(0f, Math.min(1f, fraction));
+        long targetOffset = Math.round(clamped * (double) maxOffset);
+
+        int low = 0;
+        int high = count - 1;
+        while (low < high) {
+            int middle = low + ((high - low + 1) >>> 1);
+            if (estimatedContentHeightBefore(middle, heightDeltas) <= targetOffset) {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        int targetPosition = low;
+        long itemStart = estimatedContentHeightBefore(targetPosition, heightDeltas);
+        int withinItem = (int) Math.min(Integer.MAX_VALUE,
+                Math.max(0L, targetOffset - itemStart));
+        layoutManager.scrollToPositionWithOffset(targetPosition, -withinItem);
+    }
+
+    private long estimatedContentHeightBefore(int position, @NonNull long[] heightDeltas) {
+        int boundedPosition = Math.max(0, Math.min(count, position));
+        int defaultHeight = estimatePageRowHeight();
+        int gap = activity.dpToPx(PAGE_VERTICAL_GAP_DP);
+        long total = (long) boundedPosition * (defaultHeight + (long) gap);
+        int treeIndex = Math.min(boundedPosition, heightDeltas.length - 1);
+        while (treeIndex > 0) {
+            total += heightDeltas[treeIndex];
+            treeIndex -= treeIndex & -treeIndex;
+        }
+        return Math.max(0L, total);
+    }
+
     private void rememberPageHeight(int pageIndex, int height) {
         if (pageIndex < 0 || height <= 0) return;
         int old = pageHeightCache.get(pageIndex, 0);
         if (Math.abs(old - height) > activity.dpToPx(2)) {
             pageHeightCache.put(pageIndex, height);
+            int oldEffectiveHeight = old > 0 ? old : estimatePageRowHeight();
+            long delta = height - (long) oldEffectiveHeight;
+            for (int treeIndex = pageIndex + 1;
+                 treeIndex < pageHeightDeltaTree.length;
+                 treeIndex += treeIndex & -treeIndex) {
+                pageHeightDeltaTree[treeIndex] += delta;
+            }
         }
     }
 
@@ -225,6 +301,7 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
         if (!applied) {
             notifyItemChanged(pageIndex);
         }
+        activity.schedulePdfFastScrollUpdate();
     }
 
     private String renderKeyFor(int pageIndex, int generation) {
@@ -239,7 +316,8 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
             pagesRendering.add(key);
         }
         renderContinuousPageIntoHolder(holder, pageIndex, generation, key,
-                Math.max(1, viewportWidth), adapterZoom);
+                Math.max(1, viewportWidth), adapterZoom,
+                activity.getContinuousPageMaxPixels(), false);
     }
 
     private PageViewHolder findBestVisibleHolder() {
@@ -461,13 +539,15 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
             int generation,
             @NonNull String renderKey,
             int widthForRender,
-            float zoomForRender
+            float zoomForRender,
+            long maxBitmapPixels,
+            boolean reducedOomRetry
     ) {
         final int pageToRender = pageIndex;
 
         activity.executor.execute(() -> {
             Bitmap bitmap = null;
-            int renderedHeight = 0;
+            int intendedDisplayHeight = 0;
             try {
                 synchronized (activity.rendererLock) {
                     if (activity.activityDestroyed || activity.pdfRenderer == null || pageToRender >= activity.pageCount) {
@@ -475,34 +555,34 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
                     }
                     PdfRenderer.Page page = activity.pdfRenderer.openPage(pageToRender);
                     try {
-                        int baseWidth = Math.max(1, widthForRender - activity.dpToPx(24));
-                        float fitScale = baseWidth / (float) page.getWidth();
-                        // Supersample for sharper text; bounded by the max-pixel cap.
-                        float renderScale = Math.max(0.2f, fitScale * zoomForRender * PdfReaderActivity.PDF_SUPERSAMPLE);
-                        int width = Math.max(1, Math.round(page.getWidth() * renderScale));
-                        int height = Math.max(1, Math.round(page.getHeight() * renderScale));
-
-                        long pixels = (long) width * (long) height;
-                        long maxPixels = activity.getContinuousPageMaxPixels();
-                        if (pixels > maxPixels) {
-                            float shrink = (float) Math.sqrt(maxPixels / (double) pixels);
-                            width = Math.max(1, Math.round(width * shrink));
-                            height = Math.max(1, Math.round(height * shrink));
-                        }
+                        PdfPageRenderPlan.Plan plan = PdfPageRenderPlan.create(
+                                page.getWidth(),
+                                page.getHeight(),
+                                widthForRender,
+                                1,
+                                zoomForRender,
+                                PdfReaderActivity.PDF_SUPERSAMPLE,
+                                activity.dpToPx(24),
+                                0,
+                                false,
+                                Math.max(1L, maxBitmapPixels));
+                        intendedDisplayHeight = plan.intendedDisplayHeightPx;
+                        int width = plan.bitmapWidthPx;
+                        int height = plan.bitmapHeightPx;
 
                         bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
                         bitmap.eraseColor(Color.WHITE);
                         page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-                        renderedHeight = height;
                     } finally {
                         page.close();
                     }
                 }
 
                 Bitmap finalBitmap = bitmap;
-                // Row-height bookkeeping uses fit size, not the supersampled pixels.
-                int finalRenderedHeight = Math.max(1,
-                        Math.round(renderedHeight / PdfReaderActivity.PDF_SUPERSAMPLE));
+                // Keep layout at the intended fit/zoom height even when the pixel
+                // cap reduces the backing bitmap. Deriving row height from the
+                // capped bitmap made very tall pages visibly shrink.
+                int finalRenderedHeight = Math.max(1, intendedDisplayHeight);
                 activity.handler.post(() -> {
                     synchronized (pagesRendering) {
                         pagesRendering.remove(renderKey);
@@ -518,6 +598,38 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
                         activity.updatePageStatus();
                     }
                 });
+            } catch (OutOfMemoryError oom) {
+                if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+                activity.handler.post(() -> {
+                    synchronized (pagesRendering) {
+                        pagesRendering.remove(renderKey);
+                    }
+                    if (activity.activityDestroyed
+                            || generation != adapterGeneration
+                            || !activity.verticalPageSlideMode) {
+                        return;
+                    }
+                    // Release cached, non-visible bitmaps without invalidating
+                    // geometry or rebinding the whole dataset.
+                    bitmapCache.evictAll();
+                    if (!reducedOomRetry) {
+                        boolean accepted;
+                        synchronized (pagesRendering) {
+                            accepted = pagesRendering.add(renderKey);
+                        }
+                        if (accepted) {
+                            renderContinuousPageIntoHolder(
+                                    holder,
+                                    pageToRender,
+                                    generation,
+                                    renderKey,
+                                    widthForRender,
+                                    zoomForRender,
+                                    Math.max(1L, maxBitmapPixels / 2L),
+                                    true);
+                        }
+                    }
+                });
             } catch (Exception e) {
                 if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
                 activity.handler.post(() -> {
@@ -529,4 +641,3 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
         });
     }
 }
-

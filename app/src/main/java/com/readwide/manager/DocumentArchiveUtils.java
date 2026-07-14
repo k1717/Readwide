@@ -8,8 +8,6 @@ import org.w3c.dom.NodeList;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,8 +16,10 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import com.readwide.manager.util.SecureXml;
+import com.readwide.manager.util.UriPathCodec;
+
 import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 
 final class DocumentArchiveUtils {
     private static final int DETECTION_TEXT_READ_LIMIT_BYTES = 512 * 1024;
@@ -54,27 +54,29 @@ final class DocumentArchiveUtils {
 
             java.util.Enumeration<? extends ZipEntry> entries = zip.entries();
             int scanned = 0;
-            java.util.regex.Pattern viewport = java.util.regex.Pattern.compile(
-                    "(?is)<meta[^>]+name\\s*=\\s*['\\\"]viewport['\\\"][^>]+content\\s*=\\s*['\\\"][^'\\\"]*width\\s*=\\s*([0-9]{2,5})[^'\\\"]*height\\s*=\\s*([0-9]{2,5})");
             while (entries.hasMoreElements() && scanned < 80) {
                 ZipEntry entry = entries.nextElement();
                 if (entry == null || entry.isDirectory() || !isEpubHtmlPath(entry.getName())) continue;
                 scanned++;
                 String html = readZipEntryPreviewString(zip, entry);
-                if (html == null) continue;
-                java.util.regex.Matcher m = viewport.matcher(html);
-                if (m.find()) {
-                    try {
-                        int w = Integer.parseInt(m.group(1));
-                        int h = Integer.parseInt(m.group(2));
-                        if (w >= 100 && h >= 100) return true;
-                    } catch (Exception ignored) {}
-                }
+                EpubViewportParser.Dimensions viewport = EpubViewportParser.parse(html);
+                if (viewport.isUsable()) return true;
             }
         } catch (Throwable ignored) {
             // Fall through to reflowable handling if detection fails.
         }
         return false;
+    }
+
+    /**
+     * Classifies only genuinely page-image EPUBs for landscape spreads. A fixed
+     * layout declaration is a hint, not proof: fixed-layout EPUBs can still be
+     * ordinary HTML/text documents. Cover-only books are rejected because the
+     * non-cover spine items must also be image-dominant.
+     */
+    static boolean detectEpubImagePageLike(List<String> htmlPages,
+                                           boolean fixedLayoutHint) {
+        return EpubImagePageClassifier.isImagePageBook(htmlPages, fixedLayoutHint);
     }
 
     static boolean detectEpubDeclaredFont(ZipFile zip) {
@@ -181,7 +183,7 @@ final class DocumentArchiveUtils {
     static String readZipEntryString(ZipFile zip, ZipEntry entry) throws IOException {
         try (InputStream is = zip.getInputStream(entry)) {
             byte[] data = readAllBytesWithLimit(is, MAX_DOCUMENT_TEXT_ENTRY_BYTES);
-            return new String(data, StandardCharsets.UTF_8);
+            return DocumentTextDecoder.decode(data);
         }
     }
 
@@ -203,7 +205,7 @@ final class DocumentArchiveUtils {
     static String readZipEntryPreviewString(ZipFile zip, ZipEntry entry) throws IOException {
         try (InputStream is = zip.getInputStream(entry)) {
             byte[] data = readAtMostBytes(is, DETECTION_TEXT_READ_LIMIT_BYTES);
-            return new String(data, StandardCharsets.UTF_8);
+            return DocumentTextDecoder.decode(data);
         }
     }
 
@@ -221,14 +223,7 @@ final class DocumentArchiveUtils {
     }
 
     static DocumentBuilder secureDocumentBuilder() throws Exception {
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        factory.setNamespaceAware(true);
-        factory.setExpandEntityReferences(false);
-        try { factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true); } catch (Exception ignored) {}
-        try { factory.setFeature("http://xml.org/sax/features/external-general-entities", false); } catch (Exception ignored) {}
-        try { factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false); } catch (Exception ignored) {}
-        try { factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false); } catch (Exception ignored) {}
-        return factory.newDocumentBuilder();
+        return SecureXml.newDocumentBuilder(true);
     }
 
     static Node firstNodeByLocalName(Document doc, String localName) {
@@ -294,8 +289,7 @@ final class DocumentArchiveUtils {
     }
 
     static String decodeHref(String href) {
-        if (href == null) return "";
-        try { return URLDecoder.decode(href, "UTF-8"); } catch (Exception e) { return href; }
+        return UriPathCodec.decodePercentEscapes(href);
     }
 
     static String normalizeZipPath(String path) {

@@ -20,9 +20,13 @@ import java.util.Locale;
 public final class ImageDecodeHelper {
     private static final float TALL_IMAGE_ASPECT_RATIO = 2.5f;
     private static final int PREVIEW_DISPLAY_SCALE = 2;
+    static final int PREFETCH_DISPLAY_SCALE = 1;
     private static final int DETAIL_DISPLAY_SCALE = 4;
     private static final long PREVIEW_DIRECT_ORIGINAL_PIXELS = 16_000_000L;
     private static final long PREVIEW_MAX_BITMAP_PIXELS = 16_000_000L;
+    // Prefetch targets the actual display size. The cap is only a backstop for
+    // very tall fit-width pages whose proportional height exceeds the viewport.
+    static final long PREFETCH_MAX_BITMAP_PIXELS = 8_000_000L;
     private static final long DETAIL_DIRECT_ORIGINAL_PIXELS = 48_000_000L;
     private static final long DETAIL_MAX_BITMAP_PIXELS = 48_000_000L;
 
@@ -46,6 +50,34 @@ public final class ImageDecodeHelper {
             if (drawable != null) return LoadedImage.forDrawable(drawable);
         }
         BitmapDecodeResult result = decodeBitmap(context, filePath, fileUri, false);
+        return result == null || result.bitmap == null ? null : LoadedImage.forBitmap(
+                result.bitmap,
+                result.sampleSize <= 1,
+                result.sourceWidth,
+                result.sourceHeight,
+                result.sampleSize);
+    }
+
+    /**
+     * Decodes a cache warm-up bitmap for a neighboring page. This deliberately
+     * bypasses animated drawables (the bitmap cache cannot retain them) and uses
+     * a lower pixel ceiling than an on-demand preview. The normal detail pass
+     * refines the page if the user actually opens it.
+     */
+    @Nullable
+    public static LoadedImage decodePrefetch(@NonNull Context context,
+                                             @Nullable String filePath,
+                                             @Nullable String fileUri,
+                                             @Nullable String displayName) throws Exception {
+        if (shouldSkipAnimatedBitmapPrefetch(displayName, Build.VERSION.SDK_INT)) return null;
+        BitmapDecodeResult result = decodeBitmap(
+                context,
+                filePath,
+                fileUri,
+                PREFETCH_DISPLAY_SCALE,
+                0L,
+                PREFETCH_MAX_BITMAP_PIXELS,
+                true);
         return result == null || result.bitmap == null ? null : LoadedImage.forBitmap(
                 result.bitmap,
                 result.sampleSize <= 1,
@@ -102,11 +134,29 @@ public final class ImageDecodeHelper {
 
     @Nullable
     private static BitmapDecodeResult decodeBitmap(@NonNull Context context,
-                                                   @Nullable String filePath,
-                                                   @Nullable String fileUri,
-                                                   boolean detail) throws Exception {
-        int reqW = Math.max(context.getResources().getDisplayMetrics().widthPixels * (detail ? DETAIL_DISPLAY_SCALE : PREVIEW_DISPLAY_SCALE), 1);
-        int reqH = Math.max(context.getResources().getDisplayMetrics().heightPixels * (detail ? DETAIL_DISPLAY_SCALE : PREVIEW_DISPLAY_SCALE), 1);
+                                                    @Nullable String filePath,
+                                                    @Nullable String fileUri,
+                                                    boolean detail) throws Exception {
+        return decodeBitmap(
+                context,
+                filePath,
+                fileUri,
+                detail ? DETAIL_DISPLAY_SCALE : PREVIEW_DISPLAY_SCALE,
+                detail ? DETAIL_DIRECT_ORIGINAL_PIXELS : PREVIEW_DIRECT_ORIGINAL_PIXELS,
+                detail ? DETAIL_MAX_BITMAP_PIXELS : PREVIEW_MAX_BITMAP_PIXELS,
+                !detail);
+    }
+
+    @Nullable
+    private static BitmapDecodeResult decodeBitmap(@NonNull Context context,
+                                                    @Nullable String filePath,
+                                                    @Nullable String fileUri,
+                                                    int displayScale,
+                                                    long directOriginalPixels,
+                                                    long maxBitmapPixels,
+                                                    boolean useDisplayTarget) throws Exception {
+        int reqW = Math.max(context.getResources().getDisplayMetrics().widthPixels * displayScale, 1);
+        int reqH = Math.max(context.getResources().getDisplayMetrics().heightPixels * displayScale, 1);
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
         if (filePath != null && filePath.trim().length() > 0) {
@@ -118,7 +168,14 @@ public final class ImageDecodeHelper {
                 BitmapFactory.decodeStream(is, null, bounds);
             }
         }
-        int sample = chooseBitmapSampleSize(bounds.outWidth, bounds.outHeight, reqW, reqH, detail);
+        int sample = chooseBitmapSampleSize(
+                bounds.outWidth,
+                bounds.outHeight,
+                reqW,
+                reqH,
+                directOriginalPixels,
+                maxBitmapPixels,
+                useDisplayTarget);
         return decodeBitmapWithFallback(context, filePath, fileUri, bounds.outWidth, bounds.outHeight, sample);
     }
 
@@ -154,14 +211,20 @@ public final class ImageDecodeHelper {
         return null;
     }
 
-    private static int chooseBitmapSampleSize(int width, int height, int reqWidth, int reqHeight, boolean detail) {
+    static int chooseBitmapSampleSize(int width,
+                                      int height,
+                                      int reqWidth,
+                                      int reqHeight,
+                                      long directOriginalPixels,
+                                      long maxBitmapPixels,
+                                      boolean useDisplayTarget) {
         if (width <= 0 || height <= 0) return 1;
         long pixels = (long) width * (long) height;
-        if (!detail && pixels <= PREVIEW_DIRECT_ORIGINAL_PIXELS) return 1;
-        if (detail && pixels <= DETAIL_DIRECT_ORIGINAL_PIXELS) return 1;
-        long cap = detail ? DETAIL_MAX_BITMAP_PIXELS : PREVIEW_MAX_BITMAP_PIXELS;
-        int sample = detail ? 1 : calculateInSampleSize(width, height, reqWidth, reqHeight);
-        sample = Math.max(sample, calculateSampleForPixelCap(width, height, cap));
+        if (directOriginalPixels > 0L && pixels <= directOriginalPixels) return 1;
+        int sample = useDisplayTarget
+                ? calculateInSampleSize(width, height, reqWidth, reqHeight)
+                : 1;
+        sample = Math.max(sample, calculateSampleForPixelCap(width, height, maxBitmapPixels));
         return Math.max(1, sample);
     }
 
@@ -169,6 +232,10 @@ public final class ImageDecodeHelper {
         if (name == null) return false;
         String lower = name.toLowerCase(Locale.ROOT);
         return lower.endsWith(".gif") || lower.endsWith(".webp");
+    }
+
+    static boolean shouldSkipAnimatedBitmapPrefetch(@Nullable String name, int sdkInt) {
+        return sdkInt >= Build.VERSION_CODES.P && isAnimatedImageCandidateName(name);
     }
 
     private static int calculateInSampleSize(int width, int height, int reqWidth, int reqHeight) {

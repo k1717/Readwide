@@ -9,13 +9,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -115,13 +109,8 @@ public class ThemeManager {
         File file = new File(context.getFilesDir(), THEMES_FILE);
         if (!file.exists()) return;
 
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) sb.append(line);
-
-            JSONObject root = new JSONObject(sb.toString());
+        try {
+            JSONObject root = new JSONObject(AtomicUtf8File.read(file));
             JSONArray arr = root.optJSONArray("themes");
             if (arr != null) {
                 for (int i = 0; i < arr.length(); i++) {
@@ -143,10 +132,7 @@ public class ThemeManager {
             root.put("themes", arr);
 
             File file = new File(context.getFilesDir(), THEMES_FILE);
-            try (OutputStreamWriter writer = new OutputStreamWriter(
-                    new FileOutputStream(file), StandardCharsets.UTF_8)) {
-                writer.write(root.toString(2));
-            }
+            AtomicUtf8File.write(file, root.toString(2));
         } catch (Exception e) {
             Log.e(TAG, "Failed to save custom themes", e);
         }

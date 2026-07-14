@@ -51,6 +51,7 @@ public class ZoomImageView extends AppCompatImageView {
     private int lastScrollerY;
     private boolean dragging;
     private boolean panGestureStarted;
+    private boolean multiTouchGesture;
     private long immediateTapHandledDownTime = Long.MIN_VALUE;
     private int imageWidth;
     private int imageHeight;
@@ -150,6 +151,12 @@ public class ZoomImageView extends AppCompatImageView {
         return true;
     }
 
+    @Override
+    public boolean performClick() {
+        super.performClick();
+        return true;
+    }
+
     /**
      * Fires a page-turn tap the instant the finger lifts, if the gesture was a
      * short stationary tap in a page-turn side zone. This bypasses the gesture
@@ -160,14 +167,19 @@ public class ZoomImageView extends AppCompatImageView {
      * checks and by shouldHandleTapImmediately().
      */
     private void maybeHandleImmediateUpTap(@NonNull MotionEvent e) {
-        if (dragging || panGestureStarted) return;
-        if (e.getPointerCount() != 1) return;
+        if (!isTapUp(e)) return;
+        handleImmediatePageTap(e);
+    }
+
+    private boolean isTapUp(@NonNull MotionEvent e) {
+        if (dragging || panGestureStarted || multiTouchGesture || e.getPointerCount() != 1) {
+            return false;
+        }
         float dx = e.getX() - downRawX;
         float dy = e.getY() - downRawY;
-        if ((dx * dx + dy * dy) > (touchSlop * touchSlop)) return; // moved => not a tap
+        if ((dx * dx + dy * dy) > (touchSlop * touchSlop)) return false;
         long dt = e.getEventTime() - downTimeMs;
-        if (dt > ViewConfiguration.getTapTimeout() + ViewConfiguration.getLongPressTimeout()) return;
-        handleImmediatePageTap(e);
+        return dt <= ViewConfiguration.getTapTimeout() + ViewConfiguration.getLongPressTimeout();
     }
 
     private boolean shouldHandleTapImmediately(@NonNull MotionEvent e) {
@@ -198,7 +210,8 @@ public class ZoomImageView extends AppCompatImageView {
         imageWidth = Math.max(1, nextDrawable.getIntrinsicWidth());
         imageHeight = Math.max(1, nextDrawable.getIntrinsicHeight());
         setImageDrawable(nextDrawable);
-        if (nextDrawable instanceof AnimatedImageDrawable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && nextDrawable instanceof AnimatedImageDrawable) {
             ((AnimatedImageDrawable) nextDrawable).start();
         }
         configureBaseMatrixWhenReady();
@@ -206,6 +219,7 @@ public class ZoomImageView extends AppCompatImageView {
 
     public void clearImageReady() {
         stopImageFling();
+        disallowParentIntercept(false);
         imageWidth = 0;
         imageHeight = 0;
         matrix.reset();
@@ -243,6 +257,7 @@ public class ZoomImageView extends AppCompatImageView {
                 downTimeMs = event.getEventTime();
                 dragging = false;
                 panGestureStarted = false;
+                multiTouchGesture = false;
                 disallowParentIntercept(canPanCurrentImage());
                 return true;
             case MotionEvent.ACTION_MOVE:
@@ -252,6 +267,7 @@ public class ZoomImageView extends AppCompatImageView {
                 stopImageFling();
                 dragging = false;
                 panGestureStarted = false;
+                multiTouchGesture = true;
                 disallowParentIntercept(true);
                 return true;
             case MotionEvent.ACTION_POINTER_UP:
@@ -262,11 +278,16 @@ public class ZoomImageView extends AppCompatImageView {
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                    if (isTapUp(event)) performClick();
                     maybeHandleImmediateUpTap(event);
                 }
                 dragging = false;
                 panGestureStarted = false;
-                if (!canPanCurrentImage()) disallowParentIntercept(false);
+                // Parent interception is gesture-scoped. A zoomed image may remain
+                // pannable after UP/CANCEL, but the next DOWN will claim the parent
+                // again; retaining this flag between gestures can strand an outer
+                // pager after a pinch or a canceled touch sequence.
+                disallowParentIntercept(false);
                 return true;
             default:
                 return true;

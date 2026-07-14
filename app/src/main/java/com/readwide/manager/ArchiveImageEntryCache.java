@@ -521,12 +521,11 @@ final class ArchiveImageEntryCache {
         boolean numericSplitRandomAccess = ArchiveSupport.isNumericSplitArchive(archiveFile)
                 && !isSequentialEntryArchiveType(type);
         if (!isSequentialEntryArchiveType(type) && !numericSplitRandomAccess) return false;
-        // RAR has no forward reader (its libarchive backend exposes no Java streaming
-        // API), so the first access bulk-extracts the whole archive in one pass. Once
-        // that bulk has succeeded, a later cache miss - a page evicted by the preview
-        // cache size cap - extracts only that one member rather than re-extracting the
-        // entire archive again, which is what made paging back into a large RAR stutter.
-        // The same downgrade applies to random-access numeric splits: after the bulk,
+        // RAR normally enters the viewer through the session-scoped libarchive forward
+        // reader. This bulk branch is now only the degradation path when that stream
+        // cannot open or decode the file's exact RAR variant. Once a fallback bulk has
+        // succeeded, a later cache miss extracts only that member instead of repeating
+        // the whole pass. The same downgrade applies to random-access numeric splits: after the bulk,
         // refilling one evicted page costs one concatenation plus one entry, which
         // beats re-running the whole-archive pass. 7z and the TAR family keep
         // whole-archive as their fallback because their forward reader is the
@@ -564,10 +563,19 @@ final class ArchiveImageEntryCache {
         }
     }
 
-    private static boolean shouldReuseReadyImageFile(@NonNull String entryPath,
-                                                     @NonNull File file,
-                                                     boolean sensitiveCache,
-                                                     @Nullable Set<String> verifiedSensitivePaths) {
+    /**
+     * Returns whether an existing ready image may be reused in the current
+     * archive-password session.
+     *
+     * <p>Forward archive readers must use the same gate as the normal
+     * extraction path. Checking only the ready marker would let an old
+     * plaintext preview from a password-protected archive bypass verification
+     * by the password supplied for the current open.</p>
+     */
+    static boolean shouldReuseReadyImageFile(@NonNull String entryPath,
+                                             @NonNull File file,
+                                             boolean sensitiveCache,
+                                             @Nullable Set<String> verifiedSensitivePaths) {
         return canReuseReadyMarkerForCache(sensitiveCache, verifiedSensitivePaths, file.getAbsolutePath())
                 && isReadyImageFile(entryPath, file);
     }
@@ -585,17 +593,27 @@ final class ArchiveImageEntryCache {
         return sensitiveCache && !canReuseReadyMarkerForCache(true, verifiedSensitivePaths, cacheKey);
     }
 
-    private static void discardUnverifiedSensitiveReadyCache(@NonNull File file,
-                                                             boolean sensitiveCache,
-                                                             @Nullable Set<String> verifiedSensitivePaths) {
+    static void discardUnverifiedSensitiveReadyCache(@NonNull File file,
+                                                     boolean sensitiveCache,
+                                                     @Nullable Set<String> verifiedSensitivePaths) {
         if (!shouldDiscardUnverifiedSensitiveReadyCache(
                 sensitiveCache,
                 verifiedSensitivePaths,
                 file.getAbsolutePath())) {
             return;
         }
-        deleteQuietly(readyMarkerFor(file));
-        deleteQuietly(file);
+        synchronized (lockFor(file.getAbsolutePath())) {
+            // Verification can be published while this caller waits for the
+            // file stripe; do not delete a cache that became valid meanwhile.
+            if (!shouldDiscardUnverifiedSensitiveReadyCache(
+                    sensitiveCache,
+                    verifiedSensitivePaths,
+                    file.getAbsolutePath())) {
+                return;
+            }
+            deleteQuietly(readyMarkerFor(file));
+            deleteQuietly(file);
+        }
     }
 
     private static void discardReadyIfStaleOrCorrupt(@NonNull String entryPath, @NonNull File file) {

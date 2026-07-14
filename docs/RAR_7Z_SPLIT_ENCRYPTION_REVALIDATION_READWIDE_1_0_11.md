@@ -5,6 +5,8 @@ paths against real archives. No code changes were needed; both readers already
 route these cases as intended. It captures what was verified and where the
 conservative boundaries sit, so future edits do not silently widen a claim.
 
+> **Historical audit sequence:** Some present-tense paragraphs below describe the pre-close state that motivated later first-party work. RAR5 header encryption and encrypted PPMd/BCJ2 7z support were subsequently added in the scoped paths linked from their respective closure notes; use the 1.0.15 README/release notes for the current boundary.
+
 Verification method: real fixtures were parsed and decoded with an independent
 Python mirror and with the bundled backends' reference tools (libarchive
 3.7.2 via bsdtar, p7zip). RAR fixtures include the libarchive project's own
@@ -18,8 +20,9 @@ third-party extractor code was copied into the app.
 Backend split: libarchive is the primary broad RAR backend; first-party Java
 covers stored entries, the scoped RAR3/RAR4 and RAR5 v5.0 decode paths, the
 visible-header AES decrypt/rewrite path, and (RAR5) stored-entry AES decryption
-via `Rar5Crypto`. RAR5 header-encryption has no decrypt path in either backend
-(see the boundary note below). The libarchive fallback is handed
+via `Rar5Crypto`. At the time of this initial audit, RAR5 header encryption had
+no decrypt path in either backend; that gap was later closed by the scoped
+first-party path (see the boundary note below). The libarchive fallback is handed
 the *entire* volume chain (`RarLibarchiveFallback.archivePaths` ->
 `RarArchiveReader.collectVolumeChainForBackend`), so multi-volume RAR is
 resolved by discovering all volumes, not by passing a single selected part.
@@ -60,7 +63,8 @@ first-party header decryptor - **and has since been closed first party**: see
 `docs/RAR5_HEADER_ENCRYPTION_READWIDE_1_0_11.md`. The paragraphs below record
 the pre-close state. `RarHeaderEncryptionDetector` distinguishes RAR4 `-hp` (a
 first-party header rewriter exists; a failure there is the real fault) from
-RAR5 `-hp` (no decrypt path anywhere) in its unsupported message. No
+RAR5 `-hp` (whose historical unsupported message said no decrypt path existed)
+in its unsupported message. No
 stored+encrypted RAR4 fixture could be generated in-sandbox (RAR 7.00 dropped
 RAR4 archive *creation* - `-ma4` is rejected as an unknown option), so the RAR4
 stored-payload rewrite's end-to-end decrypt remains covered by the KDF mirror
@@ -92,7 +96,7 @@ fallback for method chains Commons Compress cannot decode (PPMd, BCJ2). Split
 volumes are resolved by `SevenZSplitVolumeResolver` and opened as one
 `MultiReadOnlySeekableByteChannel`; the password is forwarded to `SevenZFile`.
 
-Verified against real 7z fixtures (built with p7zip):
+Pre-close findings verified against real 7z fixtures (built with p7zip):
 
 - **Coder coverage (Commons Compress 1.28.0).** The registered decoder table
   is COPY, LZMA, LZMA2, DEFLATE, DEFLATE64, BZIP2, AES256SHA256, the BCJ

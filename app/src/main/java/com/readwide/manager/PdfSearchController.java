@@ -27,8 +27,9 @@ import java.util.concurrent.Executors;
  *
  * Lazy and cheap until used: the PDDocument loads in the background only on the
  * first query, so opening a PDF costs nothing extra unless the user searches.
- * Highlights render in single-page (Matrix) mode; continuous scroll mode jumps
- * to the match page (highlight rendering there is a follow-up).
+ * Highlights render in single-page and landscape two-page Matrix modes;
+ * continuous scroll mode jumps to the match page (highlight rendering there is
+ * a follow-up).
  *
  * Unbuilt reference (no Android SDK in the authoring environment); build and
  * test in your own build.
@@ -41,8 +42,12 @@ final class PdfSearchController {
         int currentPage();
         @Nullable PdfPageView pageView();
         void runOnUi(Runnable r);
-        /** True while the landscape two-page spread composite is displayed. */
-        boolean twoPageSpreadActive();
+        /** Right page in the committed spread bitmap, or -1 for a single page. */
+        int visibleRightPageIndex();
+        /** True for a page in the committed or currently rendering display. */
+        boolean isPagePartOfCurrentDisplay(int pageIndex);
+        /** Maps one page's normalized rectangle into the displayed bitmap. */
+        @Nullable RectF mapPageRectToDisplayedBitmap(int pageIndex, RectF pageNormalizedRect);
     }
 
     /** Status updates for the dialog, delivered on the main thread. */
@@ -62,8 +67,12 @@ final class PdfSearchController {
     @Nullable private PdfTextSearchEngine engine;
     private boolean loadingDoc;
     private boolean loadFailed;
+    /** Invalidates a lazy PDFBox load that outlives a singleTop document swap. */
+    private volatile boolean closed;
 
     private boolean active;
+    /** Rejects callbacks from a replaced query or a dismissed/reopened dialog. */
+    private int queryGeneration;
     @Nullable private StatusListener statusListener;
     @Nullable private PdfTextSearchEngine.Match currentMatch;
     private String pendingQuery = "";
@@ -81,6 +90,7 @@ final class PdfSearchController {
 
     /** Called once the page count is known (after PdfRenderer opens the file). */
     void setSource(@Nullable String filePath, int pageCount) {
+        if (closed) return;
         this.filePath = filePath;
         this.pageCount = pageCount;
     }
@@ -91,8 +101,10 @@ final class PdfSearchController {
 
     /** True while the search dialog is open: enables highlights. */
     void setActive(boolean active) {
+        if (closed && active) return;
         this.active = active;
         if (!active) {
+            queryGeneration++;
             main.removeCallbacks(searchRunnable);
             currentMatch = null;
             clearHighlights();
@@ -103,20 +115,25 @@ final class PdfSearchController {
 
     /** Called by the dialog on every text change; debounced. */
     void startQuery(String query) {
+        if (closed) return;
+        queryGeneration++;
         pendingQuery = query == null ? "" : query;
         main.removeCallbacks(searchRunnable);
         main.postDelayed(searchRunnable, 250);
     }
 
     private void runSearchNow() {
+        if (closed || !active) return;
+        final int callbackGeneration = queryGeneration;
         final String q = pendingQuery;
         currentMatch = null;
+        clearHighlights();
         if (q.isEmpty()) {
             emitStatus();
-            clearHighlights();
             return;
         }
         ensureEngine(() -> {
+            if (closed || !active || callbackGeneration != queryGeneration) return;
             if (engine == null) {
                 emitStatus();
                 return;
@@ -125,20 +142,29 @@ final class PdfSearchController {
                 @Override
                 public void onSearchProgress(int matchesSoFar, int scannedPages, int totalPages,
                                              @Nullable PdfTextSearchEngine.Match firstMatch) {
+                    if (closed || !active || callbackGeneration != queryGeneration) return;
                     if (firstMatch != null && currentMatch == null) {
                         currentMatch = firstMatch;
-                        if (firstMatch.pageIndex == host.currentPage()) {
+                        if (isPageVisible(firstMatch.pageIndex)) {
                             refreshCurrentPageHighlights();
                         } else {
                             host.goToPage(firstMatch.pageIndex); // highlights on page shown
                         }
+                    } else if (currentMatch != null && isPageVisible(currentMatch.pageIndex)) {
+                        // A later progress batch may have added hits on the other
+                        // half of the visible spread. Refresh both halves together.
+                        refreshCurrentPageHighlights();
                     }
                     emitStatus();
                 }
 
                 @Override
                 public void onSearchFinished(int totalMatches, boolean cancelled) {
+                    if (closed || !active || callbackGeneration != queryGeneration) return;
                     if (!cancelled) {
+                        if (currentMatch != null && isPageVisible(currentMatch.pageIndex)) {
+                            refreshCurrentPageHighlights();
+                        }
                         emitStatus();
                     }
                 }
@@ -147,7 +173,7 @@ final class PdfSearchController {
     }
 
     void move(boolean forward) {
-        if (engine == null) {
+        if (closed || !active || engine == null) {
             return;
         }
         PdfTextSearchEngine.Match m = engine.moveTo(forward);
@@ -155,7 +181,7 @@ final class PdfSearchController {
             return;
         }
         currentMatch = m;
-        if (m.pageIndex == host.currentPage()) {
+        if (isPageVisible(m.pageIndex)) {
             refreshCurrentPageHighlights();
         } else {
             host.goToPage(m.pageIndex); // highlights applied when the page is shown
@@ -170,6 +196,7 @@ final class PdfSearchController {
      * passing the rendered page point size. This is the reliable highlight path.
      */
     void onPageShown(int pageIndex, int pageWpts, int pageHpts) {
+        if (closed) return;
         applyHighlights(pageIndex, pageWpts, pageHpts);
     }
 
@@ -189,26 +216,54 @@ final class PdfSearchController {
         if (pv == null || engine == null || !active || pageWpts <= 0 || pageHpts <= 0) {
             return;
         }
-        if (host.twoPageSpreadActive()) {
-            // The two-page spread shows a composite bitmap of two pages; these
-            // rectangles are normalized against a single page, so painting them
-            // would stretch across the whole spread. Match navigation still
-            // works (the target page becomes the left page); the overlay is
-            // simply not drawn in spread mode.
-            pv.clearHighlights();
-            return;
+        List<RectF> displayed = new ArrayList<>();
+        RectF[] currentDisplayed = {null};
+        // In spread mode the renderer metadata passed by the host describes the
+        // whole composite (left width + right width), not the left source page.
+        // Prefer PdfBox's exact per-page size whenever extraction has it.
+        float[] pageSize = engine.pageSizePts(pageIndex);
+        float sourceWidth = pageSize != null ? pageSize[0] : pageWpts;
+        float sourceHeight = pageSize != null ? pageSize[1] : pageHpts;
+        appendPageHighlights(pageIndex, sourceWidth, sourceHeight,
+                displayed, currentDisplayed);
+
+        int rightPage = host.visibleRightPageIndex();
+        if (rightPage >= 0 && rightPage != pageIndex) {
+            float[] rightSize = engine.pageSizePts(rightPage);
+            if (rightSize != null && rightSize[0] > 0f && rightSize[1] > 0f) {
+                appendPageHighlights(rightPage, rightSize[0], rightSize[1],
+                        displayed, currentDisplayed);
+            }
         }
+        pv.setHighlights(displayed, currentDisplayed[0]);
+    }
+
+    /** Append one visible source page after projecting it into bitmap space. */
+    private void appendPageHighlights(int pageIndex, float pageWpts, float pageHpts,
+                                      List<RectF> displayed, RectF[] currentDisplayed) {
         List<RectF> ptsRects = engine.matchesOnPage(pageIndex);
-        List<RectF> norm = new ArrayList<>(ptsRects.size());
+        RectF currentFirst = currentMatch != null && currentMatch.pageIndex == pageIndex
+                && !currentMatch.rectsPts.isEmpty()
+                ? currentMatch.rectsPts.get(0) : null;
         for (RectF r : ptsRects) {
-            norm.add(normalize(r, pageWpts, pageHpts));
+            RectF mapped = host.mapPageRectToDisplayedBitmap(
+                    pageIndex, normalize(r, pageWpts, pageHpts));
+            if (mapped == null) continue;
+            displayed.add(mapped);
+            // matchesOnPage returns the engine's rectangle objects, so preserve
+            // identity for PdfPageView's "draw current once" fast path.
+            if (r == currentFirst) currentDisplayed[0] = mapped;
         }
-        RectF currentNorm = null;
-        if (currentMatch != null && currentMatch.pageIndex == pageIndex
-                && !currentMatch.rectsPts.isEmpty()) {
-            currentNorm = normalize(currentMatch.rectsPts.get(0), pageWpts, pageHpts);
+        // Defensive fallback in case the engine later changes matchesOnPage to
+        // return copies rather than its stored rectangle instances.
+        if (currentFirst != null && currentDisplayed[0] == null) {
+            currentDisplayed[0] = host.mapPageRectToDisplayedBitmap(
+                    pageIndex, normalize(currentFirst, pageWpts, pageHpts));
         }
-        pv.setHighlights(norm, currentNorm);
+    }
+
+    private boolean isPageVisible(int pageIndex) {
+        return host.isPagePartOfCurrentDisplay(pageIndex);
     }
 
     private static RectF normalize(RectF ptsRect, float wPts, float hPts) {
@@ -226,7 +281,7 @@ final class PdfSearchController {
     /* ---- status ---- */
 
     private void emitStatus() {
-        if (statusListener == null) {
+        if (closed || statusListener == null) {
             return;
         }
         int total = engine == null ? 0 : engine.total();
@@ -237,6 +292,7 @@ final class PdfSearchController {
     /* ---- lazy document load ---- */
 
     private void ensureEngine(Runnable then) {
+        if (closed) return;
         if (engine != null) {
             then.run();
             return;
@@ -253,6 +309,7 @@ final class PdfSearchController {
         final String path = filePath;
         final int count = pageCount;
         loader.execute(() -> {
+            if (closed) return;
             PDDocument doc;
             try {
                 doc = PDDocument.load(new File(path));
@@ -261,6 +318,10 @@ final class PdfSearchController {
             }
             final PDDocument loaded = doc;
             host.runOnUi(() -> {
+                if (closed) {
+                    closeDocumentQuietly(loaded);
+                    return;
+                }
                 loadingDoc = false;
                 if (loaded == null) {
                     loadFailed = true;
@@ -273,11 +334,27 @@ final class PdfSearchController {
     }
 
     void close() {
+        if (closed) return;
+        closed = true;
+        active = false;
+        queryGeneration++;
+        statusListener = null;
+        currentMatch = null;
+        pendingQuery = "";
         main.removeCallbacks(searchRunnable);
         loader.shutdownNow();
+        clearHighlights();
         if (engine != null) {
             engine.close();
             engine = null;
+        }
+    }
+
+    private static void closeDocumentQuietly(@Nullable PDDocument document) {
+        if (document == null) return;
+        try {
+            document.close();
+        } catch (Throwable ignored) {
         }
     }
 }

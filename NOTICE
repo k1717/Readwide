@@ -11,3 +11,5 @@ zlib license and is credited in THIRD_PARTY_NOTICES.md and in the source file
 that contains the modified port.
 
 Third-party dependency notices are maintained in THIRD_PARTY_NOTICES.md.
+The APK also packages the exact libarchive-android/native-codec terms at
+assets/open_source_licenses/libarchive_android_and_codecs.txt.

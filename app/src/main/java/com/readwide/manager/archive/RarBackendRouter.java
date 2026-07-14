@@ -33,7 +33,7 @@ final class RarBackendRouter {
             }
             if (entry.encrypted()) {
                 // AES-encrypted RAR5 compressed payloads have no libarchive path
-                // at all (libarchive 3.7.2 does not decrypt RAR5), so the scoped
+                // because the bundled backend does not decrypt RAR5, so the scoped
                 // first-party Rar5 AES-decrypt + decompress path is the only route;
                 // it covers the supported RAR5 v5.0 decode subset and cleanly
                 // reports anything outside it as unsupported.

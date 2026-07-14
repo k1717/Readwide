@@ -115,11 +115,6 @@ final class ImageReaderSliderController {
         updateLabel(safeIndex, itemCount);
     }
 
-    int reservedViewportBottomInset(int itemCount) {
-        if (itemCount <= 1) return bottomInset;
-        return activity.dpToPx(82) + bottomInset;
-    }
-
     private int progressToIndex(int progress, int itemCount) {
         return ImageSequenceNavigationMath.clampIndex(progress, itemCount);
     }

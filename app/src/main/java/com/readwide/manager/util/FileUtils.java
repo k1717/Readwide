@@ -17,7 +17,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URLDecoder;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.Charset;
@@ -33,7 +32,6 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.w3c.dom.Document;
 import org.w3c.dom.NamedNodeMap;
@@ -217,12 +215,14 @@ public class FileUtils {
     /** Cap per EPUB chapter read during text extraction, so a crafted chapter can't OOM. */
     private static final long MAX_EPUB_CHAPTER_BYTES = 32L * 1024L * 1024L;
 
-    public static File copyUriToLocal(Context context, Uri uri, String fileName) throws IOException {
+    // Serialize cache pruning/commit so one URI copy cannot remove another
+    // copy's staging file or per-URI directory while enforcing the size budget.
+    public static synchronized File copyUriToLocal(
+            Context context, Uri uri, String fileName) throws IOException {
         File cacheDir = new File(context.getCacheDir(), "opened_files");
         if (!cacheDir.exists() && !cacheDir.mkdirs()) {
             throw new IOException("Cannot create opened_files cache");
         }
-        pruneOpenedFilesCache(cacheDir);
 
         // The display name comes from a possibly-untrusted content provider (this app
         // exports ACTION_VIEW), so reduce it to a bare, safe filename. Each distinct
@@ -240,28 +240,48 @@ public class FileUtils {
         if (!localFile.getCanonicalPath().startsWith(root)) {
             throw new IOException("Unsafe cache file name");
         }
+        // Keep this URI's last complete cache through the refresh. If the provider
+        // read, size check, fsync, or rename fails, callers must still be able to
+        // use the previous file; only other inactive URI directories are eligible
+        // for the pre-copy age/size prune.
+        pruneOpenedFilesCache(cacheDir, uriDir);
 
-        boolean success = false;
-        try (InputStream is = context.getContentResolver().openInputStream(uri);
-             FileOutputStream fos = new FileOutputStream(localFile)) {
-            if (is == null) throw new IOException("Cannot open URI");
+        // Never truncate the currently readable cache file in place. A live
+        // singleTop viewer (PDFBox search/TTS in particular) can still hold or
+        // open that path while the same URI is being refreshed. Copy+fsync to a
+        // unique sibling, then use POSIX rename for an atomic replacement: old
+        // file descriptors keep the old inode and new opens see the complete
+        // replacement. A failed copy leaves the previous valid cache untouched.
+        File stagingFile = File.createTempFile("opened_uri_", ".copying", uriDir);
+        boolean committed = false;
+        try {
+            try (InputStream is = context.getContentResolver().openInputStream(uri);
+                 FileOutputStream fos = new FileOutputStream(stagingFile)) {
+                if (is == null) throw new IOException("Cannot open URI");
 
-            byte[] buffer = new byte[8192];
-            int bytesRead;
-            long copied = 0L;
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                long copied = 0L;
 
-            while ((bytesRead = is.read(buffer)) != -1) {
-                copied += bytesRead;
-                if (copied > MAX_OPENED_URI_COPY_BYTES) {
-                    throw new IOException("External file exceeds size limit");
+                while ((bytesRead = is.read(buffer)) != -1) {
+                    copied += bytesRead;
+                    if (copied > MAX_OPENED_URI_COPY_BYTES) {
+                        throw new IOException("External file exceeds size limit");
+                    }
+                    fos.write(buffer, 0, bytesRead);
                 }
-                fos.write(buffer, 0, bytesRead);
+                fos.flush();
+                fos.getFD().sync();
             }
-            success = true;
+            try {
+                android.system.Os.rename(
+                        stagingFile.getAbsolutePath(), localFile.getAbsolutePath());
+            } catch (android.system.ErrnoException e) {
+                throw new IOException("Cannot commit opened URI cache", e);
+            }
+            committed = true;
         } finally {
-            // A failed, aborted, or over-limit copy must not leave a broken partial
-            // file in the cache.
-            if (!success) localFile.delete();
+            if (!committed) stagingFile.delete();
         }
 
         // Re-prune now that the new file exists, so it counts against the total budget
@@ -312,16 +332,11 @@ public class FileUtils {
         }
     }
 
-    // Opportunistic cache hygiene: drop opened_files entries (per-URI subdirectories)
-    // older than the max age, then enforce the total-size budget oldest-first. Runs
-    // before a new copy, so the entry about to be written is never the one pruned.
-    private static void pruneOpenedFilesCache(File cacheDir) {
-        pruneOpenedFilesCache(cacheDir, null);
-    }
-
-    // When 'keep' is non-null (the just-opened file's per-URI subdirectory), it is
-    // never evicted even if it alone exceeds the size budget, since it is about to be
-    // read. Other entries are still cleaned oldest-first to re-enforce the budget.
+    // Opportunistic cache hygiene: drop inactive opened_files entries (per-URI
+    // subdirectories) older than the max age, then enforce the total-size budget
+    // oldest-first. The current URI's directory is never evicted: before commit it
+    // contains the last complete fallback, and after commit it contains the file
+    // about to be read. Other entries are still cleaned to re-enforce the budget.
     private static void pruneOpenedFilesCache(File cacheDir, File keep) {
         File[] entries = cacheDir.listFiles();
         if (entries == null || entries.length == 0) return;
@@ -792,32 +807,12 @@ public class FileUtils {
     }
 
     private static DocumentBuilder secureDocumentBuilder() throws Exception {
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        factory.setNamespaceAware(true);
-        factory.setExpandEntityReferences(false);
-        setXmlFeatureQuietly(factory, "http://apache.org/xml/features/disallow-doctype-decl", true);
-        setXmlFeatureQuietly(factory, "http://xml.org/sax/features/external-general-entities", false);
-        setXmlFeatureQuietly(factory, "http://xml.org/sax/features/external-parameter-entities", false);
-        setXmlFeatureQuietly(factory, "http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-        return factory.newDocumentBuilder();
-    }
-
-    private static void setXmlFeatureQuietly(DocumentBuilderFactory factory, String feature, boolean enabled) {
-        try {
-            factory.setFeature(feature, enabled);
-        } catch (Exception ignored) {
-            // Some Android XML parser implementations do not expose every hardening flag.
-        }
+        return SecureXml.newDocumentBuilder(true);
     }
 
 
     private static String decodeZipHref(String href) {
-        if (href == null) return "";
-        try {
-            return URLDecoder.decode(href, "UTF-8");
-        } catch (Exception ignored) {
-            return href;
-        }
+        return UriPathCodec.decodePercentEscapes(href);
     }
 
     private static String normalizeZipPath(String path) {
@@ -869,11 +864,7 @@ public class FileUtils {
     public static String normalizeDisplayFileName(String fileName) {
         if (fileName == null) return "";
         String result = fileName.trim();
-        try {
-            result = URLDecoder.decode(result, "UTF-8");
-        } catch (Exception ignored) {
-            // Keep the original string when it is not percent-encoded UTF-8.
-        }
+        result = UriPathCodec.decodePercentEscapes(result);
         try {
             result = Normalizer.normalize(result, Normalizer.Form.NFC);
         } catch (Exception ignored) {}

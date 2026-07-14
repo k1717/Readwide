@@ -10,14 +10,8 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStreamReader;
 import java.io.RandomAccessFile;
-import java.io.OutputStreamWriter;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -72,11 +66,11 @@ public class BookmarkManager {
 
     // ========== Bookmark Operations ==========
 
-    public List<Bookmark> getAllBookmarks() {
+    public synchronized List<Bookmark> getAllBookmarks() {
         return new ArrayList<>(bookmarks);
     }
 
-    public List<Bookmark> getBookmarksForFile(String filePath) {
+    public synchronized List<Bookmark> getBookmarksForFile(String filePath) {
         List<Bookmark> result = collectBookmarksForExactPath(filePath);
 
         // Fast path above avoids any file I/O during normal use.  Portable matching
@@ -105,13 +99,13 @@ public class BookmarkManager {
         return result;
     }
 
-    public void addBookmark(Bookmark bookmark) {
+    public synchronized void addBookmark(Bookmark bookmark) {
         enrichPortableIdentity(bookmark);
         bookmarks.add(bookmark);
         saveBookmarks();
     }
 
-    public void updateBookmark(Bookmark bookmark) {
+    public synchronized void updateBookmark(Bookmark bookmark) {
         enrichPortableIdentity(bookmark);
         for (int i = 0; i < bookmarks.size(); i++) {
             if (bookmarks.get(i).getId().equals(bookmark.getId())) {
@@ -129,7 +123,7 @@ public class BookmarkManager {
      * because the large-file partition mode changed, while the bookmarked passage
      * itself remains the same.
      */
-    public void saveBookmarkPageMetadataRefresh(List<Bookmark> changedBookmarks) {
+    public synchronized void saveBookmarkPageMetadataRefresh(List<Bookmark> changedBookmarks) {
         if (changedBookmarks == null || changedBookmarks.isEmpty()) return;
         boolean changed = false;
         for (Bookmark changedBookmark : changedBookmarks) {
@@ -147,7 +141,7 @@ public class BookmarkManager {
         if (changed) saveBookmarks();
     }
 
-    public void deleteBookmark(String bookmarkId) {
+    public synchronized void deleteBookmark(String bookmarkId) {
         Iterator<Bookmark> it = bookmarks.iterator();
         while (it.hasNext()) {
             if (it.next().getId().equals(bookmarkId)) {
@@ -158,7 +152,7 @@ public class BookmarkManager {
         }
     }
 
-    public void deleteBookmarksForFile(String filePath) {
+    public synchronized void deleteBookmarksForFile(String filePath) {
         Iterator<Bookmark> it = bookmarks.iterator();
         while (it.hasNext()) {
             Bookmark bookmark = it.next();
@@ -172,17 +166,17 @@ public class BookmarkManager {
 
     // ========== Reading State Operations ==========
 
-    public ReaderState getReadingState(String filePath) {
+    public synchronized ReaderState getReadingState(String filePath) {
         return readingStates.get(filePath);
     }
 
-    public void saveReadingState(ReaderState state) {
+    public synchronized void saveReadingState(ReaderState state) {
         state.setLastReadAt(System.currentTimeMillis());
         readingStates.put(state.getFilePath(), state);
         saveReadingStates();
     }
 
-    public void deleteReadingState(String filePath) {
+    public synchronized void deleteReadingState(String filePath) {
         readingStates.remove(filePath);
         saveReadingStates();
     }
@@ -190,7 +184,7 @@ public class BookmarkManager {
     /**
      * Rebind saved progress and bookmarks after the app moves a local file.
      */
-    public void moveFileReferences(String oldPath, String newPath) {
+    public synchronized void moveFileReferences(String oldPath, String newPath) {
         if (oldPath == null || newPath == null || oldPath.equals(newPath)) return;
 
         boolean statesChanged = false;
@@ -221,7 +215,7 @@ public class BookmarkManager {
     /**
      * Rebind saved progress and bookmarks after the app moves a local folder.
      */
-    public void movePathPrefixReferences(String oldRootPath, String newRootPath) {
+    public synchronized void movePathPrefixReferences(String oldRootPath, String newRootPath) {
         if (oldRootPath == null || newRootPath == null || oldRootPath.equals(newRootPath)) return;
         String oldPrefix = oldRootPath.endsWith(File.separator) ? oldRootPath : oldRootPath + File.separator;
         String newPrefix = newRootPath.endsWith(File.separator) ? newRootPath : newRootPath + File.separator;
@@ -284,7 +278,7 @@ public class BookmarkManager {
     /**
      * Clear all recent-file entries / saved reading states without touching bookmarks.
      */
-    public void clearReadingStates() {
+    public synchronized void clearReadingStates() {
         readingStates.clear();
         saveReadingStates();
     }
@@ -292,7 +286,7 @@ public class BookmarkManager {
     /**
      * Get recently read files, sorted by last read time (most recent first).
      */
-    public List<ReaderState> getRecentFiles(int limit) {
+    public synchronized List<ReaderState> getRecentFiles(int limit) {
         List<ReaderState> states = new ArrayList<>(readingStates.values());
         Collections.sort(states, (a, b) -> Long.compare(b.getLastReadAt(), a.getLastReadAt()));
         if (states.size() > limit) {
@@ -305,7 +299,7 @@ public class BookmarkManager {
      * Fast existence check for UI visibility / clear-all actions.
      * Avoids sorting the whole recent-file map when only emptiness matters.
      */
-    public boolean hasRecentFiles() {
+    public synchronized boolean hasRecentFiles() {
         return !readingStates.isEmpty();
     }
 
@@ -315,7 +309,7 @@ public class BookmarkManager {
      * Export all bookmarks and states to a single JSON string.
      * User can save this to a file for backup.
      */
-    public String exportAll() {
+    public synchronized String exportAll() {
         ensurePortableIdentitiesForExistingBookmarks();
         try {
             JSONObject root = new JSONObject();
@@ -573,7 +567,7 @@ public class BookmarkManager {
      * Import bookmarks and states from a JSON string.
      * @param merge if true, merge with existing; if false, replace all
      */
-    public void importAll(String jsonString, boolean merge) {
+    public synchronized void importAll(String jsonString, boolean merge) {
         try {
             JSONObject root = new JSONObject(jsonString);
             boolean importedBookmarks = false;
@@ -1523,7 +1517,7 @@ public class BookmarkManager {
      * Useful when moving files to a new SD card or device.
      * e.g., replacePathPrefix("/storage/AAAA-BBBB", "/storage/CCCC-DDDD")
      */
-    public int replacePathPrefix(String oldPrefix, String newPrefix) {
+    public synchronized int replacePathPrefix(String oldPrefix, String newPrefix) {
         int count = 0;
 
         // Update bookmarks
@@ -1690,14 +1684,8 @@ public class BookmarkManager {
         File file = new File(context.getFilesDir(), fileName);
         if (!file.exists()) return null;
 
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
-            return sb.toString();
+        try {
+            return AtomicUtf8File.read(file);
         } catch (Exception e) {
             Log.e(TAG, "Failed to read " + fileName, e);
             return null;
@@ -1706,9 +1694,8 @@ public class BookmarkManager {
 
     private void writeFile(String fileName, String content) {
         File file = new File(context.getFilesDir(), fileName);
-        try (OutputStreamWriter writer = new OutputStreamWriter(
-                new FileOutputStream(file), StandardCharsets.UTF_8)) {
-            writer.write(content);
+        try {
+            AtomicUtf8File.write(file, content);
         } catch (Exception e) {
             Log.e(TAG, "Failed to write " + fileName, e);
         }

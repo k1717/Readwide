@@ -106,6 +106,7 @@ final class PdfTextSearchEngine {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final AtomicInteger generation = new AtomicInteger();
+    private volatile boolean closed;
 
     private final List<Match> matches = new ArrayList<>();
     private int currentIndex = -1;
@@ -121,21 +122,35 @@ final class PdfTextSearchEngine {
 
     /** Start a fresh search. Cancels any running scan. Safe to call on the
      *  main thread; the scan itself runs in the background. */
-    void startSearch(final String rawQuery, final Options options, final Listener listener) {
+    synchronized void startSearch(final String rawQuery, final Options options,
+                                  final Listener listener) {
+        if (closed) return;
         final int gen = generation.incrementAndGet();
         synchronized (matches) {
             matches.clear();
             currentIndex = -1;
         }
         if (rawQuery == null || rawQuery.isEmpty()) {
-            main.post(() -> listener.onSearchFinished(0, false));
+            main.post(() -> {
+                if (!closed && gen == generation.get()) {
+                    listener.onSearchFinished(0, false);
+                }
+            });
             return;
         }
-        executor.execute(() -> scan(gen, rawQuery, options, listener));
+        try {
+            executor.execute(() -> scan(gen, rawQuery, options, listener));
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            postCancelled(listener);
+        }
     }
 
     private void scan(int gen, String query, Options options, Listener listener) {
         ensureExtracted();
+        if (gen != generation.get()) {
+            postCancelled(listener);
+            return;
+        }
         final int n = document.getNumberOfPages();
         boolean reportedFirst = false;
         for (int page = 0; page < n; page++) {
@@ -149,11 +164,23 @@ final class PdfTextSearchEngine {
             }
             List<Match> pageMatches = findOnPage(pt, page, query, options);
             if (!pageMatches.isEmpty()) {
+                boolean cancelled;
                 synchronized (matches) {
-                    matches.addAll(pageMatches);
-                    if (currentIndex < 0) {
-                        currentIndex = 0;
+                    // startSearch increments generation before taking this same
+                    // lock to clear results. Therefore an old scan can either
+                    // commit before the new clear or be rejected after it, but
+                    // can never append query-A matches into query-B results.
+                    cancelled = gen != generation.get();
+                    if (!cancelled) {
+                        matches.addAll(pageMatches);
+                        if (currentIndex < 0) {
+                            currentIndex = 0;
+                        }
                     }
+                }
+                if (cancelled) {
+                    postCancelled(listener);
+                    return;
                 }
             }
 
@@ -167,14 +194,27 @@ final class PdfTextSearchEngine {
                 final int soFar = matchCount();
                 final Match first = firstNow ? matchAt(0) : null;
                 if (gen == generation.get()) {
-                    main.post(() ->
-                            listener.onSearchProgress(soFar, scanned, n, first));
+                    main.post(() -> {
+                        if (!closed && gen == generation.get()) {
+                            listener.onSearchProgress(soFar, scanned, n, first);
+                        }
+                    });
                 }
             }
         }
         if (gen == generation.get()) {
-            main.post(() -> listener.onSearchFinished(matchCount(), false));
+            main.post(() -> {
+                if (!closed && gen == generation.get()) {
+                    listener.onSearchFinished(matchCount(), false);
+                }
+            });
         }
+    }
+
+    private void postCancelled(Listener listener) {
+        main.post(() -> {
+            if (!closed) listener.onSearchFinished(matchCount(), true);
+        });
     }
 
     /* ------------------------------------------------------------------ */
@@ -238,14 +278,27 @@ final class PdfTextSearchEngine {
         return pt == null ? null : new float[]{pt.pageWpts, pt.pageHpts};
     }
 
-    void close() {
+    synchronized void close() {
+        if (closed) return;
+        closed = true;
         generation.incrementAndGet();
-        executor.shutdownNow();
-        pageTexts = null;
-        try {
-            document.close();
-        } catch (IOException ignored) {
+        main.removeCallbacksAndMessages(null);
+        synchronized (matches) {
+            matches.clear();
+            currentIndex = -1;
         }
+        // PDFBox extraction is not reliably interruptible. Queue cleanup on the
+        // same single-thread executor so PDDocument/pageTexts are never closed
+        // concurrently with PDFTextStripper or scan(). shutdown() still runs
+        // this final task after the current scan observes the new generation.
+        executor.execute(() -> {
+            pageTexts = null;
+            try {
+                document.close();
+            } catch (IOException ignored) {
+            }
+        });
+        executor.shutdown();
     }
 
     /* ------------------------------------------------------------------ */

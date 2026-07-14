@@ -51,13 +51,16 @@ final class DocumentPageDisplayController {
         activity.applyEpubBoundaryMarginsIfNeeded();
         activity.lastAppliedDocumentThemeSignature = activity.documentThemeSignature();
         activity.updateDocumentSpreadVisibility();
+        activity.beginDocumentFastScrollContentChange();
         activity.webView.loadDataWithBaseURL(
                 activity.documentBaseUrlForPage(p),
                 activity.documentHtmlForDisplay(p, page),
                 "text/html",
                 "UTF-8",
                 null);
+        activity.markCurrentEpubBoundaryRenderLoaded();
         activity.loadDocumentRightSpreadPageIfNeeded();
+        activity.scheduleDocumentFastScrollUpdate();
         updateStatus();
         if (!activity.isMarkdownDocument() && !activity.isRenderedContentAnchorDocument()) {
             activity.saveReadingState();

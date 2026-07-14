@@ -1,11 +1,13 @@
 # Read-aloud (TTS) status and EPUB/PDF extension design (Readwide 1.0.11)
 
-This note records what read-aloud currently covers, the neural-engine fixes and
+> **Historical design record:** This document describes the 1.0.11 implementation stage. Document and PDF spoken-sentence highlights were added later, and 1.0.15 also maps search/TTS rectangles onto both halves of a true two-page PDF composite. Statements marked “deferred” below record the 1.0.11 state rather than the current release boundary; continuous-scroll PDF still follows the result page without a bitmap rectangle overlay.
+
+This note records what read-aloud covered in 1.0.11, the neural-engine fixes and
 controls added in 1.0.11 in response to user feedback, and the design by which
 read-aloud was extended from the text reader to the document viewer (EPUB, Word,
 HWP, Markdown) and PDF.
 
-## Current coverage
+## 1.0.11 coverage
 
 Read-aloud lives in `ReaderTtsController`, which is shared by every reader and
 viewer through a small text-source abstraction (`TtsTextSource` / `TtsHost`,

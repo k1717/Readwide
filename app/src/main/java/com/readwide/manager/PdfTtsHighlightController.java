@@ -5,6 +5,7 @@ import android.graphics.RectF;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -32,7 +33,10 @@ final class PdfTtsHighlightController {
     private int cachedPageIndex = -1;
     /** Page whose extraction failed or mismatched the buffer; don't retry it. */
     private int unmappablePageIndex = -1;
-    private boolean extracting = false;
+    /** Page currently queued/running on the shared executor, or -1. */
+    private int extractingPageIndex = -1;
+    /** Invalidates an in-flight page extraction after navigation/teardown state changes. */
+    private int extractionGeneration = 0;
 
     /** Latest requested highlight, applied when async extraction completes. */
     private int pendingPageIndex = -1;
@@ -51,52 +55,90 @@ final class PdfTtsHighlightController {
      */
     void highlight(int pageIndex, int startChar, int endChar, @NonNull String expectedPageText) {
         if (activity.activityDestroyed) return;
-        if (activity.isPdfTwoPageSpreadMode()) {
-            clear();
-            return;
-        }
-        if (pageIndex != activity.currentPage) {
-            // Segment for a page that isn't displayed (e.g. right around a page
-            // turn); the next segment on the visible page will highlight.
-            clear();
-            return;
-        }
-        if (pageIndex == unmappablePageIndex) return;
-        if (cachedGlyphs != null && cachedPageIndex == pageIndex) {
-            apply(cachedGlyphs, startChar, endChar);
-            return;
-        }
-        // Need this page's glyphs; remember the latest request and extract once.
+        // Always retain the latest request. The TTS callback can arrive while a
+        // page/spread render is still in flight; once its exact bitmap geometry
+        // commits, onDisplayedBitmapChanged() reapplies this request.
         pendingPageIndex = pageIndex;
         pendingStart = startChar;
         pendingEnd = endChar;
         pendingExpectedText = expectedPageText;
-        if (extracting) return;
-        extracting = true;
+        if (!activity.isPdfPageVisibleInCurrentDisplay(pageIndex)) {
+            // Segment for a display that has not settled yet. Do not paint stale
+            // coordinates, but keep the request for the winning render.
+            clearOverlay();
+            return;
+        }
+        if (pageIndex == unmappablePageIndex) {
+            // A spread can keep the other page's valid sentence overlay alive
+            // while speech returns to this known-unmappable page. Showing that
+            // stale rectangle is worse than showing no highlight.
+            clearOverlay();
+            return;
+        }
+        if (cachedGlyphs != null && cachedPageIndex == pageIndex) {
+            if (extractingPageIndex >= 0 && extractingPageIndex != pageIndex) {
+                extractionGeneration++;
+                extractingPageIndex = -1;
+            }
+            apply(cachedGlyphs, startChar, endChar);
+            return;
+        }
+        // A spread can move speech from the left page to the already-visible
+        // right page without changing Activity.currentPage. Do not leave the
+        // previous page's sentence painted while the new page's glyphs load.
+        clearOverlay();
+        requestPendingExtractionIfNeeded();
+    }
+
+    /**
+     * Ensures the latest visible request has a glyph extraction. If page B is
+     * requested while page A is still running, invalidate A's callback and
+     * enqueue B immediately (the shared executor serializes the actual work).
+     * Repeated sentence updates on the same page only replace the pending range.
+     */
+    private void requestPendingExtractionIfNeeded() {
+        if (activity.activityDestroyed || pendingPageIndex < 0 || pendingStart < 0
+                || pendingExpectedText == null
+                || !activity.isPdfPageVisibleInCurrentDisplay(pendingPageIndex)
+                || pendingPageIndex == unmappablePageIndex
+                || (cachedGlyphs != null && cachedPageIndex == pendingPageIndex)) {
+            return;
+        }
+        if (extractingPageIndex == pendingPageIndex) return;
+
+        final int extractionPage = pendingPageIndex;
+        final String extractionExpectedText = pendingExpectedText;
+        extractingPageIndex = extractionPage;
         final java.io.File file = activity.localFile;
-        final int generation = activity.renderGeneration;
+        final int generation = ++extractionGeneration;
         activity.executor.execute(() -> {
             PdfPlainTextExtractor.PageGlyphs glyphs = file != null
                     ? PdfPlainTextExtractor.extractPageGlyphs(
-                            activity.getApplicationContext(), file, pageIndex)
+                            activity.getApplicationContext(), file, extractionPage)
                     : null;
             activity.handler.post(() -> {
-                extracting = false;
-                if (activity.activityDestroyed || generation != activity.renderGeneration) return;
-                String expected = pendingExpectedText;
+                if (generation != extractionGeneration) return;
+                extractingPageIndex = -1;
+                if (activity.activityDestroyed) return;
                 if (glyphs == null
-                        || expected == null || !glyphs.text.equals(expected)) {
+                        || !glyphs.text.equals(extractionExpectedText)) {
                     // Extraction failed or the two extractions disagree; offsets
                     // can't be trusted for this page.
-                    unmappablePageIndex = pageIndex;
-                    clear();
+                    unmappablePageIndex = extractionPage;
+                    clearOverlay();
                     return;
                 }
                 cachedGlyphs = glyphs;
-                cachedPageIndex = pageIndex;
-                if (pendingPageIndex == pageIndex && pendingPageIndex == activity.currentPage
+                cachedPageIndex = extractionPage;
+                if (pendingPageIndex == extractionPage
+                        && activity.isPdfPageVisibleInCurrentDisplay(pendingPageIndex)
                         && pendingStart >= 0) {
                     apply(glyphs, pendingStart, pendingEnd);
+                } else {
+                    // The request moved to another visible half while this page
+                    // was extracting. Guarantee that page gets its own job even
+                    // if it has only one utterance and sends no later callback.
+                    requestPendingExtractionIfNeeded();
                 }
             });
         });
@@ -110,11 +152,50 @@ final class PdfTtsHighlightController {
             view.clearTtsHighlights();
             return;
         }
-        view.setTtsHighlights(PdfTtsHighlightMath.normalize(lines, glyphs.wPts, glyphs.hPts));
+        List<RectF> pageNormalized =
+                PdfTtsHighlightMath.normalize(lines, glyphs.wPts, glyphs.hPts);
+        List<RectF> displayed = new ArrayList<>(pageNormalized.size());
+        for (RectF rect : pageNormalized) {
+            RectF mapped = activity.mapPdfPageRectToDisplayedBitmap(cachedPageIndex, rect);
+            if (mapped != null) displayed.add(mapped);
+        }
+        if (displayed.isEmpty()) {
+            view.clearTtsHighlights();
+        } else {
+            view.setTtsHighlights(displayed);
+        }
     }
 
-    /** Removes the current highlight. */
+    /** Reprojects the pending sentence after a new single/spread bitmap commits. */
+    void onDisplayedBitmapChanged() {
+        if (pendingPageIndex < 0 || pendingStart < 0 || pendingExpectedText == null
+                || pendingPageIndex == unmappablePageIndex
+                || !activity.isPdfPageVisibleInCurrentDisplay(pendingPageIndex)) {
+            // Rotation can replace a spread with a single page without changing
+            // Activity.currentPage. Never leave the old spread-normalized
+            // rectangle painted over that new bitmap.
+            clearOverlay();
+            return;
+        }
+        if (cachedGlyphs != null && cachedPageIndex == pendingPageIndex
+                && pendingStart >= 0) {
+            apply(cachedGlyphs, pendingStart, pendingEnd);
+        } else {
+            clearOverlay();
+            requestPendingExtractionIfNeeded();
+        }
+    }
+
+    /** Removes the current highlight and cancels deferred re-projection. */
     void clear() {
+        pendingStart = -1;
+        pendingEnd = -1;
+        pendingPageIndex = -1;
+        pendingExpectedText = null;
+        clearOverlay();
+    }
+
+    private void clearOverlay() {
         PdfPageView view = activity.pdfPageMatrixView;
         if (view != null) view.clearTtsHighlights();
     }
@@ -126,10 +207,9 @@ final class PdfTtsHighlightController {
      * and one page's extraction is cheap to redo.
      */
     void onPageChanged() {
+        extractionGeneration++;
+        extractingPageIndex = -1;
         clear();
-        pendingStart = -1;
-        pendingPageIndex = -1;
-        pendingExpectedText = null;
         cachedGlyphs = null;
         cachedPageIndex = -1;
         unmappablePageIndex = -1;

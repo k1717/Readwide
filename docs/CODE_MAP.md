@@ -3,7 +3,7 @@
 A connection map of the codebase for future maintenance: which screen owns
 which controllers, where the shared seams are, and where each subsystem's
 logic actually lives. Relationships listed here were verified against the
-1.0.14 sources (creation sites, interface implementations, call sites); areas
+1.0.15 sources (creation sites, interface implementations, call sites); areas
 not yet explored in depth are described at the package level and marked as
 such rather than guessed at.
 
@@ -19,7 +19,7 @@ such rather than guessed at.
   through an accessor on the Activity (e.g. `documentTts()`,
   `readerMemory()`), not all up front in `onCreate`.
 - **`*Math` classes are intended to stay pure.** Anything named `...Math`
-  (`SpreadMath`, `TapZoneMath`, `PdfGlyphBoxMath`,
+  (`SpreadMath`, `TapZoneMath`, `PdfGlyphBoxMath`, `PdfSpreadHighlightMath`,
   `DocumentTtsHighlightMath`, `PdfTtsHighlightMath`, ...) should be static
   and Android-free where possible. Many of them have off-device JVM tests;
   new index/geometry/string logic should add or extend those tests rather
@@ -29,7 +29,7 @@ such rather than guessed at.
 ## Top-level layout
 
 ```
-com.readwide.manager            148 classes - activities, per-screen controllers,
+com.readwide.manager            155 classes - activities, per-screen controllers,
                                 readers' front ends, TTS core
 ├── archive/                    138 classes - archive detection, browsing,
 │                               extraction, split-volume handling, password
@@ -37,7 +37,7 @@ com.readwide.manager            148 classes - activities, per-screen controllers
 │                               package mixes first-party parsers/decoders
 │                               with bundled-library backends; creation
 │                               support is limited. [package-level summary]
-├── util/                        49 classes - shared helpers and pure math
+├── util/                        54 classes - shared helpers and pure math
 ├── document/render              15 classes - HTML/document rendering pipeline
 │                               (FixedHtmlRenderer, RenderedDocument, blocks,
 │                               styles) [package-level summary]
@@ -48,12 +48,16 @@ com.readwide.manager            148 classes - activities, per-screen controllers
 │                               (CompoundFileReader, DocLegacyLayoutExtractor, ...)
 ├── image/                        4 classes - image decode helpers
 │                               (ImageDecodeHelper, ImageInfoReader, ...)
-├── search/                       3 classes - large-text search engine
+├── search/                       4 classes - large-text search engine
 ├── controller/                   2 classes - cross-screen toolbar helpers
 │                               (ReaderToolbarController, ...)
 ├── widget/                       2 classes
 └── ui/                           1 class
 ```
+
+The tree above covers all 402 classes under `com.readwide.manager`. One
+additional main-source compatibility shim lives outside that package at
+`javax/xml/bind/DatatypeConverter.java`, for 403 main Java files in total.
 
 ## Activities (screens)
 
@@ -114,8 +118,13 @@ The most finely decomposed screen: 36 `Reader*` controllers. Groups:
   shared forward-read cursor with a lookbehind/lookahead replay queue owned
   and lock-serialized by `ReaderLargeTextPartitionReadController`;
   char-position jumps (`readForChar`) bypass it by design. Any change to this
-  path must be checked against the full-scan path for field equivalence
-  (`content`, `baseCharOffset`, `bodyStartCharCount`, `bodyCharCount`).
+  path is checked against the full-scan path for field equivalence
+  (`content`, `baseCharOffset`, `bodyStartCharCount`, `bodyCharCount`, plus the
+  remaining result metadata) by `LargeTextForwardCursorEquivalenceTest`, which
+  also verifies canonical body tiling without skips or duplication.
+  A completed background match count publishes a bounded
+  `search/LargeTextMatchIndex`; nearest/nth navigation then uses binary lookup
+  until file state, options, blank-line mode, or display rules change.
 - **Navigation:** `ReaderSeekController`, `ReaderPageJumpController`,
   `ReaderPagePositionController`, `ReaderTapNavigationController`.
 - **Dialogs/UI:** `ReaderDialogStyleController`, `ReaderBottomControlsController`,
@@ -159,13 +168,16 @@ DocumentPageActivity  (implements TtsHost)
                                         page load; DocumentTtsHighlightMath
 ```
 
-Two-page spread (1.0.14): gate `isLandscapeTwoPageDocumentMode()` =
-EPUB && pages>1 && landscape. Left `document_webview` + right
-`document_webview_right` inside `document_spread_container`. Index math in
-`util/SpreadMath`. Tap zones are computed against the whole spread
-(`getDocumentTapPagingAction`), both halves route through the shared gesture
-pipeline, EPUB boundary margins mirror to both views, and
-`destroyDocumentWebView` tears both down.
+Two-page EPUB spread: gate `isLandscapeTwoPageDocumentMode()` = EPUB &&
+`epubImagePageLike` && pages>1 && landscape. `DocumentArchiveUtils` delegates
+image-page classification to pure `EpubImagePageClassifier`; fixed-layout
+metadata alone is not enough. `DocumentTextDecoder` decodes spine/metadata text
+and `EpubViewportParser` supplies order-independent fixed-layout dimensions.
+Ordinary text/reflowable EPUB remains one responsive-width `document_webview`.
+Image-page EPUB adds `document_webview_right` inside
+`document_spread_container`; index math is in `util/SpreadMath`, both halves
+route through the shared gesture pipeline, and `destroyDocumentWebView` tears
+both down.
 
 ## PdfReaderActivity (PDF)
 
@@ -175,8 +187,7 @@ PdfReaderActivity  (implements TtsHost)
 ├── PdfPageTurnController
 ├── PdfSearchController             async find; Host interface seam
 │                                   (goToPage/currentPage/pageView/runOnUi/
-│                                   twoPageSpreadActive - spread guard clears
-│                                   instead of painting composite-wrong rects)
+│                                   right-page identity + per-page mapping)
 │      └── PdfTextSearchEngine     -> util/PdfGlyphBoxMath (shared glyph box)
 ├── PdfBookmarkDialogController
 ├── view: PdfPageView               bitmap + matrix zoom/pan + highlight layers
@@ -188,17 +199,24 @@ PdfReaderActivity  (implements TtsHost)
     │      └── PdfPlainTextExtractor    text + per-glyph boxes
     │             └── util/PdfGlyphBoxMath
     └── PdfTtsHighlightController       glyph-box highlight; structural
-                                        text-equality guard; spread guard;
-                                        PdfTtsHighlightMath (line merge)
+                                        text-equality/generation guards;
+                                        spread projection + line merge
 ```
 
-Two-page spread (1.0.14): gate `isPdfTwoPageSpreadMode()` = single-page mode
-&& pages>1 && landscape. Renders one composite bitmap (left + 12dp gap +
-right, 22M px cap, parts recycled), skips cache/prefetch/sharpen. Index math
-in `util/SpreadMath`. Bars are root-level overlays; viewport reserves are
-managed by `applyPdfViewportBarInsets` (top = app-bar height outside the
-spread; inside the spread a constant compact-strip height in both chrome
-states, so toggling the controls never re-renders).
+Two-page spread: gate `isPdfTwoPageSpreadMode()` = single-page mode &&
+pages>1 && landscape. Each source page is rendered completely onto an opaque
+white temporary bitmap, then drawn into the capped composite canvas with a
+12dp gap. Only one temporary page bitmap is retained at a time. Single-page,
+neighbor-prefetch, and continuous fit/allocation math is centralized in pure
+`PdfPageRenderPlan`; raw pixel capping remains in `PdfRenderSize`. Index math
+is in `util/SpreadMath`; the winning composite retains each page rectangle and
+`util/PdfSpreadHighlightMath` projects search/TTS overlays through it. Root-level
+bars remain overlays. PDF chrome visibility
+does not select the body frame: portrait reuses the first valid toolbar-ON
+top/bottom reserves in both states, while landscape always uses the toolbar-OFF
+frame with only its fullscreen top safety inset and zero bottom reserve. Visible
+landscape controls overlay the body, so toggling chrome neither resizes nor
+rerenders the current page.
 
 ## ImageReaderActivity (images)
 
@@ -209,8 +227,10 @@ ImageReaderActivity
 ├── image/ImageDecodeHelper, ImageInfoReader, LoadedImage
 ├── util/ImageSequenceState        sequence bookkeeping (applyRename matches
 │                                  the exact pre-rename path)
+├── SequentialArchiveImageReader      one handed-off forward RAR/7z/TAR stream
 └── lifecycle: 4 executors + LruCache (min(128MB, heap/5), recycle-on-evict),
-    all shut down/drained in onDestroy
+    with two-worker display-sized neighbor decode (detail only on zoom); all
+    shut down in onDestroy
 ```
 
 ## Shared TTS core (cross-viewer subsystem)
@@ -243,14 +263,26 @@ is stop/finish/error-only - verified against every call site), and fresh MD
 starts locate the viewport-top text in the buffer (caret probe -> leftmost-x
 line start -> `indexOfCollapsed` -> `snapToNaturalStart`).
 
-## util/ highlights (49 classes; the load-bearing ones)
+## Document/PDF pure helpers at the root package
 
 | Class | Role |
 |---|---|
-| `SpreadMath` | two-page spread index math (step/right index/clamp/turn), shared by document + PDF |
-| `LargeTextPartitionReader.ForwardCursor` | shared forward-read cursor for large-TXT start-line partition reads; intended to reduce repeated forward scans, but it must remain field-equivalent to the full-scan path (`content`, `baseCharOffset`, `bodyStartCharCount`, `bodyCharCount`) |
+| `EpubImagePageClassifier` | distributed-spine image-page classification for landscape spreads; excludes cover-only/text-heavy/false CSS-object signals |
+| `EpubViewportParser` | order-independent fixed-layout viewport metadata parsing |
+| `DocumentTextDecoder` | UTF BOM/sniff/declaration-aware EPUB HTML/XML decoding |
+| `PdfPageRenderPlan` | shared fit/display/allocation plan for visible, prefetch, and continuous PDF page renders |
+| `PdfRenderSize` | overflow-safe bitmap pixel/dimension cap used by PDF render plans and patches |
+
+## util/ highlights (54 classes; the load-bearing ones)
+
+| Class | Role |
+|---|---|
+| `SpreadMath` | two-page spread index math (step/right index/visible range/clamp/turn/can-turn), shared by document + PDF; edge behavior is covered by `SpreadMathTest` |
+| `LargeTextPartitionReader.ForwardCursor` | shared forward-read cursor for large-TXT start-line partition reads; `LargeTextForwardCursorEquivalenceTest` enforces full-scan field equivalence and no-skip/no-duplication body tiling |
 | `PdfGlyphBoxMath` | single source of the PDF glyph highlight box (search + TTS) |
+| `PdfSpreadHighlightMath` | maps one source page's normalized search/TTS rectangles into the exact post-cap two-page composite geometry |
 | `TapZoneMath` | tap-zone action resolution for all tap paging |
+| `UriPathCodec` | percent-decodes archive/document URI paths while preserving literal `+`; shared by EPUB manifest parsing, WebView resource/navigation routing, extraction, and display-name normalization |
 | `ReaderRestoreTargetMath` | pure target matching for TXT restore intents; prevents stale background restore from reopening a previous file after an in-place file switch |
 | `TtsAnchorTextMath` | whitespace-insensitive anchor search + natural-start snapping for read-aloud |
 | `FileSystemOps` | case-only rename two-hop (`renameInPlace`) |

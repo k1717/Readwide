@@ -74,8 +74,10 @@ final class MainArchiveImageOpenController {
                 if (loaded.selectedReady && !loaded.imagePaths.isEmpty()) {
                     result = DirectOpenResult.openImages(loaded);
                 } else if (requiresPassword(archiveFile, loaded.extractionResult)) {
+                    loaded.closePreparedReader();
                     result = DirectOpenResult.fallbackToPreview();
                 } else {
+                    loaded.closePreparedReader();
                     result = DirectOpenResult.failure(loaded.extractionResult);
                 }
             }
@@ -88,7 +90,9 @@ final class MainArchiveImageOpenController {
         }
 
         DirectOpenResult finalResult = result;
-        activity.fileSearchHandler.post(() -> handleDirectOpenResult(archiveFile, finalResult));
+        boolean posted = activity.fileSearchHandler.post(
+                () -> handleDirectOpenResult(archiveFile, finalResult));
+        if (!posted) finalResult.closePreparedReader();
     }
 
     @NonNull
@@ -127,6 +131,7 @@ final class MainArchiveImageOpenController {
                                         @NonNull DirectOpenResult result) {
         if (activity.activityDestroyed || activity.isFinishing()) {
             activity.hideImageOpenLoadingWindow();
+            result.closePreparedReader();
             return;
         }
         activity.hideImageOpenLoadingWindow();
@@ -168,6 +173,7 @@ final class MainArchiveImageOpenController {
     private void openImageReader(@NonNull File archiveFile,
                                  @Nullable ArchiveImageSequenceLoader.Result result) {
         if (result == null || result.imagePaths.isEmpty()) {
+            if (result != null) result.closePreparedReader();
             openArchivePreview(archiveFile);
             return;
         }
@@ -175,8 +181,28 @@ final class MainArchiveImageOpenController {
         ArrayList<String> sequencePaths = new ArrayList<>(result.imagePaths);
         ArrayList<String> sequenceNames = new ArrayList<>(result.displayNames);
         ArrayList<String> sequenceEntryPaths = new ArrayList<>(result.entryPaths);
-        String token = ImageSequenceHandoffStore.put(() ->
-                new ImageSequenceHandoffStore.Sequence(sequencePaths, sequenceNames, sequenceEntryPaths));
+        java.util.Set<String> verifiedPathsForHandoff = result.snapshotVerifiedSensitivePaths();
+        String token = ImageSequenceHandoffStore.put(new ImageSequenceHandoffStore.ClearableProvider() {
+            @Nullable
+            @Override
+            public ImageSequenceHandoffStore.Sequence build() {
+                return new ImageSequenceHandoffStore.Sequence(
+                        sequencePaths,
+                        sequenceNames,
+                        sequenceEntryPaths,
+                        null,
+                        result.takePreparedReader(),
+                        verifiedPathsForHandoff,
+                        result.archivePathSnapshot,
+                        result.archiveLengthSnapshot,
+                        result.archiveLastModifiedSnapshot);
+            }
+
+            @Override
+            public void clear() {
+                result.closePreparedReader();
+            }
+        });
         Intent intent = new Intent(activity, ImageReaderActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra(ImageReaderActivity.EXTRA_FILE_PATH, result.imagePaths.get(safeIndex));
@@ -239,6 +265,10 @@ final class MainArchiveImageOpenController {
 
         static DirectOpenResult failure(@Nullable ArchiveSupport.ExtractionResult result) {
             return new DirectOpenResult(ACTION_ENTRY_FAILED, null, result);
+        }
+
+        void closePreparedReader() {
+            if (loaderResult != null) loaderResult.closePreparedReader();
         }
     }
 }

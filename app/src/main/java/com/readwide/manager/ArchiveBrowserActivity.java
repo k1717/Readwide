@@ -827,11 +827,12 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                         sequenceSnapshot,
                         targetIndex,
                         passwordForExtraction);
-                mainHandler.post(() -> handleArchiveImageSequenceResult(
+                boolean posted = mainHandler.post(() -> handleArchiveImageSequenceResult(
                         selectedEntry,
                         useSavedPosition,
                         result,
                         finishAfterOpen));
+                if (!posted) result.closePreparedReader();
             } finally {
                 PasswordChars.clear(passwordForExtraction);
             }
@@ -855,11 +856,12 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                         sequenceSnapshot,
                         targetIndex,
                         passwordForExtraction);
-                mainHandler.post(() -> handleArchiveImageSequenceResult(
+                boolean posted = mainHandler.post(() -> handleArchiveImageSequenceResult(
                         selectedEntry,
                         useSavedPosition,
                         result,
                         finishAfterOpen));
+                if (!posted) result.closePreparedReader();
             } finally {
                 PasswordChars.clear(passwordForExtraction);
             }
@@ -870,9 +872,13 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                                                   boolean useSavedPosition,
                                                   @NonNull ArchiveImageSequenceLoader.Result result,
                                                   boolean finishAfterOpen) {
-        if (destroyed) return;
+        if (destroyed) {
+            result.closePreparedReader();
+            return;
+        }
         hideArchivePreviewLoadingWindow();
         if (!result.selectedReady || result.imagePaths.isEmpty()) {
+            result.closePreparedReader();
             if (shouldAskArchivePassword(result.extractionResult)) {
                 showPasswordDialogAfterFailedResult(result.extractionResult, passwordText -> {
                     setArchivePassword(passwordText.toCharArray());
@@ -884,6 +890,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
             return;
         }
         openExtractedImageFiles(
+                result,
                 result.imagePaths,
                 result.displayNames,
                 result.entryPaths,
@@ -1015,18 +1022,24 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                 archiveSortMode);
     }
 
-    private void openExtractedImageFiles(@NonNull ArrayList<String> imagePaths,
+    private void openExtractedImageFiles(@NonNull ArchiveImageSequenceLoader.Result result,
+                                         @NonNull ArrayList<String> imagePaths,
                                          @NonNull ArrayList<String> displayNames,
                                          @NonNull ArrayList<String> entryPaths,
                                          int selectedIndex,
                                          boolean finishAfterOpen) {
-        if (imagePaths.isEmpty()) return;
+        if (imagePaths.isEmpty()) {
+            result.closePreparedReader();
+            return;
+        }
         saveHostArchiveRecentState();
         int safeIndex = Math.max(0, Math.min(selectedIndex, imagePaths.size() - 1));
         final ArrayList<String> sequencePaths = new ArrayList<>(imagePaths);
         final ArrayList<String> sequenceNames = new ArrayList<>(displayNames);
         final ArrayList<String> sequenceEntryPaths = new ArrayList<>(entryPaths);
         final char[] passwordForHandoff = snapshotArchivePassword();
+        final java.util.Set<String> verifiedPathsForHandoff =
+                result.snapshotVerifiedSensitivePaths();
         String token = ImageSequenceHandoffStore.put(new ImageSequenceHandoffStore.ClearableProvider() {
             @Nullable
             @Override
@@ -1035,12 +1048,18 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                         sequencePaths,
                         sequenceNames,
                         sequenceEntryPaths,
-                        passwordForHandoff);
+                        passwordForHandoff,
+                        result.takePreparedReader(),
+                        verifiedPathsForHandoff,
+                        result.archivePathSnapshot,
+                        result.archiveLengthSnapshot,
+                        result.archiveLastModifiedSnapshot);
             }
 
             @Override
             public void clear() {
                 PasswordChars.clear(passwordForHandoff);
+                result.closePreparedReader();
             }
         });
         Intent intent = new Intent(this, ImageReaderActivity.class);

@@ -85,9 +85,11 @@ two pages stay symmetric.
 - The spread's right WebView was never destroyed with the activity
   (destroyDocumentWebView tore down the left view only) - a WebView/renderer
   leak; it is now torn down alongside.
-- Spread navigation clamp math simulation-verified at the boundaries (last
-  odd page shows alone with the right pane hidden; next/prev no-op at the
-  edges; 3-page documents land 0->2->0).
+- Historical correction: the intended spread boundary behavior was checked
+  during 1.0.14 work, but the committed forward clamp still allowed an
+  even-length document's already-visible right page to be repeated alone.
+  Readwide 1.0.15 fixes that edge and adds a committed JVM regression test.
+  The last odd page remains reachable as a standalone final page.
 
 ## Viewer audit (document/text/image)
 
@@ -115,9 +117,9 @@ when the view actually holds content, tracked by a flag.
   rightIndex, clampIndex, turnTarget), previously carried as parallel private
   copies in DocumentPageActivity and PdfReaderActivity, now shared so the two
   viewers' paging semantics cannot drift. Both activities' helpers are now
-  one-line delegates. JVM harness: 11 cases (steps, right-index validity at
-  the last page, clamps including empty documents, boundary turns, 3-page
-  documents, single-mode step) - ALL PASS.
+  one-line delegates. Historical correction: the ad-hoc harness used during
+  1.0.14 did not catch the even-final-spread clamp regression; 1.0.15 adds
+  `SpreadMathTest` to the repository and fixes that case.
 - NEW `util/PdfGlyphBoxMath`: the per-glyph highlight box formula, previously
   byte-identical private copies in PdfTextSearchEngine and
   PdfPlainTextExtractor (constants pre-verified identical: 0.32/0.42 pads),
@@ -695,15 +697,17 @@ that already exists for coordinate-space changes.
   limit 500).
 - README: the large-TXT bullet now mentions the O(N) sequential reading; the
   two-page spread bullet and the badges were already present.
-- Verified: versionCode 10014 / versionName 1.0.14; the F-Droid yml has the
-  1.0.14 block with CurrentVersion updated and the commit placeholder.
+- Historical pre-tag state: versionCode 10014 / versionName 1.0.14 was verified,
+  while the draft F-Droid yml still contained an unresolved 1.0.14 block. That
+  placeholder is not present in the current 1.0.15 source package; its local
+  mirror intentionally tracks the published fdroiddata entries through 1.0.13.
 
 Remaining MANUAL release steps (require the device/repo):
 1. Device test matrix: spread (EPUB/PDF, rotation, zoom, controls toggle,
    fixed-layout EPUB), large-TXT forward/backward/scroll-handoff + mode
    switch, TXT open-with-title + top band per theme, CR/CRLF small files,
    image revisit quality, TTS resume per viewer.
-2. git tag v1.0.14 on the release commit, then replace
-   REPLACE_WITH_v1.0.14_FULL_COMMIT_HASH in fdroid/metadata/com.readwide.manager.yml.
+2. Historical step: tag v1.0.14 on its release commit and submit an immutable
+   F-Droid build block. The current source does not retain a fake commit value.
 3. Build/sign the release APK with the readwide key; attach to the GitHub
    release; verify the shields badges pick it up.

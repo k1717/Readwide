@@ -292,6 +292,7 @@ public class PdfPageView extends View {
         handler.removeCallbacks(sharpenRunnable);
         clearSharpPatch();
         clearHighlights();
+        clearTtsHighlights();
         fitBitmap = null;
         invalidate();
     }

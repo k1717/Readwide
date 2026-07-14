@@ -1,5 +1,97 @@
 # Changelog
 
+## Readwide 1.0.15 - 2026-07-14
+
+### EPUB and PDF - landscape spread correctness
+
+- EPUB landscape spread mode is now limited to image-page books whose sampled spine pages are overwhelmingly image-dominant. Ordinary reflowable and text-based fixed-layout EPUBs return to one responsive-width page in landscape, so a cover image alone cannot force the whole book into a spread.
+- Image-page EPUB detection also recognizes SVG, CSS background pages, and image `object`/`embed` pages. Reader theme colors no longer erase a publisher `background-image`, and embedded image canvases are fitted to the viewport.
+- In landscape two-page mode, an even-length document no longer shows its final page twice. Once the last complete spread is visible, Next correctly becomes unavailable instead of reopening the already-visible right page by itself.
+- Hardware page keys, PDF fast taps, normal tap zones, buttons, and swipes now use the same spread-aware page-turn path instead of some inputs moving only one page and producing overlapping spreads such as `1-2 -> 2-3`.
+- Both halves of an EPUB spread now support swipe paging. Double-tapping the right page zooms that page rather than the left page, and right-page taps are checked against the real toolbar coordinates.
+- EPUB right-to-left mode now mirrors the spread order and tap/arrow-key semantics as well as the swipe direction.
+- The document page slider previews a target without changing the actual current page before release, preventing autosave, TTS, or rotation from observing a page that has not yet been rendered; releasing on the current page also no longer reloads the WebView or loses its in-page scroll.
+- PDF search and read-aloud sentence highlights now work on both halves of a real two-page composite. The overlay uses the final post-cap bitmap geometry for each page, including mixed page sizes, the inter-page gap, and vertical centering; the final unpaired page continues to use the normal single-page path.
+
+### Read-aloud (TTS) - continuous queue correctness
+
+- Continuous read-aloud no longer stops after only the prefetched opening of a long final page. It resumes from the exact end of the accepted queue until all resident text has been spoken.
+- Blank or image-only pages are skipped during continuous playback instead of ending the session while later pages still contain text.
+- Pausing before a prefetched page boundary now preserves the boundary state, so resuming keeps the reader UI synchronized and does not replay the next page from its beginning. Delayed prefetch/page-advance callbacks are also blocked while paused.
+- If a TTS engine accepts only part of a prefetch batch, the accepted utterances remain tracked and playback continues from their real end instead of producing hidden speech or losing the screen highlight. Delayed resume/notification-page commands can now be cancelled by Stop instead of restarting playback afterward.
+
+### PDF - rendering robustness
+
+- Two-page PDF spreads now render each full page onto an opaque white temporary bitmap and composite one page at a time into the bounded spread. This prevents transparent text-only PDF paper and avoids the translated-clip path that could trim page tops or bottoms, while keeping peak memory to the composite plus one temporary page.
+- Neighbor-page prefetch uses a smaller memory budget, handles speculative out-of-memory failures without terminating the reader, and keeps each cached page's own geometry so mixed-size PDFs do not reuse the previous page's zoom/search coordinates.
+- Errors from obsolete/cancelled render jobs no longer overwrite a newer page with a stale load error. In continuous mode, capped tall-page bitmaps keep their intended on-screen height and allocation failure is contained instead of crashing the reader.
+- PDF status controls now clear and disable safely when no pages are loaded.
+- Replacing a PDF through the viewer's `singleTop` intent now tears down the previous document's renderer, search dialog/engine, read-aloud buffer, and highlight state before resolving the new source. Stale path, PDFBox search, and TTS extraction callbacks cannot navigate or paint into the replacement document; a failed or partially opened replacement cannot leak its descriptor or overwrite saved state. PDFBox document close is serialized behind any active scan, and an obsolete query cannot append results after a newer query clears them. Same-document page turns no longer cancel a valid long-running TTS text build.
+- Showing or hiding PDF controls now leaves the accepted page bitmap, fit matrix, viewport padding, render generation, and page cache untouched. Portrait position and landscape full-canvas sizing therefore remain identical across the toggle.
+- Opening in landscape, rotating while controls are hidden, or receiving system insets after the first layout no longer leaves the portrait PDF frame with zero/incomplete toolbar reserves. Only complete portrait measurements become canonical, with toolbar-ON fallbacks used until exact insets arrive; the top fallback resolves the active theme's `actionBarSize` before using 56dp as a last resort, and IME height is never cached as reader chrome. Changing the reading status-bar preference or Android gesture/3-button navigation while the viewer remains alive invalidates the old frame before it can leave a gap or toolbar overlap.
+
+### Reader fullscreen and system bars
+
+- Hiding reader controls now enters immersive navigation mode in PDF, TXT, EPUB/document, and image/comic viewers. A swipe can reveal Android's navigation controls transiently without restoring a permanent layout boundary.
+- PDF, document/EPUB, and TXT keep their body canvas independent from live side-navigation insets; immutable display cutouts still protect the body while overlay controls own the live side inset. TXT page width and page count therefore stay stable when a transient or side navigation bar changes visibility; its vertical bottom spacer remains chrome-gated.
+- The image/comic viewer no longer reserves 48dp toolbar or 82dp slider regions inside the image canvas. Those controls overlay a stable full-screen page in both chrome states.
+- **Show Status Bar While Reading** now applies consistently to PDF, EPUB/document, and image/comic viewers as well as TXT.
+- PDF and EPUB/document readers reassert the current immersive policy after an in-place rotation, preventing OEM system bars from reappearing and narrowing or shifting the body canvas.
+- The hidden document/EPUB page-status strip derives its top reserve from display-cutout insets that ignore transient visibility, plus the status-bar reserve only when **Show Status Bar While Reading** is enabled. A transient system-bar reveal therefore does not resize the strip or move the WebView.
+
+### General audit and refactoring follow-up
+
+- Long-pressing selectable text in the leading or trailing tap zones no longer turns the page on release. Long-hold, multi-touch, and active-selection gestures remain owned by the WebView, while short taps still use the configured page-turn zones. Consumed tap releases also clear the delayed WebView touch state, preventing a phantom selection after the page changes.
+- Opening or closing image/comic information controls no longer changes the image viewport padding or rebuilds its fit matrix. The image stays fixed while the toolbar and slider overlay it.
+- EPUB same-page footnotes/backlinks now scroll to their anchors, cross-page links retain their fragments after loading, and links in the right spread pane target that pane.
+- Bookmark, reading-state, and custom-theme JSON writes are crash-safe and atomic. Bookmark state access is serialized so background/viewer callbacks cannot mutate collections during persistence.
+- External URI copies are serialized and written to a unique same-directory staging file, flushed and synchronized, then committed with an atomic rename. A failed replacement removes only its staging file, preserving the previous valid cache; an already-open PDFBox/TTS reader can continue reading the old file while a `singleTop` open commits the replacement path.
+- Untrusted EPUB/DOCX/HWPX XML parsing now uses one hardened builder with an entity-resolver fallback instead of three inconsistent best-effort implementations.
+- PDF render-size capping is shared and overflow-safe across normal, continuous, prefetch, and sharpening paths, including extreme thin/tall pages.
+- PDF chrome visibility no longer changes the body frame. Portrait keeps one cached toolbar-ON frame in both states, preventing vertical movement; landscape keeps the toolbar-OFF safe frame in both states, so visible overlay controls cannot shrink the page. EPUB keeps a full-width WebView frame while only overlay controls consume live side-system insets.
+- Reflowable EPUB boundary sliders now notify the active viewer directly on every step. The viewer first updates the live DOM and then reloads the same page with the new CSS while restoring its scroll position, so reflection no longer depends on JavaScript execution being permitted by a JavaScript-disabled WebView. Values remain physical screen pixels through the `devicePixelRatio` conversion.
+- The shared 36dp document/PDF side scroller now separates real scroll motion from silent metrics refreshes. Motion updates are coalesced once per frame; content/layout and toolbar/inset changes update the thumb without flashing it. The thumb has a 32dp minimum, fades to alpha zero at rest, and its invisible rail no longer captures reader taps. Drag termination always releases pressed/parent-intercept state, including mode changes, pause, cancellation, and multi-pointer interruption.
+- PDF continuous fast-scroll uses a long-range page-height index refined by rendered page heights. It jumps directly with `scrollToPositionWithOffset` instead of issuing one huge `scrollBy`, so a jump across a very long PDF does not bind and enqueue every intermediate page. A drag freezes its height index until release; bitmap eviction preserves row geometry/pan state, and stale OOM callbacks cannot clear a newer adapter generation.
+
+### PDF/EPUB follow-up audit and refactoring
+
+- PDF visible-page, neighbor-prefetch, and continuous-mode sizing now share `PdfPageRenderPlan` and allocation-cap math. Single-page/prefetch paths retain their fit-to-viewport height constraint, while continuous rows intentionally remain width-led and preserve their logical display height; each path keeps its own memory cap.
+- Neighbor prefetch invalidates on real viewport-height changes such as rotation, while toolbar visibility alone no longer changes that height. Speculative workers no longer read live Android `View` geometry off the background thread.
+- Cancelled PDF renders no longer overwrite the visible page's point dimensions. Sharpen-patch requests are tied to both their own request and the accepted base render, so a patch from before rotation/chrome relayout cannot attach to a replacement bitmap; out-of-memory failure falls back to the fit page.
+- EPUB spine text entries now decode UTF-8/UTF-16/declared HTML charsets rather than assuming UTF-8. A shared URI-path decoder preserves literal `+` characters while percent escapes still decode normally across manifest parsing, WebView resource loading, internal navigation, extraction, and display-name normalization.
+- Fixed-layout viewport metadata is parsed and replaced independently of attribute order (including an unquoted `name=viewport`) and inserted even when the source page has no `<head>`. Fixed-layout theme/find CSS now uses `background-color`, preserving publisher `background-image` pages.
+- Image-page EPUB classification moved to a pure tested helper and no longer treats `background-image:none` or an unrelated image filename near a non-image `<object>` as proof of an image-page book.
+
+### Large TXT and image viewer follow-up
+
+- The large-TXT forward cursor is now covered by a permanent JVM equivalence suite that compares the real cursor and full-scan reader fields across adversarial and randomized request chains, then verifies that sequential body windows reconstruct the canonical transformed text without skips or duplication.
+- A completed large-TXT background match count now retains a bounded primitive position/line index (up to 200,000 matches). Subsequent next, previous, wrap-around, and nth-result navigation for the same file/query/options/display rules uses binary lookup instead of scanning the file from the beginning again. File size/time, blank-line mode, search flags, and display-rule content are part of the cache identity; cancellation never publishes a partial index.
+- The image viewer no longer risks displaying a bitmap recycled by an immediate oversized-cache eviction, and it records “full quality” only when that exact bitmap was retained by the cache.
+- Deleting an image now invalidates the index-keyed bitmap cache and stale prefetch results, so shifted sequence indexes cannot show the deleted or preceding page. Rename-time decode work is invalidated without discarding the still-valid displayed bitmap.
+- A failed next-page decode clears an older page instead of leaving it visible under the new page number, and completed/cancelled zoom gestures release parent touch interception cleanly.
+
+### Archive and comic-mode engine efficiency
+
+- The archive page prepared while opening comic mode now hands its still-open forward reader to `ImageReaderActivity`. RAR/7z/TAR no longer decompress from the archive start once in the loader and a second time after the viewer opens.
+- Libarchive-backed comic paging now decode-drains skipped/cache-hit entries through a reusable direct buffer. This preserves the sequential dictionary/window required by solid RAR while avoiding a second copy through a Java byte array; a header-only skip is no longer used for stateful archives.
+- Plain 7z archives containing PPMd or BCJ2 folders now use libarchive's forward stream in comic mode, including the complete `.7z.001` volume list. AES+PPMd/BCJ2 keeps the existing first-party decoder because bundled libarchive cannot decrypt 7z. Common 7z methods remain on Commons Compress.
+- RAR/CBR uses the same session-scoped libarchive forward stream (with the resolved volume chain) and retains whole-archive/single-entry fallback for backend-specific variants. The common user RAR samples and password-protected 7z sample were rechecked end to end.
+- Android Zstandard no longer calls desktop-only `zstd-jni` natives. `.tar.zst` forward/list/extract paths use the bundled Android libarchive filter, raw `.zst` uses a raw/empty libarchive stream with the decoded-size safety cap, and missing optional codecs now fail or fall back without a `LinkageError` crash. `zstd-jni` is retained only for JVM fixtures and does not enter the APK runtime graph.
+- Speculative neighbor bitmap decoding now uses two workers and targets the actual display size, with an 8M-pixel safety backstop only for very tall fit-width pages. Turning onto that cached page does not launch a second detail decode; original/detail quality is requested only by an explicit zoom gesture. Animated GIF/WebP candidates bypass bitmap prefetch so a static first frame cannot be mislabeled full quality.
+- Password-backed forward readers now apply the same session-verification gate as normal extraction before reusing plaintext preview files. `ArchiveImageSequenceLoader.Result` hands off the exact set of every sensitive cache path successfully verified during lazy or full sequence preparation, including paths decoded by the prepared reader; the viewer can reuse those files without `loadFully` extracting them again, while unrelated old ready files in a mixed-password archive are never promoted. Failed extraction cannot schedule decode from a stale/partial path; a valid display-sized bitmap already in flight remains reusable by a newer direction plan instead of being discarded while the duplicate-work guard blocks its replacement.
+- RAR/7z deep prefetch yields between fully drained entries when a page request or newer plan supersedes it, while preserving solid-stream state within an entry. The prepared password-backed reader is handed to the viewer instead of decoding again from byte zero.
+- Archive handoff compares the original path/length/mtime snapshot rather than two live views of the same `File`, carries that identity with the sequence, and checks it again immediately before the image viewer applies cached paths. A file replaced during preparation or the launch handoff is rejected instead of pairing stale entry metadata with the new archive.
+- Complete RAR compatibility is still not claimed: uncommon RAR3/RAR4 classic-LZ/PPMd table transitions, non-standard VM filters, damaged/recovery edge cases, and unverified split/encryption combinations remain libarchive-dependent or cleanly unsupported. No dependency or permission was added.
+
+### Internal cleanup
+
+- Added and reused shared spread-boundary helpers and JVM tests, including committed large-TXT full-scan/cursor equivalence coverage.
+- Ordered the EPUB boundary preference listener after its lifecycle-state fields, fixing the Java `illegal forward reference` reported by the release build.
+- Replaced an API-35-only `CharSequence.isEmpty()` call in document search with a minSdk-safe length check, ordered animated-image SDK guards before API-28 class checks, and resolved the remaining debug lint errors without changing permissions or dependencies.
+- Removed unused spread and obsolete document-toolbar helper methods.
+- Android metadata is now `versionCode 10015` and `versionName "1.0.15"`. No dependency or permission was added; `zstd-jni` moved from the APK runtime configuration to JVM tests only.
+- Added a source-controlled APK notice asset for libarchive-android and its bundled codecs, with pinned upstream revisions and the applicable BSD, 0BSD, zlib, and Apache-2.0 terms. Release checks now verify that the notice survives APK packaging.
+
 ## Readwide 1.0.14 - 2026-07-08
 
 ### Release scope
@@ -83,7 +175,7 @@
 
 - The tar family gains Zstandard and LZ4 members: `.tar.zst` (also `.tzst`) and `.tar.lz4` archives now list and extract like the existing `.tar.gz`/`.tar.bz2`/`.tar.xz`/`.tar.lzma`/`.tar.Z` forms, including numeric split parts (`.001`) and the sequential image-reading path used by the comic viewer.
 - Single-file `.zst` and `.lz4` files decompress like the existing `.gz`/`.bz2`/`.xz`/`.lzma`/`.Z` forms, restoring the original name (`notes.txt.zst` extracts to `notes.txt`).
-- No new dependency: Zstandard decodes through the already-bundled zstd-jni codec (previously used only for ZIP entries) and LZ4 decodes through the pure-Java framed reader already inside Commons Compress. A new unit test extracts real zstd and LZ4 fixtures end to end.
+- The initial implementation used `zstd-jni` for JVM fixtures; the final Android path uses the Zstandard filter already present in bundled libarchive, while LZ4 remains on the pure-Java framed reader in Commons Compress. `zstd-jni` is test-only and does not enter the APK runtime graph.
 
 ### Home screen - recent list swipe
 
@@ -91,14 +183,14 @@
 
 ### Archives - 7z PPMd, BCJ2, and Deflate64 coverage verified
 
-- The three 7z compression variants outside the everyday LZMA/LZMA2/BZip2 set are now verified and tested. Deflate64 decodes on the primary (pure-Java) path, confirmed end to end by a new unit test with a real fixture. PPMd and BCJ2 are decoded by the bundled native libarchive backend, which the existing fallback routing already reaches from every path (listing, single-entry, whole-archive, and the image viewer's sequential reader degradation); byte-identical output for the exact test fixtures was verified against libarchive 3.7.2. The two decoders are complementary - libarchive does not read Deflate64 and the Java path does not read PPMd/BCJ2 - so together all three work on device for unencrypted streams. (An AES-encrypted PPMd or BCJ2 stream is out of scope: the Java path lacks the coder and libarchive decrypts but then cannot decode PPMd/BCJ2, so that specific combination fails cleanly as unsupported rather than producing output.) The pass adds tests and provenance notes (the PPMd implementation inside libarchive is Igor Pavlov's public-domain Ppmd7 code; nothing from 7-Zip or libarchive enters this repository).
+- This paragraph records the intermediate backend-only coverage before the first-party PPMd and BCJ2 sections later in this same release. At that stage Deflate64 decoded on the pure-Java path and unencrypted PPMd/BCJ2 used libarchive, while AES combinations had no complete route. The later first-party sections below supersede that AES limitation and describe the final scope.
 - One listing fix came out of running the new tests on a plain JVM: entry listing had iterated 7z entries with `getNextEntry()`, which in Commons Compress also builds each entry's decoder chain and therefore throws for PPMd ("Unsupported compression method [3, 4, 1]") and BCJ2 ("Multi input/output stream coders are not yet supported") even though the names and sizes are fully readable from the header. Listing now walks the parsed header metadata via `getEntries()` instead, so PPMd/BCJ2 archives are browsable on the primary path without needing the libarchive fallback at all; extraction is unchanged (decode paths still use `getNextEntry()` and fall back to libarchive). Password behavior is unchanged too: header-encrypted archives still prompt at open (the header itself cannot be parsed), and AES content streams fail only when read.
 
 ### Archives - EGG fixes for real ALZip files, and split volume support
 
 - The EGG reader now opens real ALZip-created archives. Verification against genuine ALZip files uncovered three layout bugs the previous synthetic test files had masked: the archive header's extra-field prefix (terminated by an END field) was not parsed, so every real file was rejected as unsupported; the END field that terminates each block header was not consumed, shifting every data offset by four bytes; and the LZMA properties were read from the wrong position in the block preamble. All three are fixed and the reader is verified end to end (CRC-checked) against real store, deflate, and LZMA archives, including Unicode file names.
 - Split EGG archives (`name.vol1.egg`, `name.vol2.egg`, ...) now list and extract. Volumes are presented as one logical stream (the first volume whole, later volumes minus their own headers) with the prev/next header-id chain validated volume by volume, so blocks that straddle a volume boundary decode correctly and a missing or mismatched volume fails cleanly instead of producing partial output. Opening any volume of the set resolves to the full chain.
-- ZipCrypto-encrypted EGG entries (ALZip's default password mode) now extract. The password is verified against the entry's 12-byte check data before any output is written, so a wrong password is reported as such instead of producing garbage; the per-file keystream is carried across all of the entry's blocks, which real multi-block files require. AES- and LEA-encrypted entries and solid archives are still reported as unsupported (now by method name) rather than risking corrupt output. The container layout, including the encryption field, is documented in `docs/EGG_FORMAT_NOTES.md`.
+- ZipCrypto-encrypted EGG entries (ALZip's default password mode) now extract. The password is verified before output and the per-file keystream continues across blocks. At this intermediate stage AES/LEA and solid EGG were still refused; the later solid and AES sections below supersede that boundary. The final unsupported cases are LEA-encrypted entries and encrypted-solid archives. The container layout is documented in `docs/EGG_FORMAT_NOTES.md`.
 
 ### Archives - ALZ bzip2: the ALZip 4.x bitstream variant now decodes
 
@@ -142,7 +234,7 @@
 
 ### Archives - RAR/7z encryption boundaries verified against real archives
 
-- The encryption edges of RAR and 7z support were re-checked with real archives (WinRAR 7.00 for RAR5, p7zip for 7z), and the error reporting was made precise. Header-encrypted RAR5 archives (created with `-hp`) are not readable by any bundled backend - the libarchive engine itself reports encryption as unsupported for them - so the app now says exactly that instead of a generic header-encryption message, while header-encrypted RAR4 keeps its working first-party decryptor. On the positive side, password-protected *stored* RAR5 archives were confirmed to decrypt correctly with the app's own key derivation against a genuine WinRAR-created file (byte-identical output). For 7z, PPMd- or BCJ2-compressed archives that are also AES-encrypted remain unsupported (no backend decrypts 7z and also decodes those methods); they fail cleanly with a password prompt or an unsupported message and never produce partial output. Unencrypted PPMd/BCJ2 and all common 7z variants are unaffected.
+- During the 1.0.11 work, the encryption edges of RAR and 7z were re-checked with real archives (WinRAR 7.00 for RAR5, p7zip for 7z). At that intermediate checkpoint, libarchive could not decrypt RAR5 `-hp` headers or 7z AES content, and the first-party RAR5-header, PPMd, and BCJ2 paths had not yet landed. Those temporary gaps were subsequently closed by the first-party implementations documented in the three sections immediately above. The lasting result of this checkpoint was precise password/unsupported classification and byte-exact confirmation of password-protected stored RAR5 extraction; it is not a current unsupported-format claim.
 
 ### Archives - ALZ revalidation and split support
 

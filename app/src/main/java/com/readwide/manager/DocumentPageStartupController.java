@@ -45,6 +45,7 @@ final class DocumentPageStartupController {
         activity.bookmarkManager = BookmarkManager.getInstance(activity);
         activity.applyDocumentThemeToViews();
         activity.setupWebView();
+        activity.installDocumentFastScroll();
         activity.setupButtons();
         activity.installSwipePaging();
         activity.loadFromIntent(activity.getIntent());
@@ -98,21 +99,26 @@ final class DocumentPageStartupController {
         final int baseBottom = topPageStatus.getPaddingBottom();
         final int baseHeight = activity.dpToPx(32f);
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(topPageStatus, (v, insets) -> {
-            androidx.core.graphics.Insets bars = insets.getInsets(
-                    androidx.core.view.WindowInsetsCompat.Type.systemBars()
-                            | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
+            androidx.core.graphics.Insets cutout = insets.getInsetsIgnoringVisibility(
+                    androidx.core.view.WindowInsetsCompat.Type.displayCutout());
+            int stableTop = Math.max(0, cutout.top);
+            if (activity.prefs != null && activity.prefs.getShowStatusBar()) {
+                androidx.core.graphics.Insets status = insets.getInsetsIgnoringVisibility(
+                        androidx.core.view.WindowInsetsCompat.Type.statusBars());
+                stableTop = Math.max(stableTop, status.top);
+            }
             // This view lives in normal layout flow above the WebView.  Keep its
-            // height stable and let it own the status-bar inset; do not add padding
-            // to the WebView/viewport itself, because WebView padding clips EPUB
-            // pages and fixed-layout scaling.
+            // height tied only to the configured status-bar policy and physical
+            // cutout. A transient immersive-bar reveal must overlay rather than
+            // resize the WebView/EPUB canvas.
             ViewGroup.LayoutParams lp = v.getLayoutParams();
-            int targetHeight = baseHeight + bars.top;
+            int targetHeight = baseHeight + stableTop;
             if (lp != null && lp.height != targetHeight) {
                 lp.height = targetHeight;
                 v.setLayoutParams(lp);
             }
             v.setMinimumHeight(targetHeight);
-            v.setPadding(baseLeft, baseTop + bars.top, baseRight, baseBottom);
+            v.setPadding(baseLeft, baseTop + stableTop, baseRight, baseBottom);
             return insets;
         });
         androidx.core.view.ViewCompat.requestApplyInsets(topPageStatus);
@@ -123,18 +129,12 @@ final class DocumentPageStartupController {
         View spacer = activity.findViewById(R.id.document_nav_bar_spacer);
         if (spacer == null) return;
         spacer.setBackgroundColor(activity.readerBg);
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(spacer, (v, insets) -> {
-            androidx.core.graphics.Insets bars = insets.getInsets(
-                    androidx.core.view.WindowInsetsCompat.Type.systemBars()
-                            | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
-            android.view.ViewGroup.LayoutParams lp = v.getLayoutParams();
-            if (lp != null && lp.height != bars.bottom) {
-                lp.height = bars.bottom;
-                v.setLayoutParams(lp);
-            }
-            return insets;
-        });
-        androidx.core.view.ViewCompat.requestApplyInsets(spacer);
+        android.view.ViewGroup.LayoutParams lp = spacer.getLayoutParams();
+        if (lp != null && lp.height != 0) {
+            lp.height = 0;
+            spacer.setLayoutParams(lp);
+        }
+        spacer.setVisibility(View.GONE);
     }
 
     private void bindViews() {
@@ -164,6 +164,8 @@ final class DocumentPageStartupController {
         activity.documentSpreadContainer = activity.findViewById(R.id.document_spread_container);
         activity.webView = activity.findViewById(R.id.document_webview);
         activity.rightWebView = activity.findViewById(R.id.document_webview_right);
+        activity.documentFastScrollRail = activity.findViewById(R.id.document_fast_scroll_rail);
+        activity.documentFastScrollThumb = activity.findViewById(R.id.document_fast_scroll_thumb);
         activity.loadingBox = activity.findViewById(R.id.loading_box);
         activity.progressBar = activity.findViewById(R.id.loading_progress);
         activity.progressText = activity.findViewById(R.id.loading_text);

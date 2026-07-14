@@ -411,53 +411,86 @@ public class PrefsManager {
     public String getFontFamily() { return prefs.getString("font_family", "default"); }
     public void setFontFamily(String f) { prefs.edit().putString("font_family", f).apply(); }
 
-    // EPUB WebView reader boundary. Stored in raw px units.
-    private int clampEpubPaddingDp(int px) {
+    // EPUB WebView reader boundary. Values are physical screen pixels. Keep the
+    // legacy *_dp preference keys so existing installs retain their settings;
+    // the key names predate the UI's px contract and must not be migrated away.
+    private static final String KEY_EPUB_LEFT_BOUNDARY_PX = "epub_left_padding_dp";
+    private static final String KEY_EPUB_RIGHT_BOUNDARY_PX = "epub_right_padding_dp";
+    private static final String KEY_EPUB_SIDE_BOUNDARY_LEGACY = "epub_side_padding_dp";
+    private static final String KEY_EPUB_TOP_BOUNDARY_PX = "epub_top_padding_dp";
+    private static final String KEY_EPUB_BOTTOM_BOUNDARY_PX = "epub_bottom_padding_dp";
+
+    private int clampEpubPaddingPx(int px) {
         int clamped = Math.max(0, Math.min(240, px));
         return Math.round(clamped / 5f) * 5;
     }
 
-    public int getEpubLeftPaddingDp() {
-        return clampEpubPaddingDp(prefs.getInt("epub_left_padding_dp",
-                prefs.getInt("epub_side_padding_dp",
+    public static boolean isEpubBoundaryPreferenceKey(String key) {
+        return KEY_EPUB_LEFT_BOUNDARY_PX.equals(key)
+                || KEY_EPUB_RIGHT_BOUNDARY_PX.equals(key)
+                || KEY_EPUB_SIDE_BOUNDARY_LEGACY.equals(key)
+                || KEY_EPUB_TOP_BOUNDARY_PX.equals(key)
+                || KEY_EPUB_BOTTOM_BOUNDARY_PX.equals(key);
+    }
+
+    public int getEpubLeftPaddingPx() {
+        return clampEpubPaddingPx(prefs.getInt(KEY_EPUB_LEFT_BOUNDARY_PX,
+                prefs.getInt(KEY_EPUB_SIDE_BOUNDARY_LEGACY,
                         prefs.getInt("document_side_padding_dp", 30))));
     }
-    public void setEpubLeftPaddingDp(int dp) {
-        prefs.edit().putInt("epub_left_padding_dp", clampEpubPaddingDp(dp)).apply();
+    public void setEpubLeftPaddingPx(int px) {
+        prefs.edit().putInt(KEY_EPUB_LEFT_BOUNDARY_PX, clampEpubPaddingPx(px)).apply();
     }
-    public int getEpubRightPaddingDp() {
-        return clampEpubPaddingDp(prefs.getInt("epub_right_padding_dp",
-                prefs.getInt("epub_side_padding_dp",
+    public int getEpubRightPaddingPx() {
+        return clampEpubPaddingPx(prefs.getInt(KEY_EPUB_RIGHT_BOUNDARY_PX,
+                prefs.getInt(KEY_EPUB_SIDE_BOUNDARY_LEGACY,
                         prefs.getInt("document_side_padding_dp", 30))));
     }
-    public void setEpubRightPaddingDp(int dp) {
-        prefs.edit().putInt("epub_right_padding_dp", clampEpubPaddingDp(dp)).apply();
+    public void setEpubRightPaddingPx(int px) {
+        prefs.edit().putInt(KEY_EPUB_RIGHT_BOUNDARY_PX, clampEpubPaddingPx(px)).apply();
     }
 
     // Kept for migration/compatibility with older 2.0.7 builds that stored one side value.
     public int getEpubSidePaddingDp() {
-        return Math.round((getEpubLeftPaddingDp() + getEpubRightPaddingDp()) / 2f);
+        return Math.round((getEpubLeftPaddingPx() + getEpubRightPaddingPx()) / 2f);
     }
     public void setEpubSidePaddingDp(int dp) {
-        int value = clampEpubPaddingDp(dp);
+        int value = clampEpubPaddingPx(dp);
         prefs.edit()
-                .putInt("epub_left_padding_dp", value)
-                .putInt("epub_right_padding_dp", value)
-                .putInt("epub_side_padding_dp", value)
+                .putInt(KEY_EPUB_LEFT_BOUNDARY_PX, value)
+                .putInt(KEY_EPUB_RIGHT_BOUNDARY_PX, value)
+                .putInt(KEY_EPUB_SIDE_BOUNDARY_LEGACY, value)
                 .apply();
     }
-    public int getEpubTopPaddingDp() {
-        return clampEpubPaddingDp(prefs.getInt("epub_top_padding_dp", 0));
+    public int getEpubTopPaddingPx() {
+        return clampEpubPaddingPx(prefs.getInt(KEY_EPUB_TOP_BOUNDARY_PX, 0));
     }
-    public void setEpubTopPaddingDp(int dp) {
-        prefs.edit().putInt("epub_top_padding_dp", clampEpubPaddingDp(dp)).apply();
+    public void setEpubTopPaddingPx(int px) {
+        prefs.edit().putInt(KEY_EPUB_TOP_BOUNDARY_PX, clampEpubPaddingPx(px)).apply();
     }
-    public int getEpubBottomPaddingDp() {
-        return clampEpubPaddingDp(prefs.getInt("epub_bottom_padding_dp", 0));
+    public int getEpubBottomPaddingPx() {
+        return clampEpubPaddingPx(prefs.getInt(KEY_EPUB_BOTTOM_BOUNDARY_PX, 0));
     }
-    public void setEpubBottomPaddingDp(int dp) {
-        prefs.edit().putInt("epub_bottom_padding_dp", clampEpubPaddingDp(dp)).apply();
+    public void setEpubBottomPaddingPx(int px) {
+        prefs.edit().putInt(KEY_EPUB_BOTTOM_BOUNDARY_PX, clampEpubPaddingPx(px)).apply();
     }
+
+    /** @deprecated Use the physical-pixel accessor. */
+    @Deprecated public int getEpubLeftPaddingDp() { return getEpubLeftPaddingPx(); }
+    /** @deprecated Use the physical-pixel accessor. */
+    @Deprecated public void setEpubLeftPaddingDp(int value) { setEpubLeftPaddingPx(value); }
+    /** @deprecated Use the physical-pixel accessor. */
+    @Deprecated public int getEpubRightPaddingDp() { return getEpubRightPaddingPx(); }
+    /** @deprecated Use the physical-pixel accessor. */
+    @Deprecated public void setEpubRightPaddingDp(int value) { setEpubRightPaddingPx(value); }
+    /** @deprecated Use the physical-pixel accessor. */
+    @Deprecated public int getEpubTopPaddingDp() { return getEpubTopPaddingPx(); }
+    /** @deprecated Use the physical-pixel accessor. */
+    @Deprecated public void setEpubTopPaddingDp(int value) { setEpubTopPaddingPx(value); }
+    /** @deprecated Use the physical-pixel accessor. */
+    @Deprecated public int getEpubBottomPaddingDp() { return getEpubBottomPaddingPx(); }
+    /** @deprecated Use the physical-pixel accessor. */
+    @Deprecated public void setEpubBottomPaddingDp(int value) { setEpubBottomPaddingPx(value); }
 
     public int getEpubPageDirection() {
         int value = prefs.getInt("epub_page_direction", EPUB_PAGE_DIRECTION_LTR);

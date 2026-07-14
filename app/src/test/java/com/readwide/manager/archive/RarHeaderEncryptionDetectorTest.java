@@ -76,8 +76,8 @@ public class RarHeaderEncryptionDetectorTest {
                 writeRar4Header(out, RAR4_HEADER_MAIN, RAR4_MAIN_PASSWORD, new byte[6]);
             }
             // RAR4 -hp has a first-party header rewriter, so the version must be
-            // reported as 4 (drives the "rewriter or libarchive" message, not the
-            // RAR5 "no decrypt path anywhere" message).
+            // reported as 4 (drives the RAR4 rewriter/libarchive message, not the
+            // RAR5 first-party header-parser-gap message).
             assertEquals(4, RarHeaderEncryptionDetector.headerEncryptedRarVersion(rar));
         } finally {
             //noinspection ResultOfMethodCallIgnored
@@ -96,8 +96,8 @@ public class RarHeaderEncryptionDetectorTest {
                 out.write(4); // HEADER_ENCRYPTION.
                 out.write(0);
             }
-            // RAR5 -hp has no decrypt path in either backend; the version drives
-            // the hard-unsupported message.
+            // RAR5 -hp has a first-party decryptor but no libarchive decrypt path;
+            // the version selects the precise first-party parser-gap message.
             assertEquals(5, RarHeaderEncryptionDetector.headerEncryptedRarVersion(rar));
         } finally {
             //noinspection ResultOfMethodCallIgnored

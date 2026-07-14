@@ -1,6 +1,7 @@
 package com.readwide.manager;
 
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Canvas;
@@ -38,6 +39,7 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -48,6 +50,7 @@ import com.readwide.manager.adapter.BookmarkFolderAdapter;
 import com.readwide.manager.model.Bookmark;
 import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.model.Theme;
+import com.readwide.manager.util.UriPathCodec;
 import com.readwide.manager.util.BookmarkManager;
 import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.FontManager;
@@ -74,7 +77,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URLDecoder;
 import java.text.DateFormat;
 import java.util.Date;
 import java.util.Enumeration;
@@ -141,6 +143,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     WebView webView;
     WebView rightWebView;
     LinearLayout documentSpreadContainer;
+    View documentFastScrollRail;
+    View documentFastScrollThumb;
     View ttsFloatingCard;
     android.widget.ImageButton ttsFloatingPlayPause;
     android.widget.ImageButton ttsFloatingStop;
@@ -170,6 +174,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     boolean restoreDocumentScrollAfterThemeRefresh = false;
     int pendingThemeRefreshScrollX = 0;
     int pendingThemeRefreshScrollY = 0;
+    private int pendingEpubAnchorPage = -1;
+    private String pendingEpubAnchorFragment = "";
 
     final ExecutorService executor = Executors.newSingleThreadExecutor();
 
@@ -191,12 +197,6 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     String filePath;
     String fileName;
     String docType = "Document";
-    private int lastAppliedEpubLeftPaddingDp = Integer.MIN_VALUE;
-    private int lastAppliedEpubRightPaddingDp = Integer.MIN_VALUE;
-    private int lastAppliedEpubTopPaddingDp = Integer.MIN_VALUE;
-    private int lastAppliedEpubBottomPaddingDp = Integer.MIN_VALUE;
-    private int lastAppliedEpubBottomToolbarHeightPx = Integer.MIN_VALUE;
-    private int lastAppliedEpubEffectiveBottomMarginPx = Integer.MIN_VALUE;
     int currentPage = 0;
     int markdownVisualCurrentPage = 0;
     int markdownVisualTotalPages = 1;
@@ -224,14 +224,28 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     private boolean wordSwipeMovedEnoughForParentDisallow = false;
     boolean pageTurnInFlight = false;
     private GestureDetector documentGestureDetector;
+    /** WebView that supplied the gesture currently being dispatched. */
+    private WebView documentGestureSourceView;
     private boolean documentDoubleTapResetSequence = false;
     private boolean documentTapPagingSequence = false;
+    /** True after a second pointer joined the current WebView gesture. */
+    private boolean documentGestureHadMultiplePointers = false;
     private int armedDocumentEdgeDirection = 0;
     private long armedDocumentEdgeTimeMs = 0L;
     private boolean wordGestureStartedAtLeftEdge = true;
     private boolean wordGestureStartedAtRightEdge = true;
     volatile boolean wordSelectionActive = false;
     volatile boolean activityDestroyed = false;
+    private String loadedEpubBoundarySignature = "";
+    private final SharedPreferences.OnSharedPreferenceChangeListener epubBoundaryPreferenceListener =
+            (sharedPreferences, key) -> {
+                if (!PrefsManager.isEpubBoundaryPreferenceKey(key)) return;
+                runOnUiThread(() -> {
+                    if (!activityDestroyed && "EPUB".equals(docType)) {
+                        applyAndReloadEpubBoundaryImmediately();
+                    }
+                });
+            };
 
     // SAF picker for importing a custom .ttf/.otf font into the document font list.
     // The result Uri is handled by importDocumentFontFromUri.
@@ -242,6 +256,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     File selectedDocumentFontFile = null;
     boolean epubHasDocumentFont = false;
     boolean epubFixedLayoutLike = false;
+    /** True only when most EPUB spine items are page-sized image canvases. */
+    boolean epubImagePageLike = false;
     boolean fixedLayoutFindOffsetActive = false;
     boolean wordHasDocumentFont = false;
     String wordDefaultFontFamily = null;
@@ -265,6 +281,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     private DocumentWebViewController documentWebViewController;
     private DocumentPageLoadController documentPageLoadController;
     private DocumentPageDisplayController documentPageDisplayController;
+    private ProportionalFastScrollController documentFastScrollController;
 
     static class Page {
         final String title;
@@ -330,6 +347,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         // dark-bubble look is preserved even without forcing night mode.
         super.onCreate(savedInstanceState);
         startup().onCreateAfterSuper(savedInstanceState);
+        prefs.getPrefs().registerOnSharedPreferenceChangeListener(epubBoundaryPreferenceListener);
     }
 
 
@@ -385,10 +403,16 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             TtsPlaybackBridge.register(this);
         }
         startup().onResume();
+        if (documentFastScrollController != null) {
+            documentFastScrollController.resume();
+        }
     }
 
     @Override
     protected void onPause() {
+        if (documentFastScrollController != null) {
+            documentFastScrollController.suspend();
+        }
         startup().onPause();
         super.onPause();
     }
@@ -487,6 +511,14 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             }
             getWindow().getDecorView().setSystemUiVisibility(flags);
         }
+        View insetRoot = findViewById(R.id.document_root);
+        if (insetRoot != null) {
+            com.readwide.manager.util.EdgeToEdgeUtil.applyReaderSystemBarVisibility(
+                    this,
+                    insetRoot,
+                    documentChromeVisible,
+                    prefs != null && prefs.getShowStatusBar());
+        }
         applyDocumentChromeFillColors();
     }
 
@@ -578,8 +610,15 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     @Override
     protected void onDestroy() {
         ViewerRegistry.unregister(this);
+        if (prefs != null) {
+            prefs.getPrefs().unregisterOnSharedPreferenceChangeListener(epubBoundaryPreferenceListener);
+        }
         activityDestroyed = true;
         loadGeneration++;
+        if (documentFastScrollController != null) {
+            documentFastScrollController.destroy();
+            documentFastScrollController = null;
+        }
         if (documentTtsController != null) {
             documentTtsController.release();
             documentTtsController = null;
@@ -620,8 +659,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }
     }
 
-    private boolean handleDocumentTapGesture(@NonNull MotionEvent event) {
+    private boolean handleDocumentTapGesture(@NonNull WebView source, @NonNull MotionEvent event) {
         if (documentGestureDetector == null) return false;
+        documentGestureSourceView = source;
         boolean handled = documentGestureDetector.onTouchEvent(event);
         int action = event.getActionMasked();
 
@@ -632,9 +672,15 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 documentDoubleTapResetSequence = false;
             }
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                documentGestureSourceView = null;
+            }
             return true;
         }
 
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            documentGestureSourceView = null;
+        }
         // Do not consume normal ACTION_DOWN; the WebView still needs the original
         // down event for scrolling, text selection, and edge-swipe tracking.
         return handled && action != MotionEvent.ACTION_DOWN;
@@ -644,6 +690,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         int eventAction = e.getActionMasked();
         if (eventAction == MotionEvent.ACTION_CANCEL) {
             documentTapPagingSequence = false;
+            documentGestureHadMultiplePointers = false;
             return false;
         }
         if (!isPagedWebDocument() || webView == null || prefs == null
@@ -657,15 +704,17 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         if (eventAction == MotionEvent.ACTION_DOWN) {
             wordSwipeStartX = e.getX();
             wordSwipeStartY = e.getY();
+            documentGestureHadMultiplePointers = false;
             documentTapPagingSequence = getDocumentTapPagingAction(e) != TapZoneMath.ACTION_MENU;
-            if (isMarkdownDocument() && documentTapPagingSequence) {
-                // Do not consume DOWN: Markdown still needs normal WebView touch
-                // delivery for selection and vertical scroll if this gesture is
-                // later cancelled as a page tap.  The stale-selection bug is
-                // caused by consuming UP for the page turn, so we send WebView a
-                // synthetic CANCEL immediately before turning the page instead.
-                webView.cancelLongPress();
-            }
+            // Keep the native WebView long-press pipeline intact. A real page tap
+            // is cancelled immediately before the page turn, not on DOWN; cancelling
+            // here prevented side-zone text selection in Markdown/WebView documents.
+            return false;
+        }
+
+        if (eventAction == MotionEvent.ACTION_POINTER_DOWN || e.getPointerCount() > 1) {
+            documentGestureHadMultiplePointers = true;
+            documentTapPagingSequence = false;
             return false;
         }
 
@@ -680,9 +729,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }
 
         if (eventAction != MotionEvent.ACTION_UP) return false;
-        boolean stillTap = !wordSelectionActive && !wordSwipeTriggered
-                && Math.abs(e.getX() - wordSwipeStartX) <= wordSwipeTouchSlop
-                && Math.abs(e.getY() - wordSwipeStartY) <= wordSwipeTouchSlop;
+        boolean stillTap = isShortStationaryDocumentTap(e);
         int action = stillTap ? getDocumentTapPagingAction(e) : TapZoneMath.ACTION_MENU;
         documentTapPagingSequence = false;
         if (action == TapZoneMath.ACTION_PREVIOUS) {
@@ -702,6 +749,18 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             return true;
         }
         return false;
+    }
+
+    private boolean isShortStationaryDocumentTap(@NonNull MotionEvent event) {
+        return TapZoneMath.isShortTapRelease(
+                event.getX() - wordSwipeStartX,
+                event.getY() - wordSwipeStartY,
+                wordSwipeTouchSlop,
+                event.getEventTime() - event.getDownTime(),
+                ViewConfiguration.getLongPressTimeout(),
+                wordSelectionActive,
+                wordSwipeTriggered,
+                documentGestureHadMultiplePointers);
     }
 
     private int getDocumentTapPagingAction(@NonNull MotionEvent e) {
@@ -732,7 +791,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             w = documentSpreadContainer.getWidth();
             h = documentSpreadContainer.getHeight();
         }
-        return TapZoneMath.actionForTap(
+        int action = TapZoneMath.actionForTap(
                 x,
                 y,
                 w,
@@ -742,17 +801,22 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 prefs.getTapZoneMode(),
                 prefs.getTapLeadingZonePercent(),
                 prefs.getTapTrailingZonePercent());
+        if ("EPUB".equals(docType)
+                && prefs.getEpubPageDirection() == PrefsManager.EPUB_PAGE_DIRECTION_RTL) {
+            if (action == TapZoneMath.ACTION_PREVIOUS) return TapZoneMath.ACTION_NEXT;
+            if (action == TapZoneMath.ACTION_NEXT) return TapZoneMath.ACTION_PREVIOUS;
+        }
+        return action;
     }
 
     /** True if the touch point lies inside a currently-visible chrome bar. */
     private boolean tapIntersectsVisibleChrome(@NonNull MotionEvent e) {
-        if (!documentChromeVisible || webView == null) return false;
-        // Touch coordinates are WebView-local; convert to screen space to compare
-        // against the chrome bars, which are siblings overlaying the WebView.
-        int[] webLoc = new int[2];
-        webView.getLocationOnScreen(webLoc);
-        float screenX = e.getX() + webLoc[0];
-        float screenY = e.getY() + webLoc[1];
+        if (!documentChromeVisible) return false;
+        // Raw coordinates are already in screen space and remain correct for both
+        // the left and right WebViews in a landscape spread. Using the left
+        // WebView's location here made right-page taps test the wrong point.
+        float screenX = e.getRawX();
+        float screenY = e.getRawY();
         return viewContainsScreenPoint(documentAppBar, screenX, screenY)
                 || viewContainsScreenPoint(documentBottomChrome, screenX, screenY);
     }
@@ -857,30 +921,33 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     private void destroyDocumentWebView() {
-        if (webView == null) return;
-        try {
-            webView.removeCallbacks(checkWordSelectionAfterScrollRunnable);
-            webView.removeCallbacks(releasePageTurnRunnable);
-            webView.animate().cancel();
-            webView.setOnTouchListener(null);
-            webView.setOnScrollChangeListener(null);
-            webView.setWebViewClient(null);
-            webView.removeJavascriptInterface("ReadwideSelectionBridge");
-            webView.stopLoading();
-            webView.loadUrl("about:blank");
-            webView.clearHistory();
-            webView.removeAllViews();
-            webView.destroy();
-        } catch (Throwable ignored) {
-            // WebView teardown should never crash the Activity during system cleanup.
-        } finally {
-            webView = null;
+        if (webView != null) {
+            try {
+                webView.removeCallbacks(checkWordSelectionAfterScrollRunnable);
+                webView.removeCallbacks(releasePageTurnRunnable);
+                webView.animate().cancel();
+                webView.setOnTouchListener(null);
+                webView.setOnScrollChangeListener(null);
+                webView.setWebViewClient(null);
+                webView.removeJavascriptInterface("ReadwideSelectionBridge");
+                webView.stopLoading();
+                webView.loadUrl("about:blank");
+                webView.clearHistory();
+                webView.removeAllViews();
+                webView.destroy();
+            } catch (Throwable ignored) {
+                // WebView teardown should never crash the Activity during system cleanup.
+            } finally {
+                webView = null;
+            }
         }
         // The spread's right WebView has its own lifecycle handling in
         // pause/resume; it must be destroyed here too or it leaks its renderer.
         if (rightWebView != null) {
             try {
+                rightWebView.animate().cancel();
                 rightWebView.setOnTouchListener(null);
+                rightWebView.setOnScrollChangeListener(null);
                 rightWebView.setWebViewClient(null);
                 rightWebView.stopLoading();
                 rightWebView.loadUrl("about:blank");
@@ -971,6 +1038,11 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         super.onConfigurationChanged(newConfig);
         updateRotationButtonIcon();
         applyDocumentThemeToViews();
+        // Some Android/OEM builds reveal system bars again while the activity
+        // handles rotation in place. Reassert the current chrome/status-bar policy
+        // before the rotated WebView is laid out, otherwise hidden chrome can gain
+        // a live side/bottom navigation inset and narrow the landscape body.
+        applyDocumentSystemBarColors();
         if (isMarkdownDocument()) {
             // Orientation changes the metrics the Markdown visual-page model is
             // computed from. Drop the stable caches (the same reset the
@@ -996,12 +1068,23 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 if (!fromUser) return;
                 int total = Math.max(1, documentPageCount());
                 int safe = Math.max(0, Math.min(total - 1, progress));
-                if (isMarkdownDocument()) {
-                    markdownVisualCurrentPage = safe;
-                } else {
-                    currentPage = Math.max(0, Math.min(Math.max(0, pages.size() - 1), safe));
+                // Preview only. Do not mutate currentPage/markdownVisualCurrentPage
+                // before the user releases the thumb: doing so makes autosave,
+                // TTS, and orientation changes observe a page that has not been
+                // rendered yet, and also loses the real navigation direction in
+                // onStopTrackingTouch().
+                String label = documentPageStatusLabel(safe + 1, total);
+                if (pageStatus != null) pageStatus.setText(label);
+                if (topPageStatus != null) topPageStatus.setText(label);
+                boolean spread = !isMarkdownDocument() && isLandscapeTwoPageDocumentMode();
+                if (prevButton != null) {
+                    prevButton.setEnabled(com.readwide.manager.util.SpreadMath.canTurn(
+                            safe, -1, total, spread));
                 }
-                updateDocumentPageStatusViews(false);
+                if (nextButton != null) {
+                    nextButton.setEnabled(com.readwide.manager.util.SpreadMath.canTurn(
+                            safe, 1, total, spread));
+                }
             }
 
             @Override
@@ -1017,7 +1100,14 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 if (isMarkdownDocument()) {
                     scrollMarkdownToVisualPage(target, false);
                 } else if (!pages.isEmpty()) {
-                    showPage(target, Integer.compare(target, currentPage));
+                    if (target != currentPage) {
+                        showPage(target, Integer.compare(target, currentPage));
+                    } else {
+                        // Releasing the thumb on the current page should restore
+                        // the live label/buttons without reloading the WebView or
+                        // losing an in-page scroll position.
+                        updateDocumentPageStatusViews();
+                    }
                 } else {
                     updateDocumentPageStatusViews();
                 }
@@ -1086,17 +1176,20 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                     return true;
                 }
                 documentDoubleTapResetSequence = true;
-                if (webView != null && webView.canZoomOut()) {
-                    // Already zoomed in (pinch or a previous double-tap): reset to fit.
-                    resetDocumentZoom();
-                } else if (webView != null) {
-                    // At fit size: zoom in a couple of native steps for a quick magnify.
-                    webView.zoomIn();
-                    webView.zoomIn();
+                WebView zoomTarget = documentGestureSourceView != null
+                        ? documentGestureSourceView : webView;
+                if (zoomTarget != null && zoomTarget.canZoomOut()) {
+                    // Already zoomed in (pinch or a previous double-tap): reset only
+                    // the page that was actually touched.
+                    resetDocumentZoom(zoomTarget);
+                } else if (zoomTarget != null) {
+                    // At fit size: zoom the touched page, not always the left page.
+                    zoomTarget.zoomIn();
+                    zoomTarget.zoomIn();
                 }
                 clearDocumentEdgeArm();
-                if (webView != null) {
-                    webView.postDelayed(() -> {
+                if (zoomTarget != null) {
+                    zoomTarget.postDelayed(() -> {
                         if (!activityDestroyed) documentDoubleTapResetSequence = false;
                     }, 360);
                 }
@@ -1105,117 +1198,120 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         });
 
         if (rightWebView != null) {
-            rightWebView.setOnTouchListener((v, event) -> {
-                // The spread's right page. Route taps and flings through the same
-                // shared gesture pipeline so the chrome toggle, tap-zone paging,
-                // and swipe paging work on both halves of the landscape spread -
-                // without this, taps on the right page did nothing. The
-                // Word-selection/word-swipe machinery stays left-view only (the
-                // spread is EPUB-only), and returning false lets the right
-                // WebView keep scrolling tall pages itself. In portrait the view
-                // is GONE, so this never fires.
-                if (handleFastDocumentTapPaging(event)) {
-                    return true;
-                }
-                return !documentTapPagingSequence && handleDocumentTapGesture(event);
-            });
+            rightWebView.setOnTouchListener((v, event) ->
+                    handleDocumentWebViewTouch((WebView) v, event, false));
+        }
+        webView.setOnTouchListener((v, event) ->
+                handleDocumentWebViewTouch((WebView) v, event, true));
+    }
+
+    private boolean handleDocumentWebViewTouch(@NonNull WebView source,
+                                               @NonNull MotionEvent event,
+                                               boolean primaryView) {
+        if (handleFastDocumentTapPaging(event)) {
+            resetWordSwipeTracking(source);
+            clearDocumentEdgeArm();
+            return true;
+        }
+        if (!documentTapPagingSequence && handleDocumentTapGesture(source, event)) {
+            return true;
+        }
+        if (!isPagedWebDocument() || documentPageCount() <= 1 || pageTurnInFlight) {
+            return false;
         }
 
-        webView.setOnTouchListener((v, event) -> {
-            if (handleFastDocumentTapPaging(event)) {
-                resetWordSwipeTracking();
-                clearDocumentEdgeArm();
-                return true;
-            }
-            if (!documentTapPagingSequence && handleDocumentTapGesture(event)) {
-                return true;
-            }
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                wordSwipeStartX = event.getX();
+                wordSwipeStartY = event.getY();
+                wordSwipeTriggered = false;
+                wordSwipeMovedEnoughForParentDisallow = false;
+                documentGestureHadMultiplePointers = false;
+                markdownNativeLongPressCanceledForGesture = false;
+                wordGestureStartedAtLeftEdge = !source.canScrollHorizontally(-1);
+                wordGestureStartedAtRightEdge = !source.canScrollHorizontally(1);
+                if (webView != null) webView.removeCallbacks(releasePageTurnRunnable);
+                if (primaryView) {
+                    source.removeCallbacks(checkWordSelectionAfterScrollRunnable);
+                }
+                return false;
 
-            if (!isPagedWebDocument() || documentPageCount() <= 1 || pageTurnInFlight) return false;
+            case MotionEvent.ACTION_POINTER_DOWN:
+                documentGestureHadMultiplePointers = true;
+                documentTapPagingSequence = false;
+                return false;
 
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    wordSwipeStartX = event.getX();
-                    wordSwipeStartY = event.getY();
-                    wordSwipeTriggered = false;
-                    wordSwipeMovedEnoughForParentDisallow = false;
-                    markdownNativeLongPressCanceledForGesture = false;
-                    wordGestureStartedAtLeftEdge = !webView.canScrollHorizontally(-1);
-                    wordGestureStartedAtRightEdge = !webView.canScrollHorizontally(1);
-                    webView.removeCallbacks(checkWordSelectionAfterScrollRunnable);
-                    webView.removeCallbacks(releasePageTurnRunnable);
-                    return false;
-
-                case MotionEvent.ACTION_MOVE:
-                    if (wordSelectionActive) return false;
-                    float dx = event.getX() - wordSwipeStartX;
-                    float dy = event.getY() - wordSwipeStartY;
-                    // Markdown uses WebView's native selection.  Do not replace
-                    // that long-click pipeline, because synthetic replay breaks
-                    // handles and page anchors on some WebView builds.  Instead,
-                    // cancel the pending native long-press as soon as the finger
-                    // becomes a scroll/page gesture.  This threshold is deliberately
-                    // much smaller than the normal scroll slop: slow Markdown
-                    // scrolling was still producing stray word selections before
-                    // it crossed Android's default long-press boundary.
-                    if (isMarkdownDocument()
-                            && !markdownNativeLongPressCanceledForGesture
-                            && (Math.abs(dx) > markdownSelectionCancelSlopPx
-                            || Math.abs(dy) > markdownSelectionCancelSlopPx)) {
-                        webView.cancelLongPress();
-                        markdownNativeLongPressCanceledForGesture = true;
+            case MotionEvent.ACTION_MOVE:
+                if (primaryView && wordSelectionActive) return false;
+                float dx = event.getX() - wordSwipeStartX;
+                float dy = event.getY() - wordSwipeStartY;
+                if (primaryView && isMarkdownDocument()
+                        && !markdownNativeLongPressCanceledForGesture
+                        && (Math.abs(dx) > markdownSelectionCancelSlopPx
+                        || Math.abs(dy) > markdownSelectionCancelSlopPx)) {
+                    source.cancelLongPress();
+                    markdownNativeLongPressCanceledForGesture = true;
+                }
+                if (!wordSwipeMovedEnoughForParentDisallow
+                        && Math.abs(dx) > wordSwipeTouchSlop
+                        && Math.abs(dx) > Math.abs(dy) * 1.35f) {
+                    wordSwipeMovedEnoughForParentDisallow = true;
+                    if (source.getParent() != null) {
+                        source.getParent().requestDisallowInterceptTouchEvent(true);
                     }
-                    if (!wordSwipeMovedEnoughForParentDisallow
-                            && Math.abs(dx) > wordSwipeTouchSlop
-                            && Math.abs(dx) > Math.abs(dy) * 1.35f) {
-                        wordSwipeMovedEnoughForParentDisallow = true;
-                        v.getParent().requestDisallowInterceptTouchEvent(true);
-                    }
-                    if (!wordSwipeTriggered && shouldTurnDocumentPageBySwipe(event)) {
-                        wordSwipeTriggered = true;
-                        if (isMarkdownDocument()) webView.cancelLongPress();
-                        turnDocumentPageBySwipe(pageDeltaForHorizontalSwipe(event.getX() - wordSwipeStartX));
-                        clearDocumentEdgeArm();
-                        return true;
-                    }
-                    return false;
+                }
+                if (!wordSwipeTriggered && shouldTurnDocumentPageBySwipe(source, event)) {
+                    wordSwipeTriggered = true;
+                    if (primaryView && isMarkdownDocument()) source.cancelLongPress();
+                    turnDocumentPageBySwipe(pageDeltaForHorizontalSwipe(dx));
+                    clearDocumentEdgeArm();
+                    return true;
+                }
+                return false;
 
-                case MotionEvent.ACTION_UP:
-                    if (Math.abs(event.getX() - wordSwipeStartX) < wordSwipeTouchSlop
-                            && Math.abs(event.getY() - wordSwipeStartY) < wordSwipeTouchSlop) {
-                        v.performClick();
-                    }
-                    if (!wordSwipeTriggered && shouldTurnDocumentPageBySwipe(event)) {
-                        wordSwipeTriggered = true;
-                        if (isMarkdownDocument()) webView.cancelLongPress();
-                        turnDocumentPageBySwipe(pageDeltaForHorizontalSwipe(event.getX() - wordSwipeStartX));
-                        clearDocumentEdgeArm();
-                        return true;
-                    }
-                    resetWordSwipeTracking();
-                    webView.postDelayed(checkWordSelectionAfterScrollRunnable, 120);
-                    return false;
+            case MotionEvent.ACTION_UP:
+                // A long-press release must remain owned by WebView's text-selection
+                // pipeline. Calling performClick() here could activate a link or clear
+                // selection after the user lifts their finger.
+                if (isShortStationaryDocumentTap(event)) {
+                    source.performClick();
+                }
+                if (!wordSwipeTriggered && shouldTurnDocumentPageBySwipe(source, event)) {
+                    wordSwipeTriggered = true;
+                    if (primaryView && isMarkdownDocument()) source.cancelLongPress();
+                    turnDocumentPageBySwipe(pageDeltaForHorizontalSwipe(
+                            event.getX() - wordSwipeStartX));
+                    clearDocumentEdgeArm();
+                    return true;
+                }
+                resetWordSwipeTracking(source);
+                if (primaryView) source.postDelayed(checkWordSelectionAfterScrollRunnable, 120);
+                return false;
 
-                case MotionEvent.ACTION_CANCEL:
-                    resetWordSwipeTracking();
-                    webView.postDelayed(checkWordSelectionAfterScrollRunnable, 120);
-                    return false;
+            case MotionEvent.ACTION_CANCEL:
+                resetWordSwipeTracking(source);
+                if (primaryView) source.postDelayed(checkWordSelectionAfterScrollRunnable, 120);
+                return false;
 
-                default:
-                    return false;
-            }
-        });
+            default:
+                return false;
+        }
     }
 
     private void resetWordSwipeTracking() {
+        resetWordSwipeTracking(webView);
+    }
+
+    private void resetWordSwipeTracking(WebView source) {
         wordSwipeTriggered = false;
         wordSwipeMovedEnoughForParentDisallow = false;
         markdownNativeLongPressCanceledForGesture = false;
         documentTapPagingSequence = false;
+        documentGestureHadMultiplePointers = false;
         wordGestureStartedAtLeftEdge = true;
         wordGestureStartedAtRightEdge = true;
-        if (webView != null && webView.getParent() != null) {
-            webView.getParent().requestDisallowInterceptTouchEvent(false);
+        if (source != null && source.getParent() != null) {
+            source.getParent().requestDisallowInterceptTouchEvent(false);
         }
     }
 
@@ -1228,19 +1324,28 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         armedDocumentEdgeTimeMs = 0L;
     }
 
-    private boolean shouldTurnDocumentPageBySwipe(@NonNull MotionEvent event) {
-        if (activityDestroyed || wordSelectionActive || webView == null || documentPageCount() <= 1 || pageTurnInFlight) return false;
+    private boolean shouldTurnDocumentPageBySwipe(@NonNull WebView source, @NonNull MotionEvent event) {
+        if (activityDestroyed || source == null || documentPageCount() <= 1 || pageTurnInFlight) return false;
 
         float dx = event.getX() - wordSwipeStartX;
         float dy = event.getY() - wordSwipeStartY;
         float absX = Math.abs(dx);
         float absY = Math.abs(dy);
         long duration = event.getEventTime() - event.getDownTime();
+        // Once the gesture has reached long-press territory, ownership belongs to
+        // WebView text selection. Do not reinterpret a selection drag or handle
+        // adjustment as a horizontal page swipe, even when selection callbacks are
+        // unavailable for this document type.
+        if (duration >= ViewConfiguration.getLongPressTimeout()
+                || wordSelectionActive
+                || documentGestureHadMultiplePointers) {
+            return false;
+        }
 
         // Slightly lighter than before so zoomed Word/EPUB pages do not feel
         // like they need multiple hard swipes. The edge rule below still prevents
         // accidental page turns while the WebView can pan horizontally.
-        float threshold = Math.max(dpToPx(28), webView.getWidth() * 0.06f);
+        float threshold = Math.max(dpToPx(28), source.getWidth() * 0.06f);
         if (!(absX >= threshold
                 && absX > absY * 1.28f
                 && absY <= dpToPx(78)
@@ -1253,11 +1358,11 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         // Non-zoomed / normally wrapped pages should turn immediately on the first
         // swipe. The two-step edge threshold is used only when WebView actually has
         // horizontal scroll range, matching the PDF behavior for zoomed pages.
-        if (!webView.canScrollHorizontally(-1) && !webView.canScrollHorizontally(1)) {
+        if (!source.canScrollHorizontally(-1) && !source.canScrollHorizontally(1)) {
             return true;
         }
 
-        if (webView.canScrollHorizontally(horizontalScrollDirection)) {
+        if (source.canScrollHorizontally(horizontalScrollDirection)) {
             clearDocumentEdgeArm();
             return false;
         }
@@ -1439,45 +1544,135 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         startActivity(intent);
     }
 
-    private int getEpubLeftPaddingDp() {
-        return prefs != null ? prefs.getEpubLeftPaddingDp() : 30;
+    private int getEpubLeftPaddingPx() {
+        return prefs != null ? prefs.getEpubLeftPaddingPx() : 30;
     }
 
-    private int getEpubRightPaddingDp() {
-        return prefs != null ? prefs.getEpubRightPaddingDp() : 30;
+    private int getEpubRightPaddingPx() {
+        return prefs != null ? prefs.getEpubRightPaddingPx() : 30;
     }
 
-    private int getEpubTopPaddingDp() {
-        return prefs != null ? prefs.getEpubTopPaddingDp() : 0;
+    private int getEpubTopPaddingPx() {
+        return prefs != null ? prefs.getEpubTopPaddingPx() : 0;
     }
 
-    private int getEpubBottomPaddingDp() {
-        return prefs != null ? prefs.getEpubBottomPaddingDp() : 0;
+    private int getEpubBottomPaddingPx() {
+        return prefs != null ? prefs.getEpubBottomPaddingPx() : 0;
     }
 
     void refreshEpubSpacingIfNeeded() {
+        applyAndReloadEpubBoundaryImmediately();
+    }
+
+    private String currentEpubBoundarySignature() {
+        if (!"EPUB".equals(docType) || epubFixedLayoutLike || epubImagePageLike) {
+            return "";
+        }
+        return clampEpubBoundaryPx(getEpubLeftPaddingPx()) + ":"
+                + clampEpubBoundaryPx(getEpubRightPaddingPx()) + ":"
+                + clampEpubBoundaryPx(getEpubTopPaddingPx()) + ":"
+                + clampEpubBoundaryPx(getEpubBottomPaddingPx()) + ":"
+                + getResources().getDisplayMetrics().densityDpi;
+    }
+
+    void markCurrentEpubBoundaryRenderLoaded() {
+        loadedEpubBoundarySignature = currentEpubBoundarySignature();
+    }
+
+    void applyAndReloadEpubBoundaryImmediately() {
         applyEpubBoundaryMarginsIfNeeded();
+        if (webView == null || pages.isEmpty()
+                || currentPage < 0 || currentPage >= pages.size()
+                || !"EPUB".equals(docType)
+                || epubFixedLayoutLike || epubImagePageLike) {
+            return;
+        }
+        String currentSignature = currentEpubBoundarySignature();
+        if (currentSignature.equals(loadedEpubBoundarySignature)) return;
+
+        // Reflowable EPUB keeps page JavaScript disabled. DOM style injection is
+        // attempted for the fastest visual update, but a same-page HTML reload is
+        // the authoritative path: it guarantees the new boundary CSS is parsed
+        // even on System WebView versions that reject evaluateJavascript while
+        // JavaScript is disabled. Preserve the current within-page position.
+        pendingThemeRefreshScrollX = webView.getScrollX();
+        pendingThemeRefreshScrollY = webView.getScrollY();
+        restoreDocumentScrollAfterThemeRefresh = true;
+        showPage(currentPage, 0);
+    }
+
+    void installDocumentFastScroll() {
+        if (documentFastScrollController != null
+                || documentFastScrollRail == null
+                || documentFastScrollThumb == null) {
+            return;
+        }
+        documentFastScrollController = new ProportionalFastScrollController(
+                documentFastScrollRail,
+                documentFastScrollThumb,
+                new ProportionalFastScrollController.ScrollSource() {
+                    @Override
+                    public boolean isEnabled() {
+                        return webView != null
+                                && !("EPUB".equals(docType)
+                                && (epubFixedLayoutLike || epubImagePageLike));
+                    }
+
+                    @Override
+                    public long scrollRange() {
+                        return webView == null ? 0L : Math.max(
+                                0L, Math.round(webView.getContentHeight() * (double) webView.getScale()));
+                    }
+
+                    @Override
+                    public long scrollExtent() {
+                        return webView == null ? 0L : Math.max(0, webView.getHeight());
+                    }
+
+                    @Override
+                    public long scrollOffset() {
+                        return webView == null ? 0L : Math.max(0, webView.getScrollY());
+                    }
+
+                    @Override
+                    public void scrollToFraction(float fraction) {
+                        if (webView == null) return;
+                        long range = Math.max(0L,
+                                Math.round(webView.getContentHeight() * (double) webView.getScale()));
+                        long maxOffset = Math.max(0L, range - webView.getHeight());
+                        long target = Math.round(
+                                Math.max(0f, Math.min(1f, fraction)) * (double) maxOffset);
+                        webView.scrollTo(webView.getScrollX(),
+                                (int) Math.min(Integer.MAX_VALUE, target));
+                    }
+
+                    @Override public void onFastScrollStart() {}
+                    @Override public void onFastScrollStop() {}
+                });
+        documentFastScrollController.install();
+    }
+
+    void scheduleDocumentFastScrollUpdate() {
+        if (documentFastScrollController != null) {
+            documentFastScrollController.scheduleMetricsUpdate();
+        }
+    }
+
+    void notifyDocumentFastScrollActivity() {
+        if (documentFastScrollController != null) {
+            documentFastScrollController.notifyScrollActivity();
+        }
+    }
+
+    void beginDocumentFastScrollContentChange() {
+        if (documentFastScrollController != null) {
+            documentFastScrollController.beginContentChange();
+        }
     }
 
     private int clampEpubBoundaryPx(int px) {
         int clamped = Math.max(0, Math.min(240, px));
         return Math.round(clamped / 5f) * 5;
-    }
-
-    private int getVisibleDocumentBottomToolbarHeightPx() {
-        if (documentBottomChrome == null || documentBottomChrome.getVisibility() != View.VISIBLE) {
-            return 0;
-        }
-        int height = documentBottomChrome.getHeight();
-        if (height <= 0) height = documentBottomChrome.getMeasuredHeight();
-        return Math.max(0, height);
-    }
-
-    private boolean isDocumentBottomToolbarHeightPending() {
-        return documentBottomChrome != null
-                && documentBottomChrome.getVisibility() == View.VISIBLE
-                && documentBottomChrome.getHeight() <= 0
-                && documentBottomChrome.getMeasuredHeight() <= 0;
     }
 
     private int getEffectiveEpubBottomMarginPx(int requestedBottomBoundaryPx, int bottomToolbarHeightPx) {
@@ -1487,103 +1682,126 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     void applyEpubBoundaryMarginsIfNeeded() {
         if (webView == null) return;
-        if ("EPUB".equals(docType) && epubFixedLayoutLike) {
-            lastAppliedEpubLeftPaddingDp = 0;
-            lastAppliedEpubRightPaddingDp = 0;
-            lastAppliedEpubTopPaddingDp = 0;
-            lastAppliedEpubBottomPaddingDp = 0;
-            lastAppliedEpubBottomToolbarHeightPx = 0;
-            lastAppliedEpubEffectiveBottomMarginPx = 0;
-            for (WebView v : new WebView[]{webView, rightWebView}) {
-                if (v == null) continue;
-                ViewGroup.LayoutParams rawLp = v.getLayoutParams();
-                if (rawLp instanceof ViewGroup.MarginLayoutParams) {
-                    ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) rawLp;
-                    if (lp.leftMargin != 0 || lp.topMargin != 0 || lp.rightMargin != 0 || lp.bottomMargin != 0) {
-                        lp.setMargins(0, 0, 0, 0);
-                        v.setLayoutParams(lp);
-                    }
-                }
-            }
-            return;
-        }
-        int left = "EPUB".equals(docType) ? clampEpubBoundaryPx(getEpubLeftPaddingDp()) : 0;
-        int right = "EPUB".equals(docType) ? clampEpubBoundaryPx(getEpubRightPaddingDp()) : 0;
-        int top = "EPUB".equals(docType) ? clampEpubBoundaryPx(getEpubTopPaddingDp()) : 0;
-        int bottom = "EPUB".equals(docType) ? clampEpubBoundaryPx(getEpubBottomPaddingDp()) : 0;
-        int bottomToolbarHeightPx = 0;
-        int effectiveBottomMarginPx = getEffectiveEpubBottomMarginPx(bottom, bottomToolbarHeightPx);
-        if (left == lastAppliedEpubLeftPaddingDp
-                && right == lastAppliedEpubRightPaddingDp
-                && top == lastAppliedEpubTopPaddingDp
-                && bottom == lastAppliedEpubBottomPaddingDp
-                && bottomToolbarHeightPx == lastAppliedEpubBottomToolbarHeightPx
-                && effectiveBottomMarginPx == lastAppliedEpubEffectiveBottomMarginPx) {
-            return;
-        }
-        lastAppliedEpubLeftPaddingDp = left;
-        lastAppliedEpubRightPaddingDp = right;
-        lastAppliedEpubTopPaddingDp = top;
-        lastAppliedEpubBottomPaddingDp = bottom;
-        lastAppliedEpubBottomToolbarHeightPx = bottomToolbarHeightPx;
-        lastAppliedEpubEffectiveBottomMarginPx = effectiveBottomMarginPx;
 
-        // Apply to both spread halves so the landscape two-page view stays
-        // symmetric; in portrait the right view is GONE and the margins are
-        // simply parked on it.
+        // Keep the WebViews full-size. EPUB boundaries belong to the HTML body,
+        // not the Android View: View margins/padding either moved the side rail
+        // inward or clipped publisher layout without reliably reflowing it.
         for (WebView v : new WebView[]{webView, rightWebView}) {
             if (v == null) continue;
             ViewGroup.LayoutParams rawLp = v.getLayoutParams();
             if (rawLp instanceof ViewGroup.MarginLayoutParams) {
                 ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) rawLp;
-                int leftPx = left;
-                int rightPx = right;
-                int topPx = top;
-                int bottomPx = effectiveBottomMarginPx;
-                if (lp.leftMargin != leftPx || lp.rightMargin != rightPx
-                        || lp.topMargin != topPx || lp.bottomMargin != bottomPx) {
-                    lp.setMargins(leftPx, topPx, rightPx, bottomPx);
+                if (lp.leftMargin != 0 || lp.rightMargin != 0
+                        || lp.topMargin != 0 || lp.bottomMargin != 0) {
+                    lp.setMargins(0, 0, 0, 0);
                     v.setLayoutParams(lp);
                 }
             }
+            if (v.getPaddingLeft() != 0 || v.getPaddingTop() != 0
+                    || v.getPaddingRight() != 0 || v.getPaddingBottom() != 0) {
+                v.setPadding(0, 0, 0, 0);
+            }
+            applyEpubBoundaryCssToLoadedWebView(v);
         }
+        scheduleDocumentFastScrollUpdate();
     }
 
-    private void resetDocumentZoom() {
-        if (webView == null) return;
-        WebSettings settings = webView.getSettings();
+    private String buildEpubBoundaryCss() {
+        if (!"EPUB".equals(docType) || epubFixedLayoutLike || epubImagePageLike) {
+            return "";
+        }
+        int left = clampEpubBoundaryPx(getEpubLeftPaddingPx());
+        int right = clampEpubBoundaryPx(getEpubRightPaddingPx());
+        int top = clampEpubBoundaryPx(getEpubTopPaddingPx());
+        int bottom = getEffectiveEpubBottomMarginPx(
+                clampEpubBoundaryPx(getEpubBottomPaddingPx()), 0);
+        float devicePixelsPerCssPixel = Math.max(
+                0.1f, getResources().getDisplayMetrics().density);
+        return "html{padding:0 !important;}"
+                + "body{padding-left:" + physicalPxToCssPx(left, devicePixelsPerCssPixel) + " !important;"
+                + "padding-right:" + physicalPxToCssPx(right, devicePixelsPerCssPixel) + " !important;"
+                + "padding-top:" + physicalPxToCssPx(top, devicePixelsPerCssPixel) + " !important;"
+                + "padding-bottom:" + physicalPxToCssPx(bottom, devicePixelsPerCssPixel) + " !important;"
+                + "box-sizing:border-box !important;}";
+    }
+
+    private String physicalPxToCssPx(int physicalPx, float devicePixelsPerCssPixel) {
+        float cssPx = physicalPx / Math.max(0.1f, devicePixelsPerCssPixel);
+        return String.format(Locale.US, "%.4fpx", cssPx);
+    }
+
+    void applyEpubBoundaryCssToLoadedWebView(@NonNull WebView target) {
+        boolean reflowableEpub = "EPUB".equals(docType)
+                && !epubFixedLayoutLike
+                && !epubImagePageLike;
+        int left = reflowableEpub ? clampEpubBoundaryPx(getEpubLeftPaddingPx()) : 0;
+        int right = reflowableEpub ? clampEpubBoundaryPx(getEpubRightPaddingPx()) : 0;
+        int top = reflowableEpub ? clampEpubBoundaryPx(getEpubTopPaddingPx()) : 0;
+        int bottom = reflowableEpub
+                ? getEffectiveEpubBottomMarginPx(clampEpubBoundaryPx(getEpubBottomPaddingPx()), 0)
+                : 0;
+        String fallbackRatio = String.format(
+                Locale.US, "%.4f", Math.max(0.1f, getResources().getDisplayMetrics().density));
+        target.evaluateJavascript(
+                "(function(){try{"
+                        + "var id='readwide-epub-boundary';"
+                        + "var s=document.getElementById(id);"
+                        + "var enabled=" + reflowableEpub + ";"
+                        + "var ratio=Number(window.devicePixelRatio);"
+                        + "if(!(ratio>0))ratio=" + fallbackRatio + ";"
+                        + "var css=enabled?('html{padding:0 !important;}body{padding-left:'"
+                        + "+(" + left + "/ratio)+'px !important;padding-right:'"
+                        + "+(" + right + "/ratio)+'px !important;padding-top:'"
+                        + "+(" + top + "/ratio)+'px !important;padding-bottom:'"
+                        + "+(" + bottom + "/ratio)+'px !important;box-sizing:border-box !important;}'):'';"
+                        + "if(!css){if(s&&s.parentNode)s.parentNode.removeChild(s);return true;}"
+                        + "if(!s){s=document.createElement('style');s.id=id;"
+                        + "(document.head||document.documentElement).appendChild(s);}"
+                        + "if(s.textContent!==css)s.textContent=css;"
+                        + "if(document.documentElement)void(document.documentElement.offsetWidth);"
+                        + "return true;}catch(e){return false;}})()",
+                value -> {
+                    if (!activityDestroyed) {
+                        target.postInvalidateOnAnimation();
+                        scheduleDocumentFastScrollUpdate();
+                    }
+                });
+    }
+
+    private void resetDocumentZoom(@NonNull WebView target) {
+        WebSettings settings = target.getSettings();
         settings.setTextZoom(documentTextZoomPercent());
 
         // WebView zoomOut() is step-based.  Use a bounded loop instead of relying
         // on an unbounded canZoomOut() loop so double-tap reset cannot overshoot or
         // get stuck on device-specific WebView implementations.
-        for (int i = 0; i < 18 && webView.canZoomOut(); i++) {
-            if (!webView.zoomOut()) break;
+        for (int i = 0; i < 18 && target.canZoomOut(); i++) {
+            if (!target.zoomOut()) break;
         }
 
-        stabilizeDocumentAfterZoomReset();
+        stabilizeDocumentAfterZoomReset(target);
         clearDocumentEdgeArm();
     }
 
-    private void stabilizeDocumentAfterZoomReset() {
-        if (webView == null || !"EPUB".equals(docType)) return;
+    private void stabilizeDocumentAfterZoomReset(@NonNull WebView target) {
+        if (!"EPUB".equals(docType)) return;
 
         Runnable stabilize = () -> {
-            if (activityDestroyed || webView == null || !"EPUB".equals(docType)) return;
-            if (epubFixedLayoutLike) {
-                applyFixedLayoutFindOffsetCssIfNeeded();
-                webView.scrollTo(0, 0);
+            if (activityDestroyed || !"EPUB".equals(docType)) return;
+            if (epubFixedLayoutLike || epubImagePageLike) {
+                if (epubFixedLayoutLike && target == webView) applyFixedLayoutFindOffsetCssIfNeeded();
+                target.scrollTo(0, 0);
             }
             clearDocumentEdgeArm();
         };
 
-        webView.post(stabilize);
-        webView.postDelayed(stabilize, 90);
-        webView.postDelayed(stabilize, 240);
+        target.post(stabilize);
+        target.postDelayed(stabilize, 90);
+        target.postDelayed(stabilize, 240);
     }
 
     int documentTextZoomPercent() {
-        if ("EPUB".equals(docType) && epubFixedLayoutLike) return 100;
+        if ("EPUB".equals(docType) && (epubFixedLayoutLike || epubImagePageLike)) return 100;
         if (!("EPUB".equals(docType) || "Markdown".equals(docType)) || prefs == null) return 100;
         float size = Math.max(8f, Math.min(48f, prefs.getFontSize()));
         return Math.max(50, Math.min(267, Math.round(size / PrefsManager.DEFAULT_FONT_SIZE * 100f)));
@@ -1608,8 +1826,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     private void refreshCurrentEpubTextSize() {
-        if ("EPUB".equals(docType) && epubFixedLayoutLike) {
-            ShortToast.show(this, localizedText("Fixed-layout EPUB keeps its original page layout.", "고정 레이아웃 EPUB은 원본 페이지 배치를 유지합니다."));
+        if ("EPUB".equals(docType) && (epubFixedLayoutLike || epubImagePageLike)) {
+            ShortToast.show(this, localizedText("This EPUB keeps its original page layout.", "이 EPUB은 원본 페이지 배치를 유지합니다."));
             return;
         }
         applyDocumentTextZoom();
@@ -2402,9 +2620,19 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         // on the caps also beats the common `img{max-width:none}` reset.
         // Fixed-layout EPUB never reaches this method (early return above).
         String epubImageFitCss = "EPUB".equals(docType)
-                ? "img,svg,video{max-width:100% !important;max-height:98vh !important;height:auto;object-fit:contain;}"
+                ? "img,svg,video,object,embed{max-width:100% !important;max-height:98vh !important;height:auto;object-fit:contain;}"
                 + "svg{width:auto;}"
                 : "";
+        // Injected after the publisher stylesheets so ordinary reflowable EPUBs
+        // stay a single centered reading column in landscape. Fixed-layout and
+        // image-page EPUBs return above or use their own page-canvas CSS.
+        String epubResponsiveWidthCss = "EPUB".equals(docType)
+                && !epubFixedLayoutLike && !epubImagePageLike
+                ? "body{width:100% !important;max-width:980px !important;"
+                + "margin-left:auto !important;margin-right:auto !important;}"
+                + "@media (orientation:landscape){body{max-width:1120px !important;}}"
+                : "";
+        String epubBoundaryCss = buildEpubBoundaryCss();
         String documentSearchCss =
                 ".rw-document-search-hit{background-color:#ffeb3b !important;color:#111 !important;border-radius:2px;padding:0 1px;}"
                 + ".rw-document-search-current{background-color:#ff9800 !important;color:#111 !important;}";
@@ -2420,9 +2648,13 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 + "body.rw-rendered-doc .rw-table .rw-p{max-width:100% !important;white-space:normal !important;overflow-wrap:break-word !important;word-break:normal !important;}"
                 + "body.rw-rendered-doc a{color:#0645ad !important;}"
                 : "";
+        String rootThemeCss = epubImagePageLike
+                ? "html,body{background-color:" + cssColor(readerBg)
+                + " !important;color:" + cssColor(readerFg) + " !important;}"
+                : "html,body{background:" + cssColor(readerBg)
+                + " !important;color:" + cssColor(readerFg) + " !important;}";
         String css = "<style id=\"textview-reader-theme\">" +
-                "html,body{background:" + cssColor(readerBg) + " !important;color:" + cssColor(readerFg) +
-                " !important;}" +
+                rootThemeCss +
                 "a{color:" + cssColor(linkColor) + " !important;}" +
                 "body:not(.rw-rendered-doc) table,body:not(.rw-rendered-doc) td,body:not(.rw-rendered-doc) th{border-color:" + cssColor(readerLine) + " !important;}" +
                 "html,body{max-width:100%;overflow-x:hidden;}" +
@@ -2432,6 +2664,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 "pre{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}" +
                 renderedPaperCss +
                 epubImageFitCss +
+                epubResponsiveWidthCss +
+                epubBoundaryCss +
                 epubThemeColorCss +
                 markdownThemeCss +
                 documentSearchCss +
@@ -2455,7 +2689,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
 
     boolean isRenderedContentAnchorDocument() {
-        return ("EPUB".equals(docType) && !epubFixedLayoutLike)
+        return ("EPUB".equals(docType) && !epubFixedLayoutLike && !epubImagePageLike)
                 || "Word".equals(docType)
                 || "HWP".equals(docType);
     }
@@ -2734,13 +2968,10 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     boolean isLandscapeTwoPageDocumentMode() {
         return "EPUB".equals(docType)
+                && epubImagePageLike
                 && pages.size() > 1
                 && getResources().getConfiguration().orientation
                 == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
-    }
-
-    int documentDisplayPageStep() {
-        return com.readwide.manager.util.SpreadMath.displayStep(isLandscapeTwoPageDocumentMode());
     }
 
     int documentRightSpreadPageIndex() {
@@ -2778,13 +3009,15 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     String documentPageStatusLabel(int page, int total) {
-        if (!isMarkdownDocument() && hasVisibleDocumentRightSpreadPage()) {
-            int right = Math.min(total, currentPage + 2);
-            if (right > page) {
-                return String.format(Locale.getDefault(), "%d-%d / %d", page, right, total);
-            }
+        int startIndex = com.readwide.manager.util.SpreadMath.clampIndex(page - 1, total);
+        boolean spread = !isMarkdownDocument() && isLandscapeTwoPageDocumentMode();
+        int endIndex = com.readwide.manager.util.SpreadMath.visibleEndIndex(
+                startIndex, total, spread);
+        if (endIndex > startIndex) {
+            return String.format(Locale.getDefault(), "%d-%d / %d",
+                    startIndex + 1, endIndex + 1, total);
         }
-        return String.format(Locale.getDefault(), "%d / %d", page, total);
+        return String.format(Locale.getDefault(), "%d / %d", startIndex + 1, total);
     }
 
     void updateDocumentPageStatusViews() {
@@ -2816,8 +3049,16 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             documentPageSeekBar.setEnabled(true);
             documentPageSeekBar.setAlpha(1f);
         }
-        if (prevButton != null) prevButton.setEnabled(page > 1);
-        if (nextButton != null) nextButton.setEnabled(page < total);
+        int currentIndex = Math.max(0, Math.min(total - 1, currentDisplayDocumentPageIndex()));
+        boolean spread = !isMarkdownDocument() && isLandscapeTwoPageDocumentMode();
+        if (prevButton != null) {
+            prevButton.setEnabled(com.readwide.manager.util.SpreadMath.canTurn(
+                    currentIndex, -1, total, spread));
+        }
+        if (nextButton != null) {
+            nextButton.setEnabled(com.readwide.manager.util.SpreadMath.canTurn(
+                    currentIndex, 1, total, spread));
+        }
     }
 
     /** Toolbar read-aloud button visibility; see the integration controller. */
@@ -2852,6 +3093,10 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         if (webView != null) webView.setBackgroundColor(readerBg);
         if (documentSpreadContainer != null) {
             documentSpreadContainer.setBackgroundColor(readerBg);
+            boolean rtlSpread = showRight && prefs != null
+                    && prefs.getEpubPageDirection() == PrefsManager.EPUB_PAGE_DIRECTION_RTL;
+            documentSpreadContainer.setLayoutDirection(rtlSpread
+                    ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
         }
     }
 
@@ -2883,6 +3128,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     void showPage(int page, int direction) {
+        if (pendingEpubAnchorPage >= 0 && page != pendingEpubAnchorPage) {
+            clearPendingEpubAnchor();
+        }
         // Invalidate the one-shot resume anchor once we move to a page other than
         // the one it points into. The resume path sets the anchor and then calls
         // showPage(anchorPage), which keeps it (same page); any later turn to a
@@ -3347,16 +3595,37 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         List<String> spine = findEpubSpinePaths(resourceZip);
         if (spine.isEmpty()) spine = findEpubHtmlEntries(resourceZip);
 
+        ArrayList<String> paths = new ArrayList<>();
+        ArrayList<String> titles = new ArrayList<>();
+        ArrayList<String> rawHtmlPages = new ArrayList<>();
         for (String path : spine) {
             ZipEntry entry = resourceZip.getEntry(path);
             if (entry == null || entry.isDirectory()) continue;
             String html = readZipEntryString(resourceZip, entry);
             String title = titleFromHtml(html);
             if (title.isEmpty()) title = fileNameFromPath(path);
-            int spinePageIndex = pages.size();
-            boolean centerAsCover = !epubFixedLayoutLike
-                    && isEpubCoverLikePage(html, title, path, spinePageIndex);
-            pages.add(new Page(title, epubFixedLayoutLike ? html : prepareEpubHtml(html, centerAsCover), path));
+            paths.add(path);
+            titles.add(title);
+            rawHtmlPages.add(html);
+        }
+
+        epubImagePageLike = DocumentArchiveUtils.detectEpubImagePageLike(
+                rawHtmlPages, epubFixedLayoutLike);
+        for (int i = 0; i < rawHtmlPages.size(); i++) {
+            String html = rawHtmlPages.get(i);
+            String title = titles.get(i);
+            String path = paths.get(i);
+            boolean centerAsCover = !epubFixedLayoutLike && !epubImagePageLike
+                    && isEpubCoverLikePage(html, title, path, i);
+            String prepared;
+            if (epubFixedLayoutLike) {
+                prepared = html;
+            } else if (epubImagePageLike) {
+                prepared = prepareImagePageEpubHtml(html);
+            } else {
+                prepared = prepareEpubHtml(html, centerAsCover);
+            }
+            pages.add(new Page(title, prepared, path));
         }
     }
 
@@ -3592,9 +3861,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             return null;
         }
 
-        try {
-            zipPath = URLDecoder.decode(zipPath, "UTF-8");
-        } catch (Exception ignored) {}
+        zipPath = UriPathCodec.decodePercentEscapes(zipPath);
         zipPath = normalizeZipPath(zipPath);
 
         ZipEntry entry = resourceZip.getEntry(zipPath);
@@ -3613,32 +3880,82 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }
     }
 
-    boolean handleEpubInternalNavigation(Uri uri) {
+    boolean handleEpubInternalNavigation(@NonNull WebView sourceView, Uri uri) {
         if (uri == null || !"EPUB".equals(docType) || pages == null || pages.isEmpty()) return false;
         if (!LOCAL_HOST.equalsIgnoreCase(uri.getHost())) return false;
         String path = uri.getPath();
         if (path == null || !path.startsWith(EPUB_PREFIX)) return false;
 
         String zipPath = path.substring(EPUB_PREFIX.length());
-        try {
-            zipPath = URLDecoder.decode(zipPath, "UTF-8");
-        } catch (Exception ignored) {}
+        zipPath = UriPathCodec.decodePercentEscapes(zipPath);
         zipPath = normalizeZipPath(zipPath);
-        int hash = zipPath.indexOf('#');
-        if (hash >= 0) zipPath = zipPath.substring(0, hash);
+
+        // loadDataWithBaseURL uses the chapter's parent directory as its base.
+        // Therefore a literal href="#note" reaches shouldOverrideUrlLoading as
+        // that directory plus the fragment, not as the chapter file path.
+        int sourcePageIndex = sourceView == rightWebView
+                ? documentRightSpreadPageIndex() : currentPage;
+        if (uri.getFragment() != null
+                && sourcePageIndex >= 0
+                && sourcePageIndex < pages.size()) {
+            Page sourcePage = pages.get(sourcePageIndex);
+            String sourceParent = sourcePage == null || sourcePage.sourcePath == null
+                    ? "" : normalizeZipPath(parentPath(sourcePage.sourcePath));
+            if (zipPath.equals(sourceParent)) {
+                scrollEpubAnchor(sourceView, uri.getFragment());
+                return true;
+            }
+        }
         if (zipPath.isEmpty()) return false;
 
         for (int i = 0; i < pages.size(); i++) {
             Page page = pages.get(i);
             if (page == null || page.sourcePath == null) continue;
             if (normalizeZipPath(page.sourcePath).equals(zipPath)) {
-                if (i != currentPage) {
-                    showPage(i, Integer.compare(i, currentPage));
+                if (i == currentPage
+                        || (i == documentRightSpreadPageIndex() && sourceView == rightWebView)) {
+                    // Keep the themed loadData document in place and scroll the
+                    // actual source pane. Letting WebView navigate to the raw ZIP
+                    // entry would discard injected theme/search markup.
+                    scrollEpubAnchor(sourceView, uri.getFragment());
+                    return true;
                 }
+                pendingEpubAnchorPage = i;
+                pendingEpubAnchorFragment = uri.getFragment() == null
+                        ? "" : uri.getFragment();
+                showPage(i, Integer.compare(i, currentPage));
                 return true;
             }
         }
         return false;
+    }
+
+    void applyPendingEpubAnchorAfterPageLoad(@NonNull WebView loadedView) {
+        if (!"EPUB".equals(docType)
+                || pendingEpubAnchorPage != currentPage
+                || pendingEpubAnchorFragment.isEmpty()) {
+            if (pendingEpubAnchorPage == currentPage) clearPendingEpubAnchor();
+            return;
+        }
+        String fragment = pendingEpubAnchorFragment;
+        clearPendingEpubAnchor();
+        scrollEpubAnchor(loadedView, fragment);
+    }
+
+    private void scrollEpubAnchor(@NonNull WebView targetView, @Nullable String fragment) {
+        if (fragment == null || fragment.isEmpty()) return;
+        String quoted = JSONObject.quote(fragment);
+        targetView.evaluateJavascript(
+                "(function(){var k=" + quoted
+                        + ";var e=document.getElementById(k);"
+                        + "if(!e){var n=document.getElementsByName(k);if(n.length)e=n[0];}"
+                        + "if(e){e.scrollIntoView(true);return true;}return false;})()",
+                null);
+    }
+
+    private void clearPendingEpubAnchor() {
+        pendingEpubAnchorPage = -1;
+        pendingEpubAnchorFragment = "";
     }
 
     String prepareFixedLayoutEpubHtml(String html) {
@@ -3651,7 +3968,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         if (viewport[0] > 0 && viewport[1] > 0) {
             css = "<style id=\"textview-fixed-layout-center\">"
                     + "html{margin:0 !important;padding:0 !important;width:100vw !important;min-height:100vh !important;"
-                    + "background:" + cssColor(readerBg) + " !important;overflow:auto !important;}"
+                    + "background-color:" + cssColor(readerBg) + " !important;overflow:auto !important;}"
                     + "body{margin:0 !important;padding:0 !important;width:" + viewport[0] + "px !important;"
                     + "height:auto !important;min-width:" + viewport[0] + "px !important;"
                     + "min-height:" + viewport[1] + "px !important;position:absolute !important;left:0;top:0;"
@@ -3682,7 +3999,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             css = "<style id=\"textview-fixed-layout-center\">"
                     + "html{margin:0 !important;padding:0 !important;width:100vw !important;height:100vh !important;"
                     + "display:flex !important;align-items:center !important;justify-content:center !important;"
-                    + "background:" + cssColor(readerBg) + " !important;overflow:auto !important;}"
+                    + "background-color:" + cssColor(readerBg) + " !important;overflow:auto !important;}"
                     + "body{margin:0 !important;padding:0 !important;flex:0 0 auto;box-sizing:border-box !important;}"
                     + "body>img:only-child,body>svg:only-child{display:block;margin:0 auto;}"
                     + "</style>";
@@ -3693,9 +4010,11 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     private String replaceFixedLayoutViewportMeta(String html) {
         if (html == null) return "";
         String replacement = "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\"/>";
-        String next = html.replaceFirst("(?is)<meta[^>]+name\\s*=\\s*['\\\"]viewport['\\\"][^>]*>", replacement);
+        String next = EpubViewportParser.replaceViewportMeta(html, replacement);
         if (!next.equals(html)) return next;
-        return html.replaceFirst("(?i)<head[^>]*>", "$0" + replacement);
+        String withHead = html.replaceFirst("(?i)<head[^>]*>", "$0" + replacement);
+        if (!withHead.equals(html)) return withHead;
+        return injectIntoHtmlHead(html, replacement);
     }
 
     private int[] computeFixedLayoutCenterMarginsCssPx(int pageWidthCssPx, int pageHeightCssPx) {
@@ -3792,7 +4111,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         int minHeight = viewport[1] + topMargin + bottomMargin;
         String css = "html{margin:0 !important;padding:0 !important;width:auto !important;"
                 + "min-width:" + minWidth + "px !important;min-height:" + minHeight + "px !important;"
-                + "background:" + cssColor(readerBg) + " !important;overflow:auto !important;}"
+                + "background-color:" + cssColor(readerBg) + " !important;overflow:auto !important;}"
                 + "body{width:" + viewport[0] + "px !important;min-width:" + viewport[0] + "px !important;"
                 + "height:" + viewport[1] + "px !important;min-height:" + viewport[1] + "px !important;"
                 + "margin:" + topMargin + "px " + leftRight + "px " + bottomMargin + "px " + leftRight + "px !important;"
@@ -3820,23 +4139,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     private int[] extractFixedLayoutViewportSize(String html) {
-        int[] result = new int[]{0, 0};
-        if (html == null) return result;
-        try {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile(
-                    "(?is)<meta[^>]+name\\s*=\\s*['\\\"]viewport['\\\"][^>]+content\\s*=\\s*['\\\"]([^'\\\"]*)['\\\"]")
-                    .matcher(html);
-            if (!m.find()) return result;
-            String content = m.group(1);
-            java.util.regex.Matcher w = java.util.regex.Pattern.compile("(?i)(?:^|[,;\\s])width\\s*=\\s*([0-9]{2,5})").matcher(content);
-            java.util.regex.Matcher h = java.util.regex.Pattern.compile("(?i)(?:^|[,;\\s])height\\s*=\\s*([0-9]{2,5})").matcher(content);
-            if (w.find()) result[0] = Integer.parseInt(w.group(1));
-            if (h.find()) result[1] = Integer.parseInt(h.group(1));
-        } catch (Throwable ignored) {
-            result[0] = 0;
-            result[1] = 0;
-        }
-        return result;
+        EpubViewportParser.Dimensions dimensions = EpubViewportParser.parse(html);
+        return new int[]{dimensions.width, dimensions.height};
     }
 
     private int[] extractSvgViewBoxSize(String html) {
@@ -3894,8 +4198,10 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             html = addClassToHtmlBody(html, "textview-reader-epub-cover-page");
         }
         String css = "<style>" +
-                "html,body{margin:0;padding:0;background:#121212;color:#e8eaed;}" +
-                "body{line-height:1.55;padding:22px;box-sizing:border-box;}" +
+                "html{margin:0;padding:0;background:#121212;color:#e8eaed;}" +
+                "body{line-height:1.55;padding:22px;box-sizing:border-box;" +
+                "width:100%;max-width:980px;margin:0 auto;background:#121212;color:#e8eaed;}" +
+                "@media (orientation:landscape){body{max-width:1120px;}}" +
                 "body.textview-reader-epub-cover-page{min-height:100vh !important;display:flex !important;" +
                 "flex-direction:column !important;align-items:center !important;justify-content:center !important;}" +
                 "body.textview-reader-epub-cover-page>*{max-width:100% !important;}" +
@@ -3910,6 +4216,24 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         return "<!doctype html><html><head>" + viewport + css + "</head><body"
                 + (centerAsCover ? " class=\"textview-reader-epub-cover-page\"" : "")
                 + ">" + html + "</body></html>";
+    }
+
+    private String prepareImagePageEpubHtml(String html) {
+        if (html == null) html = "";
+        String viewport = "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">";
+        String css = "<style>"
+                + "html,body{margin:0 !important;padding:0 !important;width:100% !important;"
+                + "height:100% !important;min-height:100vh !important;overflow:hidden !important;"
+                + "background-color:#121212 !important;}"
+                + "body{display:flex !important;align-items:center !important;justify-content:center !important;"
+                + "background-size:contain !important;background-position:center !important;"
+                + "background-repeat:no-repeat !important;}"
+                + "body>*{max-width:100% !important;max-height:100% !important;}"
+                + "img,svg,video,canvas,object,embed{display:block !important;max-width:100% !important;"
+                + "max-height:100vh !important;width:auto !important;height:auto !important;"
+                + "object-fit:contain !important;margin:auto !important;}"
+                + "</style>";
+        return injectIntoHtmlHead(html, viewport + css);
     }
 
     private boolean isEpubCoverLikePage(String html, String title, String path, int spinePageIndex) {

@@ -117,26 +117,25 @@ public class BookmarkListActivity extends AppCompatActivity
         if (emptyText != null) emptyText.setTextColor(sub);
 
         if (root != null) {
+            final View insetAppBar = appbar;
+            final View insetContent = content;
             ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
                 Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
 
-                View appBarView = findViewById(R.id.bookmark_appbar);
-                View contentView = findViewById(R.id.bookmark_content);
-
-                if (appBarView != null) {
-                    appBarView.setPadding(
-                            appBarView.getPaddingLeft(),
+                if (insetAppBar != null) {
+                    insetAppBar.setPadding(
+                            insetAppBar.getPaddingLeft(),
                             bars.top,
-                            appBarView.getPaddingRight(),
-                            appBarView.getPaddingBottom()
+                            insetAppBar.getPaddingRight(),
+                            insetAppBar.getPaddingBottom()
                     );
                 }
 
-                if (contentView != null) {
-                    contentView.setPadding(
-                            contentView.getPaddingLeft(),
-                            contentView.getPaddingTop(),
-                            contentView.getPaddingRight(),
+                if (insetContent != null) {
+                    insetContent.setPadding(
+                            insetContent.getPaddingLeft(),
+                            insetContent.getPaddingTop(),
+                            insetContent.getPaddingRight(),
                             bars.bottom
                     );
                 }

@@ -46,7 +46,8 @@
                     android:layout_width="0dp"
                     android:layout_height="match_parent"
                     android:layout_weight="1"
-                    android:background="#121212" />
+                    android:background="#121212"
+                    android:scrollbars="none" />
 
                 <WebView
                     android:id="@+id/document_webview_right"
@@ -54,8 +55,30 @@
                     android:layout_height="match_parent"
                     android:layout_weight="1"
                     android:background="#121212"
+                    android:scrollbars="none"
                     android:visibility="gone" />
             </LinearLayout>
+
+            <FrameLayout
+                android:id="@+id/document_fast_scroll_rail"
+                android:layout_width="36dp"
+                android:layout_height="match_parent"
+                android:layout_gravity="end"
+                android:background="@android:color/transparent"
+                android:clickable="false"
+                android:focusable="false"
+                android:paddingEnd="4dp"
+                android:visibility="gone">
+
+                <View
+                    android:id="@+id/document_fast_scroll_thumb"
+                    android:layout_width="8dp"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="end"
+                    android:background="@drawable/fastscroll_thumb" />
+
+            </FrameLayout>
+
             <LinearLayout
                 android:id="@+id/loading_box"
                 android:layout_width="wrap_content"

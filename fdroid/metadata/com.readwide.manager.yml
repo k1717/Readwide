@@ -64,12 +64,19 @@ Builds:
 
   - versionName: 1.0.14
     versionCode: 10014
-    commit: REPLACE_WITH_v1.0.14_FULL_COMMIT_HASH
+    commit: 14fecc70291b07b44d7fa43d98bbf0bd5a7acb99
+    subdir: app
+    gradle:
+      - yes
+
+  - versionName: 1.0.15
+    versionCode: 10014
+    commit: REPLACE_WITH_v1.0.15_FULL_COMMIT_HASH
     subdir: app
     gradle:
       - yes
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 1.0.14
-CurrentVersionCode: 10014
+CurrentVersion: 1.0.15
+CurrentVersionCode: 10015

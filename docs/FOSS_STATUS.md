@@ -1,10 +1,10 @@
-# FOSS status for Readwide 1.0.14
+# FOSS status for Readwide 1.0.15
 
-This is the project-level FOSS status note for the default Readwide 1.0.14 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
+This is the project-level FOSS status note for the default Readwide 1.0.15 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
 
 ## Current assessment
 
-The default Readwide 1.0.14 source package is intended to remain FOSS-friendly:
+The default Readwide 1.0.15 source package is intended to remain FOSS-friendly:
 
 - First-party source is licensed under Apache License 2.0.
 - Source code needed for the default build is included in the repository/source package.
@@ -15,7 +15,7 @@ The default Readwide 1.0.14 source package is intended to remain FOSS-friendly:
 - Android Auto Backup is disabled with `android:allowBackup="false"`.
 - Private signing files, build outputs, and optional proprietary binary dependencies are not part of the default source package.
 
-## Runtime dependency summary
+## Dependency and bundled-component summary
 
 | Component | Use | License position recorded for this release |
 | --- | --- | --- |
@@ -25,14 +25,14 @@ The default Readwide 1.0.14 source package is intended to remain FOSS-friendly:
 | Apache Commons Compress | TAR/7z/stream archive support and ZIP method fallback | Apache-2.0 |
 | libarchive-android | RAR/backend archive support through Android libarchive bindings | Android library artifact under Apache-2.0; bundled native libarchive under permissive BSD-style notices |
 | XZ for Java | XZ/LZMA support | 0BSD |
-| zstd-jni | Zstandard codec used by Commons Compress | BSD-family licensing path recorded in `THIRD_PARTY_NOTICES.md` |
+| zstd-jni | JVM-only Zstandard archive fixtures (`testImplementation`); not packaged in the APK | BSD-family licensing path recorded in `THIRD_PARTY_NOTICES.md` |
 | Zip4j | ZIP/CBZ listing/extraction/encryption/split support | Apache-2.0 |
 | hwplib | HWP 5.x read/text extraction backend | Apache-2.0 |
 | hwpxlib | HWPX read/text extraction backend | Apache-2.0 |
 | PdfBox-Android | PDF text extraction for in-document find (rendering stays on the platform PdfRenderer) | Apache-2.0 |
 | xunazo-derived AZO port | EGG AZO extraction | zlib license notice retained in source |
 
-See `docs/LICENSE_REPORT_READWIDE_1_0_14.md`, `docs/SBOM_READWIDE_1_0_14.spdx.json`, and `THIRD_PARTY_NOTICES.md` for detail.
+See `docs/LICENSE_REPORT_READWIDE_1_0_15.md`, `docs/SBOM_READWIDE_1_0_15.spdx.json`, and `THIRD_PARTY_NOTICES.md` for detail.
 
 ## RAR / CBR boundary
 
@@ -73,7 +73,7 @@ Release signing is conditional. If `READWIDE_KEYSTORE_PATH`, `READWIDE_KEYSTORE_
 
 ## GitHub vs F-Droid source handling
 
-The GitHub source package keeps the standard Gradle wrapper. F-Droid's build verifies `gradle/wrapper/gradle-wrapper.jar` against the known-good hashes of official Gradle releases and builds with its own trusted Gradle, so the metadata does not remove it.
+The GitHub source package keeps the official Gradle 9.4.1 wrapper. Its wrapper JAR SHA-256 is `55243ef57851f12b070ad14f7f5bb8302daceeebc5bce5ece5fa6edb23e1145c`; `gradle-wrapper.properties` pins the 9.4.1 binary distribution SHA-256 as `2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb`. F-Droid verifies known official wrapper hashes and builds with trusted tooling, so the metadata does not remove it.
 
 ## Binary release notice checklist
 
@@ -84,14 +84,16 @@ When distributing APK/AAB files, keep these alongside the binary release assets:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_14.md`
-- `docs/SBOM_READWIDE_1_0_14.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_15.md`
+- `docs/SBOM_READWIDE_1_0_15.spdx.json`
 
-The Android packaging block excludes duplicate dependency `META-INF/LICENSE*` / `META-INF/NOTICE*` resources to avoid resource merge conflicts. That does not remove the obligation to provide project-level and third-party notices with source and binary release materials.
+The APK itself also contains `assets/open_source_licenses/libarchive_android_and_codecs.txt`, with the exact native libarchive-android v1.1.6 input notices. Verify that entry after every release build; it is intentionally source-controlled rather than relying on dependency `META-INF` files that are absent from the upstream AAR.
+
+The Android packaging block excludes duplicate dependency `META-INF/LICENSE*` / `META-INF/NOTICE*` resources to avoid resource merge conflicts. That does not remove the obligation to provide project-level and third-party notices with source and binary release materials; the native notice asset above supplies the in-APK copy for libarchive-android and its statically linked codecs.
 
 ## Caveats
 
-- `docs/LICENSE_REPORT_READWIDE_1_0_14.md` and `docs/SBOM_READWIDE_1_0_14.spdx.json` are direct-dependency/source-declared drafts, not a fully resolved transitive Gradle SBOM.
+- `docs/LICENSE_REPORT_READWIDE_1_0_15.md` and `docs/SBOM_READWIDE_1_0_15.spdx.json` are direct-dependency/source-declared drafts, not a fully resolved transitive Gradle SBOM.
 - A strict repository submission should regenerate a resolved dependency report/SBOM from a clean, network-enabled build environment.
-- Native Maven dependencies such as libarchive-android and zstd-jni may require additional explanation or source-build handling for strict source-only repositories.
+- The Android runtime native dependency is libarchive-android and may require additional source-build handling for strict source-only repositories. `zstd-jni` is test-only; F-Droid release assembly does not need its desktop native resources.
 - Archive compatibility claims must stay conservative and align with `README.md`, current release notes, the RAR/7z revalidation note, and the historical support-label terminology in `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`.

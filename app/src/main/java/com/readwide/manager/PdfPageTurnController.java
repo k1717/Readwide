@@ -31,10 +31,7 @@ final class PdfPageTurnController {
 
     private void pageBy(int direction) {
         if (activity.pageCount <= 0) return;
-        int target = Math.max(0, Math.min(activity.pageCount - 1, activity.currentPage + direction));
-        if (target != activity.currentPage) {
-            activity.goToPage(target, Integer.compare(target, activity.currentPage));
-        }
+        activity.turnPdfDisplayPageBy(direction);
     }
 
     private int pageTurnDirectionForKey(int keyCode) {

@@ -63,7 +63,7 @@ public class RarBackendRouterTest {
 
     @Test
     public void routesEncryptedRar5CompressedToFirstPartyOnly() {
-        // libarchive 3.7.2 cannot decrypt RAR5, so an AES-256 compressed RAR5
+        // The bundled libarchive backend cannot decrypt RAR5, so an AES-256 compressed RAR5
         // entry has no libarchive route; it must go to the scoped first-party
         // RAR5 decode path, never claimed as libarchive-owned.
         RarArchiveReader.EncryptionInfo encryption = new RarArchiveReader.EncryptionInfo(

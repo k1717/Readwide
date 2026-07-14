@@ -29,6 +29,7 @@ import com.readwide.manager.util.FileTreeProgressTracker;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -104,6 +105,10 @@ public final class ArchiveSupport {
     public static class UnsupportedArchiveFeatureException extends IOException {
         UnsupportedArchiveFeatureException(@NonNull String message) {
             super(message);
+        }
+
+        UnsupportedArchiveFeatureException(@NonNull String message, @NonNull Throwable cause) {
+            super(message, cause);
         }
     }
 
@@ -908,7 +913,7 @@ public final class ArchiveSupport {
     }
 
     /**
-     * Forward-only entry reader for solid/sequential archives (7z and the TAR family).
+     * Forward-only entry reader for solid/sequential archives (RAR/7z and the TAR family).
      *
      * These formats have no cheap random per-entry access: a single open stream is read
      * strictly forward, decoding each entry once. Callers keep one reader open for a whole
@@ -920,6 +925,23 @@ public final class ArchiveSupport {
 
         /** Reads bytes of the current entry; returns -1 at the end of the current entry. */
         int read(@NonNull byte[] buffer) throws IOException;
+
+        /**
+         * Decodes and discards the current entry without copying it through the
+         * caller's heap buffer. Returns true when the backend handled the drain.
+         */
+        default boolean drainCurrentEntry(long maxDecodedBytes) throws IOException {
+            return false;
+        }
+
+        /**
+         * Whether advancing to the next header can omit decoding the current entry
+         * without losing sequential compression state. Solid archives normally
+         * return false even if the container API can move to the next header.
+         */
+        default boolean skipsUnreadEntryOnAdvance() {
+            return false;
+        }
     }
 
     public static final class ForwardEntry {
@@ -985,6 +1007,13 @@ public final class ArchiveSupport {
         try {
             switch (prepared.type) {
                 case SEVEN_Z:
+                    if (shouldOpenSevenZForwardWithLibarchive(prepared.file, password)) {
+                        String[] archivePaths = sevenZForwardArchivePaths(prepared.file);
+                        LibarchiveNativeBridge.ForwardStream stream =
+                                LibarchiveNativeBridge.openForwardStream(
+                                        archivePaths, null);
+                        return new LibarchiveForwardReader(stream, prepared);
+                    }
                     return new SevenZForwardReader(prepared, openSevenZFile(prepared.file, password));
                 case TAR:
                 case TAR_GZ:
@@ -992,7 +1021,6 @@ public final class ArchiveSupport {
                 case TAR_XZ:
                 case TAR_LZMA:
                 case TAR_Z:
-                case TAR_ZST:
                 case TAR_LZ4: {
                     InputStream fileIn = new BufferedInputStream(new FileInputStream(prepared.file));
                     try {
@@ -1001,6 +1029,26 @@ public final class ArchiveSupport {
                     } catch (IOException | RuntimeException e) {
                         try { fileIn.close(); } catch (IOException ignored) {}
                         throw e;
+                    }
+                }
+                case TAR_ZST: {
+                    // The Maven zstd-jni JAR carries desktop/Linux natives, not Android
+                    // jni/<abi> payloads. Use libarchive's Android Zstd filter directly;
+                    // the Java stream remains a JVM fallback when the bridge is absent.
+                    if (LibarchiveNativeBridge.isAvailable()) {
+                        LibarchiveNativeBridge.ForwardStream stream =
+                                LibarchiveNativeBridge.openForwardStream(
+                                        new String[]{prepared.file.getAbsolutePath()}, null);
+                        return new LibarchiveForwardReader(stream, prepared);
+                    }
+                    InputStream fileIn = new BufferedInputStream(new FileInputStream(prepared.file));
+                    try {
+                        InputStream payload = wrapTarPayloadInputStream(fileIn, prepared.type);
+                        return new TarForwardReader(prepared, new TarArchiveInputStream(payload), fileIn);
+                    } catch (IOException | RuntimeException | LinkageError e) {
+                        try { fileIn.close(); } catch (IOException ignored) {}
+                        if (e instanceof IOException) throw (IOException) e;
+                        throw new IOException(e);
                     }
                 }
                 case RAR: {
@@ -1026,6 +1074,54 @@ public final class ArchiveSupport {
             if (e instanceof IOException) throw (IOException) e;
             throw new IOException(e);
         }
+    }
+
+    private static boolean shouldOpenSevenZForwardWithLibarchive(@NonNull File archive,
+                                                                  @Nullable char[] password) {
+        boolean hasPassword = password != null && password.length > 0;
+        boolean splitArchive = SevenZSplitVolumeResolver.isSevenZSplitPart(archive);
+        if (!LibarchiveNativeBridge.isAvailable() || hasPassword) {
+            return false;
+        }
+        // A split archive's encoded header may live in a later volume, so the
+        // single-file special-coder probe cannot classify it reliably. Route
+        // every plain split through the volume-aware native stream; a method the
+        // backend cannot decode still falls back to the dedicated whole path.
+        if (splitArchive) return true;
+        try {
+            return shouldUseLibarchiveForwardForSevenZ(
+                    true,
+                    false,
+                    SevenZBcj2ArchiveReader.archiveUsesSpecialCoder(archive, null),
+                    false);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    static boolean shouldUseLibarchiveForwardForSevenZ(boolean libarchiveAvailable,
+                                                        boolean hasPassword,
+                                                        boolean specialCoder) {
+        return shouldUseLibarchiveForwardForSevenZ(
+                libarchiveAvailable, hasPassword, specialCoder, false);
+    }
+
+    static boolean shouldUseLibarchiveForwardForSevenZ(boolean libarchiveAvailable,
+                                                        boolean hasPassword,
+                                                        boolean specialCoder,
+                                                        boolean splitArchive) {
+        return libarchiveAvailable && !hasPassword && (specialCoder || splitArchive);
+    }
+
+    @NonNull
+    private static String[] sevenZForwardArchivePaths(@NonNull File archive) throws IOException {
+        SevenZSplitVolumeResolver.VolumeSet split = SevenZSplitVolumeResolver.resolve(archive);
+        if (split == null) return new String[]{archive.getAbsolutePath()};
+        String[] paths = new String[split.parts.size()];
+        for (int i = 0; i < split.parts.size(); i++) {
+            paths[i] = split.parts.get(i).getAbsolutePath();
+        }
+        return paths;
     }
 
     private static final class SevenZForwardReader implements ForwardArchiveReader {
@@ -1687,7 +1783,7 @@ public final class ArchiveSupport {
     }
 
 
-    private static final class PreparedArchive implements AutoCloseable {
+    private static final class PreparedArchive implements Closeable {
         final File file;
         final Type type;
         @Nullable final File tempFile;
@@ -1908,6 +2004,9 @@ public final class ArchiveSupport {
         if (!isSameOrDescendant(targetDir, out)) return false;
         if (entryProgress != null) entryProgress.onFile(out.getName());
         else if (progress != null) progress.setDetail(out.getName());
+        if (type == Type.SINGLE_ZST && LibarchiveNativeBridge.isAvailable()) {
+            return extractSingleZstdWithLibarchive(payloadArchive, out, progress);
+        }
         try (InputStream fileIn = new BufferedInputStream(new FileInputStream(payloadArchive));
              InputStream payloadIn = wrapSingleCompressedInputStream(fileIn, type)) {
             return writeArchiveEntryStream(payloadIn, out, progress);
@@ -1921,9 +2020,44 @@ public final class ArchiveSupport {
                                                         @NonNull Type type) throws IOException {
         String outputName = getSingleCompressedOutputName(nameSourceArchive);
         if (!entryPath.equals(outputName)) return false;
+        if (type == Type.SINGLE_ZST && LibarchiveNativeBridge.isAvailable()) {
+            return extractSingleZstdWithLibarchive(payloadArchive, outFile, null);
+        }
         try (InputStream fileIn = new BufferedInputStream(new FileInputStream(payloadArchive));
              InputStream payloadIn = wrapSingleCompressedInputStream(fileIn, type)) {
             return writeArchiveEntryStream(payloadIn, outFile);
+        }
+    }
+
+    private static boolean extractSingleZstdWithLibarchive(@NonNull File archive,
+                                                            @NonNull File outFile,
+                                                            @Nullable FileOperationProgress progress) throws IOException {
+        LibarchiveNativeBridge.ForwardStream stream =
+                LibarchiveNativeBridge.openRawForwardStream(archive.getAbsolutePath());
+        try {
+            LibarchiveNativeBridge.ForwardStreamEntry entry = stream.nextEntry();
+            // The empty format has no payload entry; still create the correct zero-byte output.
+            if (entry != null && (entry.directory || !entry.regularFile)) return false;
+            File outParent = outFile.getParentFile();
+            if (outParent == null) return false;
+            if (!outParent.exists() && !outParent.mkdirs()) return false;
+            byte[] buffer = new byte[1024 * 64];
+            long decodedBytes = 0L;
+            try (OutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+                int read;
+                while ((read = stream.read(buffer)) != -1) {
+                    if (progress != null && !progress.checkpoint()) return false;
+                    decodedBytes = checkedAddDecodedStreamBytes(decodedBytes, read);
+                    if (read > 0) {
+                        out.write(buffer, 0, read);
+                        if (progress != null) progress.addDoneBytes(read);
+                    }
+                }
+                out.flush();
+                return true;
+            }
+        } finally {
+            stream.close();
         }
     }
 
@@ -2042,9 +2176,8 @@ public final class ArchiveSupport {
                 try (InputStream in = zip.getInputStream(entry)) {
                     if (!writeArchiveEntryStream(in, out, progress)) return false;
                 } catch (LinkageError missingCodec) {
-                    // Keep a defensive guard for optional/native codec linkage failures.
-                    // ZSTD is normally available because zstd-jni is bundled, but this
-                    // keeps extraction from crashing if an ABI-specific native load fails.
+                    // Optional Commons codecs may be absent from an Android runtime.
+                    // Convert linkage failure so the existing libarchive fallback runs.
                     throw new UnsupportedArchiveFeatureException(
                             "ZIP entry uses a compression codec that is not available");
                 }
@@ -2387,7 +2520,7 @@ public final class ArchiveSupport {
             case TAR_Z:
                 return new ZCompressorInputStream(input);
             case TAR_ZST:
-                return new ZstdCompressorInputStream(input);
+                return openZstdPayload(input);
             case TAR_LZ4:
                 return new FramedLZ4CompressorInputStream(input);
             case TAR:
@@ -2410,11 +2543,21 @@ public final class ArchiveSupport {
             case SINGLE_Z:
                 return new ZCompressorInputStream(input);
             case SINGLE_ZST:
-                return new ZstdCompressorInputStream(input);
+                return openZstdPayload(input);
             case SINGLE_LZ4:
                 return new FramedLZ4CompressorInputStream(input);
             default:
                 throw new IOException("Unsupported single-file compression format");
+        }
+    }
+
+    @NonNull
+    private static InputStream openZstdPayload(@NonNull InputStream input) throws IOException {
+        try {
+            return new ZstdCompressorInputStream(input);
+        } catch (LinkageError missingCodec) {
+            throw new UnsupportedArchiveFeatureException(
+                    "Zstandard codec is not available in this runtime", missingCodec);
         }
     }
 
