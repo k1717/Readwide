@@ -78,7 +78,7 @@ Builds:
 
   - versionName: 1.0.16
     versionCode: 10014
-    commit: REPLACE_WITH_v1.0.16_FULL_COMMIT_HASH
+    commit: 1813c87b707a0e9a18eaa312a6b387487f3b03e0
     subdir: app
     gradle:
       - yes
