@@ -31,7 +31,6 @@
 ### Reliability
 
 - URI archive copies remain atomic and serialized, but waiting for the shared cache is now interruptible so cancelled SAF/open-document work cannot remain blocked behind another large copy.
-- No permission or runtime dependency was added.
 
 ## Readwide 1.0.15 - 2026-07-14
 
