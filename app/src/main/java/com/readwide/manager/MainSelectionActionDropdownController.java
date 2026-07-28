@@ -36,7 +36,7 @@ final class MainSelectionActionDropdownController {
         final PopupWindow[] popupRef = new PopupWindow[1];
         List<Action> actions = buildActions(popupRef, style.fg, style.sub, style.danger);
         CharSequence titleText = activity.getString(R.string.file_selection_count, activity.selectedFilePaths.size());
-        final int popupWidth = MainActionPopupSizing.selectionDropdownWidth(activity);
+        final int popupWidth = calculatePopupWidth(titleText, actions);
 
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -52,12 +52,13 @@ final class MainSelectionActionDropdownController {
         title.setTextSize(13f);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        title.setSingleLine(true);
+        title.setSingleLine(false);
         title.setIncludeFontPadding(false);
-        title.setPadding(activity.dpToPx(14), 0, activity.dpToPx(14), 0);
+        title.setPadding(activity.dpToPx(14), activity.dpToPx(8),
+                activity.dpToPx(14), activity.dpToPx(8));
         box.addView(title, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                activity.dpToPx(32)));
+                LinearLayout.LayoutParams.WRAP_CONTENT));
 
         LinearLayout rows = new LinearLayout(activity);
         rows.setOrientation(LinearLayout.VERTICAL);
@@ -160,15 +161,12 @@ final class MainSelectionActionDropdownController {
         row.setTextColor(action.textColor);
         row.setTextSize(15f);
         row.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        boolean allowTwoLines = shouldAllowTwoLineActionLabel(action.label);
-        row.setSingleLine(!allowTwoLines);
-        row.setMaxLines(allowTwoLines ? 2 : 1);
-        row.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        row.setSingleLine(false);
         row.setIncludeFontPadding(false);
-        if (allowTwoLines) {
-            row.setLineSpacing(0f, 0.96f);
-        }
-        row.setPadding(activity.dpToPx(14), 0, activity.dpToPx(14), 0);
+        row.setLineSpacing(0f, 0.98f);
+        row.setMinHeight(activity.dpToPx(38));
+        row.setPadding(activity.dpToPx(14), activity.dpToPx(8),
+                activity.dpToPx(14), activity.dpToPx(8));
         GradientDrawable rowBg = new GradientDrawable();
         rowBg.setColor(rowBgColor);
         rowBg.setCornerRadius(activity.dpToPx(7));
@@ -176,13 +174,34 @@ final class MainSelectionActionDropdownController {
         row.setOnClickListener(v -> action.action.run());
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                activity.dpToPx(allowTwoLines ? 48 : 38));
+                LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.setMargins(activity.dpToPx(6), 0, activity.dpToPx(6), activity.dpToPx(4));
         box.addView(row, lp);
     }
 
-    private static boolean shouldAllowTwoLineActionLabel(@NonNull String label) {
-        return label.length() > 18 && label.indexOf(' ') >= 0;
+    private int calculatePopupWidth(@NonNull CharSequence titleText,
+                                    @NonNull List<Action> actions) {
+        TextView titleProbe = new TextView(activity);
+        titleProbe.setTextSize(13f);
+        titleProbe.setTypeface(Typeface.DEFAULT_BOLD);
+        float widest = titleProbe.getPaint().measureText(titleText.toString());
+
+        TextView rowProbe = new TextView(activity);
+        rowProbe.setTextSize(15f);
+        for (Action action : actions) {
+            widest = Math.max(widest, rowProbe.getPaint().measureText(action.label));
+        }
+
+        View content = activity.findViewById(android.R.id.content);
+        int contentWidth = content != null ? content.getWidth() : 0;
+        if (contentWidth <= 0) {
+            contentWidth = activity.getResources().getDisplayMetrics().widthPixels;
+        }
+        int maxWidth = Math.max(activity.dpToPx(96),
+                contentWidth - activity.dpToPx(24));
+        // 28dp row padding plus the popup's 6dp margins on both sides.
+        int desired = (int) Math.ceil(widest) + activity.dpToPx(40);
+        return Math.min(maxWidth, Math.max(activity.dpToPx(184), desired));
     }
 
     private void dismiss(@NonNull PopupWindow[] popupRef) {

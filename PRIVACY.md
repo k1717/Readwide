@@ -40,9 +40,16 @@ The app may store local data needed for reading and file-browser behavior:
 - the last reader search query and reader search option states, used only to prefill the search dialog locally;
 - saved TXT display rules, including rule text, scope, enabled state, case-sensitivity setting, regex setting, ordering, and source-file labels/paths used for current-file-only rules;
 - disposable TXT page/index cache metadata for large-file handling;
-- temporary extracted archive entries used when opening files from archives, including a separate shorter-lived sensitive cache for password-protected archive previews.
+- temporary extracted archive entries used when opening files from archives, including a separate shorter-lived sensitive cache for password-protected archive previews;
+- local audio extracted from an opened EPUB into app-private cache when the user starts publisher-provided media-overlay narration. Each extracted audio resource is limited to 256 MB and remains disposable cache data.
 
 This data is used locally by the app. It is not uploaded by Readwide.
+
+EPUB media-overlay playback is foreground-only. Readwide reads the linked audio
+from the local EPUB, places the needed resource in app-private cache, and plays
+it through Android's local media APIs. It does not upload the audio or fetch a
+remote narration track. The cached copy can be removed by Android or by clearing
+the app cache.
 
 ## Folder shortcuts and file paths
 
@@ -51,6 +58,8 @@ Folder shortcuts and recent-file records may store local path strings selected o
 ## Archive browsing and extraction
 
 Opening a file inside an archive may temporarily extract that selected entry into app cache so the appropriate viewer can read it. Long-press archive extraction writes files only after the user chooses a destination and confirms the extraction/conflict choice. Temporary archive cache data is disposable and is not a cloud upload or network transfer. Password-protected archive previews use a separate app-private sensitive preview cache with shorter/smaller pruning limits, because previewing such archives necessarily creates temporary decoded files for the image/PDF/TXT viewers.
+
+The archive image viewer also offers an explicit **Save** action for the current image page. The user chooses either the public Downloads collection or a destination through Android's document picker. Readwide copies the already extracted original image bytes locally without recompression or upload; the resulting saved image is ordinary user-visible data and is no longer disposable app cache.
 
 ## Opening or sharing files with other apps
 
@@ -92,6 +101,8 @@ If no mail app is available, the app copies the contact address to the clipboard
 
 The app requests storage access so it can open local documents selected by the user and act as a local file browser. On Android versions that require scoped-storage handling, the app may request broader storage access for file-browser behavior. These permissions are for local file access; they are not paired with an app network upload path.
 
+As a compatibility alternative, the user can select a folder through Android's Storage Access Framework. Android grants Readwide access only to that selected provider tree, and Readwide persists the grant so the folder remains available after restart. The stored value is a local content-provider URI and display label; it is not transmitted. Choosing this path is sufficient for the read-oriented SAF browser and avoids repeat broad-storage permission prompts.
+
 ## Broad file access and FileProvider scope
 
 The default manifest requests `MANAGE_EXTERNAL_STORAGE` for local file-browser behavior on Android versions where broad file browsing cannot be implemented with older storage permissions alone. This gives the app broad local-file visibility when the user grants that permission. Readwide uses that access for local browsing, opening, copying, moving, deleting, extracting, compressing, and reading files selected through the app. It is not paired with an `INTERNET` permission or developer-operated upload path.
@@ -100,7 +111,10 @@ The `FileProvider` path configuration includes app-private files/cache, external
 
 ## Generated cache data
 
-Disposable TXT page/index cache bookkeeping and temporary archive-entry extraction data are used only for generated cache data under app cache storage. Cache cleanup must not remove bookmarks, reading history, saved reading position, folder shortcuts, or user documents.
+Disposable TXT page/index cache bookkeeping, temporary archive-entry extraction
+data, and locally extracted EPUB media-overlay audio are generated only under app
+cache storage. Cache cleanup must not remove bookmarks, reading history, saved
+reading position, folder shortcuts, or user documents.
 
 
 ## Sensitive archive preview cache

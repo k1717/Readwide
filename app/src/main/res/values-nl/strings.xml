@@ -323,6 +323,8 @@
     <string name="settings_section_security">Beveiliging</string>
     <string name="settings_section_theme">Thema</string>
     <string name="show_hidden_files">Verborgen bestanden tonen</string>
+    <string name="show_hidden_files_on">Verborgen bestanden tonen: aan</string>
+    <string name="show_hidden_files_off">Verborgen bestanden tonen: uit</string>
     <string name="show_status_bar">Statusbalk tonen tijdens het lezen</string>
     <string name="sort">Sorteren</string>
     <string name="sort_by">Sorteren op</string>
@@ -731,4 +733,19 @@
     <string name="text_alignment">Tekstuitlijning</string>
     <string name="settings_appearance_title">Weergave-instellingen</string>
     <string name="settings_open_view_settings">Weergave-instellingen (thema, lettertype, lay-out)</string>
+    <string name="archive_landscape_two_page_on">Archiefweergave met twee pagina\'s: aan</string>
+    <string name="archive_landscape_two_page_off">Archiefweergave met twee pagina\'s: uit</string>
+    <string name="file_cover_thumbnails_on">Omslagminiaturen: aan</string>
+    <string name="file_cover_thumbnails_off">Omslagminiaturen: uit</string>
+    <string name="epub_default_font_format">EPUB-lettertype: %1$s</string>
+    <string name="epub_font_book">Boeklettertype</string>
+    <string name="epub_font_system_sans">Systeem-sans-serif</string>
+    <string name="epub_font_current_system">Huidig systeemlettertype</string>
+    <string name="epub_font_korean_sans">Koreaanse sans-serif</string>
+    <string name="epub_font_korean_serif">Koreaanse serif</string>
+    <string name="epub_font_serif">Serif</string>
+    <string name="epub_font_monospace">Monospace</string>
+    <string name="epub_font_sans_medium">Sans-serif medium</string>
+    <string name="epub_font_sans_condensed">Sans-serif smal</string>
+    <string name="epub_font_sans_light">Sans-serif licht</string>
 </resources>

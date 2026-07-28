@@ -12,8 +12,14 @@ import android.widget.Switch;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 
+import com.readwide.manager.util.EpubFontPreferenceMath;
+import com.readwide.manager.util.FontManager;
 import com.readwide.manager.util.PrefsManager;
+
+import java.util.ArrayList;
+import java.util.List;
 
 final class SettingsReaderControlsController {
     private static final int STEP_PX = 5;
@@ -34,6 +40,7 @@ final class SettingsReaderControlsController {
         setupTextZoneTuning();
         setupLargeTextPartitionMode();
         setupArchiveOpenMode();
+        setupEpubDefaultFont();
         setupEpubBoundary();
         setupEpubPageBehavior();
         setupSwitches();
@@ -231,6 +238,110 @@ final class SettingsReaderControlsController {
                 prefs.getEpubBottomPaddingPx(),
                 R.string.epub_bottom_spacing_format,
                 prefs::setEpubBottomPaddingPx);
+    }
+
+    private void setupEpubDefaultFont() {
+        TextView valueView = activity.findViewById(R.id.epub_default_font_value);
+        if (valueView == null) return;
+        updateEpubDefaultFontValue(valueView);
+        valueView.setOnClickListener(v -> showEpubDefaultFontDialog(valueView));
+    }
+
+    private void showEpubDefaultFontDialog(@NonNull TextView valueView) {
+        List<EpubFontOption> options = epubFontOptions();
+        String current = EpubFontPreferenceMath.normalize(prefs.getEpubFontFamily());
+        int selected = 0;
+        CharSequence[] labels = new CharSequence[options.size()];
+        for (int i = 0; i < options.size(); i++) {
+            EpubFontOption option = options.get(i);
+            labels[i] = option.label;
+            if (option.value.equals(current)) selected = i;
+        }
+
+        AlertDialog dialog = new AlertDialog.Builder(activity)
+                .setTitle(R.string.select_font)
+                .setSingleChoiceItems(labels, selected, null)
+                .setNegativeButton(R.string.cancel, null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            dialog.getListView().setOnItemClickListener((parent, view, position, id) -> {
+                prefs.setEpubFontFamily(options.get(position).value);
+                updateEpubDefaultFontValue(valueView);
+                dialog.dismiss();
+            });
+        });
+        dialog.show();
+    }
+
+    private List<EpubFontOption> epubFontOptions() {
+        ArrayList<EpubFontOption> options = new ArrayList<>();
+        options.add(new EpubFontOption(EpubFontPreferenceMath.BOOK_FONT,
+                activity.getString(R.string.epub_font_book)));
+        options.add(new EpubFontOption("default",
+                activity.getString(R.string.epub_font_system_sans)));
+        options.add(new EpubFontOption("system_current",
+                activity.getString(R.string.epub_font_current_system)));
+        options.add(new EpubFontOption("korean_sans",
+                activity.getString(R.string.epub_font_korean_sans)));
+        options.add(new EpubFontOption("korean_serif",
+                activity.getString(R.string.epub_font_korean_serif)));
+        options.add(new EpubFontOption("serif",
+                activity.getString(R.string.epub_font_serif)));
+        options.add(new EpubFontOption("monospace",
+                activity.getString(R.string.epub_font_monospace)));
+        options.add(new EpubFontOption("sans_medium",
+                activity.getString(R.string.epub_font_sans_medium)));
+        options.add(new EpubFontOption("sans_condensed",
+                activity.getString(R.string.epub_font_sans_condensed)));
+        options.add(new EpubFontOption("sans_light",
+                activity.getString(R.string.epub_font_sans_light)));
+
+        try {
+            FontManager fontManager = FontManager.getInstance();
+            if (!fontManager.isScanned()) fontManager.scanFontsSync(activity);
+            for (String fontName : fontManager.getUserAddedFontNames(activity)) {
+                addEpubFontOptionIfMissing(options, fontName, fontName);
+            }
+        } catch (Throwable ignored) {
+            // Curated choices remain usable when Android blocks a font folder.
+        }
+
+        String current = EpubFontPreferenceMath.normalize(prefs.getEpubFontFamily());
+        addEpubFontOptionIfMissing(options, current, current);
+        return options;
+    }
+
+    private void addEpubFontOptionIfMissing(@NonNull List<EpubFontOption> options,
+                                            String value,
+                                            String label) {
+        if (value == null || value.trim().isEmpty()) return;
+        for (EpubFontOption option : options) {
+            if (option.value.equals(value)) return;
+        }
+        options.add(new EpubFontOption(value, label));
+    }
+
+    private void updateEpubDefaultFontValue(@NonNull TextView valueView) {
+        String value = EpubFontPreferenceMath.normalize(prefs.getEpubFontFamily());
+        String label = value;
+        for (EpubFontOption option : epubFontOptions()) {
+            if (option.value.equals(value)) {
+                label = option.label;
+                break;
+            }
+        }
+        valueView.setText(activity.getString(
+                R.string.epub_default_font_format, label));
+    }
+
+    private static final class EpubFontOption {
+        final String value;
+        final String label;
+
+        EpubFontOption(String value, String label) {
+            this.value = value;
+            this.label = label;
+        }
     }
 
     private void bindEpubBoundarySeekBar(

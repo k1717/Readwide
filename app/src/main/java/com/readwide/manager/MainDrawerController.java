@@ -106,6 +106,7 @@ final class MainDrawerController {
 
     void rebuildDrawerStorageEntries() {
         List<DrawerEntry> fixedEntries = new ArrayList<>();
+        boolean providerPrimary = activity.isProviderStoragePrimary();
 
         // Built-in storage shortcuts belong to the bottom-adjacent shortcut zone.
         fixedEntries.add(new DrawerEntry(
@@ -117,32 +118,41 @@ final class MainDrawerController {
 
         File internal = Environment.getExternalStorageDirectory();
         if (internal != null) {
+            String subtitle = activity.getPrimaryStorageDisplayName();
             fixedEntries.add(new DrawerEntry(
                     DrawerEntry.ACTION_INTERNAL,
                     R.drawable.ic_storage_internal,
                     activity.getString(R.string.internal_storage),
-                    internal.getAbsolutePath(),
+                    subtitle != null ? subtitle : internal.getAbsolutePath(),
                     internal.getAbsolutePath()));
         }
 
-        for (File sd : detectExternalSdCards()) {
-            fixedEntries.add(new DrawerEntry(
-                    DrawerEntry.ACTION_EXTERNAL_SD,
-                    R.drawable.ic_storage_sdcard,
-                    activity.getString(R.string.external_storage),
-                    sd.getAbsolutePath(),
-                    sd.getAbsolutePath()));
-        }
+        // A persisted provider tree replaces the raw-root shortcut set instead
+        // of appearing as a second storage mode. This keeps one predictable
+        // Internal Storage entry on devices whose raw directory enumeration is
+        // unavailable. SD/Downloads return automatically when provider mode is
+        // no longer active.
+        if (!providerPrimary
+                && activity.hasRawStorageBrowserAuthorization()) {
+            for (File sd : detectExternalSdCards()) {
+                fixedEntries.add(new DrawerEntry(
+                        DrawerEntry.ACTION_EXTERNAL_SD,
+                        R.drawable.ic_storage_sdcard,
+                        activity.getString(R.string.external_storage),
+                        sd.getAbsolutePath(),
+                        sd.getAbsolutePath()));
+            }
 
-        File downloads = Environment.getExternalStoragePublicDirectory(
-                Environment.DIRECTORY_DOWNLOADS);
-        if (downloads != null) {
-            fixedEntries.add(new DrawerEntry(
-                    DrawerEntry.ACTION_DOWNLOADS,
-                    R.drawable.ic_download,
-                    activity.getString(R.string.downloads),
-                    downloads.getAbsolutePath(),
-                    downloads.getAbsolutePath()));
+            File downloads = Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS);
+            if (downloads != null) {
+                fixedEntries.add(new DrawerEntry(
+                        DrawerEntry.ACTION_DOWNLOADS,
+                        R.drawable.ic_download,
+                        activity.getString(R.string.downloads),
+                        downloads.getAbsolutePath(),
+                        downloads.getAbsolutePath()));
+            }
         }
 
         // Bottom-adjacent shortcut zone: built-in storage shortcuts plus user-added folder shortcuts.

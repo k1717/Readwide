@@ -323,6 +323,8 @@
     <string name="settings_section_security">Безпека</string>
     <string name="settings_section_theme">Тема</string>
     <string name="show_hidden_files">Показувати приховані файли</string>
+    <string name="show_hidden_files_on">Показувати приховані файли: увімк.</string>
+    <string name="show_hidden_files_off">Показувати приховані файли: вимк.</string>
     <string name="show_status_bar">Показувати рядок стану під час читання</string>
     <string name="sort">Сортування</string>
     <string name="sort_by">Сортувати за</string>
@@ -743,4 +745,19 @@
     <string name="text_alignment">Вирівнювання тексту</string>
     <string name="settings_appearance_title">Налаштування відображення</string>
     <string name="settings_open_view_settings">Налаштування відображення (тема, шрифт, макет)</string>
+    <string name="archive_landscape_two_page_on">Розворот архіву в альбомному режимі: увімк.</string>
+    <string name="archive_landscape_two_page_off">Розворот архіву в альбомному режимі: вимк.</string>
+    <string name="file_cover_thumbnails_on">Мініатюри обкладинок: увімк.</string>
+    <string name="file_cover_thumbnails_off">Мініатюри обкладинок: вимк.</string>
+    <string name="epub_default_font_format">Шрифт EPUB: %1$s</string>
+    <string name="epub_font_book">Шрифт книги</string>
+    <string name="epub_font_system_sans">Системний без зарубок</string>
+    <string name="epub_font_current_system">Поточний системний шрифт</string>
+    <string name="epub_font_korean_sans">Корейський без зарубок</string>
+    <string name="epub_font_korean_serif">Корейський із зарубками</string>
+    <string name="epub_font_serif">Із зарубками</string>
+    <string name="epub_font_monospace">Моноширинний</string>
+    <string name="epub_font_sans_medium">Без зарубок, середній</string>
+    <string name="epub_font_sans_condensed">Без зарубок, вузький</string>
+    <string name="epub_font_sans_light">Без зарубок, легкий</string>
 </resources>

@@ -92,13 +92,13 @@ final class DocumentTtsHighlightController {
             if (cb != null) cb.onReceiveValue(null);
             return;
         }
+        final int targetPage = activity.currentPage;
         WebSettings settings = webView.getSettings();
         boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
         if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
         webView.evaluateJavascript(js, value -> {
-            if (!activity.activityDestroyed && activity.webView != null && restoreJavascriptOff) {
-                activity.webView.getSettings().setJavaScriptEnabled(false);
-            }
+            activity.restoreDocumentJavaScriptPolicy(
+                    webView, targetPage, restoreJavascriptOff);
             if (cb != null) cb.onReceiveValue(value);
         });
     }

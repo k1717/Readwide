@@ -35,6 +35,7 @@ public class PrefsManager {
     private static final int DEFAULT_READER_TEXT_BOUNDARY_PX = 68;
     private static final String KEY_READER_TEXT_LEFT_OFFSET = "reader_text_left_inset_px";
     private static final String KEY_READER_TEXT_RIGHT_OFFSET = "reader_text_right_inset_px";
+    private static final String KEY_EPUB_FONT_FAMILY = "epub_font_family";
     // Legacy SharedPreferences store name from the TextView Reader lineage. Do NOT rename:
     // this is the live on-disk preferences key, so changing it would orphan the saved
     // settings of every existing install. The name is internal and never shown in the UI.
@@ -336,6 +337,7 @@ public class PrefsManager {
                 "font_size",
                 "line_spacing",
                 "font_family",
+                KEY_EPUB_FONT_FAMILY,
                 "epub_left_padding_dp",
                 "epub_right_padding_dp",
                 "epub_side_padding_dp",
@@ -393,6 +395,8 @@ public class PrefsManager {
                 "button_order_txt_reader",
                 "button_order_document_viewer",
                 "button_order_pdf_viewer",
+                "archive_landscape_spread_enabled",
+                "file_thumbnails_enabled",
                 "txt_collapse_blank_lines",
                 "reader_search_case_sensitive",
                 "reader_search_whole_word",
@@ -410,6 +414,26 @@ public class PrefsManager {
     public void setLineSpacing(float s) { prefs.edit().putFloat("line_spacing", s).apply(); }
     public String getFontFamily() { return prefs.getString("font_family", "default"); }
     public void setFontFamily(String f) { prefs.edit().putString("font_family", f).apply(); }
+    public String getEpubFontFamily() {
+        boolean hasDedicated = prefs.contains(KEY_EPUB_FONT_FAMILY);
+        boolean hasLegacy = prefs.contains("font_family");
+        String resolved = EpubFontPreferenceMath.resolveInitialValue(
+                hasDedicated,
+                hasDedicated ? prefs.getString(KEY_EPUB_FONT_FAMILY, null) : null,
+                hasLegacy,
+                hasLegacy ? prefs.getString("font_family", null) : null);
+        if (!hasDedicated) {
+            // Freeze the one-time legacy migration. Later TXT font changes must
+            // not unexpectedly alter the dedicated EPUB default.
+            prefs.edit().putString(KEY_EPUB_FONT_FAMILY, resolved).apply();
+        }
+        return resolved;
+    }
+    public void setEpubFontFamily(String value) {
+        prefs.edit()
+                .putString(KEY_EPUB_FONT_FAMILY, EpubFontPreferenceMath.normalize(value))
+                .apply();
+    }
 
     // EPUB WebView reader boundary. Values are physical screen pixels. Keep the
     // legacy *_dp preference keys so existing installs retain their settings;
@@ -1507,6 +1531,18 @@ public class PrefsManager {
     }
     public void setImageTapPagingEnabled(boolean enabled) {
         prefs.edit().putBoolean("image_tap_paging_enabled", enabled).apply();
+    }
+    public boolean getArchiveLandscapeSpreadEnabled() {
+        return prefs.getBoolean("archive_landscape_spread_enabled", false);
+    }
+    public void setArchiveLandscapeSpreadEnabled(boolean enabled) {
+        prefs.edit().putBoolean("archive_landscape_spread_enabled", enabled).apply();
+    }
+    public boolean getFileThumbnailsEnabled() {
+        return prefs.getBoolean("file_thumbnails_enabled", false);
+    }
+    public void setFileThumbnailsEnabled(boolean enabled) {
+        prefs.edit().putBoolean("file_thumbnails_enabled", enabled).apply();
     }
     public String getArchiveLastImageEntryPath(String archivePath) {
         if (archivePath == null || archivePath.trim().isEmpty()) return "";

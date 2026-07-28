@@ -103,6 +103,17 @@ public class PdfPageView extends View {
     private float maxScale = 4.5f;
     private float fitScale = 1f;       // matrix scale that yields the fit size
 
+    // A PDF chrome toggle changes only the View's usable frame. Preserve a
+    // zoomed reader's page-relative center and zoom ratio across that resize;
+    // fit pages still adopt the new fit scale and fill the released space.
+    private boolean viewportResizePrepared = false;
+    private int viewportResizeOldWidth = 0;
+    private int viewportResizeOldHeight = 0;
+    private float viewportResizeRelativeZoom = 1f;
+    private float viewportResizeCenterX = 0.5f;
+    private float viewportResizeCenterY = 0.5f;
+    private int viewportResizeGeneration = 0;
+
     private ScaleGestureDetector scaleDetector;
     private GestureDetector gestureDetector;
     private OverScroller scroller;
@@ -263,6 +274,7 @@ public class PdfPageView extends View {
      */
     public void setFitBitmap(Bitmap bmp, float supersample, int pageWidthPts,
                              int pageHeightPts, boolean resetView) {
+        viewportResizePrepared = false;
         this.fitBitmap = bmp;
         this.supersample = Math.max(0.01f, supersample);
         this.pageWidthPts = Math.max(1, pageWidthPts);
@@ -289,6 +301,7 @@ public class PdfPageView extends View {
      * — e.g. on a mode switch — so onDraw can't touch a freed bitmap.
      */
     public void detachBitmaps() {
+        viewportResizePrepared = false;
         handler.removeCallbacks(sharpenRunnable);
         clearSharpPatch();
         clearHighlights();
@@ -328,7 +341,88 @@ public class PdfPageView extends View {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
+        if (viewportResizePrepared) {
+            restorePreparedViewportResize(w, h);
+        } else {
+            resetToFit();
+        }
+    }
+
+    /** Capture zoom and the page point under the viewport center before a chrome resize. */
+    public void prepareForViewportResize() {
+        viewportResizeGeneration++;
+        viewportResizePrepared = false;
+        if (fitBitmap == null || fitBitmap.isRecycled()
+                || getWidth() <= 0 || getHeight() <= 0 || fitScale <= 0f) {
+            return;
+        }
+        float scale = currentScale();
+        if (scale <= 0f) return;
+
+        float[] center = {getWidth() * 0.5f, getHeight() * 0.5f};
+        if (!matrix.invert(tmpMatrix)) return;
+        tmpMatrix.mapPoints(center);
+
+        viewportResizeOldWidth = getWidth();
+        viewportResizeOldHeight = getHeight();
+        viewportResizeRelativeZoom = Math.max(1f, scale / fitScale);
+        viewportResizeCenterX = clamp01(center[0] / Math.max(1f, fitBitmap.getWidth()));
+        viewportResizeCenterY = clamp01(center[1] / Math.max(1f, fitBitmap.getHeight()));
+        viewportResizePrepared = true;
+    }
+
+    /** Finish only after the requested parent layout has reached pre-draw. */
+    public void finishPreparedViewportResizeOnNextPreDraw() {
+        if (!viewportResizePrepared) return;
+        final int generation = viewportResizeGeneration;
+        final android.view.ViewTreeObserver observer = getViewTreeObserver();
+        observer.addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+            @Override public boolean onPreDraw() {
+                android.view.ViewTreeObserver current = getViewTreeObserver();
+                if (observer.isAlive()) observer.removeOnPreDrawListener(this);
+                else if (current.isAlive()) current.removeOnPreDrawListener(this);
+                if (!viewportResizePrepared || generation != viewportResizeGeneration) return true;
+                if (getWidth() != viewportResizeOldWidth || getHeight() != viewportResizeOldHeight) {
+                    restorePreparedViewportResize(getWidth(), getHeight());
+                } else {
+                    viewportResizePrepared = false;
+                }
+                return true;
+            }
+        });
+    }
+
+    private void restorePreparedViewportResize(int width, int height) {
+        if (!viewportResizePrepared || fitBitmap == null || fitBitmap.isRecycled()
+                || width <= 0 || height <= 0) {
+            viewportResizePrepared = false;
+            resetToFit();
+            return;
+        }
+        float relativeZoom = viewportResizeRelativeZoom;
+        float centerX = viewportResizeCenterX;
+        float centerY = viewportResizeCenterY;
+        viewportResizePrepared = false;
+
         resetToFit();
+        if (relativeZoom <= 1.01f) return;
+
+        float scale = currentScale();
+        float target = Math.max(minScale, Math.min(Math.max(minScale, maxScale),
+                fitScale * relativeZoom));
+        float factor = scale > 0f ? target / scale : 1f;
+        matrix.postScale(factor, factor, width * 0.5f, height * 0.5f);
+
+        float[] pagePoint = {
+                centerX * fitBitmap.getWidth(),
+                centerY * fitBitmap.getHeight()
+        };
+        matrix.mapPoints(pagePoint);
+        matrix.postTranslate(width * 0.5f - pagePoint[0], height * 0.5f - pagePoint[1]);
+        clampMatrix();
+        clearSharpPatch();
+        invalidate();
+        scheduleSharpen();
     }
 
     private float currentScale() {

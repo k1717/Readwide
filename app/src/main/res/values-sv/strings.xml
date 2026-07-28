@@ -323,6 +323,8 @@
     <string name="settings_section_security">Säkerhet</string>
     <string name="settings_section_theme">Tema</string>
     <string name="show_hidden_files">Visa dolda filer</string>
+    <string name="show_hidden_files_on">Visa dolda filer: på</string>
+    <string name="show_hidden_files_off">Visa dolda filer: av</string>
     <string name="show_status_bar">Visa statusfält under läsning</string>
     <string name="sort">Sortera</string>
     <string name="sort_by">Sortera efter</string>
@@ -731,4 +733,19 @@
     <string name="text_alignment">Textjustering</string>
     <string name="settings_appearance_title">Visningsinställningar</string>
     <string name="settings_open_view_settings">Visningsinställningar (tema, teckensnitt, layout)</string>
+    <string name="archive_landscape_two_page_on">Arkivuppslag i liggande läge: på</string>
+    <string name="archive_landscape_two_page_off">Arkivuppslag i liggande läge: av</string>
+    <string name="file_cover_thumbnails_on">Omslagsminiatyrer: på</string>
+    <string name="file_cover_thumbnails_off">Omslagsminiatyrer: av</string>
+    <string name="epub_default_font_format">EPUB-teckensnitt: %1$s</string>
+    <string name="epub_font_book">Bokens teckensnitt</string>
+    <string name="epub_font_system_sans">Systemets sans-serif</string>
+    <string name="epub_font_current_system">Aktuellt systemteckensnitt</string>
+    <string name="epub_font_korean_sans">Koreansk sans-serif</string>
+    <string name="epub_font_korean_serif">Koreansk serif</string>
+    <string name="epub_font_serif">Serif</string>
+    <string name="epub_font_monospace">Fast bredd</string>
+    <string name="epub_font_sans_medium">Sans-serif medium</string>
+    <string name="epub_font_sans_condensed">Sans-serif kondenserad</string>
+    <string name="epub_font_sans_light">Sans-serif tunn</string>
 </resources>

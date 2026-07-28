@@ -6,35 +6,33 @@ import org.junit.Test;
 
 public class ReaderChromeLayoutMathTest {
     @Test
-    public void landscapeAlwaysUsesToolbarOffFrame() {
+    public void hiddenChromeUsesOnlySystemSafeEdgesInEveryOrientation() {
         assertEquals(24, ReaderChromeLayoutMath.pdfTopReserve(
+                false, 24, 180, 220, 144));
+        assertEquals(48, ReaderChromeLayoutMath.pdfBottomReserve(
+                false, 48, 320, 400, 288));
+    }
+
+    @Test
+    public void visibleChromePrefersCurrentMeasuredBars() {
+        assertEquals(220, ReaderChromeLayoutMath.pdfTopReserve(
                 true, 24, 180, 220, 144));
-        assertEquals(0, ReaderChromeLayoutMath.pdfBottomReserve(
-                true, 320, 400, 288));
+        assertEquals(400, ReaderChromeLayoutMath.pdfBottomReserve(
+                true, 48, 320, 400, 288));
     }
 
     @Test
-    public void portraitToggleCannotReplaceCachedToolbarOnFrame() {
-        assertEquals(180, ReaderChromeLayoutMath.pdfTopReserve(
-                false, 0, 180, 0, 144));
-        assertEquals(180, ReaderChromeLayoutMath.pdfTopReserve(
-                false, 0, 180, 220, 144));
-        assertEquals(320, ReaderChromeLayoutMath.pdfBottomReserve(
-                false, 320, 0, 288));
-        assertEquals(320, ReaderChromeLayoutMath.pdfBottomReserve(
-                false, 320, 400, 288));
-    }
-
-    @Test
-    public void portraitFrameInitializesFromLiveMeasurementOrFallback() {
+    public void visibleChromeFallsBackToCachedOrConfiguredBars() {
         assertEquals(176, ReaderChromeLayoutMath.pdfTopReserve(
-                false, 0, 0, 176, 144));
+                true, 24, 0, 176, 144));
+        assertEquals(180, ReaderChromeLayoutMath.pdfTopReserve(
+                true, 24, 180, 0, 144));
         assertEquals(144, ReaderChromeLayoutMath.pdfTopReserve(
-                false, 0, 0, 0, 144));
+                true, 24, 0, 0, 144));
         assertEquals(304, ReaderChromeLayoutMath.pdfBottomReserve(
-                false, 0, 304, 288));
+                true, 48, 0, 304, 288));
         assertEquals(288, ReaderChromeLayoutMath.pdfBottomReserve(
-                false, 0, 0, 288));
+                true, 48, 0, 0, 288));
     }
 
     @Test
@@ -44,33 +42,4 @@ public class ReaderChromeLayoutMathTest {
         assertEquals(0, ReaderChromeLayoutMath.compatibleCachedReserve(0, 205, 2));
     }
 
-    @Test
-    public void hiddenCompactStripCannotReplaceExpandedToolbarReserve() {
-        assertEquals(168, ReaderChromeLayoutMath.toolbarOnReserve(
-                168, 96, false, 0));
-    }
-
-    @Test
-    public void hiddenBottomBarKeepsLastExpandedReserve() {
-        assertEquals(312, ReaderChromeLayoutMath.toolbarOnReserve(
-                312, 0, false, 0));
-    }
-
-    @Test
-    public void visibleChromeRefreshesItsMeasuredReserve() {
-        assertEquals(180, ReaderChromeLayoutMath.toolbarOnReserve(
-                168, 180, true, 0));
-    }
-
-    @Test
-    public void firstLayoutUsesFallbackUntilToolbarIsMeasured() {
-        assertEquals(144, ReaderChromeLayoutMath.toolbarOnReserve(
-                0, 0, true, 144));
-    }
-
-    @Test
-    public void earlyHideUsesExpandedFallbackNotCompactLiveStrip() {
-        assertEquals(144, ReaderChromeLayoutMath.toolbarOnReserve(
-                0, 80, false, 144));
-    }
 }

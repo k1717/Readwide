@@ -4,6 +4,7 @@ import android.net.Uri;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
+import android.webkit.CookieManager;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.view.View;
@@ -36,13 +37,17 @@ final class DocumentWebViewController {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setDomStorageEnabled(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        CookieManager cookies = CookieManager.getInstance();
+        cookies.setAcceptCookie(false);
+        cookies.setAcceptThirdPartyCookies(view, false);
 
         view.setBackgroundColor(activity.readerBg);
         view.setLongClickable(primary);
         view.setHapticFeedbackEnabled(primary);
         view.setOverScrollMode(View.OVER_SCROLL_NEVER);
         view.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
-            if (primary && scrollY != oldScrollY) {
+            if (primary && (scrollX != oldScrollX || scrollY != oldScrollY)) {
                 activity.notifyDocumentFastScrollActivity();
             }
             if (!primary) return;
@@ -50,7 +55,9 @@ final class DocumentWebViewController {
                 activity.updateMarkdownVisualPageModel(false);
                 activity.scheduleMarkdownSourceAnchorUpdate();
             }
-            if (activity.isRenderedContentAnchorDocument() && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
+            if (activity.isRenderedContentAnchorDocument()
+                    && (Math.abs(scrollX - oldScrollX) > activity.dpToPx(1)
+                    || Math.abs(scrollY - oldScrollY) > activity.dpToPx(1))) {
                 activity.scheduleDocumentContentAnchorUpdate();
             }
             if ("Word".equals(activity.docType)
@@ -66,6 +73,7 @@ final class DocumentWebViewController {
         view.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(@NonNull WebView view, @NonNull WebResourceRequest request) {
+                if (!request.isForMainFrame()) return false;
                 return activity.handleEpubInternalNavigation(view, request.getUrl());
             }
 
@@ -91,7 +99,8 @@ final class DocumentWebViewController {
             @Override
             public void onPageFinished(@NonNull WebView view, @NonNull String url) {
                 super.onPageFinished(view, url);
-                if (activity.activityDestroyed) return;
+                if (activity.activityDestroyed
+                        || !activity.isCurrentDocumentPageLoad(view, url)) return;
                 activity.applyEpubBoundaryCssToLoadedWebView(view);
                 activity.scheduleDocumentFastScrollUpdate();
                 if (!primary) {
@@ -113,8 +122,9 @@ final class DocumentWebViewController {
                 activity.restoreDocumentContentAnchorAfterLoadIfNeeded(view);
                 activity.documentTtsHighlight().installScript();
                 activity.applyPendingEpubAnchorAfterPageLoad(view);
+                activity.onEpubPrimaryPageLoaded(view);
                 if (activity.isRenderedContentAnchorDocument()) {
-                    activity.webView.postDelayed(() -> activity.updateDocumentContentAnchorFromWebView(activity::saveReadingState), 180);
+                    activity.webView.postDelayed(activity::saveReadingState, 180);
                 }
             }
         });
@@ -128,8 +138,9 @@ final class DocumentWebViewController {
     private void configureOneWebView(WebView view) {
         if (view == null) return;
         WebSettings settings = view.getSettings();
-        boolean fixedLayout = "EPUB".equals(activity.docType)
-                && (activity.epubFixedLayoutLike || activity.epubImagePageLike);
+        int pageIndex = view == activity.rightWebView
+                ? activity.documentRightSpreadPageIndex() : activity.currentPage;
+        boolean fixedLayout = activity.epubPageKeepsOriginalLayout(pageIndex);
         if (fixedLayout) {
             settings.setUseWideViewPort(false);
             settings.setLoadWithOverviewMode(false);
@@ -139,8 +150,12 @@ final class DocumentWebViewController {
         } else {
             settings.setLoadWithOverviewMode(false);
             settings.setUseWideViewPort(false);
-            settings.setLayoutAlgorithm(WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING);
+            settings.setLayoutAlgorithm("EPUB".equals(activity.docType)
+                    && activity.epubVerticalWritingLike
+                    ? WebSettings.LayoutAlgorithm.NORMAL
+                    : WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING);
             settings.setTextZoom(activity.documentTextZoomPercent());
+            view.setInitialScale(0);
         }
     }
 }

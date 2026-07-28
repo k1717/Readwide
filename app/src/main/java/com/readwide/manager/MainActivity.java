@@ -23,6 +23,7 @@ import android.provider.Settings;
 import android.text.Editable;
 import android.text.Layout;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.MotionEvent;
@@ -107,6 +108,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     public static final String EXTRA_RETURN_TO_VIEWER = "return_to_viewer";
     public static final String EXTRA_START_DIRECTORY = "start_directory";
     private static final int PERMISSION_REQUEST_CODE = 100;
+    private static final String STORAGE_LOG_TAG = "ReadwideStorage";
 
     DrawerLayout drawerLayout;
     ActionBarDrawerToggle drawerToggle;
@@ -259,6 +261,8 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     boolean archiveExtractInProgress = false;
     boolean archiveCreateInProgress = false;
     private DrawerEntry pendingDrawerNavigationEntry;
+    private boolean safFallbackOffered;
+    private boolean safFallbackDialogShowing;
     private boolean drawerNavigationPending = false;
     private MainBrowseStateController mainBrowseStateController;
     /**
@@ -441,9 +445,24 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     final ActivityResultLauncher<String[]> openFileLauncher =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
                 if (uri != null) {
-                    getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    SafStorageAccess.tryTakePersistableReadGrant(this, uri);
                     openFileFromUri(uri);
                 }
+            });
+
+    private final ActivityResultLauncher<Uri> safTreeLauncher =
+            registerForActivityResult(new ActivityResultContracts.OpenDocumentTree(), uri -> {
+                if (uri == null) return;
+                if (!SafStorageAccess.takePersistableTreeGrant(this, uri)) {
+                    Log.w(STORAGE_LOG_TAG,
+                            "The selected SAF tree did not grant persistable read access");
+                    ShortToast.show(this, R.string.containing_folder_unavailable);
+                    return;
+                }
+                SafStorageAccess.releasePreviousGrantIfDifferent(this, uri);
+                SafStorageAccess.rememberTree(this, uri);
+                rebuildDrawerStorageEntries();
+                launchSafBrowser(uri);
             });
 
     private final ActivityResultLauncher<Intent> manageStorageLauncher =
@@ -531,6 +550,15 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         }
 
         if (mainToolbar != null) applyMainReadableTheme(mainToolbar);
+        if (fileAdapter != null && prefs != null) {
+            // Settings can reset this preference while MainActivity is
+            // stopped. Keep the live adapter and overflow label in sync when
+            // returning without recreating the activity.
+            fileAdapter.setShowThumbnails(prefs.getFileThumbnailsEnabled());
+            if (recentAdapter != null) {
+                recentAdapter.setShowThumbnails(prefs.getFileThumbnailsEnabled());
+            }
+        }
         if (mainSearchFilterController != null) {
             mainSearchFilterController.applySavedFileTypeOrder();
             mainSearchFilterController.updateFileTypeChips();
@@ -950,10 +978,14 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         }
 
         boolean inBrowse = !homeMode && !searchMode;
+        boolean showOverflow = homeMode || inBrowse;
         boolean hasOperationDestination = hasVisibleFileOperationDestination();
         if (mainOverflowButton != null) {
-            mainOverflowButton.setVisibility(inBrowse ? View.VISIBLE : View.GONE);
-            mainOverflowButton.setEnabled(inBrowse);
+            // Keep the preferences menu fixed beside the Readwide title on the
+            // recent-files home screen. Selection mode temporarily reuses the
+            // same button for file actions and restores this menu afterwards.
+            mainOverflowButton.setVisibility(showOverflow ? View.VISIBLE : View.GONE);
+            mainOverflowButton.setEnabled(showOverflow);
             mainOverflowButton.setAlpha(1.0f);
         }
         if (mainPendingActionButton != null) {
@@ -1140,27 +1172,35 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
                 resetFileFilterForNavigation();
                 showHomeMode();
                 break;
-            case DrawerEntry.ACTION_INTERNAL:
+            case DrawerEntry.ACTION_INTERNAL: {
+                Uri providerTree = SafStorageAccess.getUsableTree(this);
+                if (providerTree != null) {
+                    launchSafBrowser(providerTree);
+                    break;
+                }
+                if (!hasRawStorageBrowserAuthorization()) {
+                    launchSafFolderAccess(false);
+                    break;
+                }
+                openRawDrawerFolder(entry, fromDrawerShortcut);
+                break;
+            }
             case DrawerEntry.ACTION_EXTERNAL_SD:
             case DrawerEntry.ACTION_DOWNLOADS:
             case DrawerEntry.ACTION_STORAGE_ROOT:
             case DrawerEntry.ACTION_FOLDER_SHORTCUT:
             case DrawerEntry.ACTION_RECENT_FOLDER:
-                if (entry.getPath() != null) {
-                    File target = new File(entry.getPath());
-                    if (target.exists() && target.canRead()) {
-                        resetFileFilterForNavigation();
-                        if (fromDrawerShortcut) showBrowseModeFromDrawerShortcut(target);
-                        else showBrowseMode(target);
-                    } else {
-                        ShortToast.show(this, R.string.containing_folder_unavailable);
-                    }
-                }
+                openRawDrawerFolder(entry, fromDrawerShortcut);
                 break;
         }
     }
 
     boolean handleDrawerEntryLongClick(@NonNull DrawerEntry entry) {
+        if (entry.getActionType() == DrawerEntry.ACTION_INTERNAL
+                && isProviderStoragePrimary()) {
+            launchSafFolderAccess(true);
+            return true;
+        }
         if (entry.getActionType() == DrawerEntry.ACTION_FOLDER_SHORTCUT && entry.getPath() != null) {
             showShortcutRemoveDialog(new File(entry.getPath()));
             return true;
@@ -1170,6 +1210,96 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
             return true;
         }
         return false;
+    }
+
+    private void openRawDrawerFolder(
+            @NonNull DrawerEntry entry, boolean fromDrawerShortcut) {
+        if (entry.getPath() == null) return;
+        File target = new File(entry.getPath());
+        if (target.exists() && target.canRead()) {
+            resetFileFilterForNavigation();
+            if (fromDrawerShortcut) showBrowseModeFromDrawerShortcut(target);
+            else showBrowseMode(target);
+            return;
+        }
+        Log.w(STORAGE_LOG_TAG, "Drawer folder rejected before enumeration; "
+                + storageAccessDiagnosticSummary(target));
+        ShortToast.show(this, R.string.containing_folder_unavailable);
+        if (isRawStorageDrawerAction(entry.getActionType())) {
+            launchSafFolderAccess(false);
+        }
+    }
+
+    private static boolean isRawStorageDrawerAction(int actionType) {
+        return actionType == DrawerEntry.ACTION_INTERNAL
+                || actionType == DrawerEntry.ACTION_EXTERNAL_SD
+                || actionType == DrawerEntry.ACTION_DOWNLOADS
+                || actionType == DrawerEntry.ACTION_STORAGE_ROOT;
+    }
+
+    void launchSafFolderAccess(boolean chooseAgain) {
+        Uri treeUri = chooseAgain ? null : SafStorageAccess.getUsableTree(this);
+        if (treeUri != null) {
+            launchSafBrowser(treeUri);
+            return;
+        }
+        Uri initial = null;
+        if (chooseAgain) {
+            initial = SafStorageAccess.getRememberedTree(this);
+        }
+        safTreeLauncher.launch(initial);
+    }
+
+    private void launchSafBrowser(@NonNull Uri treeUri) {
+        Intent intent = new Intent(this, SafBrowserActivity.class);
+        intent.putExtra(SafBrowserActivity.EXTRA_TREE_URI, treeUri.toString());
+        startActivity(intent);
+    }
+
+    @Nullable
+    String getPrimaryStorageDisplayName() {
+        if (isProviderStoragePrimary()) {
+            return SafStorageAccess.getRememberedLabel(this);
+        }
+        return hasRawStorageBrowserAuthorization()
+                ? null
+                : getString(R.string.open);
+    }
+
+    boolean isProviderStoragePrimary() {
+        return SafStorageAccess.getUsableTree(this) != null;
+    }
+
+    boolean hasRawStorageBrowserAuthorization() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return Environment.isExternalStorageManager();
+        }
+        boolean readGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.READ_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED;
+        if (!readGranted) return false;
+        return Build.VERSION.SDK_INT != Build.VERSION_CODES.Q
+                || Environment.isExternalStorageLegacy();
+    }
+
+    void offerSafFolderFallback() {
+        if (safFallbackOffered || safFallbackDialogShowing) return;
+        safFallbackOffered = true;
+        fileSearchHandler.postDelayed(() -> {
+            if (isFinishing() || isDestroyed() || !hasWindowFocus()
+                    || safFallbackDialogShowing) return;
+            safFallbackDialogShowing = true;
+            String compatibleAccess = getString(R.string.open)
+                    + ": " + getString(R.string.internal_storage);
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.containing_folder_unavailable)
+                    .setMessage(compatibleAccess)
+                    .setPositiveButton(R.string.open,
+                            (dialog, which) -> launchSafFolderAccess(false))
+                    .setNegativeButton(R.string.cancel, null)
+                    .setOnDismissListener(dialog -> safFallbackDialogShowing = false)
+                    .show();
+        }, 180L);
     }
 
     void addFolderShortcut(@NonNull File folder) {
@@ -1635,6 +1765,17 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     // -------------------------------------------------------------------------
 
     void checkPermissionsAndInit() {
+        Log.i(STORAGE_LOG_TAG, "Checking file-browser access; " + storageAccessDiagnosticSummary(null));
+        // A persisted SAF tree is a complete read path that does not require
+        // READ_EXTERNAL_STORAGE or MANAGE_EXTERNAL_STORAGE. Once the user has
+        // chosen this compatibility path, do not force the raw-storage permission
+        // screen again on later starts. The one Internal Storage drawer route
+        // becomes provider-backed until the persisted grant is replaced/revoked.
+        if (SafStorageAccess.getUsableTree(this) != null) {
+            Log.i(STORAGE_LOG_TAG, "Using persisted SAF tree access");
+            onPermissionsGranted();
+            return;
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (Environment.isExternalStorageManager()) {
                 onPermissionsGranted();
@@ -1670,8 +1811,41 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     private void onPermissionsGranted() {
+        Log.i(STORAGE_LOG_TAG, "File-browser permission accepted; "
+                + storageAccessDiagnosticSummary(null));
         rebuildDrawerStorageEntries();
         loadRecentFiles();
+    }
+
+    String storageAccessDiagnosticSummary(@Nullable File directory) {
+        boolean readGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.READ_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED;
+        boolean writeGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED;
+
+        String storageMode;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            storageMode = "allFiles=" + Environment.isExternalStorageManager();
+        } else if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+            storageMode = "legacy=" + Environment.isExternalStorageLegacy();
+        } else {
+            storageMode = "legacyPreQ=true";
+        }
+
+        String directoryState = "";
+        if (directory != null) {
+            directoryState = ", exists=" + directory.exists()
+                    + ", directory=" + directory.isDirectory()
+                    + ", canRead=" + directory.canRead();
+        }
+        return "sdk=" + Build.VERSION.SDK_INT
+                + ", targetSdk=" + getApplicationInfo().targetSdkVersion
+                + ", readGranted=" + readGranted
+                + ", writeGranted=" + writeGranted
+                + ", " + storageMode
+                + directoryState;
     }
 
     // -------------------------------------------------------------------------
@@ -2044,61 +2218,13 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
 
     void openFileFromUri(Uri uri) {
         if (!acceptFileOpenNow()) return;
-        String displayName;
-        try {
-            displayName = FileUtils.getFileNameFromUri(this, uri);
-        } catch (Exception e) {
-            displayName = FileUtils.normalizeDisplayFileName(uri.getLastPathSegment());
-        }
-        if (displayName == null || displayName.trim().isEmpty()) {
-            // A provider without a display name resolves to an empty string
-            // (not an exception), which would fail every extension check below
-            // and misroute the file; fall back like the catch branch does.
-            displayName = FileUtils.normalizeDisplayFileName(uri.getLastPathSegment());
-        }
-        String mime = null;
-        try {
-            mime = getContentResolver().getType(uri);
-        } catch (Exception ignored) {
-        }
-        boolean pdf = FileUtils.isPdfFile(displayName) || "application/pdf".equalsIgnoreCase(mime);
-        boolean epub = FileUtils.isEpubFile(displayName) || "application/epub+zip".equalsIgnoreCase(mime);
-        boolean markdown = FileUtils.isMarkdownFile(displayName)
-                || "text/markdown".equalsIgnoreCase(mime)
-                || "text/x-markdown".equalsIgnoreCase(mime);
-        boolean word = FileUtils.isWordOrHwpFile(displayName)
-                || "application/x-hwp".equalsIgnoreCase(mime)
-                || "application/haansofthwp".equalsIgnoreCase(mime)
-                || "application/vnd.hancom.hwp".equalsIgnoreCase(mime)
-                || "application/vnd.hancom.hwpx".equalsIgnoreCase(mime)
-                || "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equalsIgnoreCase(mime)
-                || "application/vnd.ms-word.document.macroEnabled.12".equalsIgnoreCase(mime)
-                || "application/vnd.openxmlformats-officedocument.wordprocessingml.template".equalsIgnoreCase(mime)
-                || "application/vnd.ms-word.template.macroEnabled.12".equalsIgnoreCase(mime);
-        boolean image = FileUtils.isImageFile(displayName)
-                || (mime != null && mime.toLowerCase(Locale.ROOT).startsWith("image/"));
-
-        Intent intent;
-        if (pdf) {
-            intent = new Intent(this, PdfReaderActivity.class);
-            intent.putExtra(PdfReaderActivity.EXTRA_FILE_URI, uri.toString());
-        } else if (epub || markdown || word) {
-            intent = new Intent(this, DocumentPageActivity.class);
-            intent.putExtra(DocumentPageActivity.EXTRA_FILE_URI, uri.toString());
-        } else if (image) {
-            intent = new Intent(this, ImageReaderActivity.class);
-            intent.putExtra(ImageReaderActivity.EXTRA_FILE_URI, uri.toString());
-            intent.putExtra(ImageReaderActivity.EXTRA_ALLOW_FILE_OPS, false);
-        } else {
-            intent = new Intent(this, ReaderActivity.class);
-            intent.putExtra(ReaderActivity.EXTRA_FILE_URI, uri.toString());
-        }
-        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        if (image) {
-            mainImageOpen().startWithLoading(intent);
+        UriOpenRequest request = UriOpenRequest.create(this, uri);
+        request.intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        if (request.image) {
+            mainImageOpen().startWithLoading(request.intent);
             return;
         }
-        startActivity(intent);
+        startActivity(request.intent);
 
         if (returnToViewerMode) finish();
     }

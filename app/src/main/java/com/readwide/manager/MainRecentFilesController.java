@@ -390,6 +390,10 @@ final class MainRecentFilesController {
 
         File file = new File(statePath);
         if (!file.exists()) return null;
+        if ((activity.prefs == null || !activity.prefs.getShowHiddenFiles())
+                && file.getName().startsWith(".")) {
+            return null;
+        }
         if (FileUtils.isImageFile(file.getName())) {
             // Images are viewable, but they should not occupy reading history.
             activity.bookmarkManager.deleteReadingState(file.getAbsolutePath());

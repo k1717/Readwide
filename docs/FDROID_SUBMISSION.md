@@ -1,4 +1,4 @@
-# F-Droid submission notes for Readwide 1.0.15
+# F-Droid submission notes for Readwide 1.0.16
 
 This document records the project-side preparation for an F-Droid Data merge request.
 
@@ -6,8 +6,8 @@ This document records the project-side preparation for an F-Droid Data merge req
 
 - App name: Readwide
 - Android application ID: `com.readwide.manager`
-- Version name: `1.0.15`
-- Version code: `10015`
+- Version name: `1.0.16`
+- Version code: `10016`
 - First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
@@ -30,10 +30,10 @@ metadata/com.readwide.manager.yml
 Create and push the immutable release tag before opening the merge request:
 
 ```text
-v1.0.15
+v1.0.16
 ```
 
-As checked on 2026-07-14, current fdroiddata contains published Readwide builds through `1.0.13` (`10013`). The checked-in local mirror matches that published build list and contains no active unreleased build block. After `v1.0.15` is pushed, start from current upstream metadata, add only the `1.0.15` block, set its `commit` to the full 40-character hash that the final tag points to, and then update `CurrentVersion: 1.0.15` / `CurrentVersionCode: 10015`. A commented template is retained locally as guidance and must not be activated with a guessed or abbreviated hash. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the tag and propose the build entry automatically.
+The public F-Droid catalog was checked on 2026-07-27 and already publishes Readwide `1.0.15` (`10015`). The checked-in metadata file is only a historical mirror through `1.0.13`; do not copy it over current fdroiddata. After `v1.0.16` is pushed, start from current upstream metadata, add only the `1.0.16` block, set its `commit` to the full 40-character hash that the final tag points to, and then update `CurrentVersion: 1.0.16` / `CurrentVersionCode: 10016`. A commented template is retained locally as guidance and must not be activated with a guessed or abbreviated hash. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the tag and propose the build entry automatically.
 
 ## F-Droid-facing baseline
 
@@ -45,6 +45,7 @@ The default build is intended to be reviewed as a local-first FOSS app:
 - Android Auto Backup is disabled with `android:allowBackup="false"`.
 - Broad file access is requested because the app is a local reader and file browser that works with user-selected folders, documents, images, and archives.
 - `MANAGE_EXTERNAL_STORAGE` is requested for general local file browsing on Android versions where scoped-storage permissions alone cannot implement it. It is used only for local browse/open/copy/move/delete/extract/compress of user-selected files, and is not paired with `INTERNET` or any developer-operated upload path.
+- Version 1.0.16 also provides a persisted `ACTION_OPEN_DOCUMENT_TREE` browser that needs no additional permission and works without broad storage access. It is read-oriented; raw-path-only mutation and recursive-search operations remain visibly confined to the fully authorized raw browser.
 - The main activity exports an `ACTION_VIEW` intent filter (with the `BROWSABLE` category and document/image MIME types, no `http`/`https` scheme) so files can be opened in Readwide from a browser, messenger, file manager, or document provider. A file opened this way is copied into an app-private `opened_files` cache with display-name sanitization, a canonical-path containment check, a 2 GB per-file copy limit, and cache pruning before and after the copy; provider `query`/`getType` exceptions are caught. No network access is involved.
 - Default builds do not bundle Junrar or RARLAB UnRAR-license code.
 - HWP/HWPX support uses Apache-2.0 Java libraries (`hwplib`, `hwpxlib`) and is text-first/read-only.
@@ -91,7 +92,7 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These provide title, short description, full description, and versionCode `10015` changelog text.
+These provide title, short description, full description, and versionCode `10016` changelog text.
 
 ## Conservative support wording for review
 
@@ -108,8 +109,8 @@ Use conservative wording in the merge request:
 - `PRIVACY.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_15.md`
-- `docs/SBOM_READWIDE_1_0_15.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_16.md`
+- `docs/SBOM_READWIDE_1_0_16.spdx.json`
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `fdroid/metadata/com.readwide.manager.yml`
@@ -129,6 +130,6 @@ All APK-bundled native components are permissive/FOSS-compatible, and no copylef
 ## Remaining submitter tasks
 
 - Confirm a clean network-enabled Gradle build from the tagged source.
-- Confirm the submitted build's `commit` field is the full 40-character hash of the final `v1.0.15` release commit. Start from current upstream metadata and add only the version actually submitted.
+- Confirm the submitted build's `commit` field is the full 40-character hash of the final `v1.0.16` release commit. Start from current upstream metadata and add only the version actually submitted.
 - Confirm no optional local jars are present in `app/libs`.
 - Confirm the built APK contains `assets/open_source_licenses/libarchive_android_and_codecs.txt`. Keep the `zstd-jni` notice with source/test materials; it is not shipped in the APK.

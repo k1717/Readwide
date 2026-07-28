@@ -1,10 +1,10 @@
-# FOSS status for Readwide 1.0.15
+# FOSS status for Readwide 1.0.16
 
-This is the project-level FOSS status note for the default Readwide 1.0.15 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
+This is the project-level FOSS status note for the default Readwide 1.0.16 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
 
 ## Current assessment
 
-The default Readwide 1.0.15 source package is intended to remain FOSS-friendly:
+The default Readwide 1.0.16 source package is intended to remain FOSS-friendly:
 
 - First-party source is licensed under Apache License 2.0.
 - Source code needed for the default build is included in the repository/source package.
@@ -32,7 +32,7 @@ The default Readwide 1.0.15 source package is intended to remain FOSS-friendly:
 | PdfBox-Android | PDF text extraction for in-document find (rendering stays on the platform PdfRenderer) | Apache-2.0 |
 | xunazo-derived AZO port | EGG AZO extraction | zlib license notice retained in source |
 
-See `docs/LICENSE_REPORT_READWIDE_1_0_15.md`, `docs/SBOM_READWIDE_1_0_15.spdx.json`, and `THIRD_PARTY_NOTICES.md` for detail.
+See `docs/LICENSE_REPORT_READWIDE_1_0_16.md`, `docs/SBOM_READWIDE_1_0_16.spdx.json`, and `THIRD_PARTY_NOTICES.md` for detail.
 
 ## RAR / CBR boundary
 
@@ -61,6 +61,8 @@ HWP/HWPX support is read-only and text-first:
 
 The app is a local file browser/reader and requests broad storage access for that purpose. Broad storage access is not a FOSS license issue by itself, but it is a privacy/review-sensitive Android permission and must stay documented in `PRIVACY.md`, the F-Droid metadata, and release notes.
 
+Readwide 1.0.16 additionally offers a persisted, read-oriented Storage Access Framework tree browser. It introduces no dependency, network service, or permission and does not weaken the disclosure for the separate raw-path file-management mode.
+
 The `FileProvider` configuration includes broad external storage sharing support so user-triggered open-with/share actions can grant temporary read access to selected files outside app-private storage. The provider is not exported and grants access through Android intent URI grants; this behavior still needs to remain documented because static scanners may flag broad `external-path` use.
 
 ## Optional local jars
@@ -84,8 +86,8 @@ When distributing APK/AAB files, keep these alongside the binary release assets:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_15.md`
-- `docs/SBOM_READWIDE_1_0_15.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_16.md`
+- `docs/SBOM_READWIDE_1_0_16.spdx.json`
 
 The APK itself also contains `assets/open_source_licenses/libarchive_android_and_codecs.txt`, with the exact native libarchive-android v1.1.6 input notices. Verify that entry after every release build; it is intentionally source-controlled rather than relying on dependency `META-INF` files that are absent from the upstream AAR.
 
@@ -93,7 +95,7 @@ The Android packaging block excludes duplicate dependency `META-INF/LICENSE*` / 
 
 ## Caveats
 
-- `docs/LICENSE_REPORT_READWIDE_1_0_15.md` and `docs/SBOM_READWIDE_1_0_15.spdx.json` are direct-dependency/source-declared drafts, not a fully resolved transitive Gradle SBOM.
+- `docs/LICENSE_REPORT_READWIDE_1_0_16.md` and `docs/SBOM_READWIDE_1_0_16.spdx.json` are direct-dependency/source-declared drafts, not a fully resolved transitive Gradle SBOM.
 - A strict repository submission should regenerate a resolved dependency report/SBOM from a clean, network-enabled build environment.
 - The Android runtime native dependency is libarchive-android and may require additional source-build handling for strict source-only repositories. `zstd-jni` is test-only; F-Droid release assembly does not need its desktop native resources.
 - Archive compatibility claims must stay conservative and align with `README.md`, current release notes, the RAR/7z revalidation note, and the historical support-label terminology in `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`.

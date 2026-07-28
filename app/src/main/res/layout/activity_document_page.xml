@@ -25,7 +25,7 @@
             android:textColor="#E0E0E0"
             android:textSize="12sp"
             android:textStyle="bold"
-            android:visibility="invisible" />
+            android:visibility="gone" />
 
         <FrameLayout
             android:id="@+id/document_viewport"
@@ -326,5 +326,59 @@
             android:src="@android:drawable/ic_menu_close_clear_cancel" />
 
     </LinearLayout>
+
+    <!--
+      Android 15+ can keep system bars transparent even when a Window color is
+      requested. These EPUB-only, non-interactive scrims are sized to the stable
+      system insets so the bars always continue the reader body color rather
+      than the overlay toolbar color.
+    -->
+    <View
+        android:id="@+id/document_system_bar_scrim_top"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_gravity="top"
+        android:background="#121212"
+        android:clickable="false"
+        android:elevation="40dp"
+        android:focusable="false"
+        android:importantForAccessibility="no"
+        android:visibility="gone" />
+
+    <View
+        android:id="@+id/document_system_bar_scrim_bottom"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_gravity="bottom"
+        android:background="#121212"
+        android:clickable="false"
+        android:elevation="40dp"
+        android:focusable="false"
+        android:importantForAccessibility="no"
+        android:visibility="gone" />
+
+    <View
+        android:id="@+id/document_system_bar_scrim_start"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:background="#121212"
+        android:clickable="false"
+        android:elevation="40dp"
+        android:focusable="false"
+        android:importantForAccessibility="no"
+        android:visibility="gone" />
+
+    <View
+        android:id="@+id/document_system_bar_scrim_end"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:background="#121212"
+        android:clickable="false"
+        android:elevation="40dp"
+        android:focusable="false"
+        android:importantForAccessibility="no"
+        android:visibility="gone" />
 
 </FrameLayout>

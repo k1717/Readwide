@@ -323,6 +323,8 @@
     <string name="settings_section_security">Sicurezza</string>
     <string name="settings_section_theme">Tema</string>
     <string name="show_hidden_files">Mostra file nascosti</string>
+    <string name="show_hidden_files_on">Mostra file nascosti: attivo</string>
+    <string name="show_hidden_files_off">Mostra file nascosti: disattivo</string>
     <string name="show_status_bar">Mostra la barra di stato durante la lettura</string>
     <string name="sort">Ordina</string>
     <string name="sort_by">Ordina per</string>
@@ -731,4 +733,19 @@
     <string name="text_alignment">Allineamento del testo</string>
     <string name="settings_appearance_title">Impostazioni di visualizzazione</string>
     <string name="settings_open_view_settings">Impostazioni di visualizzazione (tema, carattere, layout)</string>
+    <string name="archive_landscape_two_page_on">Vista archivio a due pagine in orizzontale: attiva</string>
+    <string name="archive_landscape_two_page_off">Vista archivio a due pagine in orizzontale: disattiva</string>
+    <string name="file_cover_thumbnails_on">Miniature di copertina: attive</string>
+    <string name="file_cover_thumbnails_off">Miniature di copertina: disattive</string>
+    <string name="epub_default_font_format">Carattere EPUB: %1$s</string>
+    <string name="epub_font_book">Carattere del libro</string>
+    <string name="epub_font_system_sans">Sans-serif di sistema</string>
+    <string name="epub_font_current_system">Carattere di sistema attuale</string>
+    <string name="epub_font_korean_sans">Sans-serif coreano</string>
+    <string name="epub_font_korean_serif">Serif coreano</string>
+    <string name="epub_font_serif">Serif</string>
+    <string name="epub_font_monospace">Monospaziato</string>
+    <string name="epub_font_sans_medium">Sans-serif medio</string>
+    <string name="epub_font_sans_condensed">Sans-serif condensato</string>
+    <string name="epub_font_sans_light">Sans-serif leggero</string>
 </resources>

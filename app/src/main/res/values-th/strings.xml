@@ -323,6 +323,8 @@
     <string name="settings_section_security">ความปลอดภัย</string>
     <string name="settings_section_theme">ธีม</string>
     <string name="show_hidden_files">แสดงไฟล์ที่ซ่อนอยู่</string>
+    <string name="show_hidden_files_on">แสดงไฟล์ที่ซ่อนอยู่: เปิด</string>
+    <string name="show_hidden_files_off">แสดงไฟล์ที่ซ่อนอยู่: ปิด</string>
     <string name="show_status_bar">แสดงแถบสถานะขณะอ่าน</string>
     <string name="sort">เรียงลำดับ</string>
     <string name="sort_by">เรียงตาม</string>
@@ -731,4 +733,19 @@
     <string name="text_alignment">การจัดแนวข้อความ</string>
     <string name="settings_appearance_title">การตั้งค่าการแสดงผล</string>
     <string name="settings_open_view_settings">การตั้งค่าการแสดงผล (ธีม ฟอนต์ เลย์เอาต์)</string>
+    <string name="archive_landscape_two_page_on">มุมมองสองหน้าแนวนอนของไฟล์บีบอัด: เปิด</string>
+    <string name="archive_landscape_two_page_off">มุมมองสองหน้าแนวนอนของไฟล์บีบอัด: ปิด</string>
+    <string name="file_cover_thumbnails_on">ภาพขนาดย่อปก: เปิด</string>
+    <string name="file_cover_thumbnails_off">ภาพขนาดย่อปก: ปิด</string>
+    <string name="epub_default_font_format">แบบอักษร EPUB: %1$s</string>
+    <string name="epub_font_book">แบบอักษรของหนังสือ</string>
+    <string name="epub_font_system_sans">ซานส์ของระบบ</string>
+    <string name="epub_font_current_system">แบบอักษรระบบปัจจุบัน</string>
+    <string name="epub_font_korean_sans">ซานส์เกาหลี</string>
+    <string name="epub_font_korean_serif">เซอริฟเกาหลี</string>
+    <string name="epub_font_serif">เซอริฟ</string>
+    <string name="epub_font_monospace">ความกว้างคงที่</string>
+    <string name="epub_font_sans_medium">ซานส์ปานกลาง</string>
+    <string name="epub_font_sans_condensed">ซานส์แบบแคบ</string>
+    <string name="epub_font_sans_light">ซานส์แบบบาง</string>
 </resources>

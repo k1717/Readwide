@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.ImageDecoder;
 import android.graphics.drawable.AnimatedImageDrawable;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
@@ -20,10 +21,12 @@ import java.util.Locale;
 public final class ImageDecodeHelper {
     private static final float TALL_IMAGE_ASPECT_RATIO = 2.5f;
     private static final int PREVIEW_DISPLAY_SCALE = 2;
+    static final int ARCHIVE_PREVIEW_DISPLAY_SCALE = 3;
     static final int PREFETCH_DISPLAY_SCALE = 1;
     private static final int DETAIL_DISPLAY_SCALE = 4;
-    private static final long PREVIEW_DIRECT_ORIGINAL_PIXELS = 16_000_000L;
-    private static final long PREVIEW_MAX_BITMAP_PIXELS = 16_000_000L;
+    private static final long PREVIEW_DIRECT_ORIGINAL_PIXELS = 24_000_000L;
+    private static final long PREVIEW_MAX_BITMAP_PIXELS = 24_000_000L;
+    static final long ARCHIVE_PREVIEW_MAX_BITMAP_PIXELS = 24_000_000L;
     // Prefetch targets the actual display size. The cap is only a backstop for
     // very tall fit-width pages whose proportional height exceeds the viewport.
     static final long PREFETCH_MAX_BITMAP_PIXELS = 8_000_000L;
@@ -45,11 +48,69 @@ public final class ImageDecodeHelper {
                                             @Nullable String filePath,
                                             @Nullable String fileUri,
                                             @Nullable String displayName) throws Exception {
-        if (isAnimatedImageCandidateName(displayName) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            Drawable drawable = decodeAnimatedDrawable(context, filePath, fileUri, false);
-            if (drawable != null) return LoadedImage.forDrawable(drawable);
+        return decodePreviewProfile(
+                context,
+                filePath,
+                fileUri,
+                displayName,
+                PREVIEW_DISPLAY_SCALE,
+                PREVIEW_DIRECT_ORIGINAL_PIXELS,
+                PREVIEW_MAX_BITMAP_PIXELS);
+    }
+
+    /**
+     * Archive pages use a moderately denser preview than loose images. Comic
+     * pages are revisited and paired frequently, so this tier sits between the
+     * ordinary preview and the explicit zoom/detail decode.
+     */
+    @Nullable
+    public static LoadedImage decodeArchivePreview(@NonNull Context context,
+                                                   @Nullable String filePath,
+                                                   @Nullable String fileUri,
+                                                   @Nullable String displayName) throws Exception {
+        return decodePreviewProfile(
+                context,
+                filePath,
+                fileUri,
+                displayName,
+                ARCHIVE_PREVIEW_DISPLAY_SCALE,
+                ARCHIVE_PREVIEW_MAX_BITMAP_PIXELS,
+                ARCHIVE_PREVIEW_MAX_BITMAP_PIXELS);
+    }
+
+    @Nullable
+    private static LoadedImage decodePreviewProfile(@NonNull Context context,
+                                                    @Nullable String filePath,
+                                                    @Nullable String fileUri,
+                                                    @Nullable String displayName,
+                                                    int displayScale,
+                                                    long directOriginalPixels,
+                                                    long maxBitmapPixels) throws Exception {
+        if (shouldInspectAnimatedCandidate(displayName, Build.VERSION.SDK_INT)) {
+            Drawable drawable = decodeAnimatedDrawable(
+                    context,
+                    filePath,
+                    fileUri,
+                    displayScale,
+                    maxBitmapPixels);
+            // ImageDecoder also returns an ordinary BitmapDrawable for static
+            // GIF/WebP files. Only a genuinely animated drawable belongs on the
+            // non-bitmap path; static WebP comic pages must remain cacheable so
+            // the archive reader can compose a two-page spread.
+            if (drawable instanceof AnimatedImageDrawable) {
+                return LoadedImage.forDrawable(drawable);
+            }
+            LoadedImage staticImage = bitmapFromStaticCandidateDrawable(drawable);
+            if (staticImage != null) return staticImage;
         }
-        BitmapDecodeResult result = decodeBitmap(context, filePath, fileUri, false);
+        BitmapDecodeResult result = decodeBitmap(
+                context,
+                filePath,
+                fileUri,
+                displayScale,
+                directOriginalPixels,
+                maxBitmapPixels,
+                true);
         return result == null || result.bitmap == null ? null : LoadedImage.forBitmap(
                 result.bitmap,
                 result.sampleSize <= 1,
@@ -69,7 +130,23 @@ public final class ImageDecodeHelper {
                                              @Nullable String filePath,
                                              @Nullable String fileUri,
                                              @Nullable String displayName) throws Exception {
-        if (shouldSkipAnimatedBitmapPrefetch(displayName, Build.VERSION.SDK_INT)) return null;
+        if (shouldInspectAnimatedCandidate(displayName, Build.VERSION.SDK_INT)) {
+            Drawable drawable = decodeAnimatedDrawable(
+                    context,
+                    filePath,
+                    fileUri,
+                    PREFETCH_DISPLAY_SCALE,
+                    PREFETCH_MAX_BITMAP_PIXELS);
+            if (shouldSkipPrefetchAfterDrawableClassification(
+                    drawable instanceof AnimatedImageDrawable)) {
+                return null;
+            }
+            // Filename alone cannot distinguish animation. Reuse the bitmap from
+            // a static BitmapDrawable; skipping every .webp candidate made normal
+            // WebP comic pages permanently ineligible for spreads.
+            LoadedImage staticImage = bitmapFromStaticCandidateDrawable(drawable);
+            if (staticImage != null) return staticImage;
+        }
         BitmapDecodeResult result = decodeBitmap(
                 context,
                 filePath,
@@ -91,9 +168,18 @@ public final class ImageDecodeHelper {
                                            @Nullable String filePath,
                                            @Nullable String fileUri,
                                            @Nullable String displayName) throws Exception {
-        if (isAnimatedImageCandidateName(displayName) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            Drawable drawable = decodeAnimatedDrawable(context, filePath, fileUri, true);
-            if (drawable != null) return LoadedImage.forDrawable(drawable);
+        if (shouldInspectAnimatedCandidate(displayName, Build.VERSION.SDK_INT)) {
+            Drawable drawable = decodeAnimatedDrawable(
+                    context,
+                    filePath,
+                    fileUri,
+                    DETAIL_DISPLAY_SCALE,
+                    DETAIL_MAX_BITMAP_PIXELS);
+            if (drawable instanceof AnimatedImageDrawable) {
+                return LoadedImage.forDrawable(drawable);
+            }
+            LoadedImage staticImage = bitmapFromStaticCandidateDrawable(drawable);
+            if (staticImage != null) return staticImage;
         }
         BitmapDecodeResult result = decodeBitmap(context, filePath, fileUri, true);
         return result == null || result.bitmap == null ? null : LoadedImage.forBitmap(
@@ -108,7 +194,8 @@ public final class ImageDecodeHelper {
     private static Drawable decodeAnimatedDrawable(@NonNull Context context,
                                                    @Nullable String filePath,
                                                    @Nullable String fileUri,
-                                                   boolean detail) throws Exception {
+                                                   int displayScale,
+                                                   long pixelCap) throws Exception {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null;
         ImageDecoder.Source source;
         if (filePath != null && filePath.trim().length() > 0) {
@@ -118,9 +205,13 @@ public final class ImageDecodeHelper {
         } else {
             return null;
         }
-        int reqW = Math.max(context.getResources().getDisplayMetrics().widthPixels * (detail ? DETAIL_DISPLAY_SCALE : PREVIEW_DISPLAY_SCALE), 1);
-        int reqH = Math.max(context.getResources().getDisplayMetrics().heightPixels * (detail ? DETAIL_DISPLAY_SCALE : PREVIEW_DISPLAY_SCALE), 1);
-        long pixelCap = detail ? DETAIL_MAX_BITMAP_PIXELS : PREVIEW_MAX_BITMAP_PIXELS;
+        int safeDisplayScale = Math.max(1, displayScale);
+        int reqW = Math.max(
+                context.getResources().getDisplayMetrics().widthPixels * safeDisplayScale,
+                1);
+        int reqH = Math.max(
+                context.getResources().getDisplayMetrics().heightPixels * safeDisplayScale,
+                1);
         Drawable drawable = ImageDecoder.decodeDrawable(source, (decoder, info, imageSource) -> {
             int sample = calculateInSampleSize(info.getSize().getWidth(), info.getSize().getHeight(), reqW, reqH);
             sample = Math.max(sample, calculateSampleForPixelCap(info.getSize().getWidth(), info.getSize().getHeight(), pixelCap));
@@ -234,8 +325,34 @@ public final class ImageDecodeHelper {
         return lower.endsWith(".gif") || lower.endsWith(".webp");
     }
 
-    static boolean shouldSkipAnimatedBitmapPrefetch(@Nullable String name, int sdkInt) {
+    static boolean shouldInspectAnimatedCandidate(@Nullable String name, int sdkInt) {
         return sdkInt >= Build.VERSION_CODES.P && isAnimatedImageCandidateName(name);
+    }
+
+    /**
+     * Filename is only a prompt to inspect with ImageDecoder. Static WebP/GIF
+     * candidates must continue down the bitmap prefetch path.
+     */
+    static boolean shouldSkipPrefetchAfterDrawableClassification(
+            boolean actuallyAnimated) {
+        return actuallyAnimated;
+    }
+
+    @Nullable
+    private static LoadedImage bitmapFromStaticCandidateDrawable(
+            @Nullable Drawable drawable) {
+        if (!(drawable instanceof BitmapDrawable)) return null;
+        Bitmap bitmap = ((BitmapDrawable) drawable).getBitmap();
+        if (bitmap == null || bitmap.isRecycled()) return null;
+        // ImageDecoder may have sampled the source, but it does not expose that
+        // sample factor here. Mark it non-original so an explicit zoom can still
+        // request the normal detail pass.
+        return LoadedImage.forBitmap(
+                bitmap,
+                false,
+                bitmap.getWidth(),
+                bitmap.getHeight(),
+                1);
     }
 
     private static int calculateInSampleSize(int width, int height, int reqWidth, int reqHeight) {

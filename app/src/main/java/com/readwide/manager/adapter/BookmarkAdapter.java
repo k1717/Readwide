@@ -14,6 +14,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.readwide.manager.R;
 import com.readwide.manager.model.Bookmark;
+import com.readwide.manager.util.DocumentAnchorMath;
 import com.readwide.manager.util.FileUtils;
 
 import java.text.SimpleDateFormat;
@@ -292,8 +293,14 @@ public class BookmarkAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             if (json == null || json.trim().isEmpty()) return "";
             try {
                 JSONObject obj = new JSONObject(json);
-                String text = firstNonEmpty(
+                String focused = DocumentAnchorMath.bookmarkPreview(
+                        obj.optString("columnStartText", ""),
+                        obj.optString("focusText", ""),
                         obj.optString("text", ""),
+                        obj.optInt("sentenceOffset", 0),
+                        42);
+                String text = firstNonEmpty(
+                        focused,
                         obj.optString("anchorText", ""),
                         obj.optString("textAfter", ""),
                         obj.optString("quote", ""),

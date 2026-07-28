@@ -1,6 +1,6 @@
 # 7z / CB7 split and encryption status for Readwide 1.0.2
 
-> **Historical baseline:** This note records the 1.0.2 implementation. Current 1.0.15 scope also includes first-party AES plus PPMd/BCJ2 paths and libarchive forward/fallback routing; use `README.md` and the 1.0.15 release/revalidation notes for current claims.
+> **Historical baseline:** This note records the 1.0.2 implementation. Current 1.0.16 scope also includes first-party AES plus PPMd/BCJ2 paths and libarchive forward/fallback routing; use `README.md` and the 1.0.16 release/revalidation notes for current claims.
 
 ## 1.0.2 implementation
 

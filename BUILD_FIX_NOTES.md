@@ -1,11 +1,11 @@
-# Readwide 1.0.15 Build / Release Notes
+# Readwide 1.0.16 Build / Release Notes
 
-This file records source-build notes for **Readwide 1.0.15**.
+This file records source-build notes for **Readwide 1.0.16**.
 
 ## Version metadata
 
-- Android metadata is `versionCode 10015`, `versionName "1.0.15"`.
-- The Android package/application ID has been `com.readwide.manager` since 1.0.4. 1.0.15 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.14, 1.0.13, 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (previous key) still requires uninstalling first, installing 1.0.15, then migrating data with the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Earlier builds using `com.textview.reader` likewise install as a separate app.
+- Android metadata is `versionCode 10016`, `versionName "1.0.16"`.
+- The Android package/application ID has been `com.readwide.manager` since 1.0.4. 1.0.16 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.15, 1.0.14, 1.0.13, 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (previous key) still requires uninstalling first, installing 1.0.16, then migrating data with the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Earlier builds using `com.textview.reader` likewise install as a separate app.
 - The default source package is Junrar-free, UnRAR-license-fallback-free, analytics-free, ads-free, and does not request the `INTERNET` permission.
 
 ## Stale removed-source cleanup
@@ -59,5 +59,5 @@ Release APK packaging filters Android native ABIs to `armeabi-v7a` and `arm64-v8
 
 - The default source package contains no optional decoder jar under `app/libs`.
 - Release signing is conditional, so source-build review can run `assembleRelease` without a private developer keystore.
-- `fdroid/metadata/com.readwide.manager.yml` is a local draft. For an F-Droid merge request, start from current fdroiddata upstream and add only the release actually being submitted (`1.0.15` if `1.0.14` is skipped), pinned to the final 40-character release commit hash.
+- `fdroid/metadata/com.readwide.manager.yml` is a local draft. For an F-Droid merge request, start from current fdroiddata upstream and add only the 1.0.16 release, pinned to the final 40-character release commit hash.
 - If any local jar or native binary is added later, re-audit that custom build before describing it as FOSS.

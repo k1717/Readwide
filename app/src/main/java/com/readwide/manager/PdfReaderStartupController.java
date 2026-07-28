@@ -118,9 +118,9 @@ final class PdfReaderStartupController {
         if (activity.pdfViewport != null) {
             androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(
                     activity.pdfViewport, (view, insets) -> {
-                        // Rotation can deliver the new portrait navigation inset
-                        // after onConfigurationChanged(). Re-evaluate the immutable
-                        // orientation frame once that exact inset is available.
+                        // Rotation can deliver the new system-safe frame after
+                        // onConfigurationChanged(). Re-evaluate the visible/hidden
+                        // chrome reserves once that exact inset is available.
                         view.post(activity::applyPdfViewportBarInsets);
                         return insets;
                     });

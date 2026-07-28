@@ -10,6 +10,7 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.WebSettings;
+import android.webkit.WebView;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -272,12 +273,16 @@ final class DocumentSearchController {
         if (activity.documentSearchDialog != null) {
             Dialog dialog = activity.documentSearchDialog;
             activity.documentSearchDialog = null;
+            // Programmatic callers choose whether the current WebView must be
+            // reloaded. The normal OnDismiss listener always clears with a
+            // reload, which used to ignore clearWebView=false and could race a
+            // bookmark navigation that immediately loads/restores the target.
+            dialog.setOnDismissListener(null);
             if (dialog.isShowing()) dialog.dismiss();
-        } else {
-            activity.documentSearchInputView = null;
-            activity.documentSearchStatusView = null;
-            clearDocumentSearchState(clearWebView);
         }
+        activity.documentSearchInputView = null;
+        activity.documentSearchStatusView = null;
+        clearDocumentSearchState(clearWebView);
         activity.setFixedLayoutFindOffsetActive(false);
     }
 
@@ -387,11 +392,13 @@ final class DocumentSearchController {
         if (activity.activityDestroyed || activity.webView == null) {
             return;
         }
-        WebSettings settings = activity.webView.getSettings();
+        final WebView targetView = activity.webView;
+        final int targetPage = activity.currentPage;
+        WebSettings settings = targetView.getSettings();
         boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
         if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
         final int selectedOrdinal = Math.max(1, activity.activeDocumentSearchOrdinal);
-        activity.webView.evaluateJavascript(
+        targetView.evaluateJavascript(
                 "(function(){try{"
                         + "var hits=document.querySelectorAll('span.rw-document-search-hit');"
                         + "if(!hits||!hits.length)return false;"
@@ -407,9 +414,8 @@ final class DocumentSearchController {
                         + "return found;}catch(ex){return false;}})()",
                 value -> {
                     if (activity.activityDestroyed || activity.webView == null) return;
-                    if (restoreJavascriptOff) {
-                        activity.webView.getSettings().setJavaScriptEnabled(false);
-                    }
+                    activity.restoreDocumentJavaScriptPolicy(
+                            targetView, targetPage, restoreJavascriptOff);
                     if ("true".equals(value)) {
                         scrollDocumentSearchCurrentIntoView();
                     } else {
@@ -779,10 +785,12 @@ final class DocumentSearchController {
         if (activity.currentPage != activity.activeDocumentSearchPage || activity.activeDocumentSearchOrdinal <= 0) return;
 
         final int safeBottomPx = currentSearchPanelTopInWebViewPx() - dpToPx(10);
-        WebSettings settings = activity.webView.getSettings();
+        final WebView targetView = activity.webView;
+        final int targetPage = activity.currentPage;
+        WebSettings settings = targetView.getSettings();
         boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
         if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
-        activity.webView.evaluateJavascript(
+        targetView.evaluateJavascript(
                 "(function(){try{"
                         + "function addStyle(){if(document.getElementById('rw-document-search-spacer-style'))return;"
                         + "var st=document.createElement('style');st.id='rw-document-search-spacer-style';"
@@ -808,9 +816,8 @@ final class DocumentSearchController {
                         + "var ok=placeHit();setTimeout(placeHit,60);setTimeout(placeHit,160);"
                         + "return ok;}catch(ex){return false;}})()",
                 value -> {
-                    if (!activity.activityDestroyed && activity.webView != null && restoreJavascriptOff) {
-                        activity.webView.getSettings().setJavaScriptEnabled(false);
-                    }
+                    activity.restoreDocumentJavaScriptPolicy(
+                            targetView, targetPage, restoreJavascriptOff);
                 });
     }
 

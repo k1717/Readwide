@@ -17,6 +17,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.Charset;
@@ -28,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -214,10 +216,28 @@ public class FileUtils {
     private static final long MAX_OPENED_URI_COPY_BYTES = 2L * 1024L * 1024L * 1024L;
     /** Cap per EPUB chapter read during text extraction, so a crafted chapter can't OOM. */
     private static final long MAX_EPUB_CHAPTER_BYTES = 32L * 1024L * 1024L;
+    private static final ReentrantLock OPENED_FILES_CACHE_LOCK = new ReentrantLock(true);
 
     // Serialize cache pruning/commit so one URI copy cannot remove another
     // copy's staging file or per-URI directory while enforcing the size budget.
-    public static synchronized File copyUriToLocal(
+    // A lockInterruptibly lock keeps a cancelled SAF/open-document worker from
+    // waiting indefinitely behind another large provider copy.
+    public static File copyUriToLocal(
+            Context context, Uri uri, String fileName) throws IOException {
+        try {
+            OPENED_FILES_CACHE_LOCK.lockInterruptibly();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new InterruptedIOException("URI copy cancelled");
+        }
+        try {
+            return copyUriToLocalLocked(context, uri, fileName);
+        } finally {
+            OPENED_FILES_CACHE_LOCK.unlock();
+        }
+    }
+
+    private static File copyUriToLocalLocked(
             Context context, Uri uri, String fileName) throws IOException {
         File cacheDir = new File(context.getCacheDir(), "opened_files");
         if (!cacheDir.exists() && !cacheDir.mkdirs()) {
@@ -263,7 +283,12 @@ public class FileUtils {
                 int bytesRead;
                 long copied = 0L;
 
-                while ((bytesRead = is.read(buffer)) != -1) {
+                while (true) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        throw new InterruptedIOException("URI copy cancelled");
+                    }
+                    bytesRead = is.read(buffer);
+                    if (bytesRead == -1) break;
                     copied += bytesRead;
                     if (copied > MAX_OPENED_URI_COPY_BYTES) {
                         throw new IOException("External file exceeds size limit");

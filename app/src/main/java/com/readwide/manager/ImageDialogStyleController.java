@@ -110,12 +110,19 @@ final class ImageDialogStyleController {
     }
 
     void setDialogWidth(@NonNull Dialog dialog) {
+        setDialogWidth(dialog, 430);
+    }
+
+    void setDialogWidth(@NonNull Dialog dialog, int maxWidthDp) {
         Window window = dialog.getWindow();
         if (window == null) return;
         window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
         lp.copyFrom(window.getAttributes());
-        lp.width = Math.min(context.getResources().getDisplayMetrics().widthPixels - dpToPx(32), dpToPx(430));
+        int safeScreenWidth = Math.max(
+                dpToPx(1),
+                context.getResources().getDisplayMetrics().widthPixels - dpToPx(32));
+        lp.width = Math.min(safeScreenWidth, dpToPx(Math.max(1, maxWidthDp)));
         lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
         lp.gravity = Gravity.CENTER;
         window.setAttributes(lp);

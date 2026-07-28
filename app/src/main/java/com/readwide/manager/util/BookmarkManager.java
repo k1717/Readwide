@@ -1491,15 +1491,18 @@ public class BookmarkManager {
 
     private boolean isSameBookmarkLocation(Bookmark a, Bookmark b) {
         if (a == null || b == null) return false;
-        if (safeEquals(a.getFilePath(), b.getFilePath())
-                && a.getCharPosition() == b.getCharPosition()) {
-            return true;
+        if (safeEquals(a.getFilePath(), b.getFilePath())) {
+            return BookmarkMergeMath.isSameLogicalPosition(
+                    a.getCharPosition(), a.getContentAnchorJson(),
+                    b.getCharPosition(), b.getContentAnchorJson());
         }
         if (!bookmarkFileName(a).equalsIgnoreCase(bookmarkFileName(b))) return false;
-        if (a.getCharPosition() != b.getCharPosition()) return false;
         String fpA = a.getQuickFingerprint();
         String fpB = b.getQuickFingerprint();
-        return fpA != null && !fpA.isEmpty() && fpA.equals(fpB);
+        return fpA != null && !fpA.isEmpty() && fpA.equals(fpB)
+                && BookmarkMergeMath.isSameLogicalPosition(
+                        a.getCharPosition(), a.getContentAnchorJson(),
+                        b.getCharPosition(), b.getContentAnchorJson());
     }
 
     private boolean safeEquals(String a, String b) {

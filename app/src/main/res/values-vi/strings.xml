@@ -323,6 +323,8 @@
     <string name="settings_section_security">Bảo mật</string>
     <string name="settings_section_theme">Chủ đề</string>
     <string name="show_hidden_files">Hiện tệp ẩn</string>
+    <string name="show_hidden_files_on">Hiện tệp ẩn: bật</string>
+    <string name="show_hidden_files_off">Hiện tệp ẩn: tắt</string>
     <string name="show_status_bar">Hiện thanh trạng thái khi đọc</string>
     <string name="sort">Sắp xếp</string>
     <string name="sort_by">Sắp xếp theo</string>
@@ -731,4 +733,19 @@
     <string name="text_alignment">Căn chỉnh văn bản</string>
     <string name="settings_appearance_title">Cài đặt hiển thị</string>
     <string name="settings_open_view_settings">Cài đặt hiển thị (chủ đề, phông chữ, bố cục)</string>
+    <string name="archive_landscape_two_page_on">Hai trang tệp nén khi nằm ngang: bật</string>
+    <string name="archive_landscape_two_page_off">Hai trang tệp nén khi nằm ngang: tắt</string>
+    <string name="file_cover_thumbnails_on">Hình thu nhỏ bìa: bật</string>
+    <string name="file_cover_thumbnails_off">Hình thu nhỏ bìa: tắt</string>
+    <string name="epub_default_font_format">Phông chữ EPUB: %1$s</string>
+    <string name="epub_font_book">Phông chữ của sách</string>
+    <string name="epub_font_system_sans">Sans hệ thống</string>
+    <string name="epub_font_current_system">Phông chữ hệ thống hiện tại</string>
+    <string name="epub_font_korean_sans">Sans tiếng Hàn</string>
+    <string name="epub_font_korean_serif">Serif tiếng Hàn</string>
+    <string name="epub_font_serif">Serif</string>
+    <string name="epub_font_monospace">Đơn cách</string>
+    <string name="epub_font_sans_medium">Sans trung bình</string>
+    <string name="epub_font_sans_condensed">Sans thu hẹp</string>
+    <string name="epub_font_sans_light">Sans mảnh</string>
 </resources>

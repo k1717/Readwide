@@ -31,6 +31,7 @@ final class DocumentPageStartupController {
                 () -> activity.documentChromeVisible);
         activity.applyDocumentSystemBarColors();
         installStandaloneTopPageStatusInsets();
+        installEpubContentSafeInsets();
         installNavigationBarSpacerInsets();
 
         bindViews();
@@ -137,6 +138,107 @@ final class DocumentPageStartupController {
         spacer.setVisibility(View.GONE);
     }
 
+    /**
+     * EPUB removes the compact normal-flow page counter, so its content column
+     * must own the Android top/bottom safe frame directly. Keep this padding
+     * stable while Readwide's overlay controls toggle; otherwise the WebView
+     * extends below a punch hole or navigation bar when the overlays are GONE.
+     *
+     * The root inset helper already owns physical left/right cutouts. This view
+     * therefore adds only any remaining side system-bar inset (for example a
+     * landscape three-button navigation rail) plus the stable top/bottom edge.
+     */
+    private void installEpubContentSafeInsets() {
+        View content = activity.findViewById(R.id.document_content_column);
+        if (content == null) return;
+        View topScrim = activity.findViewById(R.id.document_system_bar_scrim_top);
+        View bottomScrim = activity.findViewById(R.id.document_system_bar_scrim_bottom);
+        View startScrim = activity.findViewById(R.id.document_system_bar_scrim_start);
+        View endScrim = activity.findViewById(R.id.document_system_bar_scrim_end);
+        final int baseLeft = content.getPaddingLeft();
+        final int baseTop = content.getPaddingTop();
+        final int baseRight = content.getPaddingRight();
+        final int baseBottom = content.getPaddingBottom();
+
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content, (v, insets) -> {
+            int extraLeft = 0;
+            int extraTop = 0;
+            int extraRight = 0;
+            int extraBottom = 0;
+            int stableLeft = 0;
+            int stableTop = 0;
+            int stableRight = 0;
+            int stableBottom = 0;
+            if ("EPUB".equals(activity.docType)) {
+                androidx.core.graphics.Insets bars = insets.getInsetsIgnoringVisibility(
+                        androidx.core.view.WindowInsetsCompat.Type.systemBars());
+                androidx.core.graphics.Insets cutout = insets.getInsetsIgnoringVisibility(
+                        androidx.core.view.WindowInsetsCompat.Type.displayCutout());
+                stableLeft = Math.max(bars.left, cutout.left);
+                stableTop = Math.max(bars.top, cutout.top);
+                stableRight = Math.max(bars.right, cutout.right);
+                stableBottom = Math.max(bars.bottom, cutout.bottom);
+                extraLeft = Math.max(0, stableLeft - cutout.left);
+                extraRight = Math.max(0, stableRight - cutout.right);
+                extraTop = stableTop;
+                extraBottom = stableBottom;
+            }
+            setPaddingIfChanged(v,
+                    baseLeft + extraLeft,
+                    baseTop + extraTop,
+                    baseRight + extraRight,
+                    baseBottom + extraBottom);
+            boolean epub = "EPUB".equals(activity.docType);
+            setSystemBarScrim(topScrim, android.view.Gravity.TOP,
+                    ViewGroup.LayoutParams.MATCH_PARENT, stableTop, epub && stableTop > 0);
+            setSystemBarScrim(bottomScrim, android.view.Gravity.BOTTOM,
+                    ViewGroup.LayoutParams.MATCH_PARENT, stableBottom, epub && stableBottom > 0);
+            setSystemBarScrim(startScrim, android.view.Gravity.START,
+                    stableLeft, ViewGroup.LayoutParams.MATCH_PARENT, epub && stableLeft > 0);
+            setSystemBarScrim(endScrim, android.view.Gravity.END,
+                    stableRight, ViewGroup.LayoutParams.MATCH_PARENT, epub && stableRight > 0);
+            return insets;
+        });
+        androidx.core.view.ViewCompat.requestApplyInsets(content);
+    }
+
+    private static void setSystemBarScrim(View scrim,
+                                          int gravity,
+                                          int width,
+                                          int height,
+                                          boolean visible) {
+        if (scrim == null) return;
+        ViewGroup.LayoutParams raw = scrim.getLayoutParams();
+        if (raw instanceof android.widget.FrameLayout.LayoutParams) {
+            android.widget.FrameLayout.LayoutParams lp =
+                    (android.widget.FrameLayout.LayoutParams) raw;
+            if (lp.width != width || lp.height != height || lp.gravity != gravity) {
+                lp.width = width;
+                lp.height = height;
+                lp.gravity = gravity;
+                scrim.setLayoutParams(lp);
+            }
+        }
+        int targetVisibility = visible ? View.VISIBLE : View.GONE;
+        if (scrim.getVisibility() != targetVisibility) {
+            scrim.setVisibility(targetVisibility);
+        }
+    }
+
+    private static void setPaddingIfChanged(@NonNull View view,
+                                            int left,
+                                            int top,
+                                            int right,
+                                            int bottom) {
+        if (view.getPaddingLeft() == left
+                && view.getPaddingTop() == top
+                && view.getPaddingRight() == right
+                && view.getPaddingBottom() == bottom) {
+            return;
+        }
+        view.setPadding(left, top, right, bottom);
+    }
+
     private void bindViews() {
         activity.documentAppBar = activity.findViewById(R.id.document_appbar);
         activity.documentBottomChrome = activity.findViewById(R.id.document_bottom_scroller);
@@ -145,14 +247,6 @@ final class DocumentPageStartupController {
         activity.ttsFloatingPlayPause = activity.findViewById(R.id.tts_floating_play_pause);
         activity.ttsFloatingStop = activity.findViewById(R.id.tts_floating_stop);
         activity.setupTtsFloatingCard();
-        if (activity.documentBottomChrome != null) {
-            activity.documentBottomChrome.addOnLayoutChangeListener((v, left, top, right, bottom,
-                    oldLeft, oldTop, oldRight, oldBottom) -> {
-                if ("EPUB".equals(activity.docType) && (bottom - top) != (oldBottom - oldTop)) {
-                    activity.applyEpubBoundaryMarginsIfNeeded();
-                }
-            });
-        }
         activity.toolbar = activity.findViewById(R.id.toolbar);
         activity.setSupportActionBar(activity.toolbar);
         if (activity.getSupportActionBar() != null) {

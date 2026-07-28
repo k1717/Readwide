@@ -323,6 +323,8 @@
     <string name="settings_section_security">Безопасность</string>
     <string name="settings_section_theme">Тема</string>
     <string name="show_hidden_files">Показывать скрытые файлы</string>
+    <string name="show_hidden_files_on">Показывать скрытые файлы: вкл.</string>
+    <string name="show_hidden_files_off">Показывать скрытые файлы: выкл.</string>
     <string name="show_status_bar">Показывать строку состояния при чтении</string>
     <string name="sort">Сортировка</string>
     <string name="sort_by">Сортировать по</string>
@@ -731,4 +733,19 @@
     <string name="text_alignment">Выравнивание текста</string>
     <string name="settings_appearance_title">Настройки отображения</string>
     <string name="settings_open_view_settings">Настройки отображения (тема, шрифт, макет)</string>
+    <string name="archive_landscape_two_page_on">Разворот архива в альбомном режиме: вкл.</string>
+    <string name="archive_landscape_two_page_off">Разворот архива в альбомном режиме: выкл.</string>
+    <string name="file_cover_thumbnails_on">Миниатюры обложек: вкл.</string>
+    <string name="file_cover_thumbnails_off">Миниатюры обложек: выкл.</string>
+    <string name="epub_default_font_format">Шрифт EPUB: %1$s</string>
+    <string name="epub_font_book">Шрифт книги</string>
+    <string name="epub_font_system_sans">Системный без засечек</string>
+    <string name="epub_font_current_system">Текущий системный шрифт</string>
+    <string name="epub_font_korean_sans">Корейский без засечек</string>
+    <string name="epub_font_korean_serif">Корейский с засечками</string>
+    <string name="epub_font_serif">С засечками</string>
+    <string name="epub_font_monospace">Моноширинный</string>
+    <string name="epub_font_sans_medium">Без засечек, средний</string>
+    <string name="epub_font_sans_condensed">Без засечек, узкий</string>
+    <string name="epub_font_sans_light">Без засечек, лёгкий</string>
 </resources>

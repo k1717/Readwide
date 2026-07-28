@@ -323,6 +323,8 @@
     <string name="settings_section_security">Bezpieczeństwo</string>
     <string name="settings_section_theme">Motyw</string>
     <string name="show_hidden_files">Pokaż ukryte pliki</string>
+    <string name="show_hidden_files_on">Pokaż ukryte pliki: wł.</string>
+    <string name="show_hidden_files_off">Pokaż ukryte pliki: wył.</string>
     <string name="show_status_bar">Pokaż pasek stanu podczas czytania</string>
     <string name="sort">Sortuj</string>
     <string name="sort_by">Sortuj według</string>
@@ -743,4 +745,19 @@ Reguły: %2$d włączonych reguł</string>
     <string name="text_alignment">Wyrównanie tekstu</string>
     <string name="settings_appearance_title">Ustawienia wyświetlania</string>
     <string name="settings_open_view_settings">Ustawienia wyświetlania (motyw, czcionka, układ)</string>
+    <string name="archive_landscape_two_page_on">Dwustronicowy widok archiwum w poziomie: wł.</string>
+    <string name="archive_landscape_two_page_off">Dwustronicowy widok archiwum w poziomie: wył.</string>
+    <string name="file_cover_thumbnails_on">Miniatury okładek: wł.</string>
+    <string name="file_cover_thumbnails_off">Miniatury okładek: wył.</string>
+    <string name="epub_default_font_format">Czcionka EPUB: %1$s</string>
+    <string name="epub_font_book">Czcionka książki</string>
+    <string name="epub_font_system_sans">Systemowa bezszeryfowa</string>
+    <string name="epub_font_current_system">Bieżąca czcionka systemowa</string>
+    <string name="epub_font_korean_sans">Koreańska bezszeryfowa</string>
+    <string name="epub_font_korean_serif">Koreańska szeryfowa</string>
+    <string name="epub_font_serif">Szeryfowa</string>
+    <string name="epub_font_monospace">Stała szerokość</string>
+    <string name="epub_font_sans_medium">Bezszeryfowa średnia</string>
+    <string name="epub_font_sans_condensed">Bezszeryfowa zwężona</string>
+    <string name="epub_font_sans_light">Bezszeryfowa lekka</string>
 </resources>

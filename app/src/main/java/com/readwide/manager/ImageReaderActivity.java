@@ -1,6 +1,7 @@
 package com.readwide.manager;
 
 import android.app.Dialog;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
@@ -11,11 +12,15 @@ import android.graphics.drawable.AnimatedImageDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.provider.MediaStore;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -36,6 +41,8 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.content.ContextCompat;
@@ -51,9 +58,13 @@ import com.readwide.manager.image.ImageDecodeHelper;
 import com.readwide.manager.image.ImageInfo;
 import com.readwide.manager.image.ImageInfoReader;
 import com.readwide.manager.image.LoadedImage;
+import com.readwide.manager.image.ArchiveImageSpreadDrawable;
+import com.readwide.manager.util.ArchiveImageSpreadMath;
+import com.readwide.manager.util.ArchiveImageSpreadNavigator;
 import com.readwide.manager.util.FileSystemOps;
 import com.readwide.manager.util.ImageSequenceNavigationMath;
 import com.readwide.manager.util.ImageSequenceState;
+import com.readwide.manager.util.ImageExportName;
 import com.readwide.manager.util.FileSortUtils;
 import com.readwide.manager.util.FileClipboardController;
 import com.readwide.manager.util.FileUtils;
@@ -65,7 +76,9 @@ import com.readwide.manager.util.ReaderKeyMap;
 import com.readwide.manager.view.ZoomImageView;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -81,6 +94,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ImageReaderActivity extends AppCompatActivity {
     private static final int MENU_ROTATE = 1001;
     private static final int MENU_MORE = 1002;
+    private static final String STATE_PENDING_IMAGE_EXPORT_SOURCE =
+            "pending_image_export_source";
+    private static final String STATE_BACKGROUND_SAVED_AT_WALL_TIME =
+            "background_saved_at_wall_time";
+    private static final long BACKGROUND_VIEWER_EXPIRY_MS = 10L * 60L * 1000L;
 
     public static final String EXTRA_FILE_PATH = "file_path";
     public static final String EXTRA_FILE_URI = "file_uri";
@@ -94,6 +112,7 @@ public class ImageReaderActivity extends AppCompatActivity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ExecutorService sequenceExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService detailExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService imageExportExecutor = Executors.newSingleThreadExecutor();
     // Parallel pool for pre-decoding neighbor pages into the bitmap cache. Kept
     // separate from extraction (sequenceExecutor) and from the on-demand decode
     // (executor) so prefetch decoding runs concurrently instead of queuing behind
@@ -103,6 +122,21 @@ public class ImageReaderActivity extends AppCompatActivity {
     private final Object archiveExtractLock = new Object();
     private final Object deferredSequenceLock = new Object();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    // These lifecycle fields must be declared before the Runnable initializer
+    // that captures them. Java rejects a field initializer that refers forward
+    // to instance fields declared later in the class.
+    private volatile boolean destroyed;
+    private long backgroundStoppedAtElapsedRealtime = -1L;
+    private final Runnable backgroundExpiryRunnable = () -> {
+        long stoppedAt = backgroundStoppedAtElapsedRealtime;
+        if (stoppedAt > 0L
+                && SystemClock.elapsedRealtime() - stoppedAt
+                >= BACKGROUND_VIEWER_EXPIRY_MS
+                && !isFinishing()
+                && !destroyed) {
+            finish();
+        }
+    };
     private final ArrayList<String> imagePaths = new ArrayList<>();
     private final ArrayList<String> sourceDisplayNames = new ArrayList<>();
     private final ArrayList<String> sourceEntryPaths = new ArrayList<>();
@@ -134,7 +168,7 @@ public class ImageReaderActivity extends AppCompatActivity {
     private ImageSequenceHandoffStore.Sequence pendingDeferredSequence;
     private int currentIndex = 0;
     private boolean allowFileOps;
-    private volatile boolean destroyed;
+    private long backgroundSavedAtWallTime = -1L;
     private boolean chromeVisible = true;
     private int systemLeftInset;
     private int systemTopInset;
@@ -142,6 +176,18 @@ public class ImageReaderActivity extends AppCompatActivity {
     private int systemBottomInset;
     private Bitmap currentBitmap;
     private Drawable currentDrawable;
+    // Cache-owned bitmaps retained by the currently visible allocation-free
+    // archive spread drawable. The cache eviction hook must not recycle these
+    // while the drawable still paints them.
+    @Nullable private Bitmap visibleSpreadFirstBitmap;
+    @Nullable private Bitmap visibleSpreadSecondBitmap;
+    private boolean archiveSpreadVisible;
+    private boolean visibleSpreadSecondUsesSinglePageProfile;
+    // -1 unknown, 0 square/landscape, 1 portrait. Filled from decoded bitmap
+    // aspect ratios so backward navigation can reproduce mixed single/spread
+    // screen boundaries without decoding on the UI thread.
+    private final android.util.SparseIntArray portraitPageByIndex =
+            new android.util.SparseIntArray();
     private volatile int imageLoadGeneration;
     // Consecutive same-direction page turns (ImagePrefetchMath.updateStreak);
     // sustained motion deepens the file-extraction look-ahead in that direction.
@@ -157,9 +203,23 @@ public class ImageReaderActivity extends AppCompatActivity {
             new java.util.concurrent.atomic.AtomicInteger();
     private boolean currentImageDetailLoaded = true;
     private int detailRequestGeneration = -1;
+    private int archivePreviewUpgradeGeneration = -1;
     private int displayedImageIndex = -1;
     private String displayedImagePath;
     private String displayedImageEntryPath;
+    @Nullable private Uri pendingImageExportSource;
+
+    private final ActivityResultLauncher<Intent> imageExportLauncher =
+            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+                Uri destination = result.getResultCode() == RESULT_OK && result.getData() != null
+                        ? result.getData().getData()
+                        : null;
+                Uri source = pendingImageExportSource;
+                pendingImageExportSource = null;
+                if (destination != null && source != null) {
+                    exportImageToUriAsync(source, destination);
+                }
+            });
 
     // Decoded-preview bitmap cache keyed by image index. Lets adjacent pages be
     // shown instantly (no re-decode) and keeps prefetched neighbors ready. The
@@ -173,8 +233,22 @@ public class ImageReaderActivity extends AppCompatActivity {
      * only, like every cache mutation; entryRemoved clears stale members.
      */
     private final java.util.HashSet<Integer> fullQualityCachedIndices = new java.util.HashSet<>();
+    /**
+     * Cache entries decoded with the normal one-page preview profile (or detail
+     * profile). Ordinary neighbor prefetch uses a smaller bitmap and is excluded.
+     * The archive spread companion must reach this tier before preparation is
+     * considered complete.
+     */
+    private final java.util.HashSet<Integer> singlePageProfileCachedIndices =
+            new java.util.HashSet<>();
     private final java.util.Set<Integer> bitmapPrefetchInFlight =
             java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+    private final java.util.Set<Integer> archiveSpreadPrepareInFlight =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+    private final ArchiveImageSpreadNavigator archiveSpreadNavigator =
+            new ArchiveImageSpreadNavigator();
+    @Nullable private Bitmap preparedSpreadCompanionBitmap;
+    private int preparedSpreadCompanionIndex = -1;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -184,6 +258,19 @@ public class ImageReaderActivity extends AppCompatActivity {
             prefs.applyDarkMode(prefs.getDarkMode());
         }
         super.onCreate(savedInstanceState);
+        if (savedInstanceState != null) {
+            long savedAt = savedInstanceState.getLong(
+                    STATE_BACKGROUND_SAVED_AT_WALL_TIME, -1L);
+            if (savedAt > 0L
+                    && System.currentTimeMillis() - savedAt
+                    >= BACKGROUND_VIEWER_EXPIRY_MS) {
+                // A task restored after process death must not resurrect an old
+                // image/archive cache graph. Return to the underlying browser
+                // instead of showing a stale-page decode error.
+                finish();
+                return;
+            }
+        }
         dialogStyle = new ImageDialogStyleController(this);
         overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
         ViewerRegistry.activate(this);
@@ -205,10 +292,15 @@ public class ImageReaderActivity extends AppCompatActivity {
                 // its quality record is stale either way. Put sites re-add it
                 // right after a replacing put when the new bitmap qualifies.
                 fullQualityCachedIndices.remove(key);
+                singlePageProfileCachedIndices.remove(key);
                 // Never recycle the bitmap currently shown on screen; the display
                 // swap path owns that one until it is replaced.
                 if (oldValue != null && oldValue != newValue
-                        && oldValue != currentBitmap && !oldValue.isRecycled()) {
+                        && oldValue != currentBitmap
+                        && oldValue != visibleSpreadFirstBitmap
+                        && oldValue != visibleSpreadSecondBitmap
+                        && oldValue != preparedSpreadCompanionBitmap
+                        && !oldValue.isRecycled()) {
                     oldValue.recycle();
                 }
             }
@@ -216,6 +308,13 @@ public class ImageReaderActivity extends AppCompatActivity {
 
         filePath = getIntent().getStringExtra(EXTRA_FILE_PATH);
         fileUri = getIntent().getStringExtra(EXTRA_FILE_URI);
+        if (savedInstanceState != null) {
+            String pendingSource = savedInstanceState.getString(
+                    STATE_PENDING_IMAGE_EXPORT_SOURCE);
+            if (pendingSource != null && !pendingSource.trim().isEmpty()) {
+                pendingImageExportSource = Uri.parse(pendingSource);
+            }
+        }
         sourceArchivePath = getIntent().getStringExtra(EXTRA_SOURCE_ARCHIVE_PATH);
         sequenceHandoffToken = getIntent().getStringExtra(EXTRA_SEQUENCE_HANDOFF_TOKEN);
         allowFileOps = getIntent().getBooleanExtra(EXTRA_ALLOW_FILE_OPS,
@@ -238,14 +337,32 @@ public class ImageReaderActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        mainHandler.removeCallbacks(backgroundExpiryRunnable);
+        long stoppedAt = backgroundStoppedAtElapsedRealtime;
+        backgroundStoppedAtElapsedRealtime = -1L;
+        if (stoppedAt > 0L
+                && SystemClock.elapsedRealtime() - stoppedAt
+                >= BACKGROUND_VIEWER_EXPIRY_MS) {
+            // Keep the task itself alive and close only this viewer. MainActivity
+            // underneath resumes with the already-persisted image position.
+            finish();
+        }
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        if (isFinishing()) return;
+        backgroundSavedAtWallTime = -1L;
         applyImageSystemBarVisibility();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        backgroundSavedAtWallTime = System.currentTimeMillis();
         // Persist the latest reading position now. When returning to the main
         // screen the parent activity's onResume (which reloads the recent list)
         // runs before this activity's onStop/onDestroy, so saving only in
@@ -255,6 +372,58 @@ public class ImageReaderActivity extends AppCompatActivity {
         mainHandler.removeCallbacks(imageProgressSaveRunnable);
         persistArchiveImageProgress();
         persistImageReadingProgress();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        mainHandler.removeCallbacks(backgroundExpiryRunnable);
+        if (!isChangingConfigurations() && !isFinishing() && !destroyed) {
+            backgroundStoppedAtElapsedRealtime = SystemClock.elapsedRealtime();
+            mainHandler.postDelayed(
+                    backgroundExpiryRunnable, BACKGROUND_VIEWER_EXPIRY_MS);
+        } else {
+            backgroundStoppedAtElapsedRealtime = -1L;
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        if (pendingImageExportSource != null) {
+            outState.putString(
+                    STATE_PENDING_IMAGE_EXPORT_SOURCE,
+                    pendingImageExportSource.toString());
+        }
+        if (backgroundSavedAtWallTime > 0L) {
+            outState.putLong(
+                    STATE_BACKGROUND_SAVED_AT_WALL_TIME,
+                    backgroundSavedAtWallTime);
+        }
+        super.onSaveInstanceState(outState);
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
+                && backgroundStoppedAtElapsedRealtime > 0L
+                && !isFinishing()
+                && !destroyed) {
+            // Background memory pressure is the other known stale-cache path.
+            // Closing now releases bitmap/archive readers and avoids attempting
+            // a partial reconstruction when the user later returns.
+            finish();
+        }
+    }
+
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        if (backgroundStoppedAtElapsedRealtime > 0L
+                && !isFinishing()
+                && !destroyed) {
+            finish();
+        }
     }
 
     @Override
@@ -277,8 +446,11 @@ public class ImageReaderActivity extends AppCompatActivity {
         executor.shutdownNow();
         sequenceExecutor.shutdownNow();
         detailExecutor.shutdownNow();
+        imageExportExecutor.shutdownNow();
         prefetchDecodeExecutor.shutdownNow();
         bitmapPrefetchInFlight.clear();
+        archiveSpreadPrepareInFlight.clear();
+        archiveSpreadNavigator.clear();
         SequentialArchiveImageReader readerToClose;
         synchronized (sequentialReaderLock) {
             sequentialReaderClosed = true;
@@ -292,12 +464,14 @@ public class ImageReaderActivity extends AppCompatActivity {
                 && currentDrawable instanceof AnimatedImageDrawable) {
             ((AnimatedImageDrawable) currentDrawable).stop();
         }
+        clearPreparedSpreadCompanion(true);
         clearCurrentImageSurface(true);
         if (decodedBitmapCache != null) {
             decodedBitmapCache.evictAll(); // recycles all cached bitmaps
             decodedBitmapCache = null;
         }
         fullQualityCachedIndices.clear();
+        singlePageProfileCachedIndices.clear();
         persistArchiveImageProgress();
         persistImageReadingProgress();
         ViewerRegistry.unregister(this);
@@ -564,7 +738,11 @@ public class ImageReaderActivity extends AppCompatActivity {
             @Override public boolean shouldHandleTapImmediately(float normalizedX) { return isImageSideTapPageTurn(normalizedX); }
             @Override public void onSwipeLeft() { showAdjacentImage(imageSwipeDelta(true)); }
             @Override public void onSwipeRight() { showAdjacentImage(imageSwipeDelta(false)); }
-            @Override public void onZoomRequested() { requestDetailImageForCurrent(); }
+            @Override public void onZoomRequested() {
+                // A spread is built from two cache-owned previews. Refining only
+                // the logical first page would replace the spread with one page.
+                if (!archiveSpreadVisible) requestDetailImageForCurrent();
+            }
         });
         root.addView(imageView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -719,10 +897,17 @@ public class ImageReaderActivity extends AppCompatActivity {
     @Override
     public void onConfigurationChanged(@NonNull Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        archiveSpreadNavigator.clear();
         updateRotationMenuTitle(newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE);
         applyImageSystemBarVisibility();
         if (rootView != null) ViewCompat.requestApplyInsets(rootView);
-        if (imageView != null) imageView.post(imageView::configureBaseMatrix);
+        if (imageView != null) {
+            imageView.post(() -> {
+                refreshArchiveSpreadPresentation();
+                ensureArchiveSpreadCompanionReady();
+                imageView.configureBaseMatrix();
+            });
+        }
     }
 
     // --- Hardware page-turn keys ---
@@ -801,7 +986,14 @@ public class ImageReaderActivity extends AppCompatActivity {
         if (toolbar == null) return;
         toolbar.setTitle(getDisplayName());
         if (imagePaths.size() > 1) {
-            toolbar.setSubtitle(String.format(Locale.getDefault(), "%d / %d", currentIndex + 1, imagePaths.size()));
+            int visibleEnd = ArchiveImageSpreadMath.visibleEndIndex(
+                    currentIndex, imagePaths.size(), archiveSpreadVisible);
+            String page = archiveSpreadVisible
+                    ? String.format(Locale.getDefault(), "%d–%d / %d",
+                    currentIndex + 1, visibleEnd + 1, imagePaths.size())
+                    : String.format(Locale.getDefault(), "%d / %d",
+                    currentIndex + 1, imagePaths.size());
+            toolbar.setSubtitle(page);
         } else {
             toolbar.setSubtitle(null);
         }
@@ -836,17 +1028,40 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     private void showAdjacentImage(int direction) {
         if (imagePaths.size() <= 1) return;
-        showImageAtIndex(ImageSequenceNavigationMath.nextIndex(currentIndex, direction, imagePaths.size()));
+        int target;
+        if (isArchiveLandscapeSpreadEnabled()) {
+            if (direction > 0) {
+                target = archiveSpreadNavigator.forward(
+                        currentIndex, imagePaths.size(), archiveSpreadVisible);
+            } else {
+                target = archiveSpreadNavigator.backward(
+                        currentIndex, imagePaths.size(), buildKnownPairStarts());
+            }
+        } else {
+            archiveSpreadNavigator.clear();
+            target = ImageSequenceNavigationMath.nextIndex(
+                    currentIndex, direction, imagePaths.size());
+        }
+        showImageAtIndexInternal(target);
     }
 
+    /** Slider/direct jumps start a new spread-navigation history. */
     private void showImageAtIndex(int targetIndex) {
+        archiveSpreadNavigator.clear();
+        showImageAtIndexInternal(targetIndex);
+    }
+
+    private void showImageAtIndexInternal(int targetIndex) {
         if (imagePaths.isEmpty()) return;
         int next = ImageSequenceNavigationMath.clampIndex(targetIndex, imagePaths.size());
         if (next == currentIndex) {
+            refreshArchiveSpreadPresentation();
             updateImageSliderState();
             return;
         }
+        clearPreparedSpreadCompanion(true);
         pagingStreak = com.readwide.manager.util.ImagePrefetchMath.updateStreak(pagingStreak, next - currentIndex);
+        archiveSpreadVisible = false;
         currentIndex = next;
         filePath = imagePaths.get(currentIndex);
         fileUri = null;
@@ -872,6 +1087,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         // won't overwrite us, and present from cache.
         ++imageLoadGeneration;
         detailRequestGeneration = -1;
+        archivePreviewUpgradeGeneration = -1;
         boolean cachedIsFullQuality = fullQualityCachedIndices.contains(index);
         currentImageDetailLoaded = cachedIsFullQuality;
         String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, index);
@@ -879,16 +1095,19 @@ public class ImageReaderActivity extends AppCompatActivity {
                 cached, cachedIsFullQuality, cached.getWidth(), cached.getHeight(), 1);
         applyLoadedImage(cachedLoaded, false, index, filePath, entryPath);
         setLoading(false, null);
-        // A display-sized prefetched bitmap is final for normal page viewing.
-        // Keep currentImageDetailLoaded=false when it is sampled so an explicit
-        // pinch/double-tap zoom can request detail, but never re-decode merely
-        // because the user turned onto the page.
+        showCurrentArchiveSpreadIfReady();
+        ensureArchiveSpreadCompanionReady();
+        requestArchivePreviewUpgradeForCurrent();
+        // Loose-image sequences keep the display-sized prefetch until an explicit
+        // zoom requests detail. Archive pages upgrade in place to the denser
+        // archive-preview tier above, without delaying the initial page turn.
         return true;
     }
 
     private void loadImageAsync() {
         final int generation = ++imageLoadGeneration;
         detailRequestGeneration = -1;
+        archivePreviewUpgradeGeneration = -1;
         currentImageDetailLoaded = false;
         final int index = currentIndex;
         final String path = filePath;
@@ -896,6 +1115,8 @@ public class ImageReaderActivity extends AppCompatActivity {
         final String displayName = getDisplayName();
         final String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, index);
         final Context appContext = getApplicationContext();
+        final boolean archiveBacked = sourceArchivePath != null
+                && !sourceArchivePath.trim().isEmpty();
         setLoading(true, null);
         updateToolbarTitle();
         executor.execute(() -> {
@@ -904,7 +1125,11 @@ public class ImageReaderActivity extends AppCompatActivity {
             try {
                 if (ensureArchiveImageExtracted(index, path)
                         && isCurrentImageLoadGeneration(generation)) {
-                    loaded = ImageDecodeHelper.decodePreview(appContext, path, uri, displayName);
+                    loaded = archiveBacked
+                            ? ImageDecodeHelper.decodeArchivePreview(
+                            appContext, path, uri, displayName)
+                            : ImageDecodeHelper.decodePreview(
+                            appContext, path, uri, displayName);
                 }
             } catch (Exception ignored) {
                 loaded = null;
@@ -927,11 +1152,16 @@ public class ImageReaderActivity extends AppCompatActivity {
                     // prevents an immediate recycle-before-display.
                     applyLoadedImage(result, false, index, path, entryPath);
                     if (result.bitmap != null) {
-                        cacheDecodedBitmap(index, result.bitmap, result.originalQuality);
+                        cacheDecodedBitmap(
+                                index,
+                                result.bitmap,
+                                result.originalQuality,
+                                true);
                     }
                     currentImageDetailLoaded = result.originalQuality;
                     persistArchiveImageProgress();
                     scheduleImageReadingProgressSave();
+                    ensureArchiveSpreadCompanionReady();
                     prefetchAdjacentImages(index);
                     setLoading(false, null);
                 } else {
@@ -944,6 +1174,69 @@ public class ImageReaderActivity extends AppCompatActivity {
                     }
                     setLoading(false, getString(R.string.image_open_failed));
                 }
+            });
+        });
+    }
+
+    /**
+     * A neighbor-prefetch bitmap is intentionally cheap. Once that page becomes
+     * current in an archive, replace it in-place with the denser archive preview
+     * while preserving the accepted viewport. This keeps instant page turns
+     * without leaving the reader at prefetch resolution.
+     */
+    private void requestArchivePreviewUpgradeForCurrent() {
+        if (destroyed
+                || sourceArchivePath == null
+                || sourceArchivePath.trim().isEmpty()
+                || singlePageProfileCachedIndices.contains(currentIndex)) {
+            return;
+        }
+        final int generation = imageLoadGeneration;
+        if (generation <= 0 || archivePreviewUpgradeGeneration == generation) return;
+        archivePreviewUpgradeGeneration = generation;
+        final int index = currentIndex;
+        final String path = filePath;
+        final String uri = fileUri;
+        final String displayName = getDisplayName();
+        final String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, index);
+        final Context appContext = getApplicationContext();
+        detailExecutor.execute(() -> {
+            if (!isCurrentImageLoadGeneration(generation)) return;
+            LoadedImage loaded = null;
+            try {
+                if (ensureArchiveImageExtracted(index, path)
+                        && isCurrentImageLoadGeneration(generation)) {
+                    loaded = ImageDecodeHelper.decodeArchivePreview(
+                            appContext, path, uri, displayName);
+                }
+            } catch (Exception ignored) {
+                loaded = null;
+            }
+            if (!isCurrentImageLoadGeneration(generation)) {
+                recycleLoadedImage(loaded);
+                return;
+            }
+            LoadedImage result = loaded;
+            mainHandler.post(() -> {
+                if (!isActiveImageRequest(generation, index, path, entryPath)) {
+                    recycleLoadedImage(result);
+                    return;
+                }
+                archivePreviewUpgradeGeneration = -1;
+                if (result == null || (result.bitmap == null && result.drawable == null)) {
+                    return;
+                }
+                applyLoadedImage(result, true, index, path, entryPath);
+                if (result.bitmap != null && !result.bitmap.isRecycled()
+                        && decodedBitmapCache != null) {
+                    cacheDecodedBitmap(
+                            index,
+                            result.bitmap,
+                            result.originalQuality,
+                            true);
+                }
+                currentImageDetailLoaded = result.originalQuality;
+                ensureArchiveSpreadCompanionReady();
             });
         });
     }
@@ -995,7 +1288,7 @@ public class ImageReaderActivity extends AppCompatActivity {
                     // the preview (and it guards currentBitmap regardless).
                     if (result.bitmap != null && !result.bitmap.isRecycled()
                             && decodedBitmapCache != null) {
-                        cacheDecodedBitmap(index, result.bitmap, true);
+                        cacheDecodedBitmap(index, result.bitmap, true, true);
                     }
                 }
             });
@@ -1039,11 +1332,17 @@ public class ImageReaderActivity extends AppCompatActivity {
     private void invalidateImageSequenceWork(boolean clearDecodedCache) {
         ++imageLoadGeneration;
         detailRequestGeneration = -1;
+        archivePreviewUpgradeGeneration = -1;
         imageSequenceGeneration.incrementAndGet();
         prefetchPlanGeneration.incrementAndGet();
+        archiveSpreadPrepareInFlight.clear();
+        archiveSpreadNavigator.clear();
+        clearPreparedSpreadCompanion(true);
         if (clearDecodedCache && decodedBitmapCache != null) {
             decodedBitmapCache.evictAll();
             fullQualityCachedIndices.clear();
+            singlePageProfileCachedIndices.clear();
+            portraitPageByIndex.clear();
         }
     }
 
@@ -1054,6 +1353,12 @@ public class ImageReaderActivity extends AppCompatActivity {
                                   @Nullable String requestEntryPath) {
         Bitmap oldBitmap = currentBitmap;
         Drawable oldDrawable = currentDrawable;
+        Bitmap oldSpreadFirst = visibleSpreadFirstBitmap;
+        Bitmap oldSpreadSecond = visibleSpreadSecondBitmap;
+        visibleSpreadFirstBitmap = null;
+        visibleSpreadSecondBitmap = null;
+        archiveSpreadVisible = false;
+        visibleSpreadSecondUsesSinglePageProfile = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
                 && oldDrawable instanceof AnimatedImageDrawable) {
             ((AnimatedImageDrawable) oldDrawable).stop();
@@ -1076,6 +1381,9 @@ public class ImageReaderActivity extends AppCompatActivity {
                 && !isBitmapInCache(oldBitmap)) {
             oldBitmap.recycle();
         }
+        recycleReleasedSpreadBitmap(oldSpreadFirst);
+        if (oldSpreadSecond != oldSpreadFirst) recycleReleasedSpreadBitmap(oldSpreadSecond);
+        updateToolbarTitle();
     }
 
     private boolean isBitmapInCache(@Nullable Bitmap bitmap) {
@@ -1093,30 +1401,242 @@ public class ImageReaderActivity extends AppCompatActivity {
      */
     private boolean cacheDecodedBitmap(int index,
                                        @NonNull Bitmap bitmap,
-                                       boolean fullQuality) {
+                                       boolean fullQuality,
+                                       boolean singlePageProfile) {
         if (decodedBitmapCache == null || bitmap.isRecycled()) {
             fullQualityCachedIndices.remove(index);
+            singlePageProfileCachedIndices.remove(index);
             return false;
         }
         decodedBitmapCache.put(index, bitmap);
+        portraitPageByIndex.put(index, ArchiveImageSpreadMath.isTallPage(
+                bitmap.getWidth(), bitmap.getHeight()) ? 1 : 0);
         boolean retained = decodedBitmapCache.get(index) == bitmap && !bitmap.isRecycled();
         if (retained && fullQuality) {
             fullQualityCachedIndices.add(index);
         } else {
             fullQualityCachedIndices.remove(index);
         }
+        if (retained && singlePageProfile) {
+            singlePageProfileCachedIndices.add(index);
+        } else {
+            singlePageProfileCachedIndices.remove(index);
+        }
+        if (retained && (index == currentIndex || index == currentIndex + 1)) {
+            showCurrentArchiveSpreadIfReady();
+        }
         return retained;
+    }
+
+    private boolean isArchiveLandscapeSpreadEnabled() {
+        return prefs != null
+                && prefs.getArchiveLandscapeSpreadEnabled()
+                && isLandscapeNow()
+                && sourceArchivePath != null
+                && !sourceArchivePath.trim().isEmpty()
+                && imagePaths.size() > 1;
+    }
+
+    private boolean showCurrentArchiveSpreadIfReady() {
+        if (!isArchiveLandscapeSpreadEnabled()
+                || decodedBitmapCache == null
+                || currentIndex < 0
+                || currentIndex + 1 >= imagePaths.size()) {
+            return false;
+        }
+        Bitmap first = currentFirstBitmapForArchiveSpread();
+        Bitmap second = currentSecondBitmapForArchiveSpread();
+        if (first == null || second == null
+                || first.isRecycled() || second.isRecycled()
+                || !ArchiveImageSpreadMath.canShowPair(
+                currentIndex,
+                imagePaths.size(),
+                ArchiveImageSpreadMath.isTallPage(first.getWidth(), first.getHeight()),
+                ArchiveImageSpreadMath.isTallPage(second.getWidth(), second.getHeight()))) {
+            return false;
+        }
+        if (archiveSpreadVisible
+                && visibleSpreadFirstBitmap == first
+                && visibleSpreadSecondBitmap == second) {
+            releasePreparedSpreadCompanionReference(second);
+            return true;
+        }
+
+        Bitmap oldBitmap = currentBitmap;
+        Drawable oldDrawable = currentDrawable;
+        Bitmap oldSpreadFirst = visibleSpreadFirstBitmap;
+        Bitmap oldSpreadSecond = visibleSpreadSecondBitmap;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && oldDrawable instanceof AnimatedImageDrawable) {
+            ((AnimatedImageDrawable) oldDrawable).stop();
+        }
+        ArchiveImageSpreadDrawable spread = new ArchiveImageSpreadDrawable(
+                first, second, isImageMirrorMode());
+        visibleSpreadFirstBitmap = first;
+        visibleSpreadSecondBitmap = second;
+        archiveSpreadVisible = true;
+        visibleSpreadSecondUsesSinglePageProfile =
+                second == preparedSpreadCompanionBitmap
+                        || singlePageProfileCachedIndices.contains(currentIndex + 1);
+        currentBitmap = null;
+        currentDrawable = spread;
+        imageView.setImageDrawableReady(spread);
+        displayedImageIndex = currentIndex;
+        displayedImagePath = filePath;
+        displayedImageEntryPath = ImageSequenceState.entryPathAt(
+                sourceEntryPaths, currentIndex);
+        currentImageDetailLoaded = true;
+        releasePreparedSpreadCompanionReference(second);
+        // The on-demand preview can be larger than the LRU budget. In that case
+        // it is the spread's first page even though the cache rejected it; do not
+        // recycle the bitmap while the new drawable is retaining and painting it.
+        if (oldBitmap != null
+                && oldBitmap != first
+                && oldBitmap != second
+                && !oldBitmap.isRecycled()
+                && !isBitmapInCache(oldBitmap)) {
+            oldBitmap.recycle();
+        }
+        if (oldSpreadFirst != first && oldSpreadFirst != second) {
+            recycleReleasedSpreadBitmap(oldSpreadFirst);
+        }
+        if (oldSpreadSecond != oldSpreadFirst
+                && oldSpreadSecond != first
+                && oldSpreadSecond != second) {
+            recycleReleasedSpreadBitmap(oldSpreadSecond);
+        }
+        updateToolbarTitle();
+        return true;
+    }
+
+    private void refreshArchiveSpreadPresentation() {
+        if (!isArchiveLandscapeSpreadEnabled()) {
+            clearPreparedSpreadCompanion(true);
+        }
+        if (showCurrentArchiveSpreadIfReady()) return;
+        if (!archiveSpreadVisible) return;
+        Bitmap cached = decodedBitmapCache != null ? decodedBitmapCache.get(currentIndex) : null;
+        if ((cached == null || cached.isRecycled())
+                && visibleSpreadFirstBitmap != null
+                && !visibleSpreadFirstBitmap.isRecycled()
+                && displayedImageIndex == currentIndex) {
+            cached = visibleSpreadFirstBitmap;
+        }
+        if (cached != null && !cached.isRecycled()) {
+            String entry = ImageSequenceState.entryPathAt(sourceEntryPaths, currentIndex);
+            applyLoadedImage(LoadedImage.forBitmap(
+                    cached,
+                    fullQualityCachedIndices.contains(currentIndex),
+                    cached.getWidth(),
+                    cached.getHeight(),
+                    1), false, currentIndex, filePath, entry);
+        } else {
+            clearCurrentImageSurface(false);
+            loadImageAsync();
+        }
+    }
+
+    @Nullable
+    private Bitmap currentFirstBitmapForArchiveSpread() {
+        Bitmap cached = decodedBitmapCache != null
+                ? decodedBitmapCache.get(currentIndex)
+                : null;
+        if (cached != null && !cached.isRecycled()) return cached;
+        if (currentBitmap != null
+                && !currentBitmap.isRecycled()
+                && displayedImageIndex == currentIndex
+                && TextUtils.equals(displayedImagePath, filePath)
+                && TextUtils.equals(displayedImageEntryPath,
+                ImageSequenceState.entryPathAt(sourceEntryPaths, currentIndex))) {
+            return currentBitmap;
+        }
+        if (visibleSpreadFirstBitmap != null
+                && !visibleSpreadFirstBitmap.isRecycled()
+                && displayedImageIndex == currentIndex) {
+            return visibleSpreadFirstBitmap;
+        }
+        return null;
+    }
+
+    @Nullable
+    private Bitmap currentSecondBitmapForArchiveSpread() {
+        int companionIndex = currentIndex + 1;
+        if (preparedSpreadCompanionIndex == companionIndex
+                && preparedSpreadCompanionBitmap != null
+                && !preparedSpreadCompanionBitmap.isRecycled()) {
+            return preparedSpreadCompanionBitmap;
+        }
+        Bitmap cached = decodedBitmapCache != null
+                ? decodedBitmapCache.get(companionIndex)
+                : null;
+        if (cached != null && !cached.isRecycled()) return cached;
+        if (archiveSpreadVisible
+                && displayedImageIndex == currentIndex
+                && visibleSpreadSecondBitmap != null
+                && !visibleSpreadSecondBitmap.isRecycled()) {
+            return visibleSpreadSecondBitmap;
+        }
+        return null;
+    }
+
+    private void setPreparedSpreadCompanion(int index, @NonNull Bitmap bitmap) {
+        Bitmap old = preparedSpreadCompanionBitmap;
+        preparedSpreadCompanionBitmap = bitmap;
+        preparedSpreadCompanionIndex = index;
+        if (old != null && old != bitmap) recycleReleasedSpreadBitmap(old);
+    }
+
+    private void releasePreparedSpreadCompanionReference(@Nullable Bitmap bitmap) {
+        if (bitmap != null && preparedSpreadCompanionBitmap == bitmap) {
+            preparedSpreadCompanionBitmap = null;
+            preparedSpreadCompanionIndex = -1;
+        }
+    }
+
+    private void clearPreparedSpreadCompanion(boolean recycleBitmap) {
+        Bitmap old = preparedSpreadCompanionBitmap;
+        preparedSpreadCompanionBitmap = null;
+        preparedSpreadCompanionIndex = -1;
+        if (recycleBitmap) recycleReleasedSpreadBitmap(old);
+    }
+
+    @NonNull
+    private boolean[] buildKnownPairStarts() {
+        boolean[] pairs = new boolean[Math.max(0, imagePaths.size())];
+        for (int i = 0; i + 1 < pairs.length; i++) {
+            pairs[i] = portraitPageByIndex.get(i, -1) == 1
+                    && portraitPageByIndex.get(i + 1, -1) == 1;
+        }
+        return pairs;
+    }
+
+    private void recycleReleasedSpreadBitmap(@Nullable Bitmap bitmap) {
+        if (bitmap == null || bitmap.isRecycled()
+                || bitmap == currentBitmap
+                || bitmap == visibleSpreadFirstBitmap
+                || bitmap == visibleSpreadSecondBitmap
+                || bitmap == preparedSpreadCompanionBitmap
+                || isBitmapInCache(bitmap)) {
+            return;
+        }
+        bitmap.recycle();
     }
 
     private void clearCurrentImageSurface(boolean recycleBitmap) {
         Drawable oldDrawable = currentDrawable;
         Bitmap oldBitmap = currentBitmap;
+        Bitmap oldSpreadFirst = visibleSpreadFirstBitmap;
+        Bitmap oldSpreadSecond = visibleSpreadSecondBitmap;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
                 && oldDrawable instanceof AnimatedImageDrawable) {
             ((AnimatedImageDrawable) oldDrawable).stop();
         }
         currentDrawable = null;
         currentBitmap = null;
+        visibleSpreadFirstBitmap = null;
+        visibleSpreadSecondBitmap = null;
+        archiveSpreadVisible = false;
+        visibleSpreadSecondUsesSinglePageProfile = false;
         displayedImageIndex = -1;
         displayedImagePath = null;
         displayedImageEntryPath = null;
@@ -1124,6 +1644,10 @@ public class ImageReaderActivity extends AppCompatActivity {
         if (recycleBitmap && oldBitmap != null && !oldBitmap.isRecycled()
                 && !isBitmapInCache(oldBitmap)) {
             oldBitmap.recycle();
+        }
+        if (recycleBitmap) {
+            recycleReleasedSpreadBitmap(oldSpreadFirst);
+            if (oldSpreadSecond != oldSpreadFirst) recycleReleasedSpreadBitmap(oldSpreadSecond);
         }
     }
 
@@ -1175,6 +1699,181 @@ public class ImageReaderActivity extends AppCompatActivity {
                 && ArchiveSupport.isForwardImageReadableType(new File(sourceArchivePath));
         sourceArchiveForwardReadable = result;
         return result;
+    }
+
+    /**
+     * Reliably prepares the one page required by the current spread.
+     *
+     * <p>The general neighbor prefetcher is intentionally best-effort and its
+     * plans are canceled whenever paging direction changes. A spread cannot
+     * depend solely on that speculative work: enabling the option after open or
+     * rotating into landscape otherwise leaves the second page missing forever.
+     * This focused request is sequence-scoped, deduplicated, and uses the same
+     * extraction/cache ownership paths as ordinary archive prefetch.</p>
+     */
+    private void ensureArchiveSpreadCompanionReady() {
+        if (!isArchiveLandscapeSpreadEnabled()
+                || decodedBitmapCache == null
+                || currentIndex < 0
+                || currentIndex + 1 >= imagePaths.size()) {
+            return;
+        }
+        Bitmap first = currentFirstBitmapForArchiveSpread();
+        if (first == null
+                || first.isRecycled()
+                || !ArchiveImageSpreadMath.isTallPage(
+                first.getWidth(), first.getHeight())) {
+            return;
+        }
+        int companionIndex = currentIndex + 1;
+        if (preparedSpreadCompanionIndex == companionIndex
+                && preparedSpreadCompanionBitmap != null
+                && !preparedSpreadCompanionBitmap.isRecycled()) {
+            showCurrentArchiveSpreadIfReady();
+            return;
+        }
+        if (archiveSpreadVisible
+                && visibleSpreadSecondUsesSinglePageProfile
+                && visibleSpreadSecondBitmap != null
+                && !visibleSpreadSecondBitmap.isRecycled()) {
+            return;
+        }
+        Bitmap ready = decodedBitmapCache.get(companionIndex);
+        if (ready != null
+                && !ready.isRecycled()
+                && singlePageProfileCachedIndices.contains(companionIndex)) {
+            showCurrentArchiveSpreadIfReady();
+            return;
+        }
+        if (!archiveSpreadPrepareInFlight.add(companionIndex)) {
+            return;
+        }
+
+        final int sequenceGeneration = imageSequenceGeneration.get();
+        final ArrayList<String> pathsSnapshot = new ArrayList<>(imagePaths);
+        final ArrayList<String> entryPathsSnapshot = new ArrayList<>(sourceEntryPaths);
+        final String path = pathsSnapshot.get(companionIndex);
+        final String entryPath = ImageSequenceState.entryPathAt(
+                entryPathsSnapshot, companionIndex);
+        sequenceExecutor.execute(() -> {
+            boolean handedToDecode = false;
+            try {
+                if (destroyed
+                        || imageSequenceGeneration.get() != sequenceGeneration
+                        || !isCurrentSequenceItem(companionIndex, path, entryPath)) {
+                    return;
+                }
+                if (!ensureArchiveImageExtracted(companionIndex, path)
+                        || destroyed
+                        || imageSequenceGeneration.get() != sequenceGeneration
+                        || !isCurrentSequenceItem(companionIndex, path, entryPath)) {
+                    return;
+                }
+                prefetchDecodeExecutor.execute(() -> {
+                    decodeArchiveSpreadCompanionAtSinglePageProfile(
+                            companionIndex,
+                            pathsSnapshot,
+                            entryPathsSnapshot,
+                            sequenceGeneration);
+                });
+                handedToDecode = true;
+            } finally {
+                if (!handedToDecode) {
+                    archiveSpreadPrepareInFlight.remove(companionIndex);
+                }
+            }
+        });
+    }
+
+    /**
+     * Decodes the visible spread companion with the same archive-preview profile
+     * used when that page is opened alone. General neighbor prefetch remains at
+     * its lower memory-saving tier.
+     */
+    private void decodeArchiveSpreadCompanionAtSinglePageProfile(
+            int index,
+            @NonNull ArrayList<String> imagePathsSnapshot,
+            @NonNull ArrayList<String> entryPathsSnapshot,
+            int sequenceGeneration) {
+        if (index < 0 || index >= imagePathsSnapshot.size()) {
+            archiveSpreadPrepareInFlight.remove(index);
+            return;
+        }
+        final String path = imagePathsSnapshot.get(index);
+        final String entryPath = ImageSequenceState.entryPathAt(entryPathsSnapshot, index);
+        final String displayName = path != null ? new File(path).getName() : null;
+        final Context appContext = getApplicationContext();
+        boolean handedOffToMain = false;
+        LoadedImage decoded = null;
+        try {
+            if (destroyed
+                    || decodedBitmapCache == null
+                    || imageSequenceGeneration.get() != sequenceGeneration
+                    || !isCurrentSequenceItem(index, path, entryPath)
+                    || path == null
+                    || !new File(path).exists()) {
+                return;
+            }
+            decoded = ImageDecodeHelper.decodeArchivePreview(
+                    appContext, path, null, displayName);
+            if (decoded == null || decoded.bitmap == null || decoded.bitmap.isRecycled()) {
+                recycleLoadedImage(decoded);
+                return;
+            }
+            final Bitmap bitmap = decoded.bitmap;
+            final boolean fullQuality = decoded.originalQuality;
+            boolean posted = mainHandler.post(() -> {
+                try {
+                    if (destroyed
+                            || decodedBitmapCache == null
+                            || bitmap.isRecycled()
+                            || imageSequenceGeneration.get() != sequenceGeneration
+                            || !isArchiveLandscapeSpreadEnabled()
+                            || currentIndex + 1 != index
+                            || !isCurrentSequenceItem(index, path, entryPath)) {
+                        if (!bitmap.isRecycled()) bitmap.recycle();
+                        return;
+                    }
+
+                    Bitmap cached = decodedBitmapCache.get(index);
+                    boolean cachedAtTargetQuality = cached != null
+                            && !cached.isRecycled()
+                            && singlePageProfileCachedIndices.contains(index);
+                    if (cachedAtTargetQuality
+                            || (archiveSpreadVisible
+                            && visibleSpreadSecondUsesSinglePageProfile
+                            && visibleSpreadSecondBitmap != null
+                            && !visibleSpreadSecondBitmap.isRecycled())) {
+                        bitmap.recycle();
+                        showCurrentArchiveSpreadIfReady();
+                        return;
+                    }
+
+                    setPreparedSpreadCompanion(index, bitmap);
+                    boolean retained = cacheDecodedBitmap(
+                            index, bitmap, fullQuality, true);
+                    boolean shown = showCurrentArchiveSpreadIfReady();
+                    if (preparedSpreadCompanionBitmap == bitmap) {
+                        if (retained || shown) {
+                            releasePreparedSpreadCompanionReference(bitmap);
+                        } else {
+                            clearPreparedSpreadCompanion(true);
+                        }
+                    }
+                } finally {
+                    archiveSpreadPrepareInFlight.remove(index);
+                }
+            });
+            if (posted) {
+                handedOffToMain = true;
+                return;
+            }
+            if (!bitmap.isRecycled()) bitmap.recycle();
+        } catch (Exception ignored) {
+            recycleLoadedImage(decoded);
+        } finally {
+            if (!handedOffToMain) archiveSpreadPrepareInFlight.remove(index);
+        }
     }
 
     @Nullable
@@ -1389,7 +2088,15 @@ public class ImageReaderActivity extends AppCompatActivity {
                         bmp.recycle(); // someone else cached it meanwhile
                         return;
                     }
-                    cacheDecodedBitmap(index, bmp, fullQuality);
+                    if (index == currentIndex + 1
+                            && archiveSpreadVisible
+                            && visibleSpreadSecondUsesSinglePageProfile
+                            && visibleSpreadSecondBitmap != null
+                            && !visibleSpreadSecondBitmap.isRecycled()) {
+                        bmp.recycle();
+                        return;
+                    }
+                    cacheDecodedBitmap(index, bmp, fullQuality, false);
                 } finally {
                     bitmapPrefetchInFlight.remove(key);
                 }
@@ -1508,6 +2215,20 @@ public class ImageReaderActivity extends AppCompatActivity {
         final int fg = dark ? Color.WHITE : Color.rgb(32, 33, 36);
         final int danger = dark ? Color.rgb(255, 170, 170) : Color.rgb(176, 0, 32);
         final boolean ops = canModifyCurrentLocalFile();
+        final boolean shareAvailable = canShareCurrentImage();
+        final boolean saveAvailable = canSaveCurrentArchiveImage();
+
+        ArrayList<String> visibleLabels = new ArrayList<>();
+        visibleLabels.add(getString(R.string.file_info));
+        visibleLabels.add(getString(R.string.image_view_options));
+        if (shareAvailable) visibleLabels.add(getString(R.string.share));
+        if (saveAvailable) visibleLabels.add(getString(R.string.save));
+        if (ops) {
+            visibleLabels.add(getString(R.string.rename));
+            visibleLabels.add(getString(R.string.cut));
+            visibleLabels.add(getString(R.string.delete));
+        }
+        final int popupWidth = calculateImageOptionsPopupWidth(visibleLabels);
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -1517,7 +2238,8 @@ public class ImageReaderActivity extends AppCompatActivity {
         bg.setCornerRadius(dpToPx(10));
         box.setBackground(bg);
 
-        PopupWindow popup = new PopupWindow(box, dpToPx(210), ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        PopupWindow popup = new PopupWindow(
+                box, popupWidth, ViewGroup.LayoutParams.WRAP_CONTENT, true);
         popup.setOutsideTouchable(true);
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -1526,10 +2248,16 @@ public class ImageReaderActivity extends AppCompatActivity {
 
         addPopupRow(box, getString(R.string.file_info), fg, () -> { popup.dismiss(); showImageInfoDialog(); });
         addPopupRow(box, getString(R.string.image_view_options), fg, () -> { popup.dismiss(); showImageViewOptionsDialog(); });
-        if (canShareCurrentImage()) {
+        if (shareAvailable) {
             addPopupRow(box, getString(R.string.share), fg, () -> {
                 popup.dismiss();
                 shareCurrentImage();
+            });
+        }
+        if (saveAvailable) {
+            addPopupRow(box, getString(R.string.save), fg, () -> {
+                popup.dismiss();
+                showImageSaveDestinationDialog();
             });
         }
         if (ops) {
@@ -1547,7 +2275,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             });
         }
 
-        int xoff = -(dpToPx(210) - anchor.getWidth());
+        int xoff = anchor.getWidth() - popupWidth;
         popup.showAsDropDown(anchor, xoff, 0, Gravity.NO_GRAVITY);
     }
 
@@ -1572,10 +2300,22 @@ public class ImageReaderActivity extends AppCompatActivity {
                         ? R.string.image_tap_paging_on
                         : R.string.image_tap_paging_off),
                 tapPagingEnabled ? fg : sub);
+        boolean archiveSource = sourceArchivePath != null
+                && !sourceArchivePath.trim().isEmpty();
+        boolean spreadEnabled = prefs != null && prefs.getArchiveLandscapeSpreadEnabled();
+        TextView archiveSpread = archiveSource ? dialogStyle.makeButton(
+                getString(spreadEnabled
+                        ? R.string.archive_landscape_two_page_on
+                        : R.string.archive_landscape_two_page_off),
+                spreadEnabled ? fg : sub) : null;
         TextView cancel = dialogStyle.makeButton(getString(R.string.cancel), sub);
         box.addView(ltr, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
         box.addView(rtl, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
         box.addView(tapPaging, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
+        if (archiveSpread != null) {
+            box.addView(archiveSpread, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
+        }
         box.addView(cancel, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
         ltr.setOnClickListener(v -> {
             setImageSliderDirection(PrefsManager.IMAGE_SLIDER_DIRECTION_LTR);
@@ -1593,6 +2333,22 @@ public class ImageReaderActivity extends AppCompatActivity {
                     : R.string.image_tap_paging_off));
             tapPaging.setTextColor(enabled ? fg : sub);
         });
+        if (archiveSpread != null) {
+            archiveSpread.setOnClickListener(v -> {
+                boolean enabled = prefs == null || !prefs.getArchiveLandscapeSpreadEnabled();
+                if (prefs != null) prefs.setArchiveLandscapeSpreadEnabled(enabled);
+                archiveSpreadNavigator.clear();
+                archiveSpread.setText(getString(enabled
+                        ? R.string.archive_landscape_two_page_on
+                        : R.string.archive_landscape_two_page_off));
+                archiveSpread.setTextColor(enabled ? fg : sub);
+                refreshArchiveSpreadPresentation();
+                if (enabled) {
+                    ensureArchiveSpreadCompanionReady();
+                    prefetchAdjacentImages(currentIndex);
+                }
+            });
+        }
         cancel.setOnClickListener(v -> dialog.dismiss());
         dialog.setContentView(box);
         dialog.show();
@@ -1622,6 +2378,10 @@ public class ImageReaderActivity extends AppCompatActivity {
             sliderController.setSliderDirection(currentImageSliderDirection());
             sliderController.update(currentIndex, imagePaths.size(), chromeVisible);
         }
+        if (archiveSpreadVisible) {
+            archiveSpreadVisible = false;
+            showCurrentArchiveSpreadIfReady();
+        }
     }
 
     private void addPopupRow(@NonNull LinearLayout box, @NonNull String label, int color, @NonNull Runnable action) {
@@ -1630,10 +2390,31 @@ public class ImageReaderActivity extends AppCompatActivity {
         row.setTextColor(color);
         row.setTextSize(15f);
         row.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        row.setSingleLine(true);
-        row.setPadding(dpToPx(16), 0, dpToPx(16), 0);
+        row.setSingleLine(false);
+        row.setMinHeight(dpToPx(44));
+        row.setPadding(dpToPx(16), dpToPx(9), dpToPx(16), dpToPx(9));
         row.setOnClickListener(v -> action.run());
-        box.addView(row, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(44)));
+        box.addView(row, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+    }
+
+    private int calculateImageOptionsPopupWidth(@NonNull List<String> labels) {
+        TextView probe = new TextView(this);
+        probe.setTextSize(15f);
+        float widest = 0f;
+        for (String label : labels) {
+            if (label != null) {
+                widest = Math.max(widest, probe.getPaint().measureText(label));
+            }
+        }
+        int contentWidth = rootView != null ? rootView.getWidth() : 0;
+        if (contentWidth <= 0) {
+            contentWidth = getResources().getDisplayMetrics().widthPixels;
+        }
+        int maxWidth = Math.max(dpToPx(96), contentWidth - dpToPx(24));
+        int desired = (int) Math.ceil(widest) + dpToPx(36);
+        return Math.min(maxWidth, Math.max(dpToPx(168), desired));
     }
 
     private void showOpsUnavailableToast() {
@@ -1645,6 +2426,185 @@ public class ImageReaderActivity extends AppCompatActivity {
         if (filePath == null || filePath.trim().isEmpty()) return false;
         File file = new File(filePath);
         return file.exists() && file.isFile();
+    }
+
+    private boolean canSaveCurrentArchiveImage() {
+        return sourceArchivePath != null
+                && !sourceArchivePath.trim().isEmpty()
+                && canShareCurrentImage();
+    }
+
+    private void showImageSaveDestinationDialog() {
+        if (!canSaveCurrentArchiveImage()) {
+            ShortToast.show(this, R.string.file_operation_failed);
+            return;
+        }
+        Dialog dialog = dialogStyle.makeDialog();
+        LinearLayout box = dialogStyle.makeBox();
+        box.addView(dialogStyle.makeTitle(getString(R.string.save)));
+        int fg = dialogStyle.textColor();
+        int sub = dialogStyle.subTextColor();
+        TextView downloads = dialogStyle.makeButton(getString(R.string.downloads), fg);
+        TextView chooseLocation = dialogStyle.makeButton(getString(R.string.folder), fg);
+        TextView cancel = dialogStyle.makeButton(getString(R.string.cancel), sub);
+        box.addView(downloads, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
+        box.addView(chooseLocation, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
+        box.addView(cancel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
+        downloads.setOnClickListener(v -> {
+            dialog.dismiss();
+            saveCurrentArchiveImageToDownloads();
+        });
+        chooseLocation.setOnClickListener(v -> {
+            dialog.dismiss();
+            launchCurrentArchiveImageDestinationPicker();
+        });
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        dialog.setContentView(box);
+        dialog.show();
+        // This is a compact three-action destination chooser, not an
+        // information sheet. Keep it narrow on phones while preserving the
+        // shared 16dp safety margin on very small screens.
+        dialogStyle.setDialogWidth(dialog, 320);
+    }
+
+    private void saveCurrentArchiveImageToDownloads() {
+        Uri source = getCurrentShareUri();
+        if (source == null) {
+            ShortToast.show(this, R.string.file_operation_failed);
+            return;
+        }
+        final String displayName = ImageExportName.safeDisplayName(
+                getDisplayName(), getCurrentImageMimeType());
+        final String mimeType = getCurrentImageMimeType();
+        imageExportExecutor.execute(() -> {
+            Uri inserted = null;
+            File legacyDestination = null;
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.MediaColumns.DISPLAY_NAME, displayName);
+                    values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
+                    values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+                    inserted = getContentResolver().insert(
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    if (inserted == null) throw new java.io.IOException("Downloads insert failed");
+                    copyImage(source, inserted);
+                    values.clear();
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                    getContentResolver().update(inserted, values, null, null);
+                } else {
+                    File downloads = Environment.getExternalStoragePublicDirectory(
+                            Environment.DIRECTORY_DOWNLOADS);
+                    if (!downloads.exists() && !downloads.mkdirs()) {
+                        throw new java.io.IOException("Downloads directory unavailable");
+                    }
+                    legacyDestination = uniqueDestination(downloads, displayName);
+                    try (InputStream in = getContentResolver().openInputStream(source);
+                         OutputStream out = new FileOutputStream(legacyDestination)) {
+                        copyStreams(in, out);
+                    }
+                    MediaScannerConnection.scanFile(
+                            this,
+                            new String[]{legacyDestination.getAbsolutePath()},
+                            new String[]{mimeType},
+                            null);
+                }
+                postImageExportResult(true);
+            } catch (Exception e) {
+                if (inserted != null) {
+                    try { getContentResolver().delete(inserted, null, null); }
+                    catch (Exception ignored) {}
+                }
+                if (legacyDestination != null && legacyDestination.exists()) {
+                    try { legacyDestination.delete(); }
+                    catch (Exception ignored) {}
+                }
+                postImageExportResult(false);
+            }
+        });
+    }
+
+    private void launchCurrentArchiveImageDestinationPicker() {
+        Uri source = getCurrentShareUri();
+        if (source == null) {
+            ShortToast.show(this, R.string.file_operation_failed);
+            return;
+        }
+        pendingImageExportSource = source;
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(getCurrentImageMimeType());
+        intent.putExtra(Intent.EXTRA_TITLE, ImageExportName.safeDisplayName(
+                getDisplayName(), getCurrentImageMimeType()));
+        try {
+            imageExportLauncher.launch(intent);
+        } catch (Exception e) {
+            pendingImageExportSource = null;
+            ShortToast.show(this, R.string.file_operation_failed);
+        }
+    }
+
+    private void exportImageToUriAsync(@NonNull Uri source, @NonNull Uri destination) {
+        if (source.equals(destination)) {
+            ShortToast.show(this, R.string.file_operation_failed);
+            return;
+        }
+        imageExportExecutor.execute(() -> {
+            try {
+                copyImage(source, destination);
+                postImageExportResult(true);
+            } catch (Exception e) {
+                try { getContentResolver().delete(destination, null, null); }
+                catch (Exception ignored) {}
+                postImageExportResult(false);
+            }
+        });
+    }
+
+    private void copyImage(@NonNull Uri source, @NonNull Uri destination)
+            throws java.io.IOException {
+        try (InputStream in = getContentResolver().openInputStream(source);
+             OutputStream out = getContentResolver().openOutputStream(destination, "w")) {
+            copyStreams(in, out);
+        }
+    }
+
+    private static void copyStreams(@Nullable InputStream in, @Nullable OutputStream out)
+            throws java.io.IOException {
+        if (in == null || out == null) throw new java.io.IOException("Image stream unavailable");
+        byte[] buffer = new byte[64 * 1024];
+        int read;
+        while ((read = in.read(buffer)) >= 0) {
+            if (read > 0) out.write(buffer, 0, read);
+        }
+        out.flush();
+    }
+
+    @NonNull
+    private static File uniqueDestination(@NonNull File directory, @NonNull String displayName) {
+        File first = new File(directory, displayName);
+        if (!first.exists()) return first;
+        String stem = ImageExportName.stem(displayName);
+        String extension = ImageExportName.extension(displayName);
+        for (int suffix = 1; suffix < 10_000; suffix++) {
+            File candidate = new File(directory,
+                    stem + " (" + suffix + ")" + extension);
+            if (!candidate.exists()) return candidate;
+        }
+        return new File(directory, stem + "-" + System.currentTimeMillis() + extension);
+    }
+
+    private void postImageExportResult(boolean success) {
+        mainHandler.post(() -> {
+            if (destroyed) return;
+            ShortToast.show(this, success
+                    ? R.string.exported_successfully
+                    : R.string.file_operation_failed);
+        });
     }
 
     private void shareCurrentImage() {

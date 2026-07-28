@@ -6,6 +6,7 @@ import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Canvas;
 import android.graphics.ColorFilter;
+import android.graphics.BitmapFactory;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.RectF;
@@ -50,7 +51,10 @@ import com.readwide.manager.adapter.BookmarkFolderAdapter;
 import com.readwide.manager.model.Bookmark;
 import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.model.Theme;
+import com.readwide.manager.util.DocumentAnchorMath;
 import com.readwide.manager.util.UriPathCodec;
+import com.readwide.manager.util.EpubBindingRewriter;
+import com.readwide.manager.util.EpubSpreadSlotMath;
 import com.readwide.manager.util.BookmarkManager;
 import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.FontManager;
@@ -75,6 +79,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.text.DateFormat;
@@ -88,6 +93,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.zip.ZipEntry;
@@ -131,9 +137,12 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     // Match toolbar-triggered document popups to the Go to Page bottom offset.
     static final int DOCUMENT_TOOLBAR_POPUP_Y_DP = 74;
     private static final long DOCUMENT_CHROME_TRANSITION_MS = 145L;
+    /** Match the visible gutter used by the PDF two-page composite. */
+    private static final float EPUB_SPREAD_GAP_CSS_PX = 12f;
     // Cap per in-document WebView resource (EPUB/Word image/font/entry) so a crafted
     // oversized entry can't blow up memory while being served. See interceptLocalResource.
     private static final long MAX_DOCUMENT_RESOURCE_BYTES = 64L * 1024L * 1024L;
+    private static final long MAX_EPUB_MEDIA_OVERLAY_AUDIO_BYTES = 256L * 1024L * 1024L;
 
     Toolbar toolbar;
     View documentAppBar;
@@ -176,6 +185,12 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     int pendingThemeRefreshScrollY = 0;
     private int pendingEpubAnchorPage = -1;
     private String pendingEpubAnchorFragment = "";
+    private EpubCfi pendingEpubCfi;
+    private String localDocumentHost = LOCAL_HOST;
+    int primaryDocumentPageLoadGeneration;
+    int primaryDocumentPageLoadPage = -1;
+    int rightDocumentPageLoadGeneration;
+    int rightDocumentPageLoadPage = -1;
 
     final ExecutorService executor = Executors.newSingleThreadExecutor();
 
@@ -193,6 +208,10 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     BookmarkManager bookmarkManager;
     PrefsManager prefs;
     private ZipFile resourceZip;
+    DocumentArchiveUtils.EpubPackageResources epubPackageResources =
+            new DocumentArchiveUtils.EpubPackageResources();
+    final Set<String> epubArchiveEntries = new HashSet<>();
+    private final Set<String> epubBindingPayloadPaths = new HashSet<>();
     File localFile;
     String filePath;
     String fileName;
@@ -213,6 +232,10 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     volatile String lastMarkdownAnchorText = "";
     String pendingDocumentRestoreAnchorJson = "";
     volatile String lastDocumentContentAnchorJson = "";
+    /** Invalidates asynchronous DOM-anchor callbacks whenever a page is reloaded. */
+    int documentAnchorPageGeneration = 0;
+    /** Cancels delayed anchor settling after the user starts a new gesture. */
+    int documentInteractionGeneration = 0;
     boolean snapDocumentPageTopAfterLoad = false;
     int pendingSlideDirection = 0;
     private int wordSwipeTouchSlop = 0;
@@ -258,6 +281,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     boolean epubFixedLayoutLike = false;
     /** True only when most EPUB spine items are page-sized image canvases. */
     boolean epubImagePageLike = false;
+    /** True when publisher CSS uses horizontal-flowing vertical writing columns. */
+    boolean epubVerticalWritingLike = false;
     boolean fixedLayoutFindOffsetActive = false;
     boolean wordHasDocumentFont = false;
     String wordDefaultFontFamily = null;
@@ -275,6 +300,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     android.app.Dialog documentSearchDialog = null;
     final Runnable checkWordSelectionAfterScrollRunnable = this::checkWordSelectionAfterScroll;
     final Runnable releasePageTurnRunnable = () -> pageTurnInFlight = false;
+    final Runnable documentContentAnchorUpdateRunnable =
+            this::updateDocumentContentAnchorFromWebView;
     final Map<String, String> wordRelationships = new LinkedHashMap<>();
     private DocumentPageStartupController startupController;
     private DocumentPageTurnController pageTurnController;
@@ -282,16 +309,65 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     private DocumentPageLoadController documentPageLoadController;
     private DocumentPageDisplayController documentPageDisplayController;
     private ProportionalFastScrollController documentFastScrollController;
+    private EpubMediaOverlayController epubMediaOverlayController;
 
     static class Page {
         final String title;
         final String html;
         final String sourcePath;
+        final boolean imageDominantEpubPage;
+        final boolean fixedLayoutEpubPage;
+        final boolean verticalWritingEpubPage;
+        final boolean scriptedEpubPage;
+        final String manifestId;
+        final String itemRefId;
+        final int spineIndex;
+        final EpubSmilParser.Timeline mediaOverlayTimeline;
 
         Page(String title, String html, String sourcePath) {
+            this(title, html, sourcePath, false, false, false,
+                    false, "", "", -1, null);
+        }
+
+        Page(String title, String html, String sourcePath,
+             boolean imageDominantEpubPage) {
+            this(title, html, sourcePath, imageDominantEpubPage, false, false,
+                    false, "", "", -1, null);
+        }
+
+        Page(String title, String html, String sourcePath,
+             boolean imageDominantEpubPage,
+             boolean fixedLayoutEpubPage,
+             boolean verticalWritingEpubPage) {
+            this(title, html, sourcePath, imageDominantEpubPage,
+                    fixedLayoutEpubPage, verticalWritingEpubPage,
+                    false, "", "", -1, null);
+        }
+
+        Page(String title, String html, String sourcePath,
+             boolean imageDominantEpubPage,
+             boolean fixedLayoutEpubPage,
+             boolean verticalWritingEpubPage,
+             boolean scriptedEpubPage,
+             String manifestId,
+             String itemRefId,
+             int spineIndex,
+             @Nullable EpubSmilParser.Timeline mediaOverlayTimeline) {
             this.title = title;
             this.html = html;
             this.sourcePath = sourcePath;
+            this.imageDominantEpubPage = imageDominantEpubPage;
+            this.fixedLayoutEpubPage = fixedLayoutEpubPage;
+            this.verticalWritingEpubPage = verticalWritingEpubPage;
+            this.scriptedEpubPage = scriptedEpubPage;
+            this.manifestId = manifestId != null ? manifestId : "";
+            this.itemRefId = itemRefId != null ? itemRefId : "";
+            this.spineIndex = spineIndex;
+            this.mediaOverlayTimeline = mediaOverlayTimeline;
+        }
+
+        boolean hasMediaOverlay() {
+            return mediaOverlayTimeline != null && !mediaOverlayTimeline.isEmpty();
         }
     }
 
@@ -410,6 +486,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     @Override
     protected void onPause() {
+        if (epubMediaOverlayController != null) {
+            epubMediaOverlayController.pauseForBackground();
+        }
         if (documentFastScrollController != null) {
             documentFastScrollController.suspend();
         }
@@ -436,7 +515,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                     + "|docFontSize=" + ((("EPUB".equals(docType) || "Markdown".equals(docType)) && prefs != null)
                     ? prefs.getFontSize() : PrefsManager.DEFAULT_FONT_SIZE)
                 + "|epubThemeColors=" + (("EPUB".equals(docType) && prefs != null)
-                    ? prefs.getEpubForceReaderThemeColors() : false);
+                    ? prefs.getEpubForceReaderThemeColors() : false)
+                + "|epubFont=" + (("EPUB".equals(docType) && prefs != null)
+                    ? prefs.getEpubFontFamily() : "");
         }
         String backgroundImagePath = theme.getBackgroundImagePath();
         return theme.getId()
@@ -449,7 +530,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 + "|docFontSize=" + ((("EPUB".equals(docType) || "Markdown".equals(docType)) && prefs != null)
                 ? prefs.getFontSize() : PrefsManager.DEFAULT_FONT_SIZE)
                 + "|epubThemeColors=" + (("EPUB".equals(docType) && prefs != null)
-                ? prefs.getEpubForceReaderThemeColors() : false);
+                ? prefs.getEpubForceReaderThemeColors() : false)
+                + "|epubFont=" + (("EPUB".equals(docType) && prefs != null)
+                ? prefs.getEpubFontFamily() : "");
     }
 
     void refreshDocumentPageThemeIfNeeded(String currentThemeSignature, boolean pageThemeChanged) {
@@ -485,7 +568,11 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     void applyDocumentSystemBarColors() {
         resolveReaderThemeColors();
         int bodyBg = readerBg;
-        int statusBg = documentChromeVisible ? readerToolbarBg : bodyBg;
+        // EPUB keeps Android's bars visible in both overlay states. Keep both
+        // bars visually continuous with the page body rather than changing the
+        // status-bar color when Readwide's title overlay is toggled.
+        boolean epub = "EPUB".equals(docType);
+        int statusBg = epub ? bodyBg : (documentChromeVisible ? readerToolbarBg : bodyBg);
         getWindow().setStatusBarColor(statusBg);
         getWindow().setNavigationBarColor(bodyBg);
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
@@ -513,17 +600,31 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }
         View insetRoot = findViewById(R.id.document_root);
         if (insetRoot != null) {
-            com.readwide.manager.util.EdgeToEdgeUtil.applyReaderSystemBarVisibility(
-                    this,
-                    insetRoot,
-                    documentChromeVisible,
-                    prefs != null && prefs.getShowStatusBar());
+            if ("EPUB".equals(docType)) {
+                // EPUB app chrome is only an overlay. Android's status and
+                // navigation bars remain visible in both overlay states; the
+                // content column owns their stable safe insets.
+                androidx.core.view.WindowInsetsControllerCompat barController =
+                        androidx.core.view.WindowCompat.getInsetsController(getWindow(), insetRoot);
+                if (barController != null) {
+                    barController.show(androidx.core.view.WindowInsetsCompat.Type.systemBars());
+                }
+            } else {
+                com.readwide.manager.util.EdgeToEdgeUtil.applyReaderSystemBarVisibility(
+                        this,
+                        insetRoot,
+                        documentChromeVisible,
+                        prefs != null && prefs.getShowStatusBar());
+            }
         }
         applyDocumentChromeFillColors();
     }
 
     void applyDocumentChromeFillColors() {
-        int topFillerBg = readerToolbarBg;
+        // With edge-to-edge enforced on Android 15+, the padded AppBar parent is
+        // what shows behind a transparent status bar. EPUB therefore gives the
+        // parent the body color while its Toolbar child retains the chrome color.
+        int topFillerBg = "EPUB".equals(docType) ? readerBg : readerToolbarBg;
         if (documentAppBar != null) {
             documentAppBar.setBackgroundColor(topFillerBg);
         }
@@ -535,6 +636,16 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }
         if (documentNavBarSpacer != null) {
             documentNavBarSpacer.setBackgroundColor(readerBg);
+        }
+        int[] epubSystemBarScrims = {
+                R.id.document_system_bar_scrim_top,
+                R.id.document_system_bar_scrim_bottom,
+                R.id.document_system_bar_scrim_start,
+                R.id.document_system_bar_scrim_end
+        };
+        for (int id : epubSystemBarScrims) {
+            View scrim = findViewById(id);
+            if (scrim != null) scrim.setBackgroundColor(readerBg);
         }
     }
 
@@ -575,7 +686,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             androidx.core.view.ViewCompat.requestApplyInsets(documentNavBarSpacer);
         }
         if (documentSearchOverlayContainer != null) documentSearchOverlayContainer.setBackgroundColor(Color.TRANSPARENT);
-        if (appbar != null) appbar.setBackgroundColor(readerToolbarBg);
+        if (appbar != null) {
+            appbar.setBackgroundColor("EPUB".equals(docType) ? readerBg : readerToolbarBg);
+        }
         if (bottom != null) bottom.setBackground(documentBottomChromeBackground(readerPanel));
         if (toolbar != null) {
             toolbar.setBackgroundColor(readerToolbarBg);
@@ -622,6 +735,10 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         if (documentTtsController != null) {
             documentTtsController.release();
             documentTtsController = null;
+        }
+        if (epubMediaOverlayController != null) {
+            epubMediaOverlayController.release();
+            epubMediaOverlayController = null;
         }
         TtsPlaybackBridge.unregister(this);
         saveReadingState();
@@ -694,7 +811,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             return false;
         }
         if (!isPagedWebDocument() || webView == null || prefs == null
-                || ("EPUB".equals(docType) && epubFixedLayoutLike)
+                || ("EPUB".equals(docType) && currentEpubPageKeepsOriginalLayout())
                 || !prefs.getDocumentTapPagingEnabled(docType)
                 || documentPageCount() <= 1 || pageTurnInFlight) {
             documentTapPagingSequence = false;
@@ -866,17 +983,35 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         setDocumentChromeVisible(!documentChromeVisible);
     }
 
+    private int desiredDocumentTopPageStatusVisibility(boolean chromeVisible) {
+        // EPUB uses the bottom page counter while controls are visible and no
+        // compact counter while they are hidden. Keeping this in normal layout
+        // flow as INVISIBLE/VISIBLE permanently reserved 32dp above the WebView.
+        // Other document viewers retain their existing collapsed counter.
+        if ("EPUB".equals(docType)) return View.GONE;
+        return chromeVisible ? View.INVISIBLE : View.VISIBLE;
+    }
+
+    void applyDocumentTopPageStatusVisibility() {
+        if (topPageStatus == null) return;
+        int visibility = desiredDocumentTopPageStatusVisibility(documentChromeVisible);
+        if (topPageStatus.getVisibility() != visibility) {
+            topPageStatus.setVisibility(visibility);
+        }
+    }
+
     private void setDocumentChromeVisible(boolean visible) {
+        int desiredTopStatus = desiredDocumentTopPageStatusVisibility(visible);
         if (documentChromeVisible == visible
                 && documentAppBar != null
                 && documentBottomChrome != null
                 && topPageStatus != null
                 && ((visible && documentAppBar.getVisibility() == View.VISIBLE
                 && documentBottomChrome.getVisibility() == View.VISIBLE
-                && topPageStatus.getVisibility() == View.INVISIBLE)
+                && topPageStatus.getVisibility() == desiredTopStatus)
                 || (!visible && documentAppBar.getVisibility() == View.GONE
                 && documentBottomChrome.getVisibility() == View.GONE
-                && topPageStatus.getVisibility() == View.VISIBLE))) {
+                && topPageStatus.getVisibility() == desiredTopStatus))) {
             return;
         }
 
@@ -891,9 +1026,6 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             if (toolbar != null && toolbar.getVisibility() != View.VISIBLE) {
                 toolbar.setVisibility(View.VISIBLE);
             }
-            if (topPageStatus != null && topPageStatus.getVisibility() != View.INVISIBLE) {
-                topPageStatus.setVisibility(View.INVISIBLE);
-            }
             if (pageStatus != null && pageStatus.getVisibility() != View.VISIBLE) {
                 pageStatus.setVisibility(View.VISIBLE);
             }
@@ -901,23 +1033,25 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 documentBottomChrome.setVisibility(View.VISIBLE);
             }
         } else {
-            // Collapsed state hides only the toolbar/bottom overlay. The compact
-            // page indicator is a separate overlay, not part of the toolbar mask,
-            // and the WebView remains fixed underneath both states.
+            // Collapsed state hides the toolbar/bottom overlay. Non-EPUB viewers
+            // keep their compact page counter; EPUB releases that normal-flow row
+            // so the WebView can use the complete system-safe frame.
             if (documentAppBar != null && documentAppBar.getVisibility() != View.GONE) {
                 documentAppBar.setVisibility(View.GONE);
-            }
-            if (topPageStatus != null && topPageStatus.getVisibility() != View.VISIBLE) {
-                topPageStatus.setVisibility(View.VISIBLE);
             }
             if (documentBottomChrome != null && documentBottomChrome.getVisibility() != View.GONE) {
                 documentBottomChrome.setVisibility(View.GONE);
             }
         }
+        applyDocumentTopPageStatusVisibility();
         applyDocumentSystemBarColors();
-        androidx.core.view.ViewCompat.requestApplyInsets(findViewById(R.id.document_root));
-        androidx.core.view.ViewCompat.requestApplyInsets(topPageStatus);
-        applyEpubBoundaryMarginsIfNeeded();
+        if (!"EPUB".equals(docType)) {
+            // Other document viewers can still change system-bar visibility with
+            // their chrome. EPUB keeps a fixed system-safe frame and must not
+            // relayout the WebView on a toolbar-only toggle.
+            androidx.core.view.ViewCompat.requestApplyInsets(findViewById(R.id.document_root));
+            androidx.core.view.ViewCompat.requestApplyInsets(topPageStatus);
+        }
     }
 
     private void destroyDocumentWebView() {
@@ -925,6 +1059,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             try {
                 webView.removeCallbacks(checkWordSelectionAfterScrollRunnable);
                 webView.removeCallbacks(releasePageTurnRunnable);
+                webView.removeCallbacks(documentContentAnchorUpdateRunnable);
                 webView.animate().cancel();
                 webView.setOnTouchListener(null);
                 webView.setOnScrollChangeListener(null);
@@ -966,6 +1101,97 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             try { resourceZip.close(); } catch (IOException ignored) {}
             resourceZip = null;
         }
+        epubPackageResources = new DocumentArchiveUtils.EpubPackageResources();
+        epubArchiveEntries.clear();
+        epubBindingPayloadPaths.clear();
+    }
+
+    boolean epubSourcePathMatches(@Nullable String left, @Nullable String right) {
+        if (left == null || right == null) return false;
+        return normalizeZipPath(left).equals(normalizeZipPath(right));
+    }
+
+    int findEpubPageBySourcePath(@Nullable String path) {
+        if (path == null || path.trim().isEmpty()) return -1;
+        String wanted = normalizeZipPath(path);
+        for (int i = 0; i < pages.size(); i++) {
+            Page page = pages.get(i);
+            if (page != null && wanted.equals(normalizeZipPath(page.sourcePath))) return i;
+        }
+        return -1;
+    }
+
+    void evaluateEpubJavascript(@NonNull WebView target,
+                                int pageIndex,
+                                @NonNull String javascript) {
+        WebSettings settings = target.getSettings();
+        boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
+        if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
+        target.evaluateJavascript(javascript, value ->
+                restoreDocumentJavaScriptPolicy(
+                        target, pageIndex, restoreJavascriptOff));
+    }
+
+    /** Extracts one already-validated local SMIL audio target on the document worker. */
+    File extractEpubMediaOverlayAudio(@NonNull String rawPath) throws IOException {
+        if (resourceZip == null) throw new IOException("EPUB archive is unavailable");
+        String path = normalizeZipPath(UriPathCodec.decodePercentEscapes(rawPath));
+        ZipEntry entry = resourceZip.getEntry(path);
+        if (entry == null || entry.isDirectory()) {
+            throw new IOException("EPUB media-overlay audio is missing");
+        }
+        long declaredSize = entry.getSize();
+        if (declaredSize > MAX_EPUB_MEDIA_OVERLAY_AUDIO_BYTES) {
+            throw new IOException("EPUB media-overlay audio exceeds size limit");
+        }
+
+        File dir = new File(getCacheDir(), "epub_media_overlay");
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new IOException("Unable to create EPUB media cache");
+        }
+        String lower = path.toLowerCase(Locale.ROOT);
+        int dot = lower.lastIndexOf('.');
+        String extension = dot >= 0 && lower.length() - dot <= 6
+                ? lower.substring(dot) : ".bin";
+        String publicationKey = filePath != null ? filePath : "epub";
+        if (localFile != null) {
+            publicationKey += "|" + localFile.length() + "|" + localFile.lastModified();
+        }
+        String key = Integer.toHexString(publicationKey.hashCode())
+                + "_" + Integer.toHexString(path.hashCode());
+        File output = new File(dir, key + extension);
+        if (output.isFile() && (declaredSize < 0L || output.length() == declaredSize)) {
+            return output;
+        }
+        File temporary = new File(dir, key + ".partial");
+        long total = 0L;
+        try (InputStream input = resourceZip.getInputStream(entry);
+             FileOutputStream out = new FileOutputStream(temporary, false)) {
+            byte[] buffer = new byte[32 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                total += read;
+                if (total > MAX_EPUB_MEDIA_OVERLAY_AUDIO_BYTES) {
+                    throw new IOException("EPUB media-overlay audio exceeds size limit");
+                }
+                out.write(buffer, 0, read);
+            }
+        } catch (IOException e) {
+            //noinspection ResultOfMethodCallIgnored
+            temporary.delete();
+            throw e;
+        }
+        if (output.exists() && !output.delete()) {
+            //noinspection ResultOfMethodCallIgnored
+            temporary.delete();
+            throw new IOException("Unable to replace EPUB media cache");
+        }
+        if (!temporary.renameTo(output)) {
+            //noinspection ResultOfMethodCallIgnored
+            temporary.delete();
+            throw new IOException("Unable to finalize EPUB media cache");
+        }
+        return output;
     }
 
     @Override
@@ -1017,7 +1243,19 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             // Same entry point as the More-dialog row; the row stays for
             // muscle memory, this button is the direct path (mirroring the
             // text reader's bottom toolbar).
-            documentTtsButton.setOnClickListener(v -> showDocumentTtsDialog());
+            documentTtsButton.setOnClickListener(v -> {
+                if (epubMediaOverlay().hasOverlayForPage(currentPage)) {
+                    epubMediaOverlay().toggleCurrentPage();
+                } else {
+                    showDocumentTtsDialog();
+                }
+            });
+            // Books with publisher narration use a normal click for that audio;
+            // a long press always opens Android TTS so the user retains both.
+            documentTtsButton.setOnLongClickListener(v -> {
+                showDocumentTtsDialog();
+                return true;
+            });
         }
         updateDocumentTtsButtonVisibility();
         if (moreButton != null) {
@@ -1208,6 +1446,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     private boolean handleDocumentWebViewTouch(@NonNull WebView source,
                                                @NonNull MotionEvent event,
                                                boolean primaryView) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            documentInteractionGeneration++;
+        }
         if (handleFastDocumentTapPaging(event)) {
             resetWordSwipeTracking(source);
             clearDocumentEdgeArm();
@@ -1464,15 +1705,18 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     /**
      * The only JavaScript-callable bridge exposed to document WebView content.
      *
-     * Threat model: JavaScript is disabled by default and turned on only for Word
-     * documents -- whose HTML the app generates itself -- and fixed-layout EPUB,
-     * which may carry untrusted scripts. Even when reachable, this interface has a
-     * single method that takes a boolean and only flips an internal "word is
+     * Threat model: JavaScript is disabled by default. It stays enabled for Word
+     * documents whose HTML the app generates, fixed-layout helper pages, OPF
+     * `scripted` spine items, and validated binding-rewritten pages; ordinary EPUB
+     * pages enable only short Readwide-owned helper calls and restore the page
+     * policy afterward. Some enabled EPUB paths may carry untrusted publisher
+     * scripts. Even when reachable, this interface has a single method that takes
+     * a boolean and only flips an internal "word is
      * selected" flag: no file or content access, no reflection, no navigation, no
      * eval, no data returned. On targetSdk 17 or higher only methods annotated with
      * JavascriptInterface are exposed, so nothing else such as getClass is callable.
      * The WebView also disables file access, content access, and DOM storage, and
-     * serves only readwide.local resources bound to the current document archive --
+     * serves only a per-open synthetic host bound to the current document archive --
      * see interceptLocalResource. Keep this surface boolean-only: do not add String
      * or Object parameters, or methods that touch the filesystem or app state.
      */
@@ -1565,7 +1809,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     private String currentEpubBoundarySignature() {
-        if (!"EPUB".equals(docType) || epubFixedLayoutLike || epubImagePageLike) {
+        if (!epubPageUsesReaderBoundary(currentPage)) {
             return "";
         }
         return clampEpubBoundaryPx(getEpubLeftPaddingPx()) + ":"
@@ -1584,7 +1828,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         if (webView == null || pages.isEmpty()
                 || currentPage < 0 || currentPage >= pages.size()
                 || !"EPUB".equals(docType)
-                || epubFixedLayoutLike || epubImagePageLike) {
+                || !epubPageUsesReaderBoundary(currentPage)) {
             return;
         }
         String currentSignature = currentEpubBoundarySignature();
@@ -1613,9 +1857,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 new ProportionalFastScrollController.ScrollSource() {
                     @Override
                     public boolean isEnabled() {
-                        return webView != null
-                                && !("EPUB".equals(docType)
-                                && (epubFixedLayoutLike || epubImagePageLike));
+                        return webView != null && (!"EPUB".equals(docType)
+                                || epubPageUsesReaderBoundary(currentPage));
                     }
 
                     @Override
@@ -1706,8 +1949,21 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         scheduleDocumentFastScrollUpdate();
     }
 
-    private String buildEpubBoundaryCss() {
-        if (!"EPUB".equals(docType) || epubFixedLayoutLike || epubImagePageLike) {
+    private boolean epubPageUsesReaderBoundary(int pageIndex) {
+        if (!"EPUB".equals(docType) || pageIndex < 0 || pageIndex >= pages.size()) {
+            return false;
+        }
+        Page page = pages.get(pageIndex);
+        return !page.fixedLayoutEpubPage
+                && !page.imageDominantEpubPage
+                && !page.verticalWritingEpubPage;
+    }
+
+    private String buildEpubBoundaryCss(@Nullable Page page) {
+        if (page == null || !"EPUB".equals(docType)
+                || page.fixedLayoutEpubPage
+                || page.imageDominantEpubPage
+                || page.verticalWritingEpubPage) {
             return "";
         }
         int left = clampEpubBoundaryPx(getEpubLeftPaddingPx());
@@ -1731,9 +1987,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     void applyEpubBoundaryCssToLoadedWebView(@NonNull WebView target) {
-        boolean reflowableEpub = "EPUB".equals(docType)
-                && !epubFixedLayoutLike
-                && !epubImagePageLike;
+        int pageIndex = target == rightWebView
+                ? documentRightSpreadPageIndex() : currentPage;
+        boolean reflowableEpub = epubPageUsesReaderBoundary(pageIndex);
         int left = reflowableEpub ? clampEpubBoundaryPx(getEpubLeftPaddingPx()) : 0;
         int right = reflowableEpub ? clampEpubBoundaryPx(getEpubRightPaddingPx()) : 0;
         int top = reflowableEpub ? clampEpubBoundaryPx(getEpubTopPaddingPx()) : 0;
@@ -1788,8 +2044,10 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
         Runnable stabilize = () -> {
             if (activityDestroyed || !"EPUB".equals(docType)) return;
-            if (epubFixedLayoutLike || epubImagePageLike) {
-                if (epubFixedLayoutLike && target == webView) applyFixedLayoutFindOffsetCssIfNeeded();
+            if (currentEpubPageKeepsOriginalLayout()) {
+                if (currentEpubPageIsFixedLayout() && target == webView) {
+                    applyFixedLayoutFindOffsetCssIfNeeded();
+                }
                 target.scrollTo(0, 0);
             }
             clearDocumentEdgeArm();
@@ -1801,7 +2059,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     int documentTextZoomPercent() {
-        if ("EPUB".equals(docType) && (epubFixedLayoutLike || epubImagePageLike)) return 100;
+        if ("EPUB".equals(docType) && currentEpubPageKeepsOriginalLayout()) return 100;
         if (!("EPUB".equals(docType) || "Markdown".equals(docType)) || prefs == null) return 100;
         float size = Math.max(8f, Math.min(48f, prefs.getFontSize()));
         return Math.max(50, Math.min(267, Math.round(size / PrefsManager.DEFAULT_FONT_SIZE * 100f)));
@@ -1826,7 +2084,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     private void refreshCurrentEpubTextSize() {
-        if ("EPUB".equals(docType) && (epubFixedLayoutLike || epubImagePageLike)) {
+        if ("EPUB".equals(docType) && currentEpubPageKeepsOriginalLayout()) {
             ShortToast.show(this, localizedText("This EPUB keeps its original page layout.", "이 EPUB은 원본 페이지 배치를 유지합니다."));
             return;
         }
@@ -1839,6 +2097,36 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         if (!pages.isEmpty() && currentPage >= 0 && currentPage < pages.size()) {
             showPage(currentPage, 0);
         }
+    }
+
+    private boolean currentEpubPageIsFixedLayout() {
+        return epubPageIsFixedLayout(currentPage);
+    }
+
+    boolean epubPageIsFixedLayout(int pageIndex) {
+        return "EPUB".equals(docType)
+                && pageIndex >= 0
+                && pageIndex < pages.size()
+                && pages.get(pageIndex).fixedLayoutEpubPage;
+    }
+
+    boolean epubPageKeepsOriginalLayout(int pageIndex) {
+        if (!"EPUB".equals(docType) || pageIndex < 0 || pageIndex >= pages.size()) {
+            return epubFixedLayoutLike || epubImagePageLike;
+        }
+        Page page = pages.get(pageIndex);
+        return page.fixedLayoutEpubPage || page.imageDominantEpubPage;
+    }
+
+    boolean epubPageUsesVerticalWriting(int pageIndex) {
+        return "EPUB".equals(docType)
+                && pageIndex >= 0
+                && pageIndex < pages.size()
+                && pages.get(pageIndex).verticalWritingEpubPage;
+    }
+
+    private boolean currentEpubPageKeepsOriginalLayout() {
+        return epubPageKeepsOriginalLayout(currentPage);
     }
 
     private DocumentFontDialogController documentFontController() {
@@ -2265,6 +2553,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         // A (re)load replaces the pages list, so the read-aloud text buffer and
         // any running playback belong to the previous document.
         resetDocumentTts();
+        if (epubMediaOverlayController != null) epubMediaOverlayController.stop(false);
+        clearPendingEpubAnchor();
+        localDocumentHost = "rw-" + UUID.randomUUID().toString().replace("-", "") + ".local";
         pageLoader().loadFromIntent(intent);
         documentTtsIntegration().onLoadFromIntent(intent);
     }
@@ -2326,6 +2617,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     /** Entry point from the toolbar button and the More dialog. */
     void showDocumentTtsDialog() {
+        if (epubMediaOverlayController != null) epubMediaOverlayController.stop(false);
         documentTtsIntegration().showDialogEntry();
     }
 
@@ -2503,22 +2795,53 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     private TtsFloatingCardController.Controls ttsFloatingCardControls() {
         return new TtsFloatingCardController.Controls() {
             @Override public boolean isActive() {
-                return documentTtsController != null && documentTtsController.isActive();
+                return (epubMediaOverlayController != null && epubMediaOverlayController.isActive())
+                        || (documentTtsController != null && documentTtsController.isActive());
             }
             @Override public boolean isPaused() {
+                if (epubMediaOverlayController != null && epubMediaOverlayController.isActive()) {
+                    return epubMediaOverlayController.isPaused();
+                }
                 return documentTtsController != null && documentTtsController.isPaused();
             }
             @Override public void togglePlayPause() {
+                if (epubMediaOverlayController != null && epubMediaOverlayController.isActive()) {
+                    epubMediaOverlayController.toggleCurrentPage();
+                    ttsUpdateFloatingCard();
+                    return;
+                }
                 if (documentTtsController == null) return;
                 if (documentTtsController.isPaused()) documentTtsController.resumePlayback();
                 else documentTtsController.pausePlayback();
                 ttsUpdateFloatingCard();
             }
             @Override public void stop() {
+                if (epubMediaOverlayController != null && epubMediaOverlayController.isActive()) {
+                    epubMediaOverlayController.stop(true);
+                }
                 if (documentTtsController != null) documentTtsController.stop(true);
                 ttsUpdateFloatingCard();
             }
         };
+    }
+
+    private EpubMediaOverlayController epubMediaOverlay() {
+        if (epubMediaOverlayController == null) {
+            epubMediaOverlayController = new EpubMediaOverlayController(this);
+        }
+        return epubMediaOverlayController;
+    }
+
+    void onEpubDisplayedPageChanged(int oldPage, int newPage) {
+        if (epubMediaOverlayController != null) {
+            epubMediaOverlayController.onDisplayedPageChanged(oldPage, newPage);
+        }
+    }
+
+    void onEpubPrimaryPageLoaded(@Nullable WebView loadedView) {
+        if (epubMediaOverlayController != null) {
+            epubMediaOverlayController.onPrimaryPageLoaded(loadedView);
+        }
     }
 
     @Override
@@ -2578,10 +2901,14 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         return null;
     }
 
-    String applyReaderThemeCss(String html) {
-        if ("EPUB".equals(docType) && epubFixedLayoutLike) {
-            // Fixed-layout EPUB pages already received only the centering CSS in
-            // prepareEpubHtml(). Do not add reader-theme/reflow CSS here.
+    String applyReaderThemeCss(String html, @Nullable Page page) {
+        boolean epubPage = "EPUB".equals(docType) && page != null;
+        boolean fixedEpubPage = epubPage && page.fixedLayoutEpubPage;
+        boolean imageEpubPage = epubPage && page.imageDominantEpubPage;
+        boolean verticalEpubPage = epubPage && page.verticalWritingEpubPage;
+        if (fixedEpubPage) {
+            // Fixed-layout EPUB pages already received their page-canvas fit CSS
+            // in prepareFixedLayoutEpubHtml(). Do not add reflow CSS here.
             return html != null ? html : "";
         }
         int linkColor = ThemeManager.getInstance(this).getActiveTheme().getLinkColor();
@@ -2626,13 +2953,24 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         // Injected after the publisher stylesheets so ordinary reflowable EPUBs
         // stay a single centered reading column in landscape. Fixed-layout and
         // image-page EPUBs return above or use their own page-canvas CSS.
-        String epubResponsiveWidthCss = "EPUB".equals(docType)
-                && !epubFixedLayoutLike && !epubImagePageLike
+        String epubResponsiveWidthCss = epubPage
+                && !fixedEpubPage && !imageEpubPage && !verticalEpubPage
                 ? "body{width:100% !important;max-width:980px !important;"
                 + "margin-left:auto !important;margin-right:auto !important;}"
                 + "@media (orientation:landscape){body{max-width:1120px !important;}}"
                 : "";
-        String epubBoundaryCss = buildEpubBoundaryCss();
+        // A reflowable spine item can live inside an otherwise pre-paginated
+        // image book. Publisher CSS such as Haruko's `body{max-height:28em}` is
+        // useful for an old fixed canvas but incorrectly leaves the reflowable
+        // information page in only part of the WebView. Reset only the ordinary
+        // reflow path; fixed/image canvases and vertical-writing columns own
+        // their dimensions separately.
+        String epubReflowHeightCss = epubPage
+                && !fixedEpubPage && !imageEpubPage && !verticalEpubPage
+                ? "html{height:auto !important;min-height:100vh !important;max-height:none !important;}"
+                + "body{height:auto !important;min-height:100vh !important;max-height:none !important;}"
+                : "";
+        String epubBoundaryCss = buildEpubBoundaryCss(page);
         String documentSearchCss =
                 ".rw-document-search-hit{background-color:#ffeb3b !important;color:#111 !important;border-radius:2px;padding:0 1px;}"
                 + ".rw-document-search-current{background-color:#ff9800 !important;color:#111 !important;}";
@@ -2648,23 +2986,35 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 + "body.rw-rendered-doc .rw-table .rw-p{max-width:100% !important;white-space:normal !important;overflow-wrap:break-word !important;word-break:normal !important;}"
                 + "body.rw-rendered-doc a{color:#0645ad !important;}"
                 : "";
-        String rootThemeCss = epubImagePageLike
+        // EPUB pages may use a publisher background image as actual page content
+        // (especially vertical Japanese and image-like books). A `background:`
+        // shorthand would reset that resource while applying the reader color.
+        String rootThemeCss = epubPage
                 ? "html,body{background-color:" + cssColor(readerBg)
                 + " !important;color:" + cssColor(readerFg) + " !important;}"
                 : "html,body{background:" + cssColor(readerBg)
                 + " !important;color:" + cssColor(readerFg) + " !important;}";
+        String flowSafetyCss = verticalEpubPage
+                ? "html{height:100vh !important;min-height:100vh !important;max-height:none !important;"
+                + "max-width:none !important;margin-top:0 !important;margin-bottom:0 !important;"
+                + "margin-inline:0 !important;max-inline-size:none !important;overflow-x:auto !important;}"
+                + "body{height:100% !important;min-height:100% !important;max-height:none !important;"
+                + "max-width:none !important;margin-inline:0 !important;max-inline-size:none !important;"
+                + "overflow:visible !important;}"
+                : "html,body{max-width:100%;overflow-x:hidden;}"
+                + "body,.page,p,div,span,td,th,li{max-width:100%;overflow-wrap:anywhere;word-break:break-word;}";
         String css = "<style id=\"textview-reader-theme\">" +
                 rootThemeCss +
                 "a{color:" + cssColor(linkColor) + " !important;}" +
                 "body:not(.rw-rendered-doc) table,body:not(.rw-rendered-doc) td,body:not(.rw-rendered-doc) th{border-color:" + cssColor(readerLine) + " !important;}" +
-                "html,body{max-width:100%;overflow-x:hidden;}" +
+                flowSafetyCss +
                 "*{box-sizing:border-box;}" +
-                "body,.page,p,div,span,td,th,li{max-width:100%;overflow-wrap:anywhere;word-break:break-word;}" +
                 "img,svg,video,.word-img,.textbox,table{max-width:100%;}" +
                 "pre{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}" +
                 renderedPaperCss +
                 epubImageFitCss +
                 epubResponsiveWidthCss +
+                epubReflowHeightCss +
                 epubBoundaryCss +
                 epubThemeColorCss +
                 markdownThemeCss +
@@ -2689,13 +3039,13 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
 
     boolean isRenderedContentAnchorDocument() {
-        return ("EPUB".equals(docType) && !epubFixedLayoutLike && !epubImagePageLike)
+        return ("EPUB".equals(docType) && !currentEpubPageKeepsOriginalLayout())
                 || "Word".equals(docType)
                 || "HWP".equals(docType);
     }
 
     boolean isDocumentContentAnchorSignature(String signature) {
-        return signature != null && signature.startsWith(docType + "_CONTENT_ANCHOR_v1");
+        return signature != null && signature.startsWith(docType + "_CONTENT_ANCHOR_v");
     }
 
     String buildDocumentContentAnchorJson(int pageIndex, int blockIndex, int scrollY, int maxScrollY, String text) {
@@ -2714,26 +3064,198 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }
     }
 
+    String buildDocumentContentAnchorJson(int pageIndex, @NonNull JSONObject captured) {
+        boolean verticalPage = epubPageUsesVerticalWriting(pageIndex);
+        String anchorMode = captured.optString("anchorMode", "");
+        String writingMode = captured.optString("writingMode", "");
+        boolean verticalSentence = DocumentAnchorMath.isPreciseVerticalSentence(
+                verticalPage,
+                anchorMode,
+                writingMode,
+                captured.optBoolean("caretMatched", false),
+                captured.optString("elementId", ""),
+                captured.optString("text", ""));
+        boolean verticalPosition = "vertical-position".equals(anchorMode)
+                && (verticalPage || writingMode.startsWith("vertical-"));
+        if (verticalPosition) {
+            return buildVerticalDomPositionAnchorJson(pageIndex, captured);
+        }
+        if (!verticalSentence) {
+            if ("visible-sentence".equals(anchorMode)) {
+                // Never throw away a signed vertical-rl DOM position merely
+                // because a transient WebView caret result could not be proven.
+                // This fallback remains explicitly non-semantic; a later retry
+                // can still replace it with a precise sentence anchor.
+                if ((verticalPage || writingMode.startsWith("vertical-"))
+                        && captured.has("scrollX")) {
+                    return buildVerticalDomPositionAnchorJson(pageIndex, captured);
+                }
+                return "";
+            }
+            return buildDocumentContentAnchorJson(
+                    pageIndex,
+                    captured.optInt("blockIndex", 0),
+                    captured.optInt("scrollY", webView != null ? webView.getScrollY() : 0),
+                    captured.optInt("maxScrollY", 0),
+                    captured.optString("text", ""));
+        }
+        try {
+            int scrollX = captured.optInt("scrollX", webView != null ? webView.getScrollX() : 0);
+            int maxScrollX = Math.max(0, captured.optInt("maxScrollX", 0));
+            int scrollY = Math.max(0,
+                    captured.optInt("scrollY", webView != null ? webView.getScrollY() : 0));
+            int maxScrollY = Math.max(0, captured.optInt("maxScrollY", 0));
+            JSONObject obj = new JSONObject();
+            obj.put("kind", docType + "_CONTENT_ANCHOR_v2");
+            obj.put("docType", docType);
+            obj.put("pageIndex", Math.max(0, pageIndex));
+            obj.put("anchorMode", "visible-sentence");
+            String capturedWritingMode = captured.optString("writingMode", "");
+            obj.put("writingMode", capturedWritingMode.startsWith("vertical-")
+                    ? capturedWritingMode : "vertical-rl");
+            obj.put("elementId", captured.optString("elementId", ""));
+            obj.put("blockIndex", Math.max(0, captured.optInt("blockIndex", 0)));
+            obj.put("charOffset", Math.max(0, captured.optInt("charOffset", 0)));
+            obj.put("sentenceOffset", Math.max(0, captured.optInt("sentenceOffset", 0)));
+            obj.put("caretMatched", true);
+            obj.put("focusRatioX", Math.max(0.0d, Math.min(1.0d,
+                    captured.optDouble("focusRatioX", 0.5d))));
+            obj.put("focusRatioY", Math.max(0.0d, Math.min(1.0d,
+                    captured.optDouble("focusRatioY", 0.25d))));
+            obj.put("scrollX", scrollX); // vertical-rl may use a signed DOM scroll position
+            obj.put("scrollY", scrollY);
+            obj.put("viewportBasis", captured.optString("viewportBasis", ""));
+            obj.put("viewportWidth", Math.max(0.0d,
+                    captured.optDouble("viewportWidth", 0.0d)));
+            obj.put("viewportHeight", Math.max(0.0d,
+                    captured.optDouble("viewportHeight", 0.0d)));
+            obj.put("viewportScale", Math.max(0.0d,
+                    captured.optDouble("viewportScale", 1.0d)));
+            obj.put("layoutWidth", Math.max(0.0d,
+                    captured.optDouble("layoutWidth", 0.0d)));
+            obj.put("layoutHeight", Math.max(0.0d,
+                    captured.optDouble("layoutHeight", 0.0d)));
+            obj.put("anchorTopInset", Math.max(0.0d,
+                    captured.optDouble("anchorTopInset", 0.0d)));
+            obj.put("anchorBottomInset", Math.max(0.0d,
+                    captured.optDouble("anchorBottomInset", 0.0d)));
+            // Chromium's CSS scroll coordinates for vertical-rl have changed
+            // conventions across WebView releases (0/positive/negative). Keep
+            // the native WebView snapshot as an exact same-viewport fallback;
+            // the portable sentence id/text remains authoritative when layout
+            // dimensions change.
+            obj.put("nativeScrollX", captured.optInt("nativeScrollX",
+                    webView != null ? webView.getScrollX() : 0));
+            obj.put("nativeScrollY", Math.max(0, captured.optInt("nativeScrollY",
+                    webView != null ? webView.getScrollY() : 0)));
+            obj.put("nativeViewportWidth", Math.max(0,
+                    captured.optInt("nativeViewportWidth", webView != null ? webView.getWidth() : 0)));
+            obj.put("nativeViewportHeight", Math.max(0,
+                    captured.optInt("nativeViewportHeight", webView != null ? webView.getHeight() : 0)));
+            obj.put("scrollRatioX", maxScrollX > 0
+                    ? Math.max(0.0d, Math.min(1.0d, Math.abs(scrollX) / (double) maxScrollX)) : 0.0d);
+            obj.put("scrollRatio", maxScrollY > 0
+                    ? Math.max(0.0d, Math.min(1.0d, scrollY / (double) maxScrollY)) : 0.0d);
+            obj.put("text", captured.optString("text", ""));
+            obj.put("focusText", captured.optString("focusText", ""));
+            // This is presentation metadata only. The exact glyph charOffset
+            // above remains the restore and duplicate-detection authority.
+            obj.put("columnStartText", captured.optString("columnStartText", ""));
+            obj.put("textBefore", captured.optString("textBefore", ""));
+            obj.put("textAfter", captured.optString("textAfter", ""));
+            return obj.toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private String buildVerticalDomPositionAnchorJson(int pageIndex,
+                                                       @NonNull JSONObject captured) {
+        try {
+            JSONObject obj = new JSONObject();
+            obj.put("kind", docType + "_CONTENT_ANCHOR_v2");
+            obj.put("docType", docType);
+            obj.put("pageIndex", Math.max(0, pageIndex));
+            obj.put("anchorMode", "vertical-position");
+            obj.put("writingMode", "vertical-rl");
+            obj.put("scrollX", captured.optInt("scrollX", 0));
+            obj.put("scrollY", captured.optInt("scrollY", 0));
+            int maxScrollX = Math.max(0, captured.optInt("maxScrollX", 0));
+            int maxScrollY = Math.max(0, captured.optInt("maxScrollY", 0));
+            int scrollX = captured.optInt("scrollX", 0);
+            int scrollY = Math.max(0, captured.optInt("scrollY", 0));
+            obj.put("maxScrollX", maxScrollX);
+            obj.put("maxScrollY", maxScrollY);
+            obj.put("scrollRatioX", maxScrollX > 0
+                    ? Math.max(0.0d, Math.min(1.0d, Math.abs(scrollX) / (double) maxScrollX))
+                    : 0.0d);
+            obj.put("scrollRatio", maxScrollY > 0
+                    ? Math.max(0.0d, Math.min(1.0d, scrollY / (double) maxScrollY))
+                    : 0.0d);
+            obj.put("viewportBasis", captured.optString("viewportBasis", ""));
+            obj.put("viewportWidth", Math.max(0.0d,
+                    captured.optDouble("viewportWidth", 0.0d)));
+            obj.put("viewportHeight", Math.max(0.0d,
+                    captured.optDouble("viewportHeight", 0.0d)));
+            obj.put("viewportScale", Math.max(0.0d,
+                    captured.optDouble("viewportScale", 1.0d)));
+            obj.put("layoutWidth", Math.max(0.0d,
+                    captured.optDouble("layoutWidth", 0.0d)));
+            obj.put("layoutHeight", Math.max(0.0d,
+                    captured.optDouble("layoutHeight", 0.0d)));
+            obj.put("anchorTopInset", Math.max(0.0d,
+                    captured.optDouble("anchorTopInset", 0.0d)));
+            obj.put("anchorBottomInset", Math.max(0.0d,
+                    captured.optDouble("anchorBottomInset", 0.0d)));
+            obj.put("nativeScrollX", captured.optInt("nativeScrollX",
+                    webView != null ? webView.getScrollX() : 0));
+            obj.put("nativeScrollY", Math.max(0, captured.optInt("nativeScrollY",
+                    webView != null ? webView.getScrollY() : 0)));
+            obj.put("nativeViewportWidth", Math.max(0,
+                    captured.optInt("nativeViewportWidth", webView != null ? webView.getWidth() : 0)));
+            obj.put("nativeViewportHeight", Math.max(0,
+                    captured.optInt("nativeViewportHeight", webView != null ? webView.getHeight() : 0)));
+            return obj.toString();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    String documentContentAnchorSignature(String anchorJson) {
+        if (anchorJson != null && !anchorJson.trim().isEmpty()) {
+            try {
+                String kind = new JSONObject(anchorJson).optString("kind", "");
+                if (kind.startsWith(docType + "_CONTENT_ANCHOR_v")) return kind;
+            } catch (Exception ignored) {}
+        }
+        return docType + "_CONTENT_ANCHOR_v1";
+    }
+
     void installDocumentContentAnchorScript() {
-        if (!isRenderedContentAnchorDocument() || webView == null) return;
+        installDocumentContentAnchorScript(this::updateDocumentContentAnchorFromWebView);
+    }
+
+    private void installDocumentContentAnchorScript(@Nullable Runnable afterInstall) {
+        if (!isRenderedContentAnchorDocument() || webView == null) {
+            if (afterInstall != null) afterInstall.run();
+            return;
+        }
         evaluateDocumentAnchorJavascript(
-                "(function(){try{"
-                        + "window.__rwDocBlocks=function(){var raw=Array.prototype.slice.call(document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,td,th,table'));return raw.filter(function(e){var t=(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim();var r=e.getBoundingClientRect();return t.length>0&&r.height>0&&r.width>0;});};"
-                        + "window.__rwDocAnchorAtTop=function(){var blocks=window.__rwDocBlocks();var max=Math.max(0,document.documentElement.scrollHeight-window.innerHeight);if(!blocks.length)return {blockIndex:0,scrollY:window.scrollY||0,maxScrollY:max,text:''};var best=blocks[0],bestIndex=0,threshold=8;for(var i=0;i<blocks.length;i++){var r=blocks[i].getBoundingClientRect();if(r.bottom>=threshold){best=blocks[i];bestIndex=i;break;}if(r.top<=threshold){best=blocks[i];bestIndex=i;}}var text=(best.innerText||best.textContent||'').replace(/\\s+/g,' ').trim();if(text.length>180)text=text.substring(0,180);return {blockIndex:bestIndex,scrollY:window.scrollY||0,maxScrollY:max,text:text};};"
-                        + "window.__rwDocScrollToAnchor=function(anchor){var blocks=window.__rwDocBlocks();if(!blocks.length){if(anchor&&typeof anchor.scrollY==='number')window.scrollTo(0,anchor.scrollY);return false;}anchor=anchor||{};var text=(anchor.text||'').replace(/\\s+/g,' ').trim();var idx=parseInt(anchor.blockIndex||0,10)||0;var target=null;if(text.length>=12){var needle=text.length>80?text.substring(0,80):text;for(var i=0;i<blocks.length;i++){var bt=(blocks[i].innerText||blocks[i].textContent||'').replace(/\\s+/g,' ').trim();if(bt.indexOf(needle)>=0){target=blocks[i];break;}}}if(!target){idx=Math.max(0,Math.min(blocks.length-1,idx));target=blocks[idx];}if(target){target.scrollIntoView(true);return true;}return false;};"
-                        + "return true;}catch(e){return false;}})()",
-                value -> updateDocumentContentAnchorFromWebView());
+                DocumentContentAnchorJavascript.installScript(),
+                value -> {
+                    if (afterInstall != null) afterInstall.run();
+                });
     }
 
     void evaluateDocumentAnchorJavascript(String js, android.webkit.ValueCallback<String> callback) {
         if (webView == null || js == null || js.isEmpty()) return;
+        final WebView target = webView;
+        final int targetPage = currentPage;
         WebSettings settings = webView.getSettings();
         boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
         if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
-        webView.evaluateJavascript(js, value -> {
-            if (!activityDestroyed && webView != null && restoreJavascriptOff && isRenderedContentAnchorDocument()) {
-                webView.getSettings().setJavaScriptEnabled(false);
-            }
+        target.evaluateJavascript(js, value -> {
+            restoreDocumentJavaScriptPolicy(target, targetPage, restoreJavascriptOff);
             if (callback != null) callback.onReceiveValue(value);
         });
     }
@@ -2743,33 +3265,96 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     void updateDocumentContentAnchorFromWebView(Runnable afterUpdate) {
-        if (!isRenderedContentAnchorDocument() || webView == null) {
+        captureDocumentContentAnchorFromWebView(anchorJson -> {
+            if (anchorJson != null && !anchorJson.isEmpty()) {
+                lastDocumentContentAnchorJson = anchorJson;
+            }
             if (afterUpdate != null) afterUpdate.run();
+        });
+    }
+
+    private interface DocumentContentAnchorCaptureCallback {
+        void onCaptured(@Nullable String anchorJson);
+    }
+
+    private void captureDocumentContentAnchorFromWebView(
+            @NonNull DocumentContentAnchorCaptureCallback callback) {
+        captureDocumentContentAnchorFromWebView(false, callback);
+    }
+
+    private void captureDocumentContentAnchorFromWebView(
+            boolean captureColumnStart,
+            @NonNull DocumentContentAnchorCaptureCallback callback) {
+        if (!isRenderedContentAnchorDocument() || webView == null) {
+            callback.onCaptured(null);
             return;
         }
+        final WebView capturedView = webView;
+        final int capturedPage = currentPage;
+        final int capturedGeneration = documentAnchorPageGeneration;
+        final boolean forceVerticalWriting = epubPageUsesVerticalWriting(capturedPage);
+        final int capturedNativeScrollX = capturedView.getScrollX();
+        final int capturedNativeScrollY = capturedView.getScrollY();
+        final int capturedNativeViewportWidth = capturedView.getWidth();
+        final int capturedNativeViewportHeight = capturedView.getHeight();
+        final int topOcclusion = documentAnchorOverlayOcclusionPx(documentAppBar, true);
+        final int bottomOcclusion = documentAnchorOverlayOcclusionPx(documentBottomChrome, false);
         evaluateDocumentAnchorJavascript(
-                "(function(){try{return window.__rwDocAnchorAtTop?window.__rwDocAnchorAtTop():{blockIndex:0,scrollY:window.scrollY||0,maxScrollY:Math.max(0,document.documentElement.scrollHeight-window.innerHeight),text:''};}catch(e){return {blockIndex:0,scrollY:window.scrollY||0,maxScrollY:0,text:''};}})()",
+                DocumentContentAnchorJavascript.installAndCaptureExpression(
+                        topOcclusion,
+                        bottomOcclusion,
+                        Math.max(1, capturedView.getHeight()),
+                        forceVerticalWriting,
+                        captureColumnStart),
                 value -> {
+                    String anchorJson = null;
                     try {
-                        if (value != null && !value.trim().isEmpty() && !"null".equals(value)) {
+                        if (!activityDestroyed
+                                && webView == capturedView
+                                && currentPage == capturedPage
+                                && documentAnchorPageGeneration == capturedGeneration
+                                && value != null
+                                && !value.trim().isEmpty()
+                                && !"null".equals(value)) {
                             JSONObject obj = new JSONObject(value);
-                            lastDocumentContentAnchorJson = buildDocumentContentAnchorJson(
-                                    currentPage,
-                                    obj.optInt("blockIndex", 0),
-                                    obj.optInt("scrollY", webView != null ? webView.getScrollY() : 0),
-                                    obj.optInt("maxScrollY", 0),
-                                    obj.optString("text", ""));
+                            String anchorMode = obj.optString("anchorMode", "");
+                            if (!"script-missing".equals(anchorMode)
+                                    && !"capture-error".equals(anchorMode)) {
+                                obj.put("nativeScrollX", capturedNativeScrollX);
+                                obj.put("nativeScrollY", capturedNativeScrollY);
+                                obj.put("nativeViewportWidth", capturedNativeViewportWidth);
+                                obj.put("nativeViewportHeight", capturedNativeViewportHeight);
+                                anchorJson = buildDocumentContentAnchorJson(capturedPage, obj);
+                            }
                         }
                     } catch (Exception ignored) {
                     } finally {
-                        if (afterUpdate != null) afterUpdate.run();
+                        callback.onCaptured(anchorJson);
                     }
                 });
     }
 
+    private int documentAnchorOverlayOcclusionPx(@Nullable View overlay, boolean top) {
+        if (webView == null || overlay == null || overlay.getVisibility() != View.VISIBLE
+                || webView.getHeight() <= 0 || overlay.getHeight() <= 0) {
+            return 0;
+        }
+        int[] webLocation = new int[2];
+        int[] overlayLocation = new int[2];
+        webView.getLocationOnScreen(webLocation);
+        overlay.getLocationOnScreen(overlayLocation);
+        int webTop = webLocation[1];
+        int webBottom = webTop + webView.getHeight();
+        int overlap = top
+                ? overlayLocation[1] + overlay.getHeight() - webTop
+                : webBottom - overlayLocation[1];
+        return Math.max(0, Math.min(webView.getHeight(), overlap));
+    }
+
     void scheduleDocumentContentAnchorUpdate() {
         if (!isRenderedContentAnchorDocument() || webView == null) return;
-        webView.postDelayed(this::updateDocumentContentAnchorFromWebView, 40);
+        webView.removeCallbacks(documentContentAnchorUpdateRunnable);
+        webView.postDelayed(documentContentAnchorUpdateRunnable, 40);
     }
 
     void restoreDocumentContentAnchorAfterLoadIfNeeded(@NonNull WebView view) {
@@ -2780,17 +3365,90 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }
         final String anchorJson = pendingDocumentRestoreAnchorJson;
         pendingDocumentRestoreAnchorJson = "";
+        final WebView expectedView = view;
+        final int expectedPage = currentPage;
+        final int expectedPageGeneration = documentAnchorPageGeneration;
+        final int requestedInteractionGeneration = documentInteractionGeneration;
         view.postDelayed(() -> {
-            if (activityDestroyed || webView == null || !isRenderedContentAnchorDocument()) return;
-            installDocumentContentAnchorScript();
+            if (!documentAnchorRestoreContextMatches(
+                    expectedView,
+                    expectedPage,
+                    expectedPageGeneration,
+                    requestedInteractionGeneration)) {
+                return;
+            }
             if (anchorJson != null && !anchorJson.trim().isEmpty()) {
-                String escaped = cssQuote(anchorJson);
+                if (isVerticalPositionDocumentContentAnchor(anchorJson)
+                        && !hasVerticalDomPosition(anchorJson)) {
+                    restoreDocumentContentAnchorFallback(expectedView, anchorJson);
+                    expectedView.postDelayed(() -> {
+                        if (documentAnchorRestoreContextMatches(
+                                expectedView,
+                                expectedPage,
+                                expectedPageGeneration,
+                                requestedInteractionGeneration)) {
+                            restoreDocumentContentAnchorFallback(expectedView, anchorJson);
+                            updateDocumentContentAnchorFromWebView();
+                        }
+                    }, 180L);
+                    return;
+                }
+                String restoreScript = documentContentAnchorRestoreScript(anchorJson, expectedView);
+                final boolean verticalSentenceAnchor =
+                        isVerticalSentenceDocumentContentAnchor(anchorJson);
                 evaluateDocumentAnchorJavascript(
-                        "(function(){try{var a=JSON.parse('" + escaped + "');if(window.__rwDocScrollToAnchor){return !!window.__rwDocScrollToAnchor(a);}return false;}catch(e){return false;}})()",
+                        restoreScript,
                         value -> {
+                            if (!documentAnchorRestoreContextMatches(
+                                    expectedView,
+                                    expectedPage,
+                                    expectedPageGeneration,
+                                    requestedInteractionGeneration)) {
+                                return;
+                            }
                             boolean ok = "true".equals(value);
-                            if (!ok) restoreDocumentContentAnchorFallback(anchorJson);
-                            webView.postDelayed(this::updateDocumentContentAnchorFromWebView, 80);
+                            if (!ok) {
+                                restoreDocumentContentAnchorFallback(expectedView, anchorJson);
+                                expectedView.postDelayed(this::updateDocumentContentAnchorFromWebView, 60);
+                                return;
+                            }
+                            if (verticalSentenceAnchor) {
+                                // Embedded Japanese fonts can settle vertical
+                                // column geometry after onPageFinished. Reapply
+                                // the stable sentence id once, then verify that
+                                // the target is actually visible. Finding a DOM
+                                // node alone does not prove scrollIntoView moved a
+                                // vertical-rl WebView.
+                                expectedView.postDelayed(() -> {
+                                    if (!documentAnchorRestoreContextMatches(
+                                            expectedView,
+                                            expectedPage,
+                                            expectedPageGeneration,
+                                            requestedInteractionGeneration)) {
+                                        return;
+                                    }
+                                    evaluateDocumentAnchorJavascript(
+                                            documentContentAnchorRestoreScript(anchorJson, expectedView),
+                                            ignored -> {
+                                                if (documentAnchorRestoreContextMatches(
+                                                        expectedView,
+                                                        expectedPage,
+                                                        expectedPageGeneration,
+                                                        requestedInteractionGeneration)) {
+                                                    expectedView.postDelayed(
+                                                            () -> verifyRestoredVerticalDocumentAnchor(
+                                                                    expectedView,
+                                                                    expectedPage,
+                                                                    expectedPageGeneration,
+                                                                    requestedInteractionGeneration,
+                                                                    anchorJson),
+                                                            40);
+                                                }
+                                            });
+                                }, 180);
+                            } else {
+                                expectedView.postDelayed(this::updateDocumentContentAnchorFromWebView, 80);
+                            }
                         });
             } else {
                 updateDocumentContentAnchorFromWebView();
@@ -2798,21 +3456,270 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }, 90);
     }
 
-    void restoreDocumentContentAnchorFallback(String anchorJson) {
-        if (webView == null || anchorJson == null || anchorJson.trim().isEmpty()) return;
+    /**
+     * Restores the last-resort native-only vertical position when the viewport
+     * still matches. Normal sentence anchors must stay in DOM/CSS coordinates;
+     * {@link WebView#getScrollX()} is not equivalent to a vertical-rl DOM
+     * scroller on every WebView implementation.
+     */
+    private boolean applyExactVerticalNativeAnchorIfCompatible(@NonNull WebView targetView,
+                                                                @NonNull String anchorJson) {
+        // A sentence anchor is restored in CSS/DOM coordinates. Applying
+        // WebView.getScrollX() afterward can overwrite the correct result,
+        // because vertical-rl pages often scroll their DOM element while the
+        // native WebView offset remains zero. Native offsets are authoritative
+        // only for the explicit last-resort vertical-position payload.
+        if (!isVerticalPositionDocumentContentAnchor(anchorJson)) return false;
         try {
             JSONObject obj = new JSONObject(anchorJson);
+            if (!obj.has("nativeScrollX") || !obj.has("nativeViewportWidth")
+                    || !obj.has("nativeViewportHeight")) {
+                return false;
+            }
+            int savedWidth = Math.max(0, obj.optInt("nativeViewportWidth", 0));
+            int savedHeight = Math.max(0, obj.optInt("nativeViewportHeight", 0));
+            int currentWidth = Math.max(0, targetView.getWidth());
+            int currentHeight = Math.max(0, targetView.getHeight());
+            if (savedWidth <= 0 || savedHeight <= 0 || currentWidth <= 0 || currentHeight <= 0) {
+                return false;
+            }
+            int widthTolerance = Math.max(2, Math.round(currentWidth * 0.01f));
+            int heightTolerance = Math.max(2, Math.round(currentHeight * 0.01f));
+            if (Math.abs(savedWidth - currentWidth) > widthTolerance
+                    || Math.abs(savedHeight - currentHeight) > heightTolerance) {
+                return false;
+            }
+            targetView.scrollTo(
+                    obj.optInt("nativeScrollX", targetView.getScrollX()),
+                    Math.max(0, obj.optInt("nativeScrollY", targetView.getScrollY())));
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean documentAnchorRestoreContextMatches(@NonNull WebView expectedView,
+                                                        int expectedPage,
+                                                        int expectedPageGeneration,
+                                                        int expectedInteractionGeneration) {
+        return !activityDestroyed
+                && webView == expectedView
+                && currentPage == expectedPage
+                && documentAnchorPageGeneration == expectedPageGeneration
+                && documentInteractionGeneration == expectedInteractionGeneration
+                && isRenderedContentAnchorDocument();
+    }
+
+    private String documentContentAnchorRestoreScript(@NonNull String anchorJson,
+                                                      @NonNull WebView targetView) {
+        return documentContentAnchorRestoreScript(anchorJson, targetView, false);
+    }
+
+    private String documentContentAnchorRestoreScript(@NonNull String anchorJson,
+                                                       @NonNull WebView targetView,
+                                                       boolean forceSemantic) {
+        int topOcclusion = documentAnchorOverlayOcclusionPx(documentAppBar, true);
+        int bottomOcclusion = documentAnchorOverlayOcclusionPx(documentBottomChrome, false);
+        String escaped = cssQuote(anchorJson);
+        return DocumentContentAnchorJavascript.installScript() + ";"
+                + DocumentContentAnchorJavascript.viewportInsetAssignment(
+                topOcclusion,
+                bottomOcclusion,
+                Math.max(1, targetView.getHeight()))
+                + "window.__rwDocForceVerticalWriting="
+                 + epubPageUsesVerticalWriting(currentPage)
+                 + ";(function(){try{var a=JSON.parse('" + escaped
+                 + "');if(window.__rwDocScrollToAnchor){return !!window.__rwDocScrollToAnchor(a,"
+                 + forceSemantic + ");}"
+                 + "return false;}catch(e){return false;}})()";
+    }
+
+    private void verifyRestoredVerticalDocumentAnchor(@NonNull WebView expectedView,
+                                                      int expectedPage,
+                                                      int expectedPageGeneration,
+                                                      int expectedInteractionGeneration,
+                                                      @NonNull String anchorJson) {
+        if (!documentAnchorRestoreContextMatches(
+                expectedView,
+                expectedPage,
+                expectedPageGeneration,
+                expectedInteractionGeneration)) {
+            return;
+        }
+        String verifyScript = documentContentAnchorRestoreViewportScript(expectedView)
+                + "(function(){try{var a=JSON.parse('" + cssQuote(anchorJson)
+                + "');return !!(window.__rwDocVerticalAnchorIsVisible"
+                + "&&window.__rwDocVerticalAnchorIsVisible(a));}catch(e){return false;}})()";
+        evaluateDocumentAnchorJavascript(verifyScript, value -> {
+            if (!documentAnchorRestoreContextMatches(
+                    expectedView,
+                    expectedPage,
+                    expectedPageGeneration,
+                    expectedInteractionGeneration)) {
+                return;
+            }
+            if (!"true".equals(value)) {
+                evaluateDocumentAnchorJavascript(
+                        documentContentAnchorRestoreScript(anchorJson, expectedView, true),
+                        ignored -> expectedView.postDelayed(
+                                () -> verifyForcedSemanticVerticalDocumentAnchor(
+                                        expectedView,
+                                        expectedPage,
+                                        expectedPageGeneration,
+                                        expectedInteractionGeneration,
+                                        anchorJson),
+                                60));
+                return;
+            }
+            expectedView.postDelayed(this::updateDocumentContentAnchorFromWebView, 60);
+        });
+    }
+
+    private void verifyForcedSemanticVerticalDocumentAnchor(@NonNull WebView expectedView,
+                                                             int expectedPage,
+                                                             int expectedPageGeneration,
+                                                             int expectedInteractionGeneration,
+                                                             @NonNull String anchorJson) {
+        if (!documentAnchorRestoreContextMatches(
+                expectedView,
+                expectedPage,
+                expectedPageGeneration,
+                expectedInteractionGeneration)) {
+            return;
+        }
+        String verifyScript = documentContentAnchorRestoreViewportScript(expectedView)
+                + "(function(){try{var a=JSON.parse('" + cssQuote(anchorJson)
+                + "');return !!(window.__rwDocVerticalAnchorIsVisible"
+                + "&&window.__rwDocVerticalAnchorIsVisible(a));}catch(e){return false;}})()";
+        evaluateDocumentAnchorJavascript(verifyScript, value -> {
+            if ("true".equals(value)
+                    && documentAnchorRestoreContextMatches(
+                    expectedView,
+                    expectedPage,
+                    expectedPageGeneration,
+                    expectedInteractionGeneration)) {
+                updateDocumentContentAnchorFromWebView();
+            }
+        });
+    }
+
+    private String documentContentAnchorRestoreViewportScript(@NonNull WebView targetView) {
+        return DocumentContentAnchorJavascript.installScript() + ";"
+                + DocumentContentAnchorJavascript.viewportInsetAssignment(
+                documentAnchorOverlayOcclusionPx(documentAppBar, true),
+                documentAnchorOverlayOcclusionPx(documentBottomChrome, false),
+                Math.max(1, targetView.getHeight()));
+    }
+
+    void restoreDocumentContentAnchorFallback(@NonNull WebView targetView, String anchorJson) {
+        if (anchorJson == null || anchorJson.trim().isEmpty()) return;
+        try {
+            JSONObject obj = new JSONObject(anchorJson);
+            if (isVerticalPositionDocumentContentAnchor(anchorJson)
+                    && obj.has("nativeScrollX")
+                    && applyExactVerticalNativeAnchorIfCompatible(targetView, anchorJson)) {
+                return;
+            }
+            if (isVerticalPositionDocumentContentAnchor(anchorJson)) {
+                // Raw native and CSS positions are meaningful only in the
+                // viewport that produced them. The primary JavaScript restore
+                // handles portable DOM ratios; if that failed and native
+                // geometry is incompatible, leave the safe page start intact.
+                return;
+            }
+            if (isVerticalSentenceDocumentContentAnchor(anchorJson)
+                    && obj.has("scrollX")) {
+                int cssScrollX = obj.optInt("scrollX", 0);
+                int cssScrollY = Math.max(0, obj.optInt("scrollY", 0));
+                // Anchor coordinates come from window.scrollX/Y and therefore
+                // use CSS pixels. WebView.scrollTo() expects Android physical
+                // pixels, so applying the raw values there repeats the same
+                // density bug as the old occlusion calculation.
+                evaluateDocumentAnchorJavascript(
+                        "(function(){window.scrollTo(" + cssScrollX + ","
+                                + cssScrollY + ");return true;})()",
+                        null);
+                return;
+            }
             int scrollY = obj.optInt("scrollY", -1);
             if (scrollY >= 0) {
-                webView.scrollTo(0, Math.max(0, scrollY));
+                evaluateDocumentAnchorJavascript(
+                        "(function(){window.scrollTo(0," + Math.max(0, scrollY)
+                                + ");return true;})()",
+                        null);
                 return;
             }
             double ratio = obj.optDouble("scrollRatio", -1.0d);
             if (ratio >= 0.0d) {
-                int maxY = Math.max(0, webView.getContentHeight() * Math.max(1, Math.round(webView.getScale())) - webView.getHeight());
-                webView.scrollTo(0, Math.max(0, Math.min(maxY, (int) Math.round(maxY * ratio))));
+                double clampedRatio = Math.max(0.0d, Math.min(1.0d, ratio));
+                        evaluateDocumentAnchorJavascript(
+                        "(function(){var m=Math.max(0,Math.max(document.documentElement.scrollHeight,"
+                                + "document.body?document.body.scrollHeight:0)-"
+                                + "(window.visualViewport&&window.visualViewport.height>0"
+                                + "?window.visualViewport.height:window.innerHeight));"
+                                + "window.scrollTo(0,Math.round(m*" + clampedRatio
+                                + "));return true;})()",
+                        null);
             }
         } catch (Exception ignored) {}
+    }
+
+    boolean isVerticalSentenceDocumentContentAnchor(String anchorJson) {
+        if (anchorJson == null || anchorJson.trim().isEmpty()) return false;
+        try {
+            JSONObject obj = new JSONObject(anchorJson);
+            return DocumentAnchorMath.isStoredVerticalSentence(
+                    false,
+                    obj.optString("anchorMode", ""),
+                    obj.optString("writingMode", ""),
+                    obj.optString("elementId", ""),
+                    obj.optString("text", ""));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean isPreciseVerticalSentenceDocumentContentAnchor(String anchorJson) {
+        if (anchorJson == null || anchorJson.trim().isEmpty()) return false;
+        try {
+            JSONObject obj = new JSONObject(anchorJson);
+            return DocumentAnchorMath.isPreciseVerticalSentence(
+                    false,
+                    obj.optString("anchorMode", ""),
+                    obj.optString("writingMode", ""),
+                    obj.optBoolean("caretMatched", false),
+                    obj.optString("elementId", ""),
+                    obj.optString("text", ""));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    boolean isVerticalPositionDocumentContentAnchor(String anchorJson) {
+        if (anchorJson == null || anchorJson.trim().isEmpty()) return false;
+        try {
+            JSONObject obj = new JSONObject(anchorJson);
+            return "vertical-position".equals(obj.optString("anchorMode", ""))
+                    && obj.optString("writingMode", "").startsWith("vertical-")
+                    && obj.has("nativeScrollX")
+                    && obj.optInt("nativeViewportWidth", 0) > 0
+                    && obj.optInt("nativeViewportHeight", 0) > 0;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean hasVerticalDomPosition(String anchorJson) {
+        if (anchorJson == null || anchorJson.trim().isEmpty()) return false;
+        try {
+            JSONObject obj = new JSONObject(anchorJson);
+            return "vertical-position".equals(obj.optString("anchorMode", ""))
+                    && obj.has("scrollX")
+                    && obj.optInt("viewportWidth", 0) > 0
+                    && obj.optInt("viewportHeight", 0) > 0;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     boolean isMarkdownDocument() {
@@ -3067,22 +3974,151 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     String documentBaseUrlForPage(@NonNull Page p) {
-        String baseUrl = "https://" + LOCAL_HOST + "/";
+        String baseUrl = "https://" + localDocumentHost + "/";
         if ("EPUB".equals(docType) && p.sourcePath != null) {
             String parent = parentPath(p.sourcePath);
-            baseUrl = "https://" + LOCAL_HOST + EPUB_PREFIX + parent;
+            baseUrl = "https://" + localDocumentHost + EPUB_PREFIX + parent;
             if (!baseUrl.endsWith("/")) baseUrl += "/";
         }
         return baseUrl;
     }
 
+    String localDocumentHost() {
+        return localDocumentHost;
+    }
+
+    String documentBaseUrlForPageLoad(@NonNull Page page,
+                                      @NonNull WebView target,
+                                      int pageIndex) {
+        int generation;
+        if (target == rightWebView) {
+            generation = ++rightDocumentPageLoadGeneration;
+            rightDocumentPageLoadPage = pageIndex;
+        } else {
+            generation = ++primaryDocumentPageLoadGeneration;
+            primaryDocumentPageLoadPage = pageIndex;
+        }
+        return documentBaseUrlForPage(page) + "?rw_load=" + generation;
+    }
+
+    void invalidateDocumentPageLoad(@Nullable WebView target) {
+        if (target == rightWebView) {
+            rightDocumentPageLoadGeneration++;
+            rightDocumentPageLoadPage = -1;
+        } else {
+            primaryDocumentPageLoadGeneration++;
+            primaryDocumentPageLoadPage = -1;
+        }
+    }
+
+    boolean isCurrentDocumentPageLoad(@NonNull WebView target,
+                                      @Nullable String loadedUrl) {
+        if (loadedUrl == null || loadedUrl.isEmpty()) return false;
+        try {
+            Uri uri = Uri.parse(loadedUrl);
+            String value = uri.getQueryParameter("rw_load");
+            if (value == null || value.isEmpty()) return false;
+            int generation = Integer.parseInt(value);
+            if (target == rightWebView) {
+                return generation == rightDocumentPageLoadGeneration
+                        && rightDocumentPageLoadPage == documentRightSpreadPageIndex();
+            }
+            return generation == primaryDocumentPageLoadGeneration
+                    && primaryDocumentPageLoadPage == currentPage;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * JavaScript stays disabled for ordinary EPUB pages. It is enabled only for
+     * Word's renderer helpers, fixed-layout EPUB geometry helpers, or a spine
+     * item that the OPF explicitly marks as scripted (including a page whose
+     * custom object binding was replaced by a local sandboxed handler).
+     */
+    boolean documentPageRequiresJavaScript(int pageIndex) {
+        if ("Word".equals(docType)) return true;
+        if (!"EPUB".equals(docType)
+                || pageIndex < 0 || pageIndex >= pages.size()) {
+            return false;
+        }
+        Page page = pages.get(pageIndex);
+        return page != null && (page.fixedLayoutEpubPage || page.scriptedEpubPage);
+    }
+
+    int documentPageIndexForWebView(@Nullable WebView target) {
+        return target == rightWebView ? documentRightSpreadPageIndex() : currentPage;
+    }
+
+    void restoreDocumentJavaScriptPolicy(@Nullable WebView target,
+                                         int pageIndex,
+                                         boolean wasTemporarilyEnabled) {
+        if (!wasTemporarilyEnabled || target == null || activityDestroyed) return;
+        if (documentPageIndexForWebView(target) != pageIndex) return;
+        target.getSettings().setJavaScriptEnabled(documentPageRequiresJavaScript(pageIndex));
+    }
+
     String documentHtmlForDisplay(@NonNull Page p, int pageIndex) {
         String htmlForDisplay = p.html;
-        if ("EPUB".equals(docType) && epubFixedLayoutLike) {
-            htmlForDisplay = prepareFixedLayoutEpubHtml(htmlForDisplay);
+        if ("EPUB".equals(docType) && p.fixedLayoutEpubPage) {
+            htmlForDisplay = prepareFixedLayoutEpubHtml(
+                    htmlForDisplay,
+                    p.imageDominantEpubPage,
+                    epubPhysicalSpreadSlot(pageIndex, p));
+        }
+        if ("EPUB".equals(docType) && p.scriptedEpubPage) {
+            htmlForDisplay = injectIntoHtmlHeadStart(
+                    htmlForDisplay,
+                    "<script>" + epubReadingSystemJavascript() + "</script>");
         }
         htmlForDisplay = applyDocumentSearchMarkupForDisplay(htmlForDisplay, pageIndex);
-        return applyReaderThemeCss(htmlForDisplay);
+        return applyReaderThemeCss(htmlForDisplay, p);
+    }
+
+    private String epubReadingSystemJavascript() {
+        return "(function(){try{if(!navigator.epubReadingSystem){"
+                + "Object.defineProperty(navigator,'epubReadingSystem',{value:{"
+                + "name:'Readwide',version:'1.0.16',layoutStyle:'paginated',"
+                + "hasFeature:function(f){return ['dom-manipulation','layout-changes',"
+                + "'mouse-events','spine-scripting','touch-events'].indexOf(String(f))>=0;}"
+                + "},configurable:false});}}catch(e){}})();";
+    }
+
+    private String injectIntoHtmlHeadStart(String html, String injection) {
+        if (html == null) html = "";
+        if (injection == null || injection.isEmpty()) return html;
+        java.util.regex.Matcher head = java.util.regex.Pattern
+                .compile("(?i)<head[^>]*>").matcher(html);
+        if (head.find()) {
+            return html.substring(0, head.end()) + injection + html.substring(head.end());
+        }
+        java.util.regex.Matcher root = java.util.regex.Pattern
+                .compile("(?i)<(?:html|body)[^>]*>").matcher(html);
+        if (root.find()) {
+            return html.substring(0, root.start()) + "<head>" + injection + "</head>"
+                    + html.substring(root.start());
+        }
+        return "<head>" + injection + "</head>" + html;
+    }
+
+    private int epubPhysicalSpreadSlot(int pageIndex, @NonNull Page page) {
+        if (!page.imageDominantEpubPage) return EpubSpreadSlotMath.CENTER;
+        int secondary = documentRightSpreadPageIndex();
+        // Edge-align only a genuine image/image spread. If a mostly-image EPUB
+        // ends with an About or other text page, pulling just the image page to
+        // the seam creates an unbalanced mixed spread. Keep both pages centered
+        // in that case; a lone odd final page is centered for the same reason.
+        if (secondary < 0
+                || currentPage < 0 || currentPage >= pages.size()
+                || secondary >= pages.size()
+                || !pages.get(currentPage).imageDominantEpubPage
+                || !pages.get(secondary).imageDominantEpubPage) {
+            return EpubSpreadSlotMath.CENTER;
+        }
+        boolean rtl = prefs != null
+                && prefs.getEpubPageDirection() == PrefsManager.EPUB_PAGE_DIRECTION_RTL;
+        return EpubSpreadSlotMath.physicalSlot(
+                pageIndex, currentPage, secondary, rtl);
     }
 
     void updateDocumentSpreadVisibility() {
@@ -3113,6 +4149,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             // renderer each time for nothing.
             if (rightWebViewHasContent) {
                 rightWebViewHasContent = false;
+                invalidateDocumentPageLoad(rightWebView);
                 rightWebView.loadUrl("about:blank");
             }
             return;
@@ -3120,7 +4157,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         rightWebViewHasContent = true;
         Page p = pages.get(right);
         rightWebView.loadDataWithBaseURL(
-                documentBaseUrlForPage(p),
+                documentBaseUrlForPageLoad(p, rightWebView, right),
                 documentHtmlForDisplay(p, right),
                 "text/html",
                 "UTF-8",
@@ -3148,18 +4185,82 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     void snapDocumentWebViewToPageTopIfNeeded(@NonNull WebView view) {
         if (!snapDocumentPageTopAfterLoad || isMarkdownDocument()) return;
+        if (pendingEpubAnchorPage == currentPage
+                && (pendingEpubCfi != null || !pendingEpubAnchorFragment.isEmpty())) {
+            // A cross-page EPUB anchor owns the final position. In particular,
+            // do not let vertical-rl's delayed logical-start alignment pull a
+            // successfully resolved CFI back to the chapter start.
+            snapDocumentPageTopAfterLoad = false;
+            return;
+        }
+        if (isRenderedContentAnchorDocument()
+                && pendingDocumentRestoreAnchorJson != null
+                && !pendingDocumentRestoreAnchorJson.trim().isEmpty()) {
+            // The anchor restore owns the final position. Scheduling the normal
+            // vertical-rl logical-start alignment here would run again after the
+            // first restore and visibly pull the bookmark back to page start.
+            snapDocumentPageTopAfterLoad = false;
+            return;
+        }
         if (isDocumentSearchActiveOnCurrentPage()) {
             snapDocumentPageTopAfterLoad = false;
             return;
         }
         snapDocumentPageTopAfterLoad = false;
+        final int expectedPage = currentPage;
+        final boolean verticalEpubPage = "EPUB".equals(docType)
+                && expectedPage >= 0
+                && expectedPage < pages.size()
+                && pages.get(expectedPage).verticalWritingEpubPage;
         view.post(() -> {
-            if (activityDestroyed || webView == null || webView != view) return;
-            webView.scrollTo(0, 0);
+            if (activityDestroyed || webView == null || webView != view
+                    || currentPage != expectedPage) return;
+            if (verticalEpubPage) {
+                alignVerticalEpubPageToLogicalStart(view, expectedPage);
+                // WebView can finish the main document before an embedded font
+                // or late stylesheet completes its final vertical-column
+                // geometry. Recheck once while the page-turn lock is still in
+                // force; a later page turn invalidates this by page number.
+                view.postDelayed(
+                        () -> alignVerticalEpubPageToLogicalStart(view, expectedPage),
+                        140L);
+            } else {
+                webView.scrollTo(0, 0);
+            }
             updateDocumentPageStatusViews(false);
             if (isRenderedContentAnchorDocument()) {
                 webView.postDelayed(this::updateDocumentContentAnchorFromWebView, 80);
             }
+        });
+    }
+
+    /**
+     * CSS vertical-rl advances along a logical horizontal block axis. Native
+     * WebView.scrollTo(0, 0) uses physical coordinates and can leave the first
+     * column well inside the viewport. Ask the DOM to align its first real body
+     * child to logical block-start, then restore Y so this operation cannot eat
+     * publisher top padding or Android's outer safe frame.
+     */
+    private void alignVerticalEpubPageToLogicalStart(@NonNull WebView target,
+                                                      int expectedPage) {
+        if (activityDestroyed || webView != target || currentPage != expectedPage
+                || expectedPage < 0 || expectedPage >= pages.size()
+                || !pages.get(expectedPage).verticalWritingEpubPage) {
+            return;
+        }
+        WebSettings settings = target.getSettings();
+        boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
+        if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
+        String js = "(function(){try{"
+                + "var y=window.scrollY||0;"
+                + "var b=document.body;var first=b&&b.firstElementChild;"
+                + "if(first){try{first.scrollIntoView({block:'start',inline:'nearest',behavior:'auto'});}"
+                + "catch(e){first.scrollIntoView(true);}"
+                + "var x=window.scrollX||0;window.scrollTo(x,y);return true;}"
+                + "window.scrollTo(0,y);return false;"
+                + "}catch(e){return false;}})()";
+        target.evaluateJavascript(js, value -> {
+            restoreDocumentJavaScriptPolicy(target, expectedPage, restoreJavascriptOff);
         });
     }
 
@@ -3389,14 +4490,116 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }
 
         if (isRenderedContentAnchorDocument()) {
-            updateDocumentContentAnchorFromWebView(() -> {
-                addRenderedDocumentBookmarkFromCurrentAnchor();
-                if (afterSave != null) afterSave.run();
-            });
+            final int requestedPage = currentPage;
+            final int requestedGeneration = documentAnchorPageGeneration;
+            captureFreshRenderedDocumentBookmark(
+                    requestedPage,
+                    requestedGeneration,
+                    epubPageUsesVerticalWriting(requestedPage),
+                    1,
+                    afterSave);
             return;
         }
         addRenderedDocumentBookmarkFromCurrentAnchor();
         if (afterSave != null) afterSave.run();
+    }
+
+    private void captureFreshRenderedDocumentBookmark(int requestedPage,
+                                                       int requestedGeneration,
+                                                       boolean requireVerticalSentence,
+                                                       int retriesRemaining,
+                                                       @Nullable Runnable afterSave) {
+        captureFreshRenderedDocumentBookmark(
+                requestedPage,
+                requestedGeneration,
+                requireVerticalSentence,
+                retriesRemaining,
+                null,
+                afterSave);
+    }
+
+    private void captureFreshRenderedDocumentBookmark(int requestedPage,
+                                                       int requestedGeneration,
+                                                       boolean requireVerticalSentence,
+                                                       int retriesRemaining,
+                                                       @Nullable String retainedPositionAnchor,
+                                                       @Nullable Runnable afterSave) {
+        if (activityDestroyed
+                || webView == null
+                || currentPage != requestedPage
+                || documentAnchorPageGeneration != requestedGeneration) {
+            if (afterSave != null) afterSave.run();
+            return;
+        }
+
+        // A bookmark button press must never reuse a scroll callback from an
+        // earlier point in the same spine item. In vertical EPUBs the integer
+        // Bookmark.charPosition remains the spine page index; only this fresh
+        // v2 sentence anchor can identify the visible column and sentence.
+        webView.removeCallbacks(documentContentAnchorUpdateRunnable);
+        lastDocumentContentAnchorJson = "";
+        captureDocumentContentAnchorFromWebView(true, anchorJson -> {
+                if (activityDestroyed
+                        || currentPage != requestedPage
+                        || documentAnchorPageGeneration != requestedGeneration) {
+                    if (afterSave != null) afterSave.run();
+                    return;
+                }
+
+                boolean validVerticalSentence =
+                        isPreciseVerticalSentenceDocumentContentAnchor(anchorJson);
+                String bestPositionAnchor = isVerticalPositionDocumentContentAnchor(anchorJson)
+                        ? anchorJson : retainedPositionAnchor;
+                if (anchorJson != null && !anchorJson.isEmpty()
+                        && (!requireVerticalSentence || validVerticalSentence)) {
+                    lastDocumentContentAnchorJson = anchorJson;
+                    addRenderedDocumentBookmarkFromCurrentAnchor();
+                    if (afterSave != null) afterSave.run();
+                    return;
+                }
+
+                if (requireVerticalSentence && retriesRemaining > 0 && webView != null) {
+                    webView.postDelayed(
+                            () -> captureFreshRenderedDocumentBookmark(
+                                    requestedPage,
+                                     requestedGeneration,
+                                     true,
+                                     retriesRemaining - 1,
+                                     bestPositionAnchor,
+                                     afterSave),
+                            120L);
+                    return;
+                }
+
+                if (requireVerticalSentence
+                        && isVerticalPositionDocumentContentAnchor(bestPositionAnchor)) {
+                    // A precise glyph could not be proven, but the DOM scroll
+                    // coordinates still preserve the current vertical page.
+                    // Keep this explicitly classified as a position fallback so
+                    // it can never masquerade as a sentence anchor.
+                    lastDocumentContentAnchorJson = bestPositionAnchor;
+                    addRenderedDocumentBookmarkFromCurrentAnchor();
+                    if (afterSave != null) afterSave.run();
+                    return;
+                }
+
+                if (!requireVerticalSentence) {
+                    // Horizontal rendered documents can still retain their page
+                    // location when a transient WebView capture is unavailable.
+                    addRenderedDocumentBookmarkFromCurrentAnchor();
+                    if (afterSave != null) afterSave.run();
+                    return;
+                }
+
+                // Do not pretend WebView.getScrollX/Y() is an EPUB position.
+                // Some vertical-rl WebViews keep those values at zero while a
+                // DOM scroller moves horizontally, which produced multiple
+                // bookmarks that all reopened at the same page-start location.
+                // A genuine sentence anchor or signed DOM-position fallback is
+                // required; otherwise report the capture failure honestly.
+                ShortToast.show(this, getString(R.string.file_operation_failed));
+                if (afterSave != null) afterSave.run();
+        });
     }
 
 
@@ -3421,28 +4624,60 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         return String.format(Locale.getDefault(), "Page %d / %d", Math.max(1, page), Math.max(1, total));
     }
 
+    private String documentBookmarkExcerpt(String anchorJson, int page, int total) {
+        if (isVerticalSentenceDocumentContentAnchor(anchorJson)) {
+            try {
+                JSONObject obj = new JSONObject(anchorJson);
+                String preview = DocumentAnchorMath.bookmarkPreview(
+                        obj.optString("columnStartText", ""),
+                        obj.optString("focusText", ""),
+                        obj.optString("text", ""),
+                        obj.optInt("sentenceOffset", 0),
+                        96);
+                if (!preview.isEmpty()) return preview;
+            } catch (Exception ignored) {}
+        }
+        return documentBookmarkPageExcerpt(page, total);
+    }
+
     void addRenderedDocumentBookmarkFromCurrentAnchor() {
         int bookmarkPosition = currentDisplayDocumentPageIndex();
         int bookmarkPageNumber = bookmarkPosition + 1;
         int total = documentPageCount();
         String anchorJson = isRenderedContentAnchorDocument() ? lastDocumentContentAnchorJson : "";
-        String excerpt = documentBookmarkPageExcerpt(bookmarkPageNumber, total);
+        String excerpt = documentBookmarkExcerpt(anchorJson, bookmarkPageNumber, total);
+        String anchorSignature = documentContentAnchorSignature(anchorJson);
+        Bookmark legacyPageOnlyCandidate = null;
+        boolean newVerticalSentenceAnchor =
+                isPreciseVerticalSentenceDocumentContentAnchor(anchorJson);
         for (Bookmark b : bookmarkManager.getBookmarksForFile(filePath)) {
-            if (b.getCharPosition() == bookmarkPosition
-                    && (!isRenderedContentAnchorDocument() || sameDocumentContentAnchorSpot(b, anchorJson, bookmarkPosition))) {
-                b.setLineNumber(bookmarkPageNumber);
-                b.setPageNumber(bookmarkPageNumber);
-                b.setTotalPages(total);
-                b.setExcerpt(excerpt);
-                b.setEndPosition(bookmarkPosition);
-                if (isRenderedContentAnchorDocument()) {
-                    b.setContentAnchorJson(anchorJson);
-                    b.setPageLayoutSignature(docType + "_CONTENT_ANCHOR_v1");
-                }
-                bookmarkManager.updateBookmark(b);
-                ShortToast.show(this, getString(R.string.bookmark_updated));
+            if (b.getCharPosition() != bookmarkPosition) continue;
+            if (!isRenderedContentAnchorDocument()
+                    || sameDocumentContentAnchorSpot(b, anchorJson, bookmarkPosition)) {
+                updateRenderedDocumentBookmark(
+                        b, bookmarkPageNumber, total, bookmarkPosition,
+                        excerpt, anchorJson, anchorSignature);
                 return;
             }
+            if (newVerticalSentenceAnchor
+                    && legacyPageOnlyCandidate == null
+                    && isLegacyPageOnlyRenderedDocumentBookmark(b)) {
+                // Upgrade the old Page N / Position N row in place. Leaving it
+                // beside the new v2 sentence bookmark makes a successful fix
+                // look broken and keeps navigation to the obsolete page start.
+                legacyPageOnlyCandidate = b;
+            }
+        }
+        if (legacyPageOnlyCandidate != null) {
+            updateRenderedDocumentBookmark(
+                    legacyPageOnlyCandidate,
+                    bookmarkPageNumber,
+                    total,
+                    bookmarkPosition,
+                    excerpt,
+                    anchorJson,
+                    anchorSignature);
+            return;
         }
 
         Bookmark bookmark = new Bookmark(filePath, fileName, bookmarkPosition, bookmarkPageNumber, excerpt);
@@ -3451,10 +4686,42 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         bookmark.setEndPosition(bookmarkPosition);
         if (isRenderedContentAnchorDocument()) {
             bookmark.setContentAnchorJson(anchorJson);
-            bookmark.setPageLayoutSignature(docType + "_CONTENT_ANCHOR_v1");
+            bookmark.setPageLayoutSignature(anchorSignature);
         }
         bookmarkManager.addBookmark(bookmark);
         ShortToast.show(this, getString(R.string.bookmark_saved));
+    }
+
+    private boolean isLegacyPageOnlyRenderedDocumentBookmark(@NonNull Bookmark bookmark) {
+        String storedAnchor = bookmark.getContentAnchorJson();
+        if (storedAnchor == null || storedAnchor.trim().isEmpty()) return true;
+        try {
+            JSONObject obj = new JSONObject(storedAnchor);
+            return DocumentAnchorMath.isUpgradeableLegacyVerticalAnchor(
+                    obj.optString("kind", ""), obj.optString("anchorMode", ""));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void updateRenderedDocumentBookmark(@NonNull Bookmark bookmark,
+                                                int pageNumber,
+                                                int totalPages,
+                                                int bookmarkPosition,
+                                                @NonNull String excerpt,
+                                                @NonNull String anchorJson,
+                                                @NonNull String anchorSignature) {
+        bookmark.setLineNumber(pageNumber);
+        bookmark.setPageNumber(pageNumber);
+        bookmark.setTotalPages(totalPages);
+        bookmark.setExcerpt(excerpt);
+        bookmark.setEndPosition(bookmarkPosition);
+        if (isRenderedContentAnchorDocument()) {
+            bookmark.setContentAnchorJson(anchorJson);
+            bookmark.setPageLayoutSignature(anchorSignature);
+        }
+        bookmarkManager.updateBookmark(bookmark);
+        ShortToast.show(this, getString(R.string.bookmark_updated));
     }
 
     void addMarkdownBookmarkFromCachedAnchor() {
@@ -3514,6 +4781,33 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             JSONObject oldObj = new JSONObject(oldAnchorJson);
             JSONObject newObj = new JSONObject(newAnchorJson);
             if (oldObj.optInt("pageIndex", pageIndex) != newObj.optInt("pageIndex", pageIndex)) return false;
+            boolean oldVertical = "visible-sentence".equals(oldObj.optString("anchorMode", ""));
+            boolean newVertical = "visible-sentence".equals(newObj.optString("anchorMode", ""));
+            boolean oldNativeVertical = "vertical-position".equals(
+                    oldObj.optString("anchorMode", ""));
+            boolean newNativeVertical = "vertical-position".equals(
+                    newObj.optString("anchorMode", ""));
+            if (oldNativeVertical || newNativeVertical) {
+                if (!(oldNativeVertical && newNativeVertical)) return false;
+                return DocumentAnchorMath.isSameVerticalPositionSpot(
+                        oldObj.has("scrollX"),
+                        oldObj.optInt("scrollX", 0),
+                        oldObj.optInt("scrollY", 0),
+                        newObj.has("scrollX"),
+                        newObj.optInt("scrollX", 0),
+                        newObj.optInt("scrollY", 0));
+            }
+            if (oldVertical || newVertical) {
+                if (!(oldVertical && newVertical)) return false;
+                String oldId = oldObj.optString("elementId", "").trim();
+                String newId = newObj.optString("elementId", "").trim();
+                int oldBlock = oldObj.optInt("blockIndex", -1);
+                int newBlock = newObj.optInt("blockIndex", -2);
+                int oldOffset = oldObj.optInt("charOffset", -100000);
+                int newOffset = newObj.optInt("charOffset", 100000);
+                return DocumentAnchorMath.isSameVerticalSentenceSpot(
+                        oldId, newId, oldBlock, newBlock, oldOffset, newOffset);
+            }
             int oldBlock = oldObj.optInt("blockIndex", -100000);
             int newBlock = newObj.optInt("blockIndex", 100000);
             if (oldBlock >= 0 && newBlock >= 0 && Math.abs(oldBlock - newBlock) <= 1) return true;
@@ -3543,6 +4837,41 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     void saveReadingState() {
+        saveReadingStateWithFreshAnchor(1);
+    }
+
+    private void saveReadingStateWithFreshAnchor(int retriesRemaining) {
+        if (filePath == null || prefs == null || !prefs.getAutoSavePosition()) return;
+        if (isRenderedContentAnchorDocument() && webView != null && !activityDestroyed) {
+            // DOM capture is asynchronous. Persist only from its callback so a
+            // horizontal move through vertical-rl columns cannot save the prior
+            // visible sentence. onDestroy falls through to the last cached
+            // capture because its WebView may no longer execute JavaScript.
+            final int requestedPage = currentPage;
+            final int requestedGeneration = documentAnchorPageGeneration;
+            captureDocumentContentAnchorFromWebView(anchorJson -> {
+                if (activityDestroyed) {
+                    // The WebView may no longer execute JavaScript during
+                    // teardown, so retain the last successfully captured state.
+                    saveReadingStateFromCachedAnchor();
+                } else if (currentPage == requestedPage
+                        && documentAnchorPageGeneration == requestedGeneration) {
+                    // A failed fresh capture must not persist an earlier glyph
+                    // from another horizontal column on the same spine page.
+                    lastDocumentContentAnchorJson = anchorJson != null ? anchorJson : "";
+                    saveReadingStateFromCachedAnchor();
+                } else if (retriesRemaining > 0) {
+                    saveReadingStateWithFreshAnchor(retriesRemaining - 1);
+                } else {
+                    saveReadingStateFromCachedAnchor();
+                }
+            });
+            return;
+        }
+        saveReadingStateFromCachedAnchor();
+    }
+
+    private void saveReadingStateFromCachedAnchor() {
         if (filePath == null || prefs == null || !prefs.getAutoSavePosition()) return;
         ReaderState state = new ReaderState(filePath);
         if (isMarkdownDocument()) {
@@ -3561,14 +4890,13 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                     documentPageCount()));
             state.setEncoding("Markdown_SOURCE_ANCHOR_v1");
         } else {
-            if (isRenderedContentAnchorDocument()) updateDocumentContentAnchorFromWebView();
             state.setCharPosition(currentPage);
             state.setScrollY(0);
             state.setPageNumber(currentPage + 1);
             state.setTotalPages(pages.size());
             if (isRenderedContentAnchorDocument() && lastDocumentContentAnchorJson != null && !lastDocumentContentAnchorJson.isEmpty()) {
                 state.setContentAnchorJson(lastDocumentContentAnchorJson);
-                state.setEncoding(docType + "_CONTENT_ANCHOR_v1");
+                state.setEncoding(documentContentAnchorSignature(lastDocumentContentAnchorJson));
             } else {
                 state.setEncoding(docType + "_PAGE");
             }
@@ -3590,23 +4918,88 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     void loadEpubPages(File file) throws Exception {
         closeResourceZip();
         resourceZip = new ZipFile(file);
+        epubPackageResources = DocumentArchiveUtils.findEpubPackageResources(resourceZip);
+        epubArchiveEntries.clear();
+        epubArchiveEntries.addAll(epubArchiveEntryPaths());
         epubFixedLayoutLike = detectEpubFixedLayoutLike(resourceZip);
         epubHasDocumentFont = detectEpubDeclaredFont(resourceZip);
-        List<String> spine = findEpubSpinePaths(resourceZip);
-        if (spine.isEmpty()) spine = findEpubHtmlEntries(resourceZip);
+        epubVerticalWritingLike = DocumentArchiveUtils.detectEpubVerticalWritingLike(resourceZip);
+        List<DocumentArchiveUtils.EpubSpineItem> spine =
+                DocumentArchiveUtils.findEpubSpineItems(resourceZip);
+        if (spine.isEmpty()) {
+            spine = new ArrayList<>();
+            for (String path : findEpubHtmlEntries(resourceZip)) {
+                spine.add(new DocumentArchiveUtils.EpubSpineItem(
+                        path, mimeForPath(path), "", ""));
+            }
+        }
 
         ArrayList<String> paths = new ArrayList<>();
         ArrayList<String> titles = new ArrayList<>();
         ArrayList<String> rawHtmlPages = new ArrayList<>();
-        for (String path : spine) {
+        ArrayList<Boolean> fixedLayoutPages = new ArrayList<>();
+        ArrayList<DocumentArchiveUtils.EpubSpineItem> loadedItems = new ArrayList<>();
+        ArrayList<EpubSmilParser.Timeline> mediaOverlayTimelines = new ArrayList<>();
+        ArrayList<Boolean> scriptedPages = new ArrayList<>();
+        Map<String, String> bindingHandlers = epubBindingHandlerPaths();
+        Set<String> archiveEntries = epubArchiveEntries;
+        for (DocumentArchiveUtils.EpubSpineItem item : spine) {
+            if (item == null) continue;
+            String path = item.path;
             ZipEntry entry = resourceZip.getEntry(path);
             if (entry == null || entry.isDirectory()) continue;
-            String html = readZipEntryString(resourceZip, entry);
+            boolean pageFixedLayout = item.isImage()
+                    || item.isFixedLayoutOverride()
+                    || (epubFixedLayoutLike && !item.isReflowableOverride());
+            String html;
+            if (item.isImage()) {
+                int[] dimensions = readEpubImageDimensions(entry, item.mediaType);
+                html = DocumentArchiveUtils.buildDirectImageSpineHtml(
+                        path, dimensions[0], dimensions[1]);
+            } else {
+                html = readZipEntryString(resourceZip, entry);
+                html = EpubBindingRewriter.normalizeXhtmlCdataForHtmlParser(html);
+            }
+            EpubBindingRewriter.RewriteResult bindingRewrite =
+                    EpubBindingRewriter.rewriteBoundObjects(
+                            html,
+                            path,
+                            bindingHandlers,
+                            "https://" + localDocumentHost,
+                            archiveEntries);
+            if (bindingRewrite.requiresJavaScript() && !item.isScripted()) {
+                // A binding iframe requires WebView JavaScript, but that must
+                // not activate publisher scripts/event handlers in a parent
+                // spine item which the OPF did not declare as scripted.
+                html = EpubBindingRewriter.sanitizeNonScriptedParent(html);
+                bindingRewrite = EpubBindingRewriter.rewriteBoundObjects(
+                        html,
+                        path,
+                        bindingHandlers,
+                        "https://" + localDocumentHost,
+                        archiveEntries);
+            }
+            html = bindingRewrite.html;
+            epubBindingPayloadPaths.addAll(bindingRewrite.payloadPaths);
             String title = titleFromHtml(html);
             if (title.isEmpty()) title = fileNameFromPath(path);
             paths.add(path);
             titles.add(title);
             rawHtmlPages.add(html);
+            fixedLayoutPages.add(pageFixedLayout);
+            loadedItems.add(item);
+            scriptedPages.add(item.isScripted() || bindingRewrite.requiresJavaScript());
+            EpubSmilParser.Timeline timeline = null;
+            if (item.hasMediaOverlay()) {
+                try {
+                    EpubSmilParser.Timeline parsed = EpubSmilParser.parse(
+                            resourceZip, item.mediaOverlayPath);
+                    if (parsed != null && !parsed.isEmpty()) timeline = parsed;
+                } catch (IOException ignored) {
+                    // A broken optional overlay must not make the EPUB unreadable.
+                }
+            }
+            mediaOverlayTimelines.add(timeline);
         }
 
         epubImagePageLike = DocumentArchiveUtils.detectEpubImagePageLike(
@@ -3615,17 +5008,80 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             String html = rawHtmlPages.get(i);
             String title = titles.get(i);
             String path = paths.get(i);
-            boolean centerAsCover = !epubFixedLayoutLike && !epubImagePageLike
+            boolean pageFixedLayout = fixedLayoutPages.get(i);
+            DocumentArchiveUtils.EpubSpineItem item = loadedItems.get(i);
+            boolean imageDominantPage = EpubImagePageClassifier.isImageDominantPage(
+                    html, pageFixedLayout);
+            boolean centerAsCover = !pageFixedLayout && !epubImagePageLike
+                    && !epubVerticalWritingLike
                     && isEpubCoverLikePage(html, title, path, i);
             String prepared;
-            if (epubFixedLayoutLike) {
+            if (pageFixedLayout) {
                 prepared = html;
-            } else if (epubImagePageLike) {
+            } else if (epubImagePageLike && imageDominantPage) {
                 prepared = prepareImagePageEpubHtml(html);
             } else {
                 prepared = prepareEpubHtml(html, centerAsCover);
             }
-            pages.add(new Page(title, prepared, path));
+            pages.add(new Page(
+                    title,
+                    prepared,
+                    path,
+                    imageDominantPage,
+                    pageFixedLayout,
+                    epubVerticalWritingLike && !imageDominantPage,
+                    scriptedPages.get(i),
+                    item.manifestId,
+                    item.itemRefId,
+                    item.spineIndex,
+                    mediaOverlayTimelines.get(i)));
+        }
+    }
+
+    private Map<String, String> epubBindingHandlerPaths() {
+        Map<String, String> handlers = new LinkedHashMap<>();
+        if (epubPackageResources == null) return handlers;
+        for (Map.Entry<String, DocumentArchiveUtils.EpubBinding> entry
+                : epubPackageResources.bindingsByMediaType.entrySet()) {
+            DocumentArchiveUtils.EpubBinding binding = entry.getValue();
+            if (binding != null && !binding.handlerPath.isEmpty()) {
+                handlers.put(entry.getKey(), binding.handlerPath);
+            }
+        }
+        return handlers;
+    }
+
+    private Set<String> epubArchiveEntryPaths() {
+        if (!epubArchiveEntries.isEmpty()) return epubArchiveEntries;
+        Set<String> result = new HashSet<>();
+        if (resourceZip == null) return result;
+        Enumeration<? extends ZipEntry> entries = resourceZip.entries();
+        while (entries.hasMoreElements()) {
+            ZipEntry entry = entries.nextElement();
+            if (entry != null && !entry.isDirectory()) {
+                result.add(normalizeZipPath(entry.getName()));
+            }
+        }
+        return result;
+    }
+
+    private int[] readEpubImageDimensions(@NonNull ZipEntry entry,
+                                           @Nullable String mediaType) {
+        if (resourceZip == null) return new int[]{0, 0};
+        String mime = mediaType != null ? mediaType.toLowerCase(Locale.ROOT) : "";
+        try {
+            if (mime.contains("svg") || entry.getName().toLowerCase(Locale.ROOT).endsWith(".svg")) {
+                String svg = readZipEntryString(resourceZip, entry);
+                return extractSvgViewBoxSize(svg);
+            }
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inJustDecodeBounds = true;
+            try (InputStream input = resourceZip.getInputStream(entry)) {
+                BitmapFactory.decodeStream(input, null, options);
+            }
+            return new int[]{Math.max(0, options.outWidth), Math.max(0, options.outHeight)};
+        } catch (Throwable ignored) {
+            return new int[]{0, 0};
         }
     }
 
@@ -3720,7 +5176,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     private boolean tryLoadWordRenderedPages(File file) {
         try {
             RenderedDocument rendered = DocumentDocxLayoutExtractor.extract(
-                    resourceZip, file != null ? file.getName() : fileName, LOCAL_HOST, WORD_PARAGRAPHS_PER_PAGE);
+                    resourceZip, file != null ? file.getName() : fileName,
+                    localDocumentHost, WORD_PARAGRAPHS_PER_PAGE);
             if (rendered == null || rendered.pages.isEmpty()) return false;
             for (RenderedPage page : rendered.pages) {
                 RenderedDocument singlePage = RenderedDocument.builder("docx")
@@ -3832,25 +5289,32 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         return Math.round(dp * getResources().getDisplayMetrics().density);
     }
 
-    // Serves only readwide.local resources, and only entries that exist INSIDE the
+    // Serves only this publication's per-open synthetic host, and only entries
+    // that exist INSIDE the
     // current document archive resourceZip or the user-selected font -- never an
     // arbitrary filesystem path. getEntry and getInputStream read from the in-memory
     // zip, so a crafted ../ path in document HTML cannot escape to the filesystem;
     // together with disabled file access this leaves no local-file read surface.
     WebResourceResponse interceptLocalResource(Uri uri) {
         if (uri == null) return null;
-        if (!LOCAL_HOST.equalsIgnoreCase(uri.getHost())) {
-            return new WebResourceResponse("text/plain", "UTF-8",
-                    new ByteArrayInputStream(new byte[0]));
+        String scheme = uri.getScheme();
+        if ("data".equalsIgnoreCase(scheme) || "blob".equalsIgnoreCase(scheme)
+                || "about".equalsIgnoreCase(scheme)) {
+            return null;
+        }
+        if (!"https".equalsIgnoreCase(scheme)
+                || !localDocumentHost.equalsIgnoreCase(uri.getHost())) {
+            return blockedDocumentResource(403, "Forbidden");
         }
         String path = uri.getPath();
-        if (path == null) return null;
+        if (path == null) return blockedDocumentResource(404, "Not Found");
 
         if (path.startsWith(FONT_PREFIX)) {
-            return interceptSelectedDocumentFont();
+            WebResourceResponse font = interceptSelectedDocumentFont();
+            return font != null ? font : blockedDocumentResource(404, "Not Found");
         }
 
-        if (resourceZip == null) return null;
+        if (resourceZip == null) return blockedDocumentResource(404, "Not Found");
 
         String zipPath;
         if (path.startsWith(EPUB_PREFIX)) {
@@ -3858,37 +5322,150 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         } else if (path.startsWith(WORD_PREFIX)) {
             zipPath = path.substring(1);
         } else {
-            return null;
+            return blockedDocumentResource(404, "Not Found");
         }
 
         zipPath = UriPathCodec.decodePercentEscapes(zipPath);
+        if (hasArchiveParentTraversal(zipPath)) {
+            return blockedDocumentResource(403, "Forbidden");
+        }
         zipPath = normalizeZipPath(zipPath);
 
         ZipEntry entry = resourceZip.getEntry(zipPath);
-        if (entry == null || entry.isDirectory()) return null;
+        if (entry == null || entry.isDirectory()) {
+            return blockedDocumentResource(404, "Not Found");
+        }
         try {
             byte[] data;
             try (InputStream is = resourceZip.getInputStream(entry)) {
                 data = readAllBytes(is);
             }
-            return new WebResourceResponse(
-                    mimeForPath(zipPath),
-                    "UTF-8",
-                    new ByteArrayInputStream(data));
+            boolean epubResource = path.startsWith(EPUB_PREFIX);
+            String mime = epubResource && epubPackageResources != null
+                    ? epubPackageResources.mediaTypeForPath(zipPath)
+                    : mimeForPath(zipPath);
+            String encoding = null;
+            if ("text/css".equals(mime)) {
+                String css = DocumentTextDecoder.decode(data);
+                data = EpubCssCompatibility.addWebViewAliases(css)
+                        .getBytes(StandardCharsets.UTF_8);
+                encoding = "UTF-8";
+            } else if (epubResource && isEpubBindingHandlerPath(zipPath)
+                    && ("application/xhtml+xml".equals(mime)
+                    || "text/html".equals(mime))) {
+                String handlerHtml = DocumentTextDecoder.decode(data);
+                data = injectIntoHtmlHeadStart(
+                                handlerHtml,
+                                "<script>" + epubReadingSystemJavascript() + "</script>")
+                        .getBytes(StandardCharsets.UTF_8);
+                encoding = "UTF-8";
+            } else if (epubResource
+                    && epubPackageResources != null
+                    && epubPackageResources.hasBindings()
+                    && epubBindingPayloadPaths.contains(zipPath)) {
+                String xml = DocumentTextDecoder.decode(data);
+                data = EpubBindingRewriter.rewriteXmlResourceUris(
+                                xml,
+                                zipPath,
+                                "https://" + localDocumentHost,
+                                epubArchiveEntryPaths())
+                        .getBytes(StandardCharsets.UTF_8);
+                // Binding handlers consume these through XMLHttpRequest.responseXML;
+                // the foreign object media type itself is not necessarily +xml.
+                mime = "application/xml";
+                encoding = "UTF-8";
+            } else if (mime.startsWith("text/")
+                    || "image/svg+xml".equals(mime)
+                    || "application/xhtml+xml".equals(mime)
+                    || "application/javascript".equals(mime)
+                    || "application/json".equals(mime)
+                    || "application/xml".equals(mime)
+                    || mime.endsWith("+xml")) {
+                encoding = "UTF-8";
+            }
+            if (epubResource) {
+                Map<String, String> headers = new LinkedHashMap<>();
+                // Binding handlers run in an opaque sandbox. CORS is therefore
+                // needed for their explicitly local XHR payloads; no external
+                // host or filesystem path is exposed by this interceptor.
+                headers.put("Access-Control-Allow-Origin", "*");
+                headers.put("Cache-Control", "no-store");
+                return new WebResourceResponse(
+                        mime, encoding, 200, "OK", headers,
+                        new ByteArrayInputStream(data));
+            }
+            return new WebResourceResponse(mime, encoding, new ByteArrayInputStream(data));
         } catch (IOException e) {
-            return null;
+            return blockedDocumentResource(404, "Not Found");
         }
+    }
+
+    private WebResourceResponse blockedDocumentResource(int status, @NonNull String reason) {
+        return new WebResourceResponse(
+                "text/plain",
+                "UTF-8",
+                status,
+                reason,
+                java.util.Collections.singletonMap("Cache-Control", "no-store"),
+                new ByteArrayInputStream(new byte[0]));
+    }
+
+    private boolean hasArchiveParentTraversal(@Nullable String path) {
+        if (path == null) return true;
+        for (String segment : path.replace('\\', '/').split("/")) {
+            if ("..".equals(segment)) return true;
+        }
+        return false;
+    }
+
+    private boolean isEpubBindingHandlerPath(@Nullable String path) {
+        if (path == null || epubPackageResources == null) return false;
+        String wanted = normalizeZipPath(path);
+        for (DocumentArchiveUtils.EpubBinding binding
+                : epubPackageResources.bindingsByMediaType.values()) {
+            if (binding != null
+                    && wanted.equals(normalizeZipPath(binding.handlerPath))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     boolean handleEpubInternalNavigation(@NonNull WebView sourceView, Uri uri) {
         if (uri == null || !"EPUB".equals(docType) || pages == null || pages.isEmpty()) return false;
-        if (!LOCAL_HOST.equalsIgnoreCase(uri.getHost())) return false;
+        if ("about".equalsIgnoreCase(uri.getScheme())
+                && "blank".equalsIgnoreCase(uri.getSchemeSpecificPart())) {
+            return false;
+        }
+        // Scripted EPUB support remains archive-local. A publisher script or
+        // link cannot navigate this reader WebView to a remote/network origin.
+        if (!localDocumentHost.equalsIgnoreCase(uri.getHost())) return true;
         String path = uri.getPath();
-        if (path == null || !path.startsWith(EPUB_PREFIX)) return false;
+        if (path == null || !path.startsWith(EPUB_PREFIX)) return true;
 
         String zipPath = path.substring(EPUB_PREFIX.length());
         zipPath = UriPathCodec.decodePercentEscapes(zipPath);
         zipPath = normalizeZipPath(zipPath);
+        String fragment = uri.getFragment();
+        if (fragment != null && fragment.trim().startsWith("epubcfi(")) {
+            int sourcePageIndex = sourceView == rightWebView
+                    ? documentRightSpreadPageIndex() : currentPage;
+            String sourceParent = "";
+            if (sourcePageIndex >= 0 && sourcePageIndex < pages.size()) {
+                Page sourcePage = pages.get(sourcePageIndex);
+                sourceParent = sourcePage == null || sourcePage.sourcePath == null
+                        ? "" : normalizeZipPath(parentPath(sourcePage.sourcePath));
+            }
+            String packagePath = epubPackageResources != null
+                    ? normalizeZipPath(epubPackageResources.packagePath) : "";
+            // A CFI's package component addresses the selected OPF. Permit a
+            // literal fragment-only link resolved against the current chapter's
+            // base directory, or an explicit link to that selected OPF; reject
+            // arbitrary other archive paths rather than applying the CFI to the
+            // wrong package/spine.
+            if (!zipPath.equals(sourceParent) && !zipPath.equals(packagePath)) return true;
+            return handleEpubCfiNavigation(sourceView, fragment);
+        }
 
         // loadDataWithBaseURL uses the chapter's parent directory as its base.
         // Therefore a literal href="#note" reaches shouldOverrideUrlLoading as
@@ -3906,7 +5483,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 return true;
             }
         }
-        if (zipPath.isEmpty()) return false;
+        if (zipPath.isEmpty()) return true;
 
         for (int i = 0; i < pages.size(); i++) {
             Page page = pages.get(i);
@@ -3927,10 +5504,20 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 return true;
             }
         }
-        return false;
+        // Do not let auxiliary or handler XHTML replace the primary reader
+        // document. Recognized spine navigation has already returned above.
+        return true;
     }
 
     void applyPendingEpubAnchorAfterPageLoad(@NonNull WebView loadedView) {
+        if ("EPUB".equals(docType)
+                && pendingEpubAnchorPage == currentPage
+                && pendingEpubCfi != null) {
+            EpubCfi cfi = pendingEpubCfi;
+            clearPendingEpubAnchor();
+            scrollEpubCfi(loadedView, currentPage, cfi);
+            return;
+        }
         if (!"EPUB".equals(docType)
                 || pendingEpubAnchorPage != currentPage
                 || pendingEpubAnchorFragment.isEmpty()) {
@@ -3945,56 +5532,197 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     private void scrollEpubAnchor(@NonNull WebView targetView, @Nullable String fragment) {
         if (fragment == null || fragment.isEmpty()) return;
         String quoted = JSONObject.quote(fragment);
-        targetView.evaluateJavascript(
+        evaluateEpubJavascript(
+                targetView,
+                documentPageIndexForWebView(targetView),
                 "(function(){var k=" + quoted
                         + ";var e=document.getElementById(k);"
                         + "if(!e){var n=document.getElementsByName(k);if(n.length)e=n[0];}"
-                        + "if(e){e.scrollIntoView(true);return true;}return false;})()",
-                null);
+                        + "if(e){e.scrollIntoView(true);return true;}return false;})()");
+    }
+
+    private boolean handleEpubCfiNavigation(@NonNull WebView sourceView,
+                                            @NonNull String rawCfi) {
+        EpubCfi cfi = EpubCfi.parse(rawCfi);
+        if (cfi == null) return true; // scoped unsupported forms stay inside the book
+        int targetPage = findEpubPageForCfi(cfi);
+        if (targetPage < 0) return true;
+
+        if (targetPage == currentPage) {
+            scrollEpubCfi(webView != null ? webView : sourceView, targetPage, cfi);
+            return true;
+        }
+        int rightPage = documentRightSpreadPageIndex();
+        if (targetPage == rightPage && rightWebView != null) {
+            scrollEpubCfi(rightWebView, targetPage, cfi);
+            return true;
+        }
+        pendingEpubAnchorPage = targetPage;
+        pendingEpubAnchorFragment = "";
+        pendingEpubCfi = cfi;
+        showPage(targetPage, Integer.compare(targetPage, currentPage));
+        return true;
+    }
+
+    private int findEpubPageForCfi(@NonNull EpubCfi cfi) {
+        String assertedItemRef = cfi.itemRefIdAssertion();
+        if (!assertedItemRef.isEmpty()) {
+            for (int i = 0; i < pages.size(); i++) {
+                Page page = pages.get(i);
+                if (page != null && assertedItemRef.equals(page.itemRefId)) return i;
+            }
+        }
+        int spineIndex = cfi.spineItemIndex();
+        for (int i = 0; i < pages.size(); i++) {
+            Page page = pages.get(i);
+            if (page != null && page.spineIndex == spineIndex) return i;
+        }
+        return -1;
+    }
+
+    private void scrollEpubCfi(@NonNull WebView targetView,
+                               int targetPage,
+                               @NonNull EpubCfi cfi) {
+        WebSettings settings = targetView.getSettings();
+        boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
+        if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
+        targetView.evaluateJavascript(
+                EpubCfiJavascript.installAndScrollExpression(cfi),
+                value -> restoreDocumentJavaScriptPolicy(
+                        targetView, targetPage, restoreJavascriptOff));
     }
 
     private void clearPendingEpubAnchor() {
         pendingEpubAnchorPage = -1;
         pendingEpubAnchorFragment = "";
+        pendingEpubCfi = null;
     }
 
     String prepareFixedLayoutEpubHtml(String html) {
+        return prepareFixedLayoutEpubHtml(
+                html,
+                EpubImagePageClassifier.isImageDominantPage(html, true),
+                EpubSpreadSlotMath.CENTER);
+    }
+
+    private String prepareFixedLayoutEpubHtml(String html,
+                                               boolean imageDominantPage,
+                                               int physicalSpreadSlot) {
         if (html == null) html = "";
+        int spreadSlot = imageDominantPage ? physicalSpreadSlot : EpubSpreadSlotMath.CENTER;
+        float halfGap = EPUB_SPREAD_GAP_CSS_PX / 2f;
         int[] viewport = extractFixedLayoutViewportSize(html);
         if (viewport[0] <= 0 || viewport[1] <= 0) {
             viewport = extractSvgViewBoxSize(html);
         }
         String css;
         if (viewport[0] > 0 && viewport[1] > 0) {
+            String bodySizeAndOverflow = imageDominantPage
+                    ? "height:" + viewport[1] + "px !important;"
+                    + "min-height:" + viewport[1] + "px !important;"
+                    + "overflow:hidden !important;"
+                    : "height:auto !important;min-height:" + viewport[1]
+                    + "px !important;overflow:visible !important;";
+            String mediaCanvasCss = imageDominantPage
+                    ? "body>:only-child:not(img):not(svg):not(canvas):not(video):not(object):not(embed){"
+                    + "width:100% !important;height:100% !important;max-width:100% !important;max-height:100% !important;}"
+                    + "body img,body svg,body canvas,body video,body object,body embed{"
+                    + "max-width:100% !important;object-fit:contain !important;}"
+                    : "body>div:only-child,body>svg:only-child{width:100% !important;height:100% !important;}"
+                    + "body img,body svg{max-width:100% !important;max-height:100% !important;}";
             css = "<style id=\"textview-fixed-layout-center\">"
                     + "html{margin:0 !important;padding:0 !important;width:100vw !important;min-height:100vh !important;"
                     + "background-color:" + cssColor(readerBg) + " !important;overflow:auto !important;}"
                     + "body{margin:0 !important;padding:0 !important;width:" + viewport[0] + "px !important;"
-                    + "height:auto !important;min-width:" + viewport[0] + "px !important;"
-                    + "min-height:" + viewport[1] + "px !important;position:absolute !important;left:0;top:0;"
-                    + "transform-origin:0 0 !important;background:transparent !important;overflow:visible !important;}"
-                    + "body>div:only-child,body>svg:only-child{width:100% !important;height:100% !important;}"
-                    + "body img,body svg{max-width:100% !important;max-height:100% !important;}"
+                    + "min-width:" + viewport[0] + "px !important;" + bodySizeAndOverflow
+                    + "position:absolute !important;left:0;top:0;"
+                    + "transform-origin:0 0 !important;background-color:transparent !important;}"
+                    + mediaCanvasCss
                     + "</style>"
                     + "<script id=\"textview-fixed-layout-fit\">"
-                    + "(function(){var W=" + viewport[0] + ",H=" + viewport[1] + ";"
+                    + "(function(){var W=" + viewport[0] + ",H=" + viewport[1]
+                    + ",IMAGE_PAGE=" + (imageDominantPage ? "true" : "false")
+                    + ",SLOT=" + spreadSlot + ",HALF_GAP="
+                    + String.format(Locale.US, "%.2f", halfGap) + ";"
                     + "function fit(){try{var vw=Math.max(1,window.innerWidth||document.documentElement.clientWidth||W);"
                     + "var vh=Math.max(1,window.innerHeight||document.documentElement.clientHeight||H);"
-                    + "var naturalH=Math.max(H,document.body.scrollHeight||0);"
-                    + "var landscape=W>H*1.2;"
-                    + "var safe=landscape?Math.min(36,Math.max(18,Math.round(vw*0.025))):0;"
-                    + "var fitW=Math.max(1,vw-(safe*2));"
-                    + "var s=Math.min(fitW/W,vh/H);if(!isFinite(s)||s<=0)s=1;"
+                    + "if(IMAGE_PAGE){document.body.style.transform='none';document.body.style.left='0px';"
+                    + "document.body.style.top='0px';document.body.style.setProperty('height',H+'px','important');"
+                    + "document.body.style.setProperty('min-height',H+'px','important');}"
+                    + "function mediaH(){var max=H,b=document.body.getBoundingClientRect();"
+                    + "var nodes=document.querySelectorAll('img,svg,canvas,video,object,embed');"
+                    + "for(var i=0;i<nodes.length;i++){var c=getComputedStyle(nodes[i]);"
+                    + "if(c.display==='none'||c.visibility==='hidden'||parseFloat(c.opacity||'1')===0)continue;"
+                    + "var r=nodes[i].getBoundingClientRect();"
+                    + "if(r.width>0&&r.height>0)max=Math.max(max,r.bottom-b.top);}"
+                    + "return Math.max(H,max);}"
+                    + "var naturalH=IMAGE_PAGE?mediaH():Math.max(H,document.body.scrollHeight||0);"
+                    + "var landscape=W>H*1.2,inSpread=IMAGE_PAGE&&SLOT!==0;"
+                    + "var safe=inSpread?0:(landscape?Math.min(36,Math.max(18,Math.round(vw*0.025))):0);"
+                    + "var fitW=Math.max(1,vw-(inSpread?HALF_GAP:(safe*2)));"
+                    + "var fitH=IMAGE_PAGE?naturalH:H;"
+                    + "var s=Math.min(fitW/W,vh/fitH);if(!isFinite(s)||s<=0)s=1;"
                     + "var scaledH=naturalH*s;"
-                    + "var l=Math.max(safe,(vw-W*s)/2),t=Math.max(0,(vh-Math.min(H*s,scaledH))/2);"
-                    + "document.documentElement.style.width=vw+'px';document.documentElement.style.height=Math.max(vh,scaledH+t)+'px';"
-                    + "document.body.style.width=W+'px';document.body.style.minHeight=naturalH+'px';"
+                    + "var slack=Math.max(0,vw-W*s);"
+                    + "var l=SLOT<0?Math.max(0,slack-HALF_GAP):(SLOT>0?Math.min(slack,HALF_GAP):Math.max(safe,slack/2));"
+                    + "var t=Math.max(0,(vh-Math.min(fitH*s,scaledH))/2);"
+                    + "document.documentElement.style.width=vw+'px';"
+                    + "document.documentElement.style.height=(IMAGE_PAGE?vh:Math.max(vh,scaledH+t))+'px';"
+                    + "document.body.style.width=W+'px';"
+                    + "if(IMAGE_PAGE){document.body.style.setProperty('height',naturalH+'px','important');"
+                    + "document.body.style.setProperty('min-height',naturalH+'px','important');"
+                    + "document.body.style.setProperty('overflow','hidden','important');}"
+                    + "else{document.body.style.minHeight=naturalH+'px';}"
                     + "document.body.style.left=l+'px';document.body.style.top=t+'px';"
                     + "document.body.style.transform='scale('+s+')';}catch(e){}}"
+                    + "function arm(){var media=document.querySelectorAll('img,video,object,embed');"
+                    + "for(var i=0;i<media.length;i++){if(media[i].getAttribute('data-rw-fixed-fit')==='1')continue;"
+                    + "media[i].setAttribute('data-rw-fixed-fit','1');media[i].addEventListener('load',fit);}}"
                     + "window.addEventListener('resize',fit);window.addEventListener('orientationchange',function(){setTimeout(fit,60);});"
-                    + "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',fit);else fit();"
+                    + "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){arm();fit();});"
+                    + "else{arm();fit();}"
                     + "setTimeout(fit,0);setTimeout(fit,180);})();"
                     + "</script>";
+        } else if (imageDominantPage) {
+            // A few pre-paginated/image EPUBs omit both a viewport meta and an
+            // SVG viewBox. Give only those near-image-only pages a definite
+            // viewport canvas. The root remains scrollable for WebView zoom/pan,
+            // while publisher wrapper heights cannot create a multi-screen blank
+            // tail. Mixed/text pages continue through the natural-scroll branch.
+            String spreadJustify = spreadSlot == EpubSpreadSlotMath.PHYSICAL_LEFT
+                    ? "flex-end" : spreadSlot == EpubSpreadSlotMath.PHYSICAL_RIGHT
+                    ? "flex-start" : "center";
+            String spreadPadding = spreadSlot == EpubSpreadSlotMath.PHYSICAL_LEFT
+                    ? "padding-right:" + halfGap + "px !important;"
+                    : spreadSlot == EpubSpreadSlotMath.PHYSICAL_RIGHT
+                    ? "padding-left:" + halfGap + "px !important;" : "";
+            String spreadBackgroundPosition = spreadSlot == EpubSpreadSlotMath.PHYSICAL_LEFT
+                    ? "right center" : spreadSlot == EpubSpreadSlotMath.PHYSICAL_RIGHT
+                    ? "left center" : "center";
+            css = "<style id=\"textview-fixed-layout-center\">"
+                    + "html{margin:0 !important;padding:0 !important;width:100vw !important;height:100vh !important;"
+                    + "background-color:" + cssColor(readerBg) + " !important;overflow:auto !important;}"
+                    + "body{margin:0 !important;padding:0 !important;" + spreadPadding
+                    + "width:100vw !important;height:100vh !important;"
+                    + "min-height:0 !important;overflow:hidden !important;display:flex !important;"
+                    + "align-items:center !important;justify-content:" + spreadJustify
+                    + " !important;box-sizing:border-box !important;"
+                    + "background-size:contain !important;background-position:"
+                    + spreadBackgroundPosition + " !important;"
+                    + "background-origin:content-box !important;background-clip:content-box !important;"
+                    + "background-repeat:no-repeat !important;}"
+                    + "body>:only-child:not(img):not(svg):not(canvas):not(video):not(object):not(embed){width:100% !important;"
+                    + "height:100% !important;max-width:100% !important;max-height:100% !important;"
+                    + "overflow:hidden !important;display:flex !important;align-items:center !important;"
+                    + "justify-content:" + spreadJustify + " !important;background-size:contain !important;"
+                    + "background-position:" + spreadBackgroundPosition + " !important;"
+                    + "background-origin:content-box !important;background-clip:content-box !important;"
+                    + "background-repeat:no-repeat !important;}"
+                    + "body img,body svg,body canvas,body video,body object,body embed{display:block !important;"
+                    + "margin:0 !important;"
+                    + "max-width:100% !important;max-height:100% !important;width:auto !important;height:auto !important;"
+                    + "object-fit:contain !important;}"
+                    + "</style>";
         } else {
             css = "<style id=\"textview-fixed-layout-center\">"
                     + "html{margin:0 !important;padding:0 !important;width:100vw !important;height:100vh !important;"
@@ -4091,7 +5819,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     void applyFixedLayoutFindOffsetCssIfNeeded() {
-        if (!"EPUB".equals(docType) || !epubFixedLayoutLike || webView == null) return;
+        if (!currentEpubPageIsFixedLayout() || webView == null) return;
         if (activityDestroyed) return;
         if (!fixedLayoutFindOffsetActive) {
             evaluateFixedLayoutCssJavascript(
@@ -4109,6 +5837,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         int bottomMargin = margins[2];
         int minWidth = viewport[0] + (leftRight * 2);
         int minHeight = viewport[1] + topMargin + bottomMargin;
+        String fixedBodyOverflow = page.imageDominantEpubPage ? "hidden" : "visible";
         String css = "html{margin:0 !important;padding:0 !important;width:auto !important;"
                 + "min-width:" + minWidth + "px !important;min-height:" + minHeight + "px !important;"
                 + "background-color:" + cssColor(readerBg) + " !important;overflow:auto !important;}"
@@ -4116,7 +5845,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 + "height:" + viewport[1] + "px !important;min-height:" + viewport[1] + "px !important;"
                 + "margin:" + topMargin + "px " + leftRight + "px " + bottomMargin + "px " + leftRight + "px !important;"
                 + "padding:0 !important;box-sizing:border-box !important;position:relative !important;"
-                + "overflow:visible !important;background:transparent !important;}";
+                + "overflow:" + fixedBodyOverflow + " !important;background-color:transparent !important;}";
         String js = "(function(){var css='" + cssQuote(css) + "';"
                 + "var s=document.getElementById('textview-fixed-layout-find-offset');"
                 + "if(!s){s=document.createElement('style');s.id='textview-fixed-layout-find-offset';"
@@ -4127,15 +5856,13 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     private void evaluateFixedLayoutCssJavascript(String js) {
         if (webView == null || js == null || js.isEmpty()) return;
-        WebSettings settings = webView.getSettings();
+        final WebView target = webView;
+        final int targetPage = currentPage;
+        WebSettings settings = target.getSettings();
         boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
         if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
-        webView.evaluateJavascript(js, value -> {
-            if (!activityDestroyed && webView != null && restoreJavascriptOff
-                    && "EPUB".equals(docType) && epubFixedLayoutLike) {
-                webView.getSettings().setJavaScriptEnabled(false);
-            }
-        });
+        target.evaluateJavascript(js, value ->
+                restoreDocumentJavaScriptPolicy(target, targetPage, restoreJavascriptOff));
     }
 
     private int[] extractFixedLayoutViewportSize(String html) {
@@ -4189,19 +5916,19 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     private String prepareEpubHtml(String html, boolean centerAsCover) {
         if (html == null) html = "";
-        if (epubFixedLayoutLike) {
-            // Preserve the fixed-layout page geometry, but center the fixed page in
-            // the available WebView area instead of leaving it pinned to the top.
-            return prepareFixedLayoutEpubHtml(html);
-        }
         if (centerAsCover) {
             html = addClassToHtmlBody(html, "textview-reader-epub-cover-page");
         }
+        String pageBodyLayoutCss = epubVerticalWritingLike
+                ? "body{line-height:1.55;box-sizing:border-box;"
+                + "min-height:100%;margin:0;background:#121212;color:#e8eaed;}"
+                : "body{line-height:1.55;padding:22px;box-sizing:border-box;"
+                + "width:100%;max-width:980px;margin:0 auto;background:#121212;color:#e8eaed;}"
+                + "@media (orientation:landscape){body{max-width:1120px;}}";
         String css = "<style>" +
-                "html{margin:0;padding:0;background:#121212;color:#e8eaed;}" +
-                "body{line-height:1.55;padding:22px;box-sizing:border-box;" +
-                "width:100%;max-width:980px;margin:0 auto;background:#121212;color:#e8eaed;}" +
-                "@media (orientation:landscape){body{max-width:1120px;}}" +
+                "html{margin:0;padding:0;background:#121212;color:#e8eaed;"
+                + (epubVerticalWritingLike ? "overflow-x:auto;" : "") + "}" +
+                pageBodyLayoutCss +
                 "body.textview-reader-epub-cover-page{min-height:100vh !important;display:flex !important;" +
                 "flex-direction:column !important;align-items:center !important;justify-content:center !important;}" +
                 "body.textview-reader-epub-cover-page>*{max-width:100% !important;}" +
@@ -4385,11 +6112,11 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     private String renderWordParagraph(Node p) {
-        return DocumentWordUtils.renderParagraph(p, wordRelationships, LOCAL_HOST);
+        return DocumentWordUtils.renderParagraph(p, wordRelationships, localDocumentHost);
     }
 
     private String renderWordTable(Node table) {
-        return DocumentWordUtils.renderTable(table, wordRelationships, LOCAL_HOST);
+        return DocumentWordUtils.renderTable(table, wordRelationships, localDocumentHost);
     }
 
     private void loadWordRelationships(ZipFile zip) {

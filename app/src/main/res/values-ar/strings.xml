@@ -323,6 +323,8 @@
     <string name="settings_section_security">الأمان</string>
     <string name="settings_section_theme">السمة</string>
     <string name="show_hidden_files">إظهار الملفات المخفية</string>
+    <string name="show_hidden_files_on">إظهار الملفات المخفية: تشغيل</string>
+    <string name="show_hidden_files_off">إظهار الملفات المخفية: إيقاف</string>
     <string name="show_status_bar">إظهار شريط الحالة أثناء القراءة</string>
     <string name="sort">فرز</string>
     <string name="sort_by">الترتيب حسب</string>
@@ -731,4 +733,19 @@
     <string name="text_alignment">محاذاة النص</string>
     <string name="settings_appearance_title">إعدادات العرض</string>
     <string name="settings_open_view_settings">إعدادات العرض (السمة، الخط، التخطيط)</string>
+    <string name="archive_landscape_two_page_on">عرض الأرشيف بصفحتين أفقيًا: تشغيل</string>
+    <string name="archive_landscape_two_page_off">عرض الأرشيف بصفحتين أفقيًا: إيقاف</string>
+    <string name="file_cover_thumbnails_on">الصور المصغّرة للأغلفة: تشغيل</string>
+    <string name="file_cover_thumbnails_off">الصور المصغّرة للأغلفة: إيقاف</string>
+    <string name="epub_default_font_format">خط EPUB: %1$s</string>
+    <string name="epub_font_book">خط الكتاب</string>
+    <string name="epub_font_system_sans">خط النظام بلا زوائد</string>
+    <string name="epub_font_current_system">خط النظام الحالي</string>
+    <string name="epub_font_korean_sans">خط كوري بلا زوائد</string>
+    <string name="epub_font_korean_serif">خط كوري بزوائد</string>
+    <string name="epub_font_serif">خط بزوائد</string>
+    <string name="epub_font_monospace">خط أحادي المسافة</string>
+    <string name="epub_font_sans_medium">خط بلا زوائد متوسط</string>
+    <string name="epub_font_sans_condensed">خط بلا زوائد مكثف</string>
+    <string name="epub_font_sans_light">خط بلا زوائد خفيف</string>
 </resources>

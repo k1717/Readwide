@@ -323,6 +323,8 @@
     <string name="settings_section_security">Güvenlik</string>
     <string name="settings_section_theme">Tema</string>
     <string name="show_hidden_files">Gizli Dosyaları Göster</string>
+    <string name="show_hidden_files_on">Gizli dosyaları göster: açık</string>
+    <string name="show_hidden_files_off">Gizli dosyaları göster: kapalı</string>
     <string name="show_status_bar">Okurken Durum Çubuğunu Göster</string>
     <string name="sort">Sırala</string>
     <string name="sort_by">Sıralama Ölçütü</string>
@@ -737,4 +739,19 @@ Kurallar: %2$d etkin kural</string>
     <string name="text_alignment">Metin hizalama</string>
     <string name="settings_appearance_title">Görünüm ayarları</string>
     <string name="settings_open_view_settings">Görünüm ayarları (tema, yazı tipi, düzen)</string>
+    <string name="archive_landscape_two_page_on">Yatay arşiv iki sayfa görünümü: açık</string>
+    <string name="archive_landscape_two_page_off">Yatay arşiv iki sayfa görünümü: kapalı</string>
+    <string name="file_cover_thumbnails_on">Kapak küçük resimleri: açık</string>
+    <string name="file_cover_thumbnails_off">Kapak küçük resimleri: kapalı</string>
+    <string name="epub_default_font_format">EPUB yazı tipi: %1$s</string>
+    <string name="epub_font_book">Kitap yazı tipi</string>
+    <string name="epub_font_system_sans">Sistem sans-serif</string>
+    <string name="epub_font_current_system">Geçerli sistem yazı tipi</string>
+    <string name="epub_font_korean_sans">Korece sans-serif</string>
+    <string name="epub_font_korean_serif">Korece serif</string>
+    <string name="epub_font_serif">Serif</string>
+    <string name="epub_font_monospace">Eş aralıklı</string>
+    <string name="epub_font_sans_medium">Orta sans-serif</string>
+    <string name="epub_font_sans_condensed">Dar sans-serif</string>
+    <string name="epub_font_sans_light">İnce sans-serif</string>
 </resources>

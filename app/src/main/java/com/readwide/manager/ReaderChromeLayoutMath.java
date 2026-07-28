@@ -1,35 +1,34 @@
 package com.readwide.manager;
 
-/** Pure layout policy for reserving the measured visible reader toolbar frame. */
+/** Pure layout policy for reserving PDF chrome and system-safe edges. */
 final class ReaderChromeLayoutMath {
     private ReaderChromeLayoutMath() {}
 
     /**
-     * PDF uses an orientation-specific frame which is independent of chrome
-     * visibility: portrait keeps the measured toolbar-ON reserve for the
-     * current system-bar configuration, while
-     * landscape keeps the toolbar-OFF safe strip.
+     * Visible PDF chrome owns its measured app-bar frame. Hidden chrome releases
+     * that frame and keeps only the Android status-bar/display-cutout safe edge.
      */
-    static int pdfTopReserve(boolean landscape,
-                             int fullscreenSafePx,
-                             int cachedPortraitToolbarPx,
-                             int livePortraitToolbarPx,
-                             int portraitFallbackPx) {
-        if (landscape) return Math.max(0, fullscreenSafePx);
-        if (cachedPortraitToolbarPx > 0) return cachedPortraitToolbarPx;
-        if (livePortraitToolbarPx > 0) return livePortraitToolbarPx;
-        return Math.max(0, portraitFallbackPx);
+    static int pdfTopReserve(boolean chromeVisible,
+                             int hiddenSafePx,
+                             int cachedToolbarPx,
+                             int liveToolbarPx,
+                             int visibleFallbackPx) {
+        if (!chromeVisible) return Math.max(0, hiddenSafePx);
+        if (liveToolbarPx > 0) return liveToolbarPx;
+        if (cachedToolbarPx > 0) return cachedToolbarPx;
+        return Math.max(0, visibleFallbackPx);
     }
 
-    /** Landscape chrome overlays the full canvas; portrait keeps its ON reserve. */
-    static int pdfBottomReserve(boolean landscape,
-                                int cachedPortraitToolbarPx,
-                                int livePortraitToolbarPx,
-                                int portraitFallbackPx) {
-        if (landscape) return 0;
-        if (cachedPortraitToolbarPx > 0) return cachedPortraitToolbarPx;
-        if (livePortraitToolbarPx > 0) return livePortraitToolbarPx;
-        return Math.max(0, portraitFallbackPx);
+    /** Hidden chrome keeps only the Android navigation/cutout safe edge. */
+    static int pdfBottomReserve(boolean chromeVisible,
+                                int hiddenSafePx,
+                                int cachedToolbarPx,
+                                int liveToolbarPx,
+                                int visibleFallbackPx) {
+        if (!chromeVisible) return Math.max(0, hiddenSafePx);
+        if (liveToolbarPx > 0) return liveToolbarPx;
+        if (cachedToolbarPx > 0) return cachedToolbarPx;
+        return Math.max(0, visibleFallbackPx);
     }
 
     /**
@@ -43,14 +42,4 @@ final class ReaderChromeLayoutMath {
         return difference <= Math.max(0, tolerancePx) ? cachedPx : 0;
     }
 
-    static int toolbarOnReserve(int cachedExpandedPx,
-                                int liveMeasuredPx,
-                                boolean chromeVisible,
-                                int fallbackPx) {
-        if (chromeVisible && liveMeasuredPx > 0) return liveMeasuredPx;
-        if (cachedExpandedPx > 0) return cachedExpandedPx;
-        if (!chromeVisible && fallbackPx > 0) return fallbackPx;
-        if (liveMeasuredPx > 0) return liveMeasuredPx;
-        return Math.max(0, fallbackPx);
-    }
 }

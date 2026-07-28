@@ -323,6 +323,8 @@
     <string name="settings_section_security">セキュリティ</string>
     <string name="settings_section_theme">テーマ</string>
     <string name="show_hidden_files">隠しファイルを表示</string>
+    <string name="show_hidden_files_on">隠しファイルを表示：オン</string>
+    <string name="show_hidden_files_off">隠しファイルを表示：オフ</string>
     <string name="show_status_bar">読書中にステータスバーを表示</string>
     <string name="sort">並べ替え</string>
     <string name="sort_by">並べ替え</string>
@@ -731,4 +733,19 @@
     <string name="text_alignment">テキストの配置</string>
     <string name="settings_appearance_title">表示設定</string>
     <string name="settings_open_view_settings">表示設定（テーマ、フォント、レイアウト）</string>
+    <string name="archive_landscape_two_page_on">横向きのアーカイブ見開き表示：オン</string>
+    <string name="archive_landscape_two_page_off">横向きのアーカイブ見開き表示：オフ</string>
+    <string name="file_cover_thumbnails_on">表紙サムネイル：オン</string>
+    <string name="file_cover_thumbnails_off">表紙サムネイル：オフ</string>
+    <string name="epub_default_font_format">EPUBフォント：%1$s</string>
+    <string name="epub_font_book">書籍のフォント</string>
+    <string name="epub_font_system_sans">システムゴシック</string>
+    <string name="epub_font_current_system">現在のシステムフォント</string>
+    <string name="epub_font_korean_sans">韓国語ゴシック</string>
+    <string name="epub_font_korean_serif">韓国語明朝</string>
+    <string name="epub_font_serif">明朝体</string>
+    <string name="epub_font_monospace">等幅</string>
+    <string name="epub_font_sans_medium">ゴシック（Medium）</string>
+    <string name="epub_font_sans_condensed">ゴシック（Condensed）</string>
+    <string name="epub_font_sans_light">ゴシック（Light）</string>
 </resources>

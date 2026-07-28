@@ -15,12 +15,13 @@ import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
-import android.widget.Space;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 
 import com.readwide.manager.util.PrefsManager;
+
+import java.util.ArrayList;
 
 /**
  * Owns the small MainActivity popups that are unrelated to file traversal or
@@ -35,13 +36,31 @@ final class MainHomeDialogController {
     }
 
     void showMainOverflowDialog() {
-        if (activity.homeMode || activity.searchMode || activity.mainOverflowButton == null) return;
+        if (activity.searchMode || activity.mainOverflowButton == null) return;
         final boolean dark = activity.prefs == null || activity.prefs.shouldUseDarkColors(activity);
         final int panel = activity.prefs != null ? activity.prefs.getMainPanelColor(activity) : (dark ? Color.rgb(48, 48, 48) : Color.rgb(245, 245, 245));
         final int fg = activity.prefs != null ? activity.prefs.getMainTextColor(activity) : (dark ? Color.rgb(245, 245, 245) : Color.rgb(32, 33, 36));
-        final int line = activity.prefs != null ? activity.prefs.getMainOutlineColor(activity) : (dark ? Color.rgb(92, 92, 92) : Color.rgb(210, 210, 210));
 
-        final int popupWidth = activity.dpToPx(170);
+        boolean showHidden = activity.prefs != null && activity.prefs.getShowHiddenFiles();
+        boolean thumbnails = activity.prefs != null && activity.prefs.getFileThumbnailsEnabled();
+        String newFolderLabel = activity.getString(R.string.new_folder);
+        String hiddenLabel = activity.getString(showHidden
+                ? R.string.show_hidden_files_on
+                : R.string.show_hidden_files_off);
+        String thumbnailLabel = activity.getString(thumbnails
+                ? R.string.file_cover_thumbnails_on
+                : R.string.file_cover_thumbnails_off);
+        final boolean showNewFolder = !activity.homeMode && activity.currentDirectory != null;
+        ArrayList<String> widthLabels = new ArrayList<>();
+        if (showNewFolder) widthLabels.add(newFolderLabel);
+        widthLabels.add(hiddenLabel);
+        widthLabels.add(activity.getString(R.string.show_hidden_files_on));
+        widthLabels.add(activity.getString(R.string.show_hidden_files_off));
+        widthLabels.add(thumbnailLabel);
+        widthLabels.add(activity.getString(R.string.file_cover_thumbnails_on));
+        widthLabels.add(activity.getString(R.string.file_cover_thumbnails_off));
+        final int popupWidth = calculateMainOverflowWidth(
+                widthLabels.toArray(new String[0]));
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(0, activity.dpToPx(3), 0, activity.dpToPx(3));
@@ -64,18 +83,52 @@ final class MainHomeDialogController {
             popup.setElevation(activity.dpToPx(3));
         }
 
-        addMainOverflowPopupRow(box, activity.getString(R.string.new_folder), fg, () -> {
-            popup.dismiss();
-            activity.showNewFolderDialog();
-        });
+        if (showNewFolder) {
+            addMainOverflowPopupRow(box, newFolderLabel, fg, () -> {
+                popup.dismiss();
+                activity.showNewFolderDialog();
+            });
+        }
 
-        final TextView[] hiddenCheckRef = new TextView[1];
-        hiddenCheckRef[0] = addMainOverflowHiddenRow(box, fg, line, () -> {
+        final TextView[] hiddenRow = new TextView[1];
+        hiddenRow[0] = addMainOverflowPopupRow(box, hiddenLabel, fg, () -> {
             boolean newVal = activity.prefs == null || !activity.prefs.getShowHiddenFiles();
             if (activity.prefs != null) activity.prefs.setShowHiddenFiles(newVal);
-            updateHiddenFilesIndicator(hiddenCheckRef[0], line);
-            if (activity.currentDirectory != null) activity.refreshCurrentDirectoryWithoutClearing(activity.currentDirectory);
+            if (hiddenRow[0] != null) {
+                hiddenRow[0].setText(activity.getString(newVal
+                        ? R.string.show_hidden_files_on
+                        : R.string.show_hidden_files_off));
+            }
+            if (activity.homeMode) {
+                activity.loadRecentFiles(true);
+            } else if (activity.currentDirectory != null) {
+                activity.refreshCurrentDirectoryWithoutClearing(activity.currentDirectory);
+            }
         });
+
+        final TextView[] thumbnailRow = new TextView[1];
+        thumbnailRow[0] = addMainOverflowPopupRow(
+                box,
+                thumbnailLabel,
+                fg,
+                () -> {
+                    boolean enabled = activity.prefs == null
+                            || !activity.prefs.getFileThumbnailsEnabled();
+                    if (activity.prefs != null) {
+                        activity.prefs.setFileThumbnailsEnabled(enabled);
+                    }
+                    if (activity.fileAdapter != null) {
+                        activity.fileAdapter.setShowThumbnails(enabled);
+                    }
+                    if (activity.recentAdapter != null) {
+                        activity.recentAdapter.setShowThumbnails(enabled);
+                    }
+                    if (thumbnailRow[0] != null) {
+                        thumbnailRow[0].setText(activity.getString(enabled
+                                ? R.string.file_cover_thumbnails_on
+                                : R.string.file_cover_thumbnails_off));
+                    }
+                });
 
         int xoff = -(popupWidth - activity.mainOverflowButton.getWidth());
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
@@ -85,72 +138,42 @@ final class MainHomeDialogController {
         }
     }
 
-    private TextView addMainOverflowHiddenRow(@NonNull LinearLayout box, int textColor, int outlineColor, @NonNull Runnable action) {
-        LinearLayout row = new LinearLayout(activity);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(activity.dpToPx(12), 0, activity.dpToPx(10), 0);
-        row.setBackgroundColor(Color.TRANSPARENT);
-        row.setClickable(true);
-        row.setOnClickListener(v -> action.run());
-
-        TextView label = new TextView(activity);
-        label.setText(activity.getString(R.string.show_hidden_files));
-        label.setTextColor(textColor);
-        label.setTextSize(15f);
-        label.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        label.setSingleLine(true);
-        label.setIncludeFontPadding(false);
-        // Keep the O/X indicator in the same horizontal slot for English and Korean.
-        // The Korean label is shorter, so a fixed label column prevents the marker
-        // from jumping left while still leaving enough room for "Show hidden files".
-        LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(activity.dpToPx(124), LinearLayout.LayoutParams.MATCH_PARENT);
-        row.addView(label, labelLp);
-
-        TextView indicator = new TextView(activity);
-        indicator.setText("");
-        indicator.setGravity(Gravity.CENTER);
-        indicator.setIncludeFontPadding(false);
-        indicator.setMinWidth(0);
-        indicator.setMinHeight(0);
-        LinearLayout.LayoutParams indicatorLp = new LinearLayout.LayoutParams(activity.dpToPx(14), LinearLayout.LayoutParams.MATCH_PARENT);
-        indicatorLp.setMargins(activity.dpToPx(3), 0, 0, 0);
-        row.addView(indicator, indicatorLp);
-
-        Space tailSpace = new Space(activity);
-        row.addView(tailSpace, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
-
-        updateHiddenFilesIndicator(indicator, outlineColor);
-
-        box.addView(row, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, activity.dpToPx(44)));
-        return indicator;
-    }
-
-    private void updateHiddenFilesIndicator(TextView indicator, int outlineColor) {
-        if (indicator == null) return;
-        boolean showHidden = activity.prefs != null && activity.prefs.getShowHiddenFiles();
-        int inactive = activity.prefs != null ? activity.prefs.getMainSubTextColor(activity) : outlineColor;
-        indicator.setBackgroundColor(Color.TRANSPARENT);
-        indicator.setText(showHidden ? "O" : "X");
-        indicator.setTextColor(inactive);
-        indicator.setTextSize(14f);
-        indicator.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        indicator.setGravity(Gravity.CENTER);
-        indicator.setIncludeFontPadding(false);
-    }
-
     private TextView addMainOverflowPopupRow(@NonNull LinearLayout box, @NonNull String label, int textColor, @NonNull Runnable action) {
         TextView row = new TextView(activity);
         row.setText(label);
         row.setTextColor(textColor);
         row.setTextSize(15f);
         row.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        row.setSingleLine(true);
-        row.setPadding(activity.dpToPx(14), 0, activity.dpToPx(14), 0);
+        row.setSingleLine(false);
+        row.setMinHeight(activity.dpToPx(44));
+        row.setPadding(activity.dpToPx(14), activity.dpToPx(9),
+                activity.dpToPx(14), activity.dpToPx(9));
         row.setBackgroundColor(Color.TRANSPARENT);
-        box.addView(row, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, activity.dpToPx(44)));
+        box.addView(row, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
         row.setOnClickListener(v -> action.run());
         return row;
+    }
+
+    private int calculateMainOverflowWidth(@NonNull String... labels) {
+        TextView probe = new TextView(activity);
+        probe.setTextSize(15f);
+        float widest = 0f;
+        for (String label : labels) {
+            if (label != null) {
+                widest = Math.max(widest, probe.getPaint().measureText(label));
+            }
+        }
+        int contentWidth = activity.findViewById(android.R.id.content) != null
+                ? activity.findViewById(android.R.id.content).getWidth()
+                : 0;
+        if (contentWidth <= 0) {
+            contentWidth = activity.getResources().getDisplayMetrics().widthPixels;
+        }
+        int maxWidth = Math.max(activity.dpToPx(96), contentWidth - activity.dpToPx(24));
+        int desired = (int) Math.ceil(widest) + activity.dpToPx(32);
+        return Math.min(maxWidth, Math.max(activity.dpToPx(168), desired));
     }
 
 

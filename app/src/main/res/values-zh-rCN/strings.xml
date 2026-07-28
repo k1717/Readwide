@@ -323,6 +323,8 @@
     <string name="settings_section_security">安全</string>
     <string name="settings_section_theme">主题</string>
     <string name="show_hidden_files">显示隐藏文件</string>
+    <string name="show_hidden_files_on">显示隐藏文件：开启</string>
+    <string name="show_hidden_files_off">显示隐藏文件：关闭</string>
     <string name="show_status_bar">阅读时显示状态栏</string>
     <string name="sort">排序</string>
     <string name="sort_by">排序方式</string>
@@ -731,4 +733,19 @@
     <string name="text_alignment">文本对齐</string>
     <string name="settings_appearance_title">显示设置</string>
     <string name="settings_open_view_settings">显示设置（主题、字体、布局）</string>
+    <string name="archive_landscape_two_page_on">横屏压缩包双页显示：开启</string>
+    <string name="archive_landscape_two_page_off">横屏压缩包双页显示：关闭</string>
+    <string name="file_cover_thumbnails_on">封面缩略图：开启</string>
+    <string name="file_cover_thumbnails_off">封面缩略图：关闭</string>
+    <string name="epub_default_font_format">EPUB 字体：%1$s</string>
+    <string name="epub_font_book">书籍字体</string>
+    <string name="epub_font_system_sans">系统无衬线</string>
+    <string name="epub_font_current_system">当前系统字体</string>
+    <string name="epub_font_korean_sans">韩文无衬线</string>
+    <string name="epub_font_korean_serif">韩文衬线</string>
+    <string name="epub_font_serif">衬线</string>
+    <string name="epub_font_monospace">等宽</string>
+    <string name="epub_font_sans_medium">中等无衬线</string>
+    <string name="epub_font_sans_condensed">窄体无衬线</string>
+    <string name="epub_font_sans_light">细体无衬线</string>
 </resources>

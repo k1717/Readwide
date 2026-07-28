@@ -151,6 +151,7 @@ final class MainActivityStartupController {
         activity.fileAdapter = new FileAdapter(activity);
         activity.fileAdapter.setListener(activity);
         activity.fileAdapter.setSortMode(activity.prefs.getSortMode());
+        activity.fileAdapter.setShowThumbnails(activity.prefs.getFileThumbnailsEnabled());
         activity.fileRecyclerView.setLayoutManager(new LinearLayoutManager(activity));
         activity.fileRecyclerView.setItemAnimator(null);
         activity.fileRecyclerView.setAdapter(activity.fileAdapter);
@@ -164,6 +165,7 @@ final class MainActivityStartupController {
         activity.recentAdapter.setListener(activity);
         activity.recentAdapter.setSortEnabled(false);
         activity.recentAdapter.setShowReadingProgress(true);
+        activity.recentAdapter.setShowThumbnails(activity.prefs.getFileThumbnailsEnabled());
         activity.recentRecyclerView.setLayoutManager(new LinearLayoutManager(activity));
         activity.recentRecyclerView.setItemAnimator(null);
         activity.recentRecyclerView.setAdapter(activity.recentAdapter);

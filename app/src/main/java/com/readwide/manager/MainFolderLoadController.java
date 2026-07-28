@@ -1,6 +1,7 @@
 package com.readwide.manager;
 
 import android.os.SystemClock;
+import android.util.Log;
 import android.view.View;
 
 import androidx.annotation.NonNull;
@@ -22,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class MainFolderLoadController {
+    private static final String STORAGE_LOG_TAG = "ReadwideStorage";
     private static final int FOLDER_LOAD_INITIAL_PROGRESS_BATCH = 32;
     private static final int FOLDER_LOAD_PROGRESS_BATCH = 192;
     private static final long FOLDER_LOAD_INITIAL_PROGRESS_MIN_INTERVAL_MS = 80L;
@@ -82,21 +84,26 @@ final class MainFolderLoadController {
             FolderLoadProgress progress = new FolderLoadProgress(targetDir, loadGeneration, sortMode, true);
             try {
                 File[] fileArray = targetDir.listFiles();
-                if (fileArray != null) {
-                    for (File f : fileArray) {
-                        if (isCancelled(loadGeneration)) return;
-                        String name = f.getName();
-                        if (!showHidden && name.startsWith(".")) continue;
-                        // isDirectory() is a filesystem stat; call it once per entry
-                        // and reuse it when building the item.
-                        boolean isDir = f.isDirectory();
-                        if (isDir || FileUtils.isVisibleInAllFilesFilter(name)) {
-                            com.readwide.manager.model.FileListItem item =
-                                    com.readwide.manager.model.FileListItem.fromKnownDirectory(f, isDir);
-                            if (isDir) folderItems.add(item);
-                            else fileItems.add(item);
-                            maybePublishFolderLoadProgress(progress, folderItems, fileItems);
-                        }
+                if (fileArray == null) {
+                    Log.w(STORAGE_LOG_TAG, "Directory listing returned null; "
+                            + activity.storageAccessDiagnosticSummary(targetDir));
+                    activity.fileSearchHandler.post(
+                            () -> applyDirectoryAccessDenied(targetDir, sortMode, loadGeneration));
+                    return;
+                }
+                for (File f : fileArray) {
+                    if (isCancelled(loadGeneration)) return;
+                    String name = f.getName();
+                    if (!showHidden && name.startsWith(".")) continue;
+                    // isDirectory() is a filesystem stat; call it once per entry
+                    // and reuse it when building the item.
+                    boolean isDir = f.isDirectory();
+                    if (isDir || FileUtils.isVisibleInAllFilesFilter(name)) {
+                        com.readwide.manager.model.FileListItem item =
+                                com.readwide.manager.model.FileListItem.fromKnownDirectory(f, isDir);
+                        if (isDir) folderItems.add(item);
+                        else fileItems.add(item);
+                        maybePublishFolderLoadProgress(progress, folderItems, fileItems);
                     }
                 }
                 // Combine the items walked above (folders first, then files — the
@@ -114,7 +121,9 @@ final class MainFolderLoadController {
                 final String precomputedSignature =
                         activity.captureBrowseFolderSignatureFromItems(targetDir, items);
                 activity.fileSearchHandler.post(() -> applyFinalDirectoryLoad(targetDir, items, finalSortMode, loadGeneration, precomputedSignature));
-            } catch (SecurityException ignored) {
+            } catch (SecurityException denied) {
+                Log.w(STORAGE_LOG_TAG, "Directory listing threw SecurityException; "
+                        + activity.storageAccessDiagnosticSummary(targetDir));
                 activity.fileSearchHandler.post(() -> applyDirectoryAccessDenied(targetDir, sortMode, loadGeneration));
             }
         });
@@ -141,7 +150,11 @@ final class MainFolderLoadController {
             boolean readOk = true;
             try {
                 File[] fileArray = targetDir.listFiles();
-                if (fileArray != null) {
+                if (fileArray == null) {
+                    Log.w(STORAGE_LOG_TAG, "Directory refresh returned null; "
+                            + activity.storageAccessDiagnosticSummary(targetDir));
+                    readOk = false;
+                } else {
                     for (File f : fileArray) {
                         if (isCancelled(loadGeneration)) return;
                         String name = f.getName();
@@ -154,7 +167,9 @@ final class MainFolderLoadController {
                 }
                 appliedSortMode = currentSortMode();
                 if (!FileSortUtils.sortMainItems(items, appliedSortMode)) return;
-            } catch (SecurityException ignored) {
+            } catch (SecurityException denied) {
+                Log.w(STORAGE_LOG_TAG, "Directory refresh threw SecurityException; "
+                        + activity.storageAccessDiagnosticSummary(targetDir));
                 items.clear();
                 appliedSortMode = currentSortMode();
                 readOk = false;
@@ -166,7 +181,14 @@ final class MainFolderLoadController {
             // signature) so validation does not keep re-refreshing an unreadable dir.
             final String precomputedSignature =
                     readOk ? activity.captureBrowseFolderSignatureFromItems(targetDir, items) : null;
-            activity.fileSearchHandler.post(() -> applyRefreshDirectory(targetDir, items, finalSortMode, loadGeneration, precomputedSignature));
+            final boolean finalReadOk = readOk;
+            activity.fileSearchHandler.post(() -> {
+                if (finalReadOk) {
+                    applyRefreshDirectory(targetDir, items, finalSortMode, loadGeneration, precomputedSignature);
+                } else {
+                    applyDirectoryAccessDenied(targetDir, finalSortMode, loadGeneration);
+                }
+            });
         });
     }
 
@@ -397,8 +419,12 @@ final class MainFolderLoadController {
             activity.fileAdapter.setFilesFastPresorted(new ArrayList<>());
         }
         updateEmptyState(true);
+        if (activity.emptyText != null) {
+            activity.emptyText.setText(activity.getString(R.string.containing_folder_unavailable));
+        }
         activity.markCurrentBrowseFolderLoadFailed(targetDir);
         if (activity.fileSearchProgress != null) activity.fileSearchProgress.setVisibility(View.GONE);
+        activity.offerSafFolderFallback();
     }
 
     private void applyRefreshDirectory(@NonNull File targetDir,

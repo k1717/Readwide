@@ -14,6 +14,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.readwide.manager.R;
 import com.readwide.manager.UiColorUtils;
 import com.readwide.manager.model.Bookmark;
+import com.readwide.manager.util.DocumentAnchorMath;
 import com.readwide.manager.util.FileUtils;
 
 import java.io.File;
@@ -526,7 +527,8 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             String missingPrefix = missing
                     ? itemView.getContext().getString(R.string.bookmark_file_missing_badge) + "  •  "
                     : "";
-            meta.setText(missingPrefix + pageText + "Position " + range + "  •  " + dateStr);
+            meta.setText(missingPrefix + pageText
+                    + bookmarkLocationMetadata(bookmark, range) + "  •  " + dateStr);
             meta.setTextColor(missing
                     ? blendColors(dialogBgColor, textColor, lightDialog ? 0.690f : 0.780f)
                     : pathTextColor);
@@ -561,8 +563,14 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             if (json == null || json.trim().isEmpty()) return "";
             try {
                 JSONObject obj = new JSONObject(json);
-                String text = firstNonEmpty(
+                String focused = DocumentAnchorMath.bookmarkPreview(
+                        obj.optString("columnStartText", ""),
+                        obj.optString("focusText", ""),
                         obj.optString("text", ""),
+                        obj.optInt("sentenceOffset", 0),
+                        42);
+                String text = firstNonEmpty(
+                        focused,
                         obj.optString("anchorText", ""),
                         obj.optString("textAfter", ""),
                         obj.optString("quote", ""),
@@ -571,6 +579,41 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             } catch (Exception ignored) {
                 return "";
             }
+        }
+
+        private String bookmarkLocationMetadata(Bookmark bookmark, String fallbackRange) {
+            if (bookmark != null) {
+                String json = bookmark.getContentAnchorJson();
+                if (json != null && !json.trim().isEmpty()) {
+                    try {
+                        JSONObject obj = new JSONObject(json);
+                        if ("visible-sentence".equals(obj.optString("anchorMode", ""))) {
+                            String elementId = obj.optString("elementId", "").trim();
+                            int charOffset = Math.max(0, obj.optInt("charOffset", 0));
+                            if (!elementId.isEmpty()) {
+                                return "Sentence " + elementId
+                                        + (charOffset > 0 ? " +" + charOffset : "");
+                            }
+                            return "Sentence anchor " + Math.max(0, obj.optInt("blockIndex", 0))
+                                    + ":" + charOffset;
+                        }
+                        if ("vertical-position".equals(obj.optString("anchorMode", ""))
+                                && obj.has("nativeScrollX")) {
+                            return "Saved screen position";
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+                String name = bookmark.getFileName();
+                if (name == null || name.trim().isEmpty()) name = bookmark.getFilePath();
+                if (name != null && FileUtils.isEpubFile(name)) {
+                    // EPUB charPosition is the zero-based spine index, not an
+                    // in-page character position. Calling it "Position 3" made
+                    // legacy page-only bookmarks look like a precise location.
+                    return "Page start";
+                }
+            }
+            return "Position " + fallbackRange;
         }
 
         private String firstNonEmpty(String... values) {

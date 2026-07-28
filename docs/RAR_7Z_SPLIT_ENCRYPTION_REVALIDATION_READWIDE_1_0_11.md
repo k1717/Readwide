@@ -5,7 +5,7 @@ paths against real archives. No code changes were needed; both readers already
 route these cases as intended. It captures what was verified and where the
 conservative boundaries sit, so future edits do not silently widen a claim.
 
-> **Historical audit sequence:** Some present-tense paragraphs below describe the pre-close state that motivated later first-party work. RAR5 header encryption and encrypted PPMd/BCJ2 7z support were subsequently added in the scoped paths linked from their respective closure notes; use the 1.0.15 README/release notes for the current boundary.
+> **Historical audit sequence:** Some present-tense paragraphs below describe the pre-close state that motivated later first-party work. RAR5 header encryption and encrypted PPMd/BCJ2 7z support were subsequently added in the scoped paths linked from their respective closure notes; use the 1.0.16 README/release notes for the current boundary.
 
 Verification method: real fixtures were parsed and decoded with an independent
 Python mirror and with the bundled backends' reference tools (libarchive

@@ -323,6 +323,8 @@
     <string name="settings_section_security">Keamanan</string>
     <string name="settings_section_theme">Tema</string>
     <string name="show_hidden_files">Tampilkan File Tersembunyi</string>
+    <string name="show_hidden_files_on">Tampilkan file tersembunyi: aktif</string>
+    <string name="show_hidden_files_off">Tampilkan file tersembunyi: nonaktif</string>
     <string name="show_status_bar">Tampilkan Status Bar Saat Membaca</string>
     <string name="sort">Urutkan</string>
     <string name="sort_by">Urutkan Berdasarkan</string>
@@ -737,4 +739,19 @@ Aturan: %2$d aturan aktif</string>
     <string name="text_alignment">Perataan teks</string>
     <string name="settings_appearance_title">Pengaturan tampilan</string>
     <string name="settings_open_view_settings">Pengaturan tampilan (tema, font, tata letak)</string>
+    <string name="archive_landscape_two_page_on">Tampilan dua halaman arsip lanskap: aktif</string>
+    <string name="archive_landscape_two_page_off">Tampilan dua halaman arsip lanskap: nonaktif</string>
+    <string name="file_cover_thumbnails_on">Thumbnail sampul: aktif</string>
+    <string name="file_cover_thumbnails_off">Thumbnail sampul: nonaktif</string>
+    <string name="epub_default_font_format">Font EPUB: %1$s</string>
+    <string name="epub_font_book">Font buku</string>
+    <string name="epub_font_system_sans">Sans sistem</string>
+    <string name="epub_font_current_system">Font sistem saat ini</string>
+    <string name="epub_font_korean_sans">Sans Korea</string>
+    <string name="epub_font_korean_serif">Serif Korea</string>
+    <string name="epub_font_serif">Serif</string>
+    <string name="epub_font_monospace">Monospace</string>
+    <string name="epub_font_sans_medium">Sans medium</string>
+    <string name="epub_font_sans_condensed">Sans kondensasi</string>
+    <string name="epub_font_sans_light">Sans ringan</string>
 </resources>

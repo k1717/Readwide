@@ -323,6 +323,8 @@
     <string name="settings_section_security">सुरक्षा</string>
     <string name="settings_section_theme">थीम</string>
     <string name="show_hidden_files">छिपी हुई फ़ाइलें दिखाएँ</string>
+    <string name="show_hidden_files_on">छिपी हुई फ़ाइलें दिखाएँ: चालू</string>
+    <string name="show_hidden_files_off">छिपी हुई फ़ाइलें दिखाएँ: बंद</string>
     <string name="show_status_bar">पढ़ते समय स्टेटस बार दिखाएँ</string>
     <string name="sort">क्रमबद्ध करें</string>
     <string name="sort_by">क्रमबद्ध करें</string>
@@ -731,4 +733,19 @@
     <string name="text_alignment">टेक्स्ट संरेखण</string>
     <string name="settings_appearance_title">डिस्प्ले सेटिंग्स</string>
     <string name="settings_open_view_settings">डिस्प्ले सेटिंग्स (थीम, फ़ॉन्ट, लेआउट)</string>
+    <string name="archive_landscape_two_page_on">लैंडस्केप में आर्काइव दो-पृष्ठ दृश्य: चालू</string>
+    <string name="archive_landscape_two_page_off">लैंडस्केप में आर्काइव दो-पृष्ठ दृश्य: बंद</string>
+    <string name="file_cover_thumbnails_on">कवर थंबनेल: चालू</string>
+    <string name="file_cover_thumbnails_off">कवर थंबनेल: बंद</string>
+    <string name="epub_default_font_format">EPUB फ़ॉन्ट: %1$s</string>
+    <string name="epub_font_book">पुस्तक का फ़ॉन्ट</string>
+    <string name="epub_font_system_sans">सिस्टम सैन्स</string>
+    <string name="epub_font_current_system">वर्तमान सिस्टम फ़ॉन्ट</string>
+    <string name="epub_font_korean_sans">कोरियाई सैन्स</string>
+    <string name="epub_font_korean_serif">कोरियाई सेरिफ़</string>
+    <string name="epub_font_serif">सेरिफ़</string>
+    <string name="epub_font_monospace">मोनोस्पेस</string>
+    <string name="epub_font_sans_medium">मध्यम सैन्स</string>
+    <string name="epub_font_sans_condensed">संघनित सैन्स</string>
+    <string name="epub_font_sans_light">हल्का सैन्स</string>
 </resources>

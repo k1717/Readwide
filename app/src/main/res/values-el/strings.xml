@@ -323,6 +323,8 @@
     <string name="settings_section_security">Ασφάλεια</string>
     <string name="settings_section_theme">Θέμα</string>
     <string name="show_hidden_files">Εμφάνιση κρυφών αρχείων</string>
+    <string name="show_hidden_files_on">Εμφάνιση κρυφών αρχείων: ενεργή</string>
+    <string name="show_hidden_files_off">Εμφάνιση κρυφών αρχείων: ανενεργή</string>
     <string name="show_status_bar">Εμφάνιση γραμμής κατάστασης κατά την ανάγνωση</string>
     <string name="sort">Ταξινόμηση</string>
     <string name="sort_by">Ταξινόμηση κατά</string>
@@ -731,4 +733,19 @@
     <string name="text_alignment">Στοίχιση κειμένου</string>
     <string name="settings_appearance_title">Ρυθμίσεις εμφάνισης</string>
     <string name="settings_open_view_settings">Ρυθμίσεις εμφάνισης (θέμα, γραμματοσειρά, διάταξη)</string>
+    <string name="archive_landscape_two_page_on">Δισέλιδη προβολή αρχείου σε οριζόντια θέση: ενεργή</string>
+    <string name="archive_landscape_two_page_off">Δισέλιδη προβολή αρχείου σε οριζόντια θέση: ανενεργή</string>
+    <string name="file_cover_thumbnails_on">Μικρογραφίες εξωφύλλων: ενεργές</string>
+    <string name="file_cover_thumbnails_off">Μικρογραφίες εξωφύλλων: ανενεργές</string>
+    <string name="epub_default_font_format">Γραμματοσειρά EPUB: %1$s</string>
+    <string name="epub_font_book">Γραμματοσειρά βιβλίου</string>
+    <string name="epub_font_system_sans">Χωρίς πατούρες συστήματος</string>
+    <string name="epub_font_current_system">Τρέχουσα γραμματοσειρά συστήματος</string>
+    <string name="epub_font_korean_sans">Κορεατική χωρίς πατούρες</string>
+    <string name="epub_font_korean_serif">Κορεατική με πατούρες</string>
+    <string name="epub_font_serif">Με πατούρες</string>
+    <string name="epub_font_monospace">Σταθερού πλάτους</string>
+    <string name="epub_font_sans_medium">Χωρίς πατούρες μεσαία</string>
+    <string name="epub_font_sans_condensed">Χωρίς πατούρες συμπυκνωμένη</string>
+    <string name="epub_font_sans_light">Χωρίς πατούρες ελαφριά</string>
 </resources>

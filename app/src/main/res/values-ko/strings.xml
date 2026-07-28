@@ -334,6 +334,8 @@
     <string name="settings_section_security">보안</string>
     <string name="settings_section_theme">테마</string>
     <string name="show_hidden_files">숨김 파일 표시</string>
+    <string name="show_hidden_files_on">숨김 파일 표시: 켜짐</string>
+    <string name="show_hidden_files_off">숨김 파일 표시: 꺼짐</string>
     <string name="show_status_bar">읽기 화면에서 상태바 표시</string>
     <string name="sort">정렬</string>
     <string name="sort_by">정렬 기준</string>
@@ -742,4 +744,19 @@
     <string name="tts_resume">계속</string>
     <string name="tts_floating_drag">드래그하여 이동</string>
     <string name="delete_selected_includes_folders_warning">이 중 %1$d개는 폴더입니다 — 폴더 안의 모든 내용도 함께 삭제됩니다.</string>
+    <string name="archive_landscape_two_page_on">가로 모드 아카이브 두 페이지 보기: 켜짐</string>
+    <string name="archive_landscape_two_page_off">가로 모드 아카이브 두 페이지 보기: 꺼짐</string>
+    <string name="file_cover_thumbnails_on">표지 썸네일: 켜짐</string>
+    <string name="file_cover_thumbnails_off">표지 썸네일: 꺼짐</string>
+    <string name="epub_default_font_format">EPUB 글꼴: %1$s</string>
+    <string name="epub_font_book">책 글꼴</string>
+    <string name="epub_font_system_sans">시스템 고딕</string>
+    <string name="epub_font_current_system">현재 시스템 글꼴</string>
+    <string name="epub_font_korean_sans">한국어 고딕</string>
+    <string name="epub_font_korean_serif">한국어 명조</string>
+    <string name="epub_font_serif">명조</string>
+    <string name="epub_font_monospace">고정폭</string>
+    <string name="epub_font_sans_medium">고딕 중간</string>
+    <string name="epub_font_sans_condensed">고딕 좁게</string>
+    <string name="epub_font_sans_light">고딕 얇게</string>
 </resources>

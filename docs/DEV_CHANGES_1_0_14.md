@@ -699,7 +699,7 @@ that already exists for coordinate-space changes.
   two-page spread bullet and the badges were already present.
 - Historical pre-tag state: versionCode 10014 / versionName 1.0.14 was verified,
   while the draft F-Droid yml still contained an unresolved 1.0.14 block. That
-  placeholder is not present in the current 1.0.15 source package; its local
+  placeholder is not present in the current 1.0.16 source package; its local
   mirror intentionally tracks the published fdroiddata entries through 1.0.13.
 
 Remaining MANUAL release steps (require the device/repo):

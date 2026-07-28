@@ -58,4 +58,3 @@ public class DrawerEntry {
         return java.util.Objects.hash(actionType, iconRes, title, subtitle, path);
     }
 }
-

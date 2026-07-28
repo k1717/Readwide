@@ -1,6 +1,5 @@
 package com.readwide.manager;
 
-import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -60,8 +59,7 @@ public class ThemeEditorActivity extends AppCompatActivity {
     private final ActivityResultLauncher<String[]> imagePicker =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
                 if (uri != null) {
-                    getContentResolver().takePersistableUriPermission(uri,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    SafStorageAccess.tryTakePersistableReadGrant(this, uri);
                     backgroundImagePath = uri.toString();
                     ShortToast.show(this, R.string.theme_editor_background_image_set);
                 }

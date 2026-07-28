@@ -284,11 +284,19 @@ final class DocumentBookmarkDialogController {
                     activity.scrollMarkdownToVisualPage(b.getCharPosition(), false);
                 }
             } else {
-                if (activity.isRenderedContentAnchorDocument()
-                        && b.getContentAnchorJson() != null
-                        && !b.getContentAnchorJson().trim().isEmpty()) {
-                    activity.pendingDocumentRestoreAnchorJson = b.getContentAnchorJson();
-                }
+                // Classify the bookmark target, not the page that happens to be
+                // visible while the dialog is open. A mixed-layout EPUB can move
+                // from a fixed/image page to a reflowable vertical page whose
+                // sentence anchor must survive the turn.
+                // A bookmark is an explicit navigation request. An active find
+                // session otherwise clears this pending anchor after load and
+                // leaves the reader at the search result instead.
+                // showPage() below replaces the marked page, so clearing the
+                // WebView first would only introduce a second, racing reload.
+                activity.hideDocumentSearchPanel(true, false);
+                String contentAnchor = b.getContentAnchorJson();
+                activity.pendingDocumentRestoreAnchorJson =
+                        contentAnchor != null ? contentAnchor.trim() : "";
                 activity.showPage(b.getCharPosition(), Integer.compare(b.getCharPosition(), activity.currentPage));
             }
             return;

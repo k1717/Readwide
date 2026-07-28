@@ -12,6 +12,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
+        android:requestLegacyExternalStorage="true"
         android:supportsRtl="true"
         android:theme="@style/Theme.TextViewReader"
         android:largeHeap="true"
@@ -54,6 +55,9 @@
         </activity>
         <activity
             android:name=".ArchiveBrowserActivity"
+            android:exported="false" />
+        <activity
+            android:name=".SafBrowserActivity"
             android:exported="false" />
         <activity
             android:name=".ImageReaderActivity"

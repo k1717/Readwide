@@ -1,5 +1,38 @@
 # Changelog
 
+## Readwide 1.0.16 - 2026-07-27
+
+### Archive and image reading
+
+- Archive pages can be saved to Downloads or a user-selected folder without recompression.
+- Added optional two-page archive viewing in landscape when both adjacent pages are portrait-shaped. RTL placement, mixed single/spread navigation, cache ownership, and companion-page quality follow the visible spread.
+- Raised loose-image and archive-preview limits to 24MP. Neighbor-cache previews are upgraded in place, and a long-backgrounded image viewer saves its position and closes instead of reviving stale decoder state.
+
+### File browsing and cover thumbnails
+
+- Added a provider-backed Storage Access Framework fallback when the built-in raw filesystem browser cannot enumerate shared storage. The existing **Internal Storage** entry selects the usable route, remembers a granted folder, and keeps one-time document grants usable when persistence is unavailable.
+- Added optional 40×40dp cover thumbnails without shifting the filename column: loose images, folder covers, archive first images, PDF first pages, and EPUB covers are supported in normal and Recent lists.
+- Thumbnail decoding and memory/disk caching are bounded. Atomic replacement, stale-source checks, retry cooldowns, bounded failure records, and generation cancellation prevent stale or failed work from destabilizing long folder lists.
+- Folder, selection, Recent, and image-viewer overflow menus now size themselves from their localized actions. Hidden-file and cover-thumbnail actions report their on/off state without clipped labels.
+- EPUB has a dedicated global default-font preference shared with the in-book font picker.
+
+### PDF reading
+
+- Hiding PDF controls now removes the Readwide title and bottom bars in portrait and landscape, releases their empty layout reserves, and refits the existing bitmap without rendering the page again. Android status and navigation bars remain visible and system-safe insets are preserved.
+- Continuous mode retains its visible anchor; single-page mode retains fit/zoom focus. A zero-sized or not-yet-laid-out viewport now waits through a bounded, lifecycle-aware retry instead of starting an invalid render or leaving a callback after destruction.
+
+### EPUB compatibility and bookmarks
+
+- EPUB keeps Android status/navigation bars visible in the active body color, removes its hidden 32dp page-status reserve, and no longer reapplies boundary JavaScript when only Readwide controls are toggled.
+- Fixed-layout image pages use a bounded canvas, a PDF-like landscape gutter, and page-local image/text classification. Direct image spine items, mixed fixed/reflowable layouts, CSS background pages, and legacy Japanese vertical-writing CSS are handled without clipping later columns or creating long empty scroll tails.
+- Vertical-writing bookmarks now save and restore the visible sentence/glyph position, keep distinct bookmarks on one spine page, and show a useful column-start excerpt. Stale page-load, search, and delayed-restore callbacks can no longer overwrite a newer navigation.
+- Expanded the local-only EPUB compatibility path for validated scripted bindings, linked SMIL media overlays, and a safe point-CFI subset. The 45-book sample audit and remaining limits are documented in `docs/EPUB_COMPATIBILITY_AUDIT_1_0_16.md`.
+
+### Reliability
+
+- URI archive copies remain atomic and serialized, but waiting for the shared cache is now interruptible so cancelled SAF/open-document work cannot remain blocked behind another large copy.
+- No permission or runtime dependency was added.
+
 ## Readwide 1.0.15 - 2026-07-14
 
 ### EPUB and PDF - landscape spread correctness

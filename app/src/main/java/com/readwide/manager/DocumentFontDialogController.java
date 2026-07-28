@@ -24,6 +24,7 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.core.widget.TextViewCompat;
 
+import com.readwide.manager.util.EpubFontPreferenceMath;
 import com.readwide.manager.util.FontManager;
 
 import java.io.File;
@@ -34,9 +35,8 @@ import java.util.List;
 import java.util.Locale;
 
 final class DocumentFontDialogController {
-    private static final String LOCAL_HOST = "readwide.local";
     private static final String FONT_PREFIX = "/font/";
-    private static final String DOCUMENT_FONT_DEFAULT = "document_default";
+    private static final String DOCUMENT_FONT_DEFAULT = EpubFontPreferenceMath.BOOK_FONT;
     private static final String FONT_OPTION_SYSTEM_CURRENT = "system_current";
 
     private final DocumentPageActivity activity;
@@ -383,11 +383,18 @@ final class DocumentFontDialogController {
     }
 
     private boolean shouldOfferDocumentDefaultFont() {
-        return ("EPUB".equals(activity.docType) && activity.epubHasDocumentFont)
+        return "EPUB".equals(activity.docType)
                 || ("Word".equals(activity.docType) && activity.wordHasDocumentFont);
     }
 
     private String currentDocumentFontSelection() {
+        if ("EPUB".equals(activity.docType)) {
+            return EpubFontPreferenceMath.resolveActiveSelection(
+                    null,
+                    activity.prefs != null
+                            ? activity.prefs.getEpubFontFamily()
+                            : DOCUMENT_FONT_DEFAULT);
+        }
         if (DOCUMENT_FONT_DEFAULT.equals(activity.documentFontOverride)) return DOCUMENT_FONT_DEFAULT;
         if (activity.documentFontOverride != null && !activity.documentFontOverride.trim().isEmpty()) {
             return normalizeReadingFontValue(activity.documentFontOverride);
@@ -397,6 +404,17 @@ final class DocumentFontDialogController {
     }
 
     private void setDocumentFontSelection(String value) {
+        if ("EPUB".equals(activity.docType)) {
+            String normalized = normalizeReadingFontValue(value);
+            // EPUB uses one dedicated persisted preference. Keeping a second
+            // activity-local override made the menu display the selected font
+            // while a newly opened book silently reverted to its old default.
+            activity.documentFontOverride = null;
+            if (activity.prefs != null) activity.prefs.setEpubFontFamily(normalized);
+            activity.lastAppliedDocumentThemeSignature = activity.documentThemeSignature();
+            refreshCurrentDocumentFont();
+            return;
+        }
         if (DOCUMENT_FONT_DEFAULT.equals(value)) {
             activity.documentFontOverride = DOCUMENT_FONT_DEFAULT;
         } else {
@@ -838,7 +856,8 @@ final class DocumentFontDialogController {
         if (filePath != null) {
             activity.selectedDocumentFontFile = new File(filePath);
             family = "'TextViewSelectedDocumentFont', " + fallback;
-            return "@font-face{font-family:'TextViewSelectedDocumentFont';src:url('https://" + LOCAL_HOST + FONT_PREFIX + "selected');}" +
+            return "@font-face{font-family:'TextViewSelectedDocumentFont';src:url('https://"
+                    + activity.localDocumentHost() + FONT_PREFIX + "selected');}" +
                     documentFontRule(family);
         }
         if (FontManager.isSystemFamilyValue(value)) {
@@ -851,7 +870,30 @@ final class DocumentFontDialogController {
     }
 
     private String documentFontRule(String family) {
-        return "body,.page,p,div,span,td,th,li,pre{font-family:" + family + " !important;}";
+        // EPUB publisher styles commonly use class-qualified !important rules.
+        // Give an explicit user font enough specificity to win those rules while
+        // still leaving fixed-layout/image pages untouched (they bypass theme CSS).
+        String selector = "html body:not(#rw-font-force),"
+                + "html body:not(#rw-font-force) p,"
+                + "html body:not(#rw-font-force) div,"
+                + "html body:not(#rw-font-force) span,"
+                + "html body:not(#rw-font-force) td,"
+                + "html body:not(#rw-font-force) th,"
+                + "html body:not(#rw-font-force) li,"
+                + "html body:not(#rw-font-force) pre,"
+                + "html body:not(#rw-font-force) h1,"
+                + "html body:not(#rw-font-force) h2,"
+                + "html body:not(#rw-font-force) h3,"
+                + "html body:not(#rw-font-force) h4,"
+                + "html body:not(#rw-font-force) h5,"
+                + "html body:not(#rw-font-force) h6,"
+                + "html body:not(#rw-font-force) a,"
+                + "html body:not(#rw-font-force) blockquote,"
+                + "html body:not(#rw-font-force) em,"
+                + "html body:not(#rw-font-force) strong,"
+                + "html body:not(#rw-font-force) ruby,"
+                + "html body:not(#rw-font-force) rt";
+        return selector + "{font-family:" + family + " !important;}";
     }
 
     private String wordDefaultFontRule() {

@@ -1,5 +1,49 @@
 # Patch Notes
 
+## Readwide 1.0.16 - 2026-07-27
+
+### Provider-backed storage fallback
+
+- The raw browser keeps its existing platform permission behavior, while one persisted `ACTION_OPEN_DOCUMENT_TREE` route provides a read-oriented fallback whenever raw enumeration fails. `SafStorageAccess` centralizes document/tree grant policy and `UriOpenRequest` centralizes URI viewer routing.
+- `MainFolderLoadController` treats `listFiles() == null` and `SecurityException` as access failures rather than empty folders. The unified **Internal Storage** entry selects raw or provider-backed browsing without duplicating drawer routes.
+- SAF folder queries and archive preparation use separate executors and generations. `FileUtils.copyUriToLocal()` keeps atomic serialized cache commits but now acquires the cache lock interruptibly, so cancelled workers do not wait behind another large URI copy.
+
+### Archive image export and portrait-only spreads
+
+- `ImageReaderActivity` exports the current archive entry's original bytes through Downloads or SAF, with normalized names and partial-output cleanup.
+- `ArchiveImageSpreadMath`, `ArchiveImageSpreadDrawable`, and `ArchiveImageSpreadNavigator` limit landscape pairing to two portrait pages, keep LTR/RTL and mixed single/spread history consistent, and draw cache-owned bitmaps without a composite allocation.
+- Loose and archive preview paths use a 24MP ceiling; a low-tier neighbor preview is upgraded in place and both spread halves use the same decode profile.
+- Long background expiry saves the current page and finishes only the viewer, avoiding stale archive/bitmap revival after ten minutes or background memory pressure.
+
+### Browser thumbnails and EPUB font preference
+
+- `FileAdapter` applies the same 40×40dp preview mode to browser and Recent rows inside a fixed 42dp slot. `FileThumbnailLoader` supports loose images, folder books, archive covers, PDF page 1, and raster EPUB cover metadata/fallbacks.
+- Thumbnail work is limited to two decoders and a 96-item queue. Requests are generation-scoped; memory, disk, per-key locks, atomic commits, source stamps, folder expiry, candidate fallback, and a 60-second negative cooldown are coordinated instead of being owned by recycled row views.
+- Negative-result bookkeeping is capped at 512 records per visible generation, preventing a huge folder of damaged/unsupported sources from growing the retry map without bound.
+- Current-folder, Recent, selection, and image-viewer popups measure localized actions and clamp to the live content width.
+- `epub_font_family` is a shared Settings/in-book preference and remains separate from the TXT font preference.
+
+### PDF chrome and safe-area fullscreen
+
+- `ReaderChromeLayoutMath` derives the PDF frame from `pdfChromeVisible`. Hidden app chrome releases only its own measured reserves; status/navigation/cutout insets remain and `pdf_nav_bar_spacer` stays `0/GONE`.
+- `setPdfViewportPadding()` and `PdfPageView` preserve the continuous anchor or single-page fit-relative Matrix state without renderer calls, render-generation changes, or cache eviction.
+- `renderCurrentPage()` now requires positive content width and height before cache lookup/render submission. A named, bounded `postOnAnimation` retry is cancelled on mode changes and destruction, eliminating invalid zero-height renders and anonymous callbacks that could outlive the Activity.
+- No dependency or permission was added.
+
+### EPUB chrome and fixed-image scroll geometry
+
+- Vertical-writing bookmarks use a `visible-sentence` v2 anchor containing stable element/text identity, glyph/block offsets, signed DOM scroll, and normalized focus within the unobscured visual viewport. Capture and restore share one caret point and reject clipped/neighboring columns.
+- Explicit saves require a fresh DOM result, retry once after layout settles, and keep multiple precise anchors on one spine page distinct. Column-start text is presentation-only; duplicate and restore identity remains tied to the precise sentence/glyph anchor.
+- Page-load and interaction generations guard delayed JavaScript, font-settle, search, CFI, and bookmark callbacks. `BookmarkMergeMath` compares non-empty content anchors instead of treating the integer spine page as the whole location.
+- EPUB owns a stable `systemBars`/`displayCutout` safe frame and body-colored system-bar scrims while keeping Android bars visible. `document_top_page_status` is `GONE` for EPUB, and app-chrome toggles no longer reapply boundary JavaScript.
+- Page-local `EpubImagePageClassifier` results separate image canvases from mixed/text fixed pages. Near-image pages fit declared/media bounds rather than publisher wrapper `scrollHeight`, retain root zoom/pan, and preserve publisher `background-image`.
+- Typed `EpubSpineItem` metadata preserves package/per-item layout, fallback chains, direct image entries, scripts, bindings, and validated media-overlay links without promoting a minority of fixed pages to a fixed-layout book.
+- Scripted bindings use sandboxed local-only handlers; `EpubSmilParser`/`EpubMediaOverlayController` implement linked foreground cues; `EpubCfi`/JavaScript implement a deliberately bounded point-CFI subset. Fresh per-open synthetic origins, traversal checks, MIME routing, and independent WebView load generations isolate stale or unsafe resources.
+- The optional 45-book compatibility audit verifies supported spines and zero missing resources; unsupported browser/SMIL/CFI/package features remain listed in `docs/EPUB_COMPATIBILITY_AUDIT_1_0_16.md`.
+- `EpubSpreadSlotMath` gives real image/image pairs a 6 CSS-pixel inward inset per pane, with LTR/RTL placement and an unpaired final page handled explicitly.
+- `EpubCssCompatibility` aliases legacy Japanese vertical-writing declarations. Vertical pages keep horizontal column overflow and logical right-edge startup, while ordinary reflow pages drop publisher height caps that confined Haruko content.
+- Page-specific layout/boundary eligibility and URI-safe synthetic image paths prevent mixed-layout pages or Unicode/plus-sign resources from inheriting the wrong book-wide behavior.
+
 ## Readwide 1.0.15 - 2026-07-14
 
 ### Document text-selection gesture arbitration

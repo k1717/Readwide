@@ -152,9 +152,10 @@ public final class EdgeToEdgeUtil {
 
 
     /**
-     * PDF keeps the bottom toolbar as an overlay like the other readers. Hidden
-     * chrome enters immersive navigation mode, so the old navigation spacer must
-     * stay collapsed instead of leaving a permanent blank strip below the page.
+     * PDF keeps Android system bars visible while its own chrome is toggled. The
+     * root therefore owns stable left/right system-safe edges (including a
+     * landscape three-button navigation rail), while the visible app bars own
+     * their top/bottom insets. No extra navigation spacer is ever needed.
      */
     public static void applyPdfReaderInsets(Activity activity,
                                             View root,
@@ -167,22 +168,24 @@ public final class EdgeToEdgeUtil {
         final Padding bottomPad = bottomContent != null ? new Padding(bottomContent) : null;
 
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            // Keep PDF body width tied to physical geometry rather than the
-            // current visibility of immersive system bars.
+            // PDF keeps system bars visible. Ignoring transient visibility avoids
+            // a one-frame safe-area collapse during Samsung rotation/bar updates.
+            Insets systemBars = insets.getInsetsIgnoringVisibility(
+                    WindowInsetsCompat.Type.systemBars());
             Insets cutout = insets.getInsetsIgnoringVisibility(
                     WindowInsetsCompat.Type.displayCutout());
             Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
             boolean imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
-            root.setPadding(rootPad.left + ReaderBodyInsetMath.bodySideInset(cutout.left),
+            int bodyLeft = Math.max(systemBars.left, cutout.left);
+            int bodyRight = Math.max(systemBars.right, cutout.right);
+            root.setPadding(rootPad.left + ReaderBodyInsetMath.bodySideInset(bodyLeft),
                     rootPad.top,
-                    rootPad.right + ReaderBodyInsetMath.bodySideInset(cutout.right),
+                    rootPad.right + ReaderBodyInsetMath.bodySideInset(bodyRight),
                     rootPad.bottom);
 
-            int controlLeft = ReaderBodyInsetMath.overlaySideInset(
-                    systemBars.left, cutout.left);
-            int controlRight = ReaderBodyInsetMath.overlaySideInset(
-                    systemBars.right, cutout.right);
+            // Root padding already protects both content and overlay controls.
+            int controlLeft = 0;
+            int controlRight = 0;
             int topInset = Math.max(systemBars.top, cutout.top);
 
             if (topBar != null) {
@@ -190,15 +193,17 @@ public final class EdgeToEdgeUtil {
                         topPad.right + controlRight, topPad.bottom);
             }
             if (bottomContent != null) {
+                int systemBottom = Math.max(systemBars.bottom, cutout.bottom);
                 int bottomInset = imeVisible
-                        ? Math.max(systemBars.bottom, ime.bottom) : systemBars.bottom;
+                        ? Math.max(systemBottom, ime.bottom) : systemBottom;
                 bottomContent.setPadding(bottomPad.left + controlLeft, bottomPad.top,
                         bottomPad.right + controlRight, bottomPad.bottom + bottomInset);
             }
             if (hiddenNavigationSpacer != null) {
                 // Visible chrome owns bars.bottom through bottomContent padding.
-                // Hidden chrome is immersive and transient bars overlay content,
-                // so neither state needs an additional layout-height spacer.
+                // Hidden chrome keeps its safe edge in PdfReaderActivity's
+                // viewport reserve, so a second spacer would recreate the old
+                // empty bottom band.
                 int spacerHeight = 0;
                 android.view.ViewGroup.LayoutParams lp = hiddenNavigationSpacer.getLayoutParams();
                 if (lp != null && lp.height != spacerHeight) {
@@ -209,6 +214,14 @@ public final class EdgeToEdgeUtil {
             }
             return insets;
         });
+        ViewCompat.requestApplyInsets(root);
+    }
+
+    /** PDF-only policy: app chrome may hide, but Android status/navigation bars stay. */
+    public static void applyPdfSystemBarVisibility(Activity activity, View root) {
+        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
+                activity.getWindow(), root);
+        controller.show(WindowInsetsCompat.Type.systemBars());
         ViewCompat.requestApplyInsets(root);
     }
 

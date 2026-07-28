@@ -83,6 +83,15 @@ final class DocumentPageLoadController {
                     }
                     activity.hideLoadingWindow();
                     if (activity.webView != null) activity.webView.setVisibility(View.VISIBLE);
+                    // docType is resolved off-thread. Apply the EPUB-only compact
+                    // counter/system-bar policy and its stable safe frame before
+                    // the first page is shown.
+                    activity.applyDocumentTopPageStatusVisibility();
+                    activity.applyDocumentSystemBarColors();
+                    androidx.core.view.ViewCompat.requestApplyInsets(
+                            activity.findViewById(R.id.document_root));
+                    androidx.core.view.ViewCompat.requestApplyInsets(
+                            activity.findViewById(R.id.document_content_column));
                     activity.showPage(activity.currentPage, 0);
                 });
             } catch (Exception e) {

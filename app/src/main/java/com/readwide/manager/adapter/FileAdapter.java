@@ -2,11 +2,13 @@ package com.readwide.manager.adapter;
 
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.os.Handler;
+import android.os.SystemClock;
 import android.text.TextUtils;
 import android.os.Looper;
 import android.view.LayoutInflater;
@@ -21,6 +23,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.RecyclerView;
+import com.readwide.manager.FileThumbnailLoader;
 import com.readwide.manager.R;
 import com.readwide.manager.model.FileListItem;
 import com.readwide.manager.model.ReaderState;
@@ -37,6 +40,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
 
@@ -44,6 +51,10 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     private static final int MULTI_SELECT_LONG_PRESS_MS = 800;
     private static final int MAIN_ROW_TEXT_END_PADDING_DP = 6;
     private static final Object SELECTION_PAYLOAD = "selection_payload";
+    private static final long THUMBNAIL_FAILURE_RETRY_MS = 60_000L;
+    private static final long DIRECTORY_THUMBNAIL_MEMORY_TTL_MS = 30_000L;
+    private static final int MAX_QUEUED_THUMBNAIL_REQUESTS = 96;
+    private static final int MAX_THUMBNAIL_FAILURE_RECORDS = 512;
 
     public interface OnFileClickListener {
         void onFileClick(File file);
@@ -65,6 +76,28 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     private int touchCancelGeneration = 0;
     private boolean showReadingProgress = false;
     private boolean selectionMode = false;
+    private boolean showThumbnails = false;
+    private volatile boolean released = false;
+    private final ThreadPoolExecutor thumbnailExecutor = new ThreadPoolExecutor(
+            2,
+            2,
+            30L,
+            TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(MAX_QUEUED_THUMBNAIL_REQUESTS),
+            new ThreadPoolExecutor.AbortPolicy());
+    private final Map<String, Long> thumbnailRetryAfter =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final Set<String> thumbnailRequests =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final AtomicInteger thumbnailGeneration = new AtomicInteger();
+    private final Handler thumbnailResultHandler = new Handler(Looper.getMainLooper());
+    private final android.util.LruCache<String, ThumbnailCacheEntry> thumbnailCache =
+            new android.util.LruCache<String, ThumbnailCacheEntry>(12 * 1024 * 1024) {
+                @Override protected int sizeOf(String key, ThumbnailCacheEntry value) {
+                    Bitmap bitmap = value == null ? null : value.bitmap;
+                    return bitmap == null || bitmap.isRecycled() ? 0 : bitmap.getByteCount();
+                }
+            };
     private final Set<String> selectedPaths = new LinkedHashSet<>();
     private final Map<String, Integer> readingProgressByPath = new HashMap<>();
     private final SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
@@ -89,6 +122,21 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     public void setShowFilePath(boolean enabled) {
         if (this.showFilePath == enabled) return;
         this.showFilePath = enabled;
+        if (getItemCount() > 0) notifyItemRangeChanged(0, getItemCount());
+    }
+
+    public void setShowThumbnails(boolean enabled) {
+        if (showThumbnails == enabled) return;
+        showThumbnails = enabled;
+        invalidateThumbnailRequests();
+        if (!enabled) {
+            thumbnailCache.evictAll();
+        } else {
+            // A miss may have been caused by a partially copied file, temporary
+            // storage denial, or an archive backend that was not ready yet.
+            // Explicitly re-enabling previews is also an explicit retry.
+            thumbnailRetryAfter.clear();
+        }
         if (getItemCount() > 0) notifyItemRangeChanged(0, getItemCount());
     }
 
@@ -276,6 +324,13 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
 
     /** Item-based fast replacement: metadata already computed off the UI thread. */
     public void setItemsFastPresorted(@NonNull List<FileListItem> itemList) {
+        // A folder/home replacement makes queued work for rows from the prior
+        // dataset obsolete. Queued runnables check this generation before doing
+        // expensive archive/PDF work, so the new visible rows are not stuck
+        // behind thumbnails from a folder that is no longer on screen.
+        invalidateThumbnailRequests();
+        thumbnailRetryAfter.clear();
+        expireDirectoryThumbnailMemoryEntries();
         items.clear();
         items.addAll(itemList);
         notifyDataSetChanged();
@@ -349,7 +404,7 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
 
     private void replaceFiles(@NonNull List<FileListItem> next) {
         if (sortEnabled) sortItems(next);
-        if (items.equals(next)) return;
+        if (sameItemsAndContents(items, next)) return;
 
         List<FileListItem> old = new ArrayList<>(items);
         DiffUtil.DiffResult diff = DiffUtil.calculateDiff(new DiffUtil.Callback() {
@@ -375,6 +430,23 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
         items.clear();
         items.addAll(next);
         diff.dispatchUpdatesTo(this);
+    }
+
+    private static boolean sameItemsAndContents(@NonNull List<FileListItem> left,
+                                                @NonNull List<FileListItem> right) {
+        if (left.size() != right.size()) return false;
+        for (int i = 0; i < left.size(); i++) {
+            FileListItem a = left.get(i);
+            FileListItem b = right.get(i);
+            if (!a.getAbsolutePath().equals(b.getAbsolutePath())
+                    || !a.getName().equals(b.getName())
+                    || a.isDirectory() != b.isDirectory()
+                    || a.getSize() != b.getSize()
+                    || a.getLastModified() != b.getLastModified()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void sortItems(@NonNull List<FileListItem> target) {
@@ -436,8 +508,56 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     }
 
     public void release() {
+        released = true;
+        invalidateThumbnailRequests();
+        thumbnailResultHandler.removeCallbacksAndMessages(null);
+        thumbnailExecutor.shutdownNow();
+        thumbnailCache.evictAll();
+        thumbnailRetryAfter.clear();
         listener = null;
         items.clear();
+    }
+
+    private void invalidateThumbnailRequests() {
+        thumbnailGeneration.incrementAndGet();
+        // A fixed-size queue prevents a fast scroll through a very large folder
+        // from retaining one expensive PDF/archive decode per visited row. On a
+        // folder or mode switch, queued work belongs to the old generation and
+        // can be removed immediately instead of delaying the new visible rows.
+        thumbnailExecutor.getQueue().clear();
+        thumbnailRequests.clear();
+    }
+
+    private void expireDirectoryThumbnailMemoryEntries() {
+        // A directory's own mtime is not guaranteed to change when an existing
+        // child cover is replaced in place. Revalidate folder covers on a full
+        // browser dataset refresh; ordinary file thumbnails remain hot.
+        for (Map.Entry<String, ThumbnailCacheEntry> entry
+                : thumbnailCache.snapshot().entrySet()) {
+            ThumbnailCacheEntry cached = entry.getValue();
+            if (cached != null && cached.directory) {
+                thumbnailCache.remove(entry.getKey());
+            }
+        }
+    }
+
+    private void rememberThumbnailFailure(@NonNull String requestId) {
+        long now = SystemClock.elapsedRealtime();
+        thumbnailRetryAfter.put(requestId, now + THUMBNAIL_FAILURE_RETRY_MS);
+        if (thumbnailRetryAfter.size() <= MAX_THUMBNAIL_FAILURE_RECORDS) return;
+
+        for (Map.Entry<String, Long> entry : thumbnailRetryAfter.entrySet()) {
+            Long retryAfter = entry.getValue();
+            if (retryAfter != null && retryAfter <= now) {
+                thumbnailRetryAfter.remove(entry.getKey(), retryAfter);
+            }
+        }
+        int overflow = thumbnailRetryAfter.size() - MAX_THUMBNAIL_FAILURE_RECORDS;
+        if (overflow <= 0) return;
+        for (String key : thumbnailRetryAfter.keySet()) {
+            if (key.equals(requestId)) continue;
+            if (thumbnailRetryAfter.remove(key) != null && --overflow <= 0) break;
+        }
     }
 
     private static int iconResForFile(@NonNull String fileName) {
@@ -468,8 +588,38 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
         return -1;
     }
 
+    @NonNull
+    private static String thumbnailKey(@NonNull FileListItem item,
+                                       boolean showHiddenFiles) {
+        // Folder cover selection changes with the hidden-file policy. Keeping
+        // the policy in the cache key prevents a previously visible dot-image
+        // from remaining as a cover after hidden files are disabled.
+        return item.getAbsolutePath() + "|" + item.getSize()
+                + "|" + item.getLastModified()
+                + "|hidden=" + (showHiddenFiles ? "1" : "0");
+    }
+
+    private static final class ThumbnailCacheEntry {
+        @NonNull final Bitmap bitmap;
+        final boolean directory;
+        final long expiresAtElapsedRealtime;
+
+        ThumbnailCacheEntry(@NonNull Bitmap bitmap, boolean directory) {
+            this.bitmap = bitmap;
+            this.directory = directory;
+            this.expiresAtElapsedRealtime = directory
+                    ? SystemClock.elapsedRealtime() + DIRECTORY_THUMBNAIL_MEMORY_TTL_MS
+                    : Long.MAX_VALUE;
+        }
+
+        boolean isUsable(long nowElapsedRealtime) {
+            return !bitmap.isRecycled() && nowElapsedRealtime < expiresAtElapsedRealtime;
+        }
+    }
+
     public class ViewHolder extends RecyclerView.ViewHolder {
         ImageView icon;
+        View iconBox;
         LinearLayout textContainer;
         com.readwide.manager.view.ExtensionEllipsisTextView name;
         TextView info, path, progress, selectionMarker;
@@ -488,6 +638,7 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
         ViewHolder(View v) {
             super(v);
             icon = v.findViewById(R.id.file_icon);
+            iconBox = v.findViewById(R.id.file_icon_box);
             textContainer = v.findViewById(R.id.file_text_container);
             name = v.findViewById(R.id.file_name);
             info = v.findViewById(R.id.file_info);
@@ -642,11 +793,147 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
                 String type = FileUtils.getReadableFileType(item.getName());
                 info.setText(String.format(Locale.getDefault(), "%s  •  %s  •  %s", type, size, date));
             }
+            bindThumbnail(item, iconTint);
             updateReadingProgressBadge(item);
-            icon.setImageTintList(ColorStateList.valueOf(iconTint));
             itemView.setPressed(false);
             itemView.setBackground(makeFileRowBackground(prefs));
             bindSelectionState(file);
+        }
+
+        private void bindThumbnail(@NonNull FileListItem item, int iconTint) {
+            applyThumbnailLayout(showThumbnails);
+            // RecyclerView holders may previously have shown a cover preview.
+            // Restore the normal icon presentation before every early return,
+            // including cached decode misses.
+            icon.setScaleType(ImageView.ScaleType.CENTER);
+            icon.setImageTintList(ColorStateList.valueOf(iconTint));
+            if (!showThumbnails || context == null) {
+                return;
+            }
+            boolean showHiddenThumbnailSources =
+                    PrefsManager.getInstance(context).getShowHiddenFiles();
+            String key = thumbnailKey(item, showHiddenThumbnailSources);
+            ThumbnailCacheEntry cached = thumbnailCache.get(key);
+            long now = SystemClock.elapsedRealtime();
+            if (cached != null && cached.isUsable(now)) {
+                showThumbnail(cached.bitmap);
+                return;
+            }
+            if (cached != null) thumbnailCache.remove(key);
+            final int generation = thumbnailGeneration.get();
+            final String requestId = generation + "|" + key;
+            Long retryAfter = thumbnailRetryAfter.get(requestId);
+            if (retryAfter != null) {
+                if (now < retryAfter) return;
+                thumbnailRetryAfter.remove(requestId, retryAfter);
+            }
+            if (!thumbnailRequests.add(requestId)) return;
+            try {
+                thumbnailExecutor.execute(() -> {
+                    if (released
+                            || thumbnailGeneration.get() != generation
+                            || !showThumbnails) {
+                        thumbnailRequests.remove(requestId);
+                        return;
+                    }
+                    Bitmap decoded = FileThumbnailLoader.decode(
+                            context,
+                            item.getFile(),
+                            item.isDirectory(),
+                            showHiddenThumbnailSources,
+                            192);
+                    if (thumbnailGeneration.get() != generation) {
+                        thumbnailRequests.remove(requestId);
+                        if (decoded != null && !decoded.isRecycled()) decoded.recycle();
+                        return;
+                    }
+                    if (decoded == null || decoded.isRecycled()) {
+                        thumbnailRequests.remove(requestId);
+                        // Keep misses generation-scoped. A stale worker that
+                        // finishes while a folder is replaced must not poison
+                        // the same source key in the new visible dataset.
+                        if (thumbnailGeneration.get() == generation
+                                && showThumbnails
+                                && !released) {
+                            rememberThumbnailFailure(requestId);
+                        }
+                        return;
+                    }
+                    // Do not post through the initiating row View: RecyclerView
+                    // may detach it while an archive is decoding, and View.post()
+                    // can then wait until that holder happens to reattach. The
+                    // adapter-owned main handler always completes cache ownership
+                    // and rebinds whichever row is current.
+                    boolean posted = thumbnailResultHandler.post(() -> {
+                        thumbnailRequests.remove(requestId);
+                        if (released
+                                || thumbnailGeneration.get() != generation
+                                || !showThumbnails) {
+                            decoded.recycle();
+                            return;
+                        }
+                        thumbnailRetryAfter.remove(requestId);
+                        ThumbnailCacheEntry existing = thumbnailCache.get(key);
+                        if (existing == null || !existing.isUsable(SystemClock.elapsedRealtime())) {
+                            thumbnailCache.put(
+                                    key,
+                                    new ThumbnailCacheEntry(decoded, item.isDirectory()));
+                        } else if (existing.bitmap != decoded) {
+                            decoded.recycle();
+                        }
+                        notifyThumbnailKeyChanged(key, showHiddenThumbnailSources);
+                    });
+                    if (!posted) {
+                        thumbnailRequests.remove(requestId);
+                        decoded.recycle();
+                    }
+                });
+            } catch (RuntimeException rejected) {
+                thumbnailRequests.remove(requestId);
+                // A bounded queue deliberately rejects work during a very fast
+                // scroll. Rebind the row shortly after older work drains so a
+                // still-visible cover does not remain a type icon indefinitely.
+                thumbnailResultHandler.postDelayed(() -> {
+                    if (!released
+                            && showThumbnails
+                            && thumbnailGeneration.get() == generation) {
+                        notifyThumbnailKeyChanged(key, showHiddenThumbnailSources);
+                    }
+                }, 250L);
+            }
+        }
+
+        private void showThumbnail(@NonNull Bitmap bitmap) {
+            icon.setImageTintList(null);
+            icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            icon.setImageBitmap(bitmap);
+        }
+
+        private void applyThumbnailLayout(boolean enabled) {
+            if (iconBox == null) return;
+            // Keep the file-name column fixed when thumbnails are toggled.
+            // Only the preview/icon itself and the vertical row footprint vary.
+            int boxWidth = dp(42);
+            int boxHeight = dp(enabled ? 42 : 34);
+            ViewGroup.LayoutParams boxLp = iconBox.getLayoutParams();
+            if (boxLp != null && (boxLp.width != boxWidth || boxLp.height != boxHeight)) {
+                boxLp.width = boxWidth;
+                boxLp.height = boxHeight;
+                iconBox.setLayoutParams(boxLp);
+            }
+            ViewGroup.LayoutParams iconLp = icon.getLayoutParams();
+            int iconWidth = dp(enabled ? 40 : 28);
+            int iconHeight = dp(enabled ? 40 : 28);
+            if (iconLp != null && (iconLp.width != iconWidth || iconLp.height != iconHeight)) {
+                iconLp.width = iconWidth;
+                iconLp.height = iconHeight;
+                icon.setLayoutParams(iconLp);
+            }
+        }
+
+        private int dp(int value) {
+            return Math.max(1, Math.round(value
+                    * itemView.getResources().getDisplayMetrics().density));
         }
 
         void bindSelectionState(@NonNull File file) {
@@ -760,6 +1047,15 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
             states.addState(new int[]{android.R.attr.state_selected}, new ColorDrawable(pressed));
             states.addState(new int[]{}, new ColorDrawable(Color.TRANSPARENT));
             return states;
+        }
+    }
+
+    private void notifyThumbnailKeyChanged(@NonNull String key,
+                                           boolean showHiddenThumbnailSources) {
+        for (int i = 0; i < items.size(); i++) {
+            if (key.equals(thumbnailKey(items.get(i), showHiddenThumbnailSources))) {
+                notifyItemChanged(i);
+            }
         }
     }
 }

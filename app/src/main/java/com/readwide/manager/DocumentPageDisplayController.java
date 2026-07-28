@@ -17,8 +17,11 @@ final class DocumentPageDisplayController {
                 || page >= activity.pages.size()) {
             return;
         }
-        if ("EPUB".equals(activity.docType)
-                && activity.epubFixedLayoutLike
+        // docType is resolved off-thread. Apply the EPUB-only no-strip policy
+        // before the first page load as well as on later chrome toggles/singleTop
+        // document replacements.
+        activity.applyDocumentTopPageStatusVisibility();
+        if (activity.epubPageIsFixedLayout(page)
                 && (activity.webView.getWidth() <= 0 || activity.webView.getHeight() <= 0)) {
             final int requestedPage = page;
             activity.webView.post(() -> {
@@ -35,17 +38,29 @@ final class DocumentPageDisplayController {
             activity.webView.postDelayed(activity.releasePageTurnRunnable, 190);
         }
         activity.pendingSlideDirection = 0;
-        activity.snapDocumentPageTopAfterLoad = direction != 0;
+        activity.webView.removeCallbacks(activity.documentContentAnchorUpdateRunnable);
+        int previousPage = activity.currentPage;
         activity.currentPage = page;
+        activity.documentAnchorPageGeneration++;
+        if (previousPage != page) {
+            // Never let a late capture from the previous spine page become the
+            // bookmark/state anchor for this page.
+            activity.lastDocumentContentAnchorJson = "";
+        }
         DocumentPageActivity.Page p = activity.pages.get(page);
+        // Normal page turns snap after load. Vertical-rl uses a logical block
+        // alignment in DocumentPageActivity; initial/anchor loads keep their
+        // natural or restored position.
+        activity.snapDocumentPageTopAfterLoad = direction != 0;
         resetDocumentPageTransform();
         activity.wordSelectionActive = false;
         activity.webView.removeCallbacks(activity.checkWordSelectionAfterScrollRunnable);
-        activity.webView.getSettings().setJavaScriptEnabled("Word".equals(activity.docType)
-                || ("EPUB".equals(activity.docType) && activity.epubFixedLayoutLike));
+        activity.webView.getSettings().setJavaScriptEnabled(
+                activity.documentPageRequiresJavaScript(page));
         if (activity.rightWebView != null) {
+            int rightPage = activity.documentRightSpreadPageIndex();
             activity.rightWebView.getSettings().setJavaScriptEnabled(
-                    "EPUB".equals(activity.docType) && activity.epubFixedLayoutLike);
+                    activity.documentPageRequiresJavaScript(rightPage));
         }
         activity.configureWebViewForCurrentPage();
         activity.applyEpubBoundaryMarginsIfNeeded();
@@ -53,13 +68,14 @@ final class DocumentPageDisplayController {
         activity.updateDocumentSpreadVisibility();
         activity.beginDocumentFastScrollContentChange();
         activity.webView.loadDataWithBaseURL(
-                activity.documentBaseUrlForPage(p),
+                activity.documentBaseUrlForPageLoad(p, activity.webView, page),
                 activity.documentHtmlForDisplay(p, page),
                 "text/html",
                 "UTF-8",
                 null);
         activity.markCurrentEpubBoundaryRenderLoaded();
         activity.loadDocumentRightSpreadPageIfNeeded();
+        activity.onEpubDisplayedPageChanged(previousPage, page);
         activity.scheduleDocumentFastScrollUpdate();
         updateStatus();
         if (!activity.isMarkdownDocument() && !activity.isRenderedContentAnchorDocument()) {
