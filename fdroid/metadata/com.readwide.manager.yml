@@ -85,7 +85,7 @@ Builds:
 
   - versionName: 1.0.17
     versionCode: 10017
-    commit: 
+    commit: 94e313053def5ec40c5c942841d451aea25d1cff
     subdir: app
     gradle:
       - yes
