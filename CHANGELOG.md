@@ -6,7 +6,7 @@
 
 - Added a persistent **File display** choice to the fixed upper-right overflow beside the current location title (`Readwide`, `Download`, and folders).
 - File and Recent views can switch between the existing compact list and a two-column tile grid. The grid keeps cover thumbnails, file-type icons, reading progress, selection, search paths, and existing open/long-hold behavior.
-- The two-column layout gives covers and filenames more room than the previous three-column phone layout. Switching modes preserves the visible list position instead of jumping back to the beginning.
+- Switching modes preserves the visible list position instead of jumping back to the beginning.
 - The display choice is not added to per-file or long-hold action menus.
 
 ### TXT and Markdown annotations
