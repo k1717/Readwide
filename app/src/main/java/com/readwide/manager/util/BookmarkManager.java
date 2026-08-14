@@ -210,6 +210,7 @@ public class BookmarkManager {
 
         if (statesChanged) saveReadingStates();
         if (bookmarksChanged) saveBookmarks();
+        DocumentAnnotationManager.getInstance(context).moveFileReferences(oldPath, newPath);
     }
 
     /**
@@ -273,6 +274,8 @@ public class BookmarkManager {
 
         if (statesChanged) saveReadingStates();
         if (bookmarksChanged) saveBookmarks();
+        DocumentAnnotationManager.getInstance(context)
+                .movePathPrefixReferences(oldRootPath, newRootPath);
     }
 
     /**
@@ -401,6 +404,11 @@ public class BookmarkManager {
                 arr.put(b.toJson());
             }
             root.put("bookmarks", arr);
+
+            // Notes/highlights are stored in their own app-private JSON file but
+            // travel with the normal Readwide backup.
+            root.put("annotations",
+                    DocumentAnnotationManager.getInstance(context).exportJson());
 
             // Reading states
             JSONObject statesObj = new JSONObject();
@@ -648,6 +656,12 @@ public class BookmarkManager {
             JSONArray themesArr = root.optJSONArray("customThemes");
             if (themesArr != null) {
                 ThemeManager.getInstance(context).importCustomThemesFromJson(themesArr, merge);
+            }
+
+            JSONArray annotationsArr = root.optJSONArray("annotations");
+            if (annotationsArr != null) {
+                DocumentAnnotationManager.getInstance(context)
+                        .importJson(annotationsArr, merge);
             }
 
             if (importedBookmarks || importedReadingStates || importedSettings) {

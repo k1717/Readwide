@@ -1,10 +1,10 @@
-# FOSS status for Readwide 1.0.16
+# FOSS status for Readwide 1.0.17
 
-This is the project-level FOSS status note for the default Readwide 1.0.16 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
+This is the project-level FOSS status note for the default Readwide 1.0.17 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
 
 ## Current assessment
 
-The default Readwide 1.0.16 source package is intended to remain FOSS-friendly:
+The default Readwide 1.0.17 source package is intended to remain FOSS-friendly:
 
 - First-party source is licensed under Apache License 2.0.
 - Source code needed for the default build is included in the repository/source package.
@@ -22,17 +22,18 @@ The default Readwide 1.0.16 source package is intended to remain FOSS-friendly:
 | Readwide first-party source | App code | Apache-2.0 |
 | AndroidX / Material Components | Android UI/runtime support | Apache-2.0 |
 | JUniversalChardet | Text encoding detection | MPL-1.1 option used by this project |
-| Apache Commons Compress | TAR/7z/stream archive support and ZIP method fallback | Apache-2.0 |
-| libarchive-android | RAR/backend archive support through Android libarchive bindings | Android library artifact under Apache-2.0; bundled native libarchive under permissive BSD-style notices |
+| Apache Commons Compress | TAR/7z/stream archive support, ZIP method fallback, and decoded ZIPX Deflate64/BZip2 streams after WinZip AES handling | Apache-2.0 |
+| libarchive-android / libarchive 3.8.9 | Source-built Android archive backend, including ZIPX PPMd/Zstandard fallback and CAB/LHA/LZH read paths | Android wrapper under Apache-2.0; vendored libarchive and codec source under retained permissive notices |
+| XADMaster WinZip JPEG / WavPack 5.9.0 | Separate source-built shared library for WinZip-AES ZIPX JPEG and WavPack extraction | XAD WinZip JPEG and the JNI bridge under LGPL-2.1-or-later; WavPack under BSD-3-Clause; complete source/build scripts and in-APK license texts retained |
 | XZ for Java | XZ/LZMA support | 0BSD |
 | zstd-jni | JVM-only Zstandard archive fixtures (`testImplementation`); not packaged in the APK | BSD-family licensing path recorded in `THIRD_PARTY_NOTICES.md` |
-| Zip4j | ZIP/CBZ listing/extraction/encryption/split support | Apache-2.0 |
+| Zip4j | ZIP/CBZ/ZIPX listing, extraction, split support, and WinZip AES password/decryption primitives | Apache-2.0 |
 | hwplib | HWP 5.x read/text extraction backend | Apache-2.0 |
 | hwpxlib | HWPX read/text extraction backend | Apache-2.0 |
 | PdfBox-Android | PDF text extraction for in-document find (rendering stays on the platform PdfRenderer) | Apache-2.0 |
 | xunazo-derived AZO port | EGG AZO extraction | zlib license notice retained in source |
 
-See `docs/LICENSE_REPORT_READWIDE_1_0_16.md`, `docs/SBOM_READWIDE_1_0_16.spdx.json`, and `THIRD_PARTY_NOTICES.md` for detail.
+See `docs/LICENSE_REPORT_READWIDE_1_0_17.md`, `docs/SBOM_READWIDE_1_0_17.spdx.json`, and `THIRD_PARTY_NOTICES.md` for detail.
 
 ## RAR / CBR boundary
 
@@ -42,8 +43,9 @@ Default RAR handling is deliberately conservative:
 
 1. libarchive-android is the primary backend for common compressed RAR read/extract attempts.
 2. First-party Java handles covered metadata, safe paths, stored entries, stored split paths, and selected validation/cleanup paths.
-3. Scoped first-party decode-only fallbacks exist for eligible RAR3/RAR4 PPMd solid sets, covered RAR5 v5.0 compressed/solid runs, and fixture-tested RAR5 AES visible-header multi-volume chains, with CRC/password-check safeguards.
-4. Broad encrypted RAR, broad split/multi-volume RAR, SFX, VM-filtered RAR3/RAR4, broad RAR5-era variants, and complete RAR compatibility are not claimed.
+3. Scoped first-party decode-only fallbacks exist for eligible RAR3/RAR4 PPMd solid sets, covered RAR5-container algorithm-v0 (RAR 5/6) runs, bounded algorithm-v1 (RAR 7) runs, and fixture-tested RAR5 AES paths, with CRC/password-check safeguards.
+4. RAR7 support is an original first-party implementation of the published container fields and decompression changes: 80 distance codes, fractional dictionaries, non-power-of-two wrapping, and 64-bit distance reads. It does not bundle or depend on Junrar or UnRAR. A 1 TiB declaration is parsed but never allocated; retained history is capped at 64 MiB and farther real references fail cleanly.
+5. The first-party classic-LZ path recognizes the six standard RAR3 VM filters and now preserves program/length reuse across VM records and solid state. Custom VM bytecode, broad encrypted RAR, broad split/multi-volume RAR, SFX, long-history RAR7 streams, and complete RAR compatibility are not claimed.
 
 No Junrar or RARLAB UnRAR-license source code is bundled in the default build.
 
@@ -61,7 +63,7 @@ HWP/HWPX support is read-only and text-first:
 
 The app is a local file browser/reader and requests broad storage access for that purpose. Broad storage access is not a FOSS license issue by itself, but it is a privacy/review-sensitive Android permission and must stay documented in `PRIVACY.md`, the F-Droid metadata, and release notes.
 
-Readwide 1.0.16 additionally offers a persisted, read-oriented Storage Access Framework tree browser. It introduces no dependency, network service, or permission and does not weaken the disclosure for the separate raw-path file-management mode.
+Readwide 1.0.17 retains the persisted, read-oriented Storage Access Framework tree browser introduced in 1.0.16. It introduces no dependency, network service, or permission and does not weaken the disclosure for the separate raw-path file-management mode.
 
 The `FileProvider` configuration includes broad external storage sharing support so user-triggered open-with/share actions can grant temporary read access to selected files outside app-private storage. The provider is not exported and grants access through Android intent URI grants; this behavior still needs to remain documented because static scanners may flag broad `external-path` use.
 
@@ -86,16 +88,16 @@ When distributing APK/AAB files, keep these alongside the binary release assets:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_16.md`
-- `docs/SBOM_READWIDE_1_0_16.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_17.md`
+- `docs/SBOM_READWIDE_1_0_17.spdx.json`
 
-The APK itself also contains `assets/open_source_licenses/libarchive_android_and_codecs.txt`, with the exact native libarchive-android v1.1.6 input notices. Verify that entry after every release build; it is intentionally source-controlled rather than relying on dependency `META-INF` files that are absent from the upstream AAR.
+The APK itself also contains `assets/open_source_licenses/libarchive_android_and_codecs.txt`, with the exact pinned libarchive-android/libarchive 3.8.9 input notices, plus `xadmaster_winzip_jpeg_lgpl_2_1.txt` and `wavpack_bsd_3_clause.txt` for the ZIPX native codec module. Verify all three entries after every release build; they are intentionally source-controlled so the native notices are present in the binary distribution.
 
 The Android packaging block excludes duplicate dependency `META-INF/LICENSE*` / `META-INF/NOTICE*` resources to avoid resource merge conflicts. That does not remove the obligation to provide project-level and third-party notices with source and binary release materials; the native notice asset above supplies the in-APK copy for libarchive-android and its statically linked codecs.
 
 ## Caveats
 
-- `docs/LICENSE_REPORT_READWIDE_1_0_16.md` and `docs/SBOM_READWIDE_1_0_16.spdx.json` are direct-dependency/source-declared drafts, not a fully resolved transitive Gradle SBOM.
+- `docs/LICENSE_REPORT_READWIDE_1_0_17.md` and `docs/SBOM_READWIDE_1_0_17.spdx.json` are direct-dependency/source-declared drafts, not a fully resolved transitive Gradle SBOM.
 - A strict repository submission should regenerate a resolved dependency report/SBOM from a clean, network-enabled build environment.
-- The Android runtime native dependency is libarchive-android and may require additional source-build handling for strict source-only repositories. `zstd-jni` is test-only; F-Droid release assembly does not need its desktop native resources.
+- The Android runtime native backend is built from the vendored libarchive-android source and therefore requires Android NDK 29.0.14206865 and CMake 3.22.1. `zstd-jni` is test-only; F-Droid release assembly does not need its desktop native resources.
 - Archive compatibility claims must stay conservative and align with `README.md`, current release notes, the RAR/7z revalidation note, and the historical support-label terminology in `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`.

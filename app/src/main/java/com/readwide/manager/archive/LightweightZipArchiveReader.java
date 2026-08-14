@@ -4,9 +4,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -164,7 +162,7 @@ final class LightweightZipArchiveReader {
         if (parent == null) return false;
         if (!parent.exists() && !parent.mkdirs() && !parent.exists()) return false;
         try (InputStream in = new BufferedInputStream(zip.getInputStream(entry));
-             OutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+             OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             byte[] buffer = new byte[BUFFER_SIZE];
             int read;
             while ((read = in.read(buffer)) != -1) {

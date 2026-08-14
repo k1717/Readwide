@@ -599,7 +599,7 @@ final class ReaderChromeController {
         // The TextView is already one reader-row taller, so bottom gravity moves
         // the page indicator down while preserving stable TXT pagination.
         boolean rtl = ViewCompat.getLayoutDirection(activity.readerPageStatus)
-                == View.LAYOUT_DIRECTION_RTL;
+                == ViewCompat.LAYOUT_DIRECTION_RTL;
         int overlayStart = rtl ? overlaySideInsetRight : overlaySideInsetLeft;
         int overlayEnd = rtl ? overlaySideInsetLeft : overlaySideInsetRight;
         activity.readerPageStatus.setPaddingRelative(

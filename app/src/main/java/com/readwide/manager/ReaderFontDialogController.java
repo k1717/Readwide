@@ -28,7 +28,6 @@ import com.readwide.manager.util.FontManager;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * Owns the TXT reader font-picker UI. This keeps ReaderActivity focused on the
@@ -51,33 +50,16 @@ final class ReaderFontDialogController {
     private ReadingFontOption[] getReadingFontOptions() {
         List<ReadingFontOption> options = new ArrayList<>();
 
-        options.add(new ReadingFontOption("default",
-                "System Sans (recommended)",
-                "시스템 산세리프 (추천)"));
+        options.add(new ReadingFontOption("default", activity.getString(R.string.epub_font_system_sans)));
         options.add(new ReadingFontOption(FONT_OPTION_SYSTEM_CURRENT,
-                "Current system font",
-                "현재 시스템 글꼴"));
-        options.add(new ReadingFontOption("korean_sans",
-                "Korean/System Sans",
-                "한글 산세리프"));
-        options.add(new ReadingFontOption("korean_serif",
-                "Korean/System Serif",
-                "한글 명조/세리프"));
-        options.add(new ReadingFontOption("serif",
-                "Serif",
-                "세리프"));
-        options.add(new ReadingFontOption("monospace",
-                "Monospace",
-                "고정폭"));
-        options.add(new ReadingFontOption("sans_medium",
-                "Sans Medium",
-                "산세리프 미디엄"));
-        options.add(new ReadingFontOption("sans_condensed",
-                "Sans Condensed",
-                "산세리프 압축"));
-        options.add(new ReadingFontOption("sans_light",
-                "Sans Light",
-                "산세리프 라이트"));
+                activity.getString(R.string.epub_font_current_system)));
+        options.add(new ReadingFontOption("korean_sans", activity.getString(R.string.epub_font_korean_sans)));
+        options.add(new ReadingFontOption("korean_serif", activity.getString(R.string.epub_font_korean_serif)));
+        options.add(new ReadingFontOption("serif", activity.getString(R.string.epub_font_serif)));
+        options.add(new ReadingFontOption("monospace", activity.getString(R.string.epub_font_monospace)));
+        options.add(new ReadingFontOption("sans_medium", activity.getString(R.string.epub_font_sans_medium)));
+        options.add(new ReadingFontOption("sans_condensed", activity.getString(R.string.epub_font_sans_condensed)));
+        options.add(new ReadingFontOption("sans_light", activity.getString(R.string.epub_font_sans_light)));
 
         addUserFontOptions(options);
 
@@ -86,13 +68,9 @@ final class ReaderFontDialogController {
         if (!isCuratedReadingFontValue(current) && !containsReadingFontOption(options, current)) {
             if (FontManager.isSystemFamilyValue(current)) {
                 String familyName = FontManager.getSystemFamilyName(current);
-                options.add(new ReadingFontOption(current,
-                        "Saved system font: " + familyName,
-                        "저장된 시스템 글꼴: " + familyName));
+                options.add(new ReadingFontOption(current, familyName));
             } else {
-                options.add(new ReadingFontOption(current,
-                        "Installed/Custom: " + current,
-                        "설치/사용자 글꼴: " + current));
+                options.add(new ReadingFontOption(current, current));
             }
         }
 
@@ -110,9 +88,7 @@ final class ReaderFontDialogController {
                 if (fontName == null || fontName.trim().isEmpty()) continue;
                 String value = normalizeReadingFontValue(fontName);
                 if (isCuratedReadingFontValue(value) || containsReadingFontOption(options, value)) continue;
-                options.add(new ReadingFontOption(value,
-                        "Added font: " + fontName,
-                        "추가한 글꼴: " + fontName));
+                options.add(new ReadingFontOption(value, fontName));
             }
         } catch (Throwable ignored) {
             // Font scanning should never block opening the font picker.
@@ -144,8 +120,7 @@ final class ReaderFontDialogController {
     }
 
     private String getReadingFontLabel(@NonNull ReadingFontOption option) {
-        String lang = Locale.getDefault().getLanguage();
-        return "ko".equalsIgnoreCase(lang) ? option.koreanLabel : option.englishLabel;
+        return option.label;
     }
 
     private TextView makeReaderDialogTitle(String text, int bgColor, int fgColor) {
@@ -446,7 +421,7 @@ final class ReaderFontDialogController {
         actionRow.setPadding(activity.dpToPx(30), 0, activity.dpToPx(30), 0);
 
         TextView addFont = activity.dialogStyler().makeReaderDialogActionText(
-                localizedText("Add font", "글꼴 추가"),
+                activity.getString(R.string.select_font),
                 fg,
                 Gravity.CENTER_VERTICAL | Gravity.START);
         TextView cancel = activity.dialogStyler().makeReaderDialogActionText(activity.getString(R.string.cancel), fg,
@@ -529,7 +504,7 @@ final class ReaderFontDialogController {
         header.setClipToPadding(true);
 
         TextView title = activity.dialogStyler().makeReaderFontDialogTitle(
-                localizedText("Add font", "글꼴 추가"),
+                activity.getString(R.string.select_font),
                 bg,
                 fg);
         title.setBackgroundColor(Color.TRANSPARENT);
@@ -540,9 +515,7 @@ final class ReaderFontDialogController {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
         TextView hint = activity.dialogStyler().makeReaderDialogLabel(
-                localizedText(
-                        "Pick a .ttf/.otf font file, or choose a font found on your device.",
-                        "기기의 .ttf/.otf 글꼴 파일을 선택하거나, 기기에서 찾은 글꼴을 고르세요."),
+                activity.getString(R.string.font_picker_hint),
                 sub,
                 12f);
         hint.setGravity(Gravity.CENTER);
@@ -595,7 +568,7 @@ final class ReaderFontDialogController {
         String currentFont = normalizeReadingFontValue(activity.prefs.getFontFamily());
 
         TextView importRow = activity.dialogStyler().makeReaderFontActionRow(
-                localizedText("Add a font file (.ttf/.otf)", "폰트 파일 추가 (.ttf/.otf)"), fg, false);
+                activity.getString(R.string.font_add_file), fg, false);
         importRow.setOnClickListener(v -> {
             dialog.dismiss();
             activity.launchReadingFontImport();
@@ -604,7 +577,7 @@ final class ReaderFontDialogController {
 
         if (fontNames.isEmpty()) {
             TextView empty = activity.dialogStyler().makeReaderDialogLabel(
-                    localizedText("No readable system fonts found.", "읽을 수 있는 시스템 글꼴을 찾지 못했습니다."),
+                    activity.getString(R.string.font_no_system_found),
                     sub,
                     14f);
             empty.setGravity(Gravity.CENTER);
@@ -660,7 +633,7 @@ final class ReaderFontDialogController {
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setBackgroundColor(Color.TRANSPARENT);
 
-        TextView title = makeReaderDialogTitle(localizedText("Remove font", "글꼴 삭제"), bg, fg);
+        TextView title = makeReaderDialogTitle(activity.getString(R.string.font_remove_title), bg, fg);
         panel.addView(title, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -672,12 +645,7 @@ final class ReaderFontDialogController {
 
         TextView message = new TextView(activity);
         String safeLabel = label != null && !label.trim().isEmpty() ? label.trim() : value;
-        message.setText(safeLabel + "\n\n" + localizedText(
-                "Remove this user-added font from Readwide?",
-                "이 사용자 추가 글꼴을 Readwide에서 삭제할까요?")
-                + "\n" + localizedText(
-                "System fonts and document files are not affected.",
-                "시스템 글꼴과 문서 파일은 영향받지 않습니다."));
+        message.setText(activity.getString(R.string.font_remove_confirm, safeLabel));
         message.setTextColor(fg);
         message.setTextSize(14f);
         message.setLineSpacing(0f, 1.15f);
@@ -721,21 +689,14 @@ final class ReaderFontDialogController {
                     activity.applyPreferences();
                     activity.updatePositionLabel();
                 }
-                ShortToast.show(activity, localizedText("Font removed", "글꼴을 삭제했습니다"));
+                ShortToast.show(activity, R.string.font_removed);
                 dialog.dismiss();
                 if (afterRemove != null) afterRemove.run();
             } else {
-                ShortToast.show(activity, localizedText(
-                        "This font cannot be removed from inside the app.",
-                        "이 글꼴은 앱 안에서 삭제할 수 없습니다."));
+                ShortToast.show(activity, R.string.font_remove_failed);
             }
         });
         dialog.show();
     }
-
-    private String localizedText(String english, String korean) {
-        return "ko".equalsIgnoreCase(Locale.getDefault().getLanguage()) ? korean : english;
-    }
-
 
 }

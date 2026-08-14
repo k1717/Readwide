@@ -7,10 +7,8 @@ import org.tukaani.xz.LZMA2InputStream;
 import org.tukaani.xz.LZMAInputStream;
 
 import java.io.ByteArrayInputStream;
-import java.io.BufferedOutputStream;
 import java.io.EOFException;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -722,7 +720,7 @@ final class SevenZBcj2ArchiveReader {
             throw new IOException("7z entry slice out of range");
         }
         boolean ok = false;
-        try (OutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             out.write(data, (int) offset, (int) size);
             out.flush();
             ok = true;

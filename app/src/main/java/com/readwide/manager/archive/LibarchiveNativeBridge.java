@@ -1,7 +1,6 @@
 package com.readwide.manager.archive;
 
 import android.os.Build;
-import android.os.ParcelFileDescriptor;
 import android.system.OsConstants;
 import android.util.Log;
 
@@ -12,6 +11,7 @@ import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -224,7 +224,7 @@ final class LibarchiveNativeBridge {
                     if (parent != null && !parent.exists() && !parent.mkdirs()) {
                         throw new IOException("Cannot create output directory: " + parent);
                     }
-                    extractCurrentEntry(reader.archive, entry, out, progress);
+                    extractCurrentEntry(reader.archive, out, progress);
                 } else {
                     // Do not materialize symlinks/devices from archives in the app sandbox.
                     Archive.readDataSkip(reader.archive);
@@ -287,7 +287,7 @@ final class LibarchiveNativeBridge {
                 String comparePath = path == null ? null : normalizeForCompare(path);
                 if (comparePath == null || !wanted.equals(comparePath)) {
                     if (primeSkippedRegularFiles && isRegularFile(entry)) {
-                        drainCurrentRegularEntryForSequentialDecoder(reader.archive, entry, parent, progress);
+                        drainCurrentRegularEntryForSequentialDecoder(reader.archive, progress);
                     } else {
                         Archive.readDataSkip(reader.archive);
                     }
@@ -296,7 +296,7 @@ final class LibarchiveNativeBridge {
                 if (isDirectory(entry)) throw new IOException("Archive entry is a directory");
                 if (!isRegularFile(entry)) throw new IOException("Unsupported archive entry type");
                 if (progress != null) progress.setDetail(new File(path).getName());
-                extractCurrentEntry(reader.archive, entry, outFile, progress);
+                extractCurrentEntry(reader.archive, outFile, progress);
                 return true;
             }
             return false;
@@ -431,43 +431,52 @@ final class LibarchiveNativeBridge {
     }
 
     private static void extractCurrentEntry(long archive,
-                                            long entry,
                                             @NonNull File outFile,
                                             @Nullable FileOperationProgress progress)
             throws IOException, ArchiveException {
         if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
-        long size = ArchiveEntry.sizeIsSet(entry) ? Math.max(0L, ArchiveEntry.size(entry)) : -1L;
-        try (ParcelFileDescriptor pfd = ParcelFileDescriptor.open(outFile,
-                ParcelFileDescriptor.MODE_CREATE
-                        | ParcelFileDescriptor.MODE_TRUNCATE
-                        | ParcelFileDescriptor.MODE_WRITE_ONLY)) {
-            Archive.readDataIntoFd(archive, pfd.getFd());
+        ByteBuffer block = ByteBuffer.allocateDirect(BLOCK_SIZE);
+        byte[] decoded = new byte[BLOCK_SIZE];
+        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
+            while (true) {
+                if (progress != null && !progress.checkpoint()) {
+                    throw new IOException("RAR extraction cancelled");
+                }
+                block.clear();
+                Archive.readData(archive, block);
+                int produced = block.position();
+                if (produced <= 0) break;
+                block.flip();
+                block.get(decoded, 0, produced);
+                // The operation-wide budget is charged by this guarded output
+                // before each physical write, including entries whose header did
+                // not declare an unpacked size.
+                out.write(decoded, 0, produced);
+                if (progress != null) progress.addDoneBytes(produced);
+            }
+            out.flush();
         }
-        if (progress != null && size > 0L) progress.addDoneBytes(size);
     }
 
     private static void drainCurrentRegularEntryForSequentialDecoder(long archive,
-                                                                     long entry,
-                                                                     @Nullable File tempParent,
                                                                      @Nullable FileOperationProgress progress)
             throws IOException, ArchiveException {
         if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
-        File dir = tempParent != null ? tempParent : new File(System.getProperty("java.io.tmpdir", "."));
-        if (!dir.exists() && !dir.mkdirs()) throw new IOException("Cannot create temporary extraction directory");
-        File temp = File.createTempFile("libarchive-solid-primer-", ".tmp", dir);
-        try {
-            try (ParcelFileDescriptor pfd = ParcelFileDescriptor.open(temp,
-                    ParcelFileDescriptor.MODE_CREATE
-                            | ParcelFileDescriptor.MODE_TRUNCATE
-                            | ParcelFileDescriptor.MODE_WRITE_ONLY)) {
-                Archive.readDataIntoFd(archive, pfd.getFd());
+        ByteBuffer block = ByteBuffer.allocateDirect(BLOCK_SIZE);
+        long decodedBytes = 0L;
+        while (true) {
+            if (progress != null && !progress.checkpoint()) {
+                throw new IOException("RAR extraction cancelled");
             }
-        } finally {
-            try {
-                //noinspection ResultOfMethodCallIgnored
-                temp.delete();
-            } catch (SecurityException ignored) {
+            block.clear();
+            Archive.readData(archive, block);
+            int produced = block.position();
+            if (produced <= 0) return;
+            if (decodedBytes > ArchiveSupport.MAX_EXTRACTION_TOTAL_BYTES - produced) {
+                throw new ArchiveSupport.UnsupportedArchiveFeatureException(
+                        "Sequential archive entry exceeds the extraction safety limit");
             }
+            decodedBytes += produced;
         }
     }
 

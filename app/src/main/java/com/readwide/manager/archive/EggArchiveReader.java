@@ -6,9 +6,7 @@ import androidx.annotation.Nullable;
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 import org.tukaani.xz.LZMAInputStream;
 
-import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -363,7 +361,7 @@ final class EggArchiveReader {
         if (!parent.exists() && !parent.mkdirs()) throw new IOException("Cannot create output directory");
 
         boolean ok = false;
-        try (OutputStream fileOut = new BufferedOutputStream(new FileOutputStream(outFile))) {
+        try (OutputStream fileOut = ArchiveSupport.openExtractionOutputStream(outFile)) {
             SolidRangeWriter writer = new SolidRangeWriter(fileOut, offset, length);
             CRC32 runningCrc = new CRC32();
             try {
@@ -456,7 +454,7 @@ final class EggArchiveReader {
                 if (parent != null && !parent.exists() && !parent.mkdirs()) {
                     throw new IOException("Cannot create output directory");
                 }
-                current = new BufferedOutputStream(new FileOutputStream(target.outFile));
+                current = ArchiveSupport.openExtractionOutputStream(target.outFile);
                 currentFile = target.outFile;
                 wroteAny = true;
             } else {
@@ -948,7 +946,7 @@ final class EggArchiveReader {
         if (!parent.exists() && !parent.mkdirs()) throw new IOException("Cannot create output directory");
 
         boolean ok = false;
-        try (OutputStream out = new FileOutputStream(outFile)) {
+        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             CRC32 runningCrc = new CRC32();
             for (EggBlock block : entry.blocks) {
                 if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");

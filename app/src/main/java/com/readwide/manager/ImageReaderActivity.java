@@ -127,6 +127,14 @@ public class ImageReaderActivity extends AppCompatActivity {
     // to instance fields declared later in the class.
     private volatile boolean destroyed;
     private long backgroundStoppedAtElapsedRealtime = -1L;
+    /**
+     * True when Android asked a stopped viewer to release UI memory.  Keep the
+     * activity and archive sequence alive, then decode the same current index
+     * again from onStart().  Finishing here used to expose MainActivity's
+     * Recents list whenever Samsung sent TRIM_MEMORY_BACKGROUND after an app
+     * switch, even though the process and task were still healthy.
+     */
+    private boolean backgroundImageMemoryReleased;
     private final Runnable backgroundExpiryRunnable = () -> {
         long stoppedAt = backgroundStoppedAtElapsedRealtime;
         if (stoppedAt > 0L
@@ -348,6 +356,14 @@ public class ImageReaderActivity extends AppCompatActivity {
             // Keep the task itself alive and close only this viewer. MainActivity
             // underneath resumes with the already-persisted image position.
             finish();
+            return;
+        }
+        if (backgroundImageMemoryReleased && !isFinishing() && !destroyed) {
+            backgroundImageMemoryReleased = false;
+            // currentIndex, sourceEntryPaths and the archive credentials remain
+            // authoritative while only decoded UI memory is released. Rebuild
+            // the same page instead of recreating or closing the viewer.
+            loadImageAsync();
         }
     }
 
@@ -409,10 +425,7 @@ public class ImageReaderActivity extends AppCompatActivity {
                 && backgroundStoppedAtElapsedRealtime > 0L
                 && !isFinishing()
                 && !destroyed) {
-            // Background memory pressure is the other known stale-cache path.
-            // Closing now releases bitmap/archive readers and avoids attempting
-            // a partial reconstruction when the user later returns.
-            finish();
+            releaseStoppedViewerImageMemory();
         }
     }
 
@@ -422,8 +435,26 @@ public class ImageReaderActivity extends AppCompatActivity {
         if (backgroundStoppedAtElapsedRealtime > 0L
                 && !isFinishing()
                 && !destroyed) {
-            finish();
+            releaseStoppedViewerImageMemory();
         }
+    }
+
+    /**
+     * Releases decoded display and prefetch bitmaps without discarding archive
+     * navigation state. This method runs on the main thread from the component
+     * callbacks. In-flight decode generations are invalidated, so a late result
+     * cannot repopulate the stopped surface. The shared archive reader is kept
+     * alive until the normal ten-minute expiry/onDestroy path because closing it
+     * here can race an extraction already running on a worker.
+     */
+    private void releaseStoppedViewerImageMemory() {
+        if (backgroundImageMemoryReleased) return;
+        mainHandler.removeCallbacks(imageProgressSaveRunnable);
+        persistArchiveImageProgress();
+        persistImageReadingProgress();
+        invalidateImageSequenceWork(true);
+        clearCurrentImageSurface(true);
+        backgroundImageMemoryReleased = true;
     }
 
     @Override
@@ -548,7 +579,7 @@ public class ImageReaderActivity extends AppCompatActivity {
                 mainHandler.post(() -> {
                     if (!destroyed && token.equals(sequenceHandoffToken)) {
                         sequenceHandoffToken = null;
-                        loadImageAsync();
+                        if (!backgroundImageMemoryReleased) loadImageAsync();
                     }
                 });
                 return;
@@ -636,7 +667,7 @@ public class ImageReaderActivity extends AppCompatActivity {
                 sequence.clearSensitiveData();
             }
         }
-        if (applied && !destroyed) {
+        if (applied && !destroyed && !backgroundImageMemoryReleased) {
             loadImageAsync();
         }
     }
@@ -669,7 +700,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             }
         }
         updateToolbarTitle();
-        loadImageAsync();
+        if (!backgroundImageMemoryReleased) loadImageAsync();
     }
 
     /**

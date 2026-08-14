@@ -1,0 +1,1 @@
+목록/2열 타일 표시와 대화면 EPUB 가로 2페이지 보기를 추가했습니다. 메모/하이라이트는 툴바에서 바로 열며, 다른 앱에서 돌아오면 아카이브 뷰어가 같은 페이지를 복구합니다. WinZip AES ZIPX의 Deflate64·BZip2·LZMA·XZ·PPMd·Zstandard·JPEG·WavPack을 지원합니다. CAB·LHA/LZH 읽기와 압축 해제, RAR6 및 제한적 RAR7 해제를 보강했습니다. 새 권한은 없습니다.

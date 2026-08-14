@@ -5,11 +5,9 @@ import androidx.annotation.Nullable;
 
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 
-import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -408,7 +406,7 @@ final class AlzipArchiveReader {
 
         boolean ok = false;
         try (InputStream decoded = openDecodedPayloadStream(in, entry, password);
-             OutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+             OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             CRC32 crc = new CRC32();
             copyDecodedPayload(decoded, out, crc, progress);
             verifyCrc(entry, crc.getValue());

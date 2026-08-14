@@ -370,7 +370,8 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             title = (TextView) itemView;
         }
         void bind(Row row) {
-            title.setText(row.fileName + "  •  " + row.count);
+            title.setText(itemView.getContext().getString(
+                    R.string.bookmark_metadata_format, row.fileName, String.valueOf(row.count)));
             title.setTextColor(blendColors(dialogBgColor, textColor, 0.90f));
             boolean lightDialog = isLightColor(dialogBgColor);
             GradientDrawable bg = new GradientDrawable();
@@ -430,13 +431,15 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             arrow.setText(row.expanded ? "▾" : "▸");
             arrow.setTextColor(textColor);
 
-            String prefix = row.currentFile ? "현재 파일  •  " : "";
-            title.setText(prefix + row.fileName);
+            title.setText(row.currentFile
+                    ? itemView.getContext().getString(R.string.bookmark_current_file_format, row.fileName)
+                    : row.fileName);
             title.setTextColor(textColor);
 
-            String countText = row.count + (row.count == 1 ? " bookmark" : " bookmarks");
+            String countText = itemView.getContext().getString(R.string.bookmark_count_format, row.count);
             meta.setText(row.fileMissing
-                    ? countText + "  •  " + itemView.getContext().getString(R.string.bookmark_file_missing_badge)
+                    ? itemView.getContext().getString(R.string.bookmark_metadata_format,
+                            countText, itemView.getContext().getString(R.string.bookmark_file_missing_badge))
                     : countText);
             meta.setTextColor(row.fileMissing
                     ? blendColors(dialogBgColor, textColor, lightDialog ? 0.820f : 0.880f)
@@ -498,7 +501,8 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
             String display = displayTitleForBookmark(bookmark);
             title.setText(display != null && !display.isEmpty()
                     ? display
-                    : "Position " + bookmark.getCharPosition());
+                    : itemView.getContext().getString(
+                            R.string.bookmark_position_format, bookmark.getCharPosition()));
             title.setTextColor(textColor);
 
             String excerptText = bookmark.getExcerpt();
@@ -524,11 +528,13 @@ public class BookmarkFolderAdapter extends RecyclerView.Adapter<RecyclerView.Vie
                 pageText = "Page " + page + " / " + total + "  •  ";
             }
             boolean missing = isMissingFilePath(bookmark.getFilePath());
-            String missingPrefix = missing
-                    ? itemView.getContext().getString(R.string.bookmark_file_missing_badge) + "  •  "
-                    : "";
-            meta.setText(missingPrefix + pageText
-                    + bookmarkLocationMetadata(bookmark, range) + "  •  " + dateStr);
+            String locationText = pageText + bookmarkLocationMetadata(bookmark, range);
+            String datedLocation = itemView.getContext().getString(
+                    R.string.bookmark_metadata_format, locationText, dateStr);
+            meta.setText(missing
+                    ? itemView.getContext().getString(R.string.bookmark_metadata_format,
+                            itemView.getContext().getString(R.string.bookmark_file_missing_badge), datedLocation)
+                    : datedLocation);
             meta.setTextColor(missing
                     ? blendColors(dialogBgColor, textColor, lightDialog ? 0.690f : 0.780f)
                     : pathTextColor);

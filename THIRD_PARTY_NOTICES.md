@@ -2,11 +2,11 @@
 
 Readwide first-party source code is licensed under the Apache License 2.0. Keep this file with source releases and with binary release materials such as APK/AAB release assets.
 
-This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.16 build. It does not replace a fully resolved transitive dependency report.
+This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.17 build. It does not replace a fully resolved transitive dependency report.
 
 ## Default build boundary
 
-The default Readwide 1.0.16 package is the FOSS-oriented public line:
+The default Readwide 1.0.17 package is the FOSS-oriented public line:
 
 - first-party source: Apache-2.0;
 - no Junrar or RARLAB UnRAR-license code bundled;
@@ -16,7 +16,7 @@ The default Readwide 1.0.16 package is the FOSS-oriented public line:
 - no Hancom proprietary SDK, LibreOffice bundle, or server conversion service;
 - no ads, analytics, telemetry SDK, account system, or network update checker in the default app.
 
-See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_16.md`, and `docs/SBOM_READWIDE_1_0_16.spdx.json`.
+See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_17.md`, and `docs/SBOM_READWIDE_1_0_17.spdx.json`.
 
 ## Runtime dependencies
 
@@ -51,12 +51,23 @@ License: Apache License 2.0.
 
 ### libarchive-android
 
-- Artifact: `me.zhanghai.android.libarchive:library:1.1.6`
+- Source module: `project(':libarchiveAndroid')`, vendored under `third_party/libarchive-android`
 - Project: `https://github.com/zhanghai/libarchive-android`
 - Purpose: Android libarchive Java/JNI backend used for RAR and other backend-dependent archive paths.
-- License position: Android library artifact under Apache License 2.0; bundled native libarchive under permissive BSD-style upstream notices.
-- 7z method note: 7z BCJ2 and PPMd entries (which neither Commons Compress nor a decryption-less libarchive can handle for AES-encrypted archives) are decoded by first-party Java in `SevenZBcj2ArchiveReader`/`SevenZBcj2Decoder`/`SevenZAesDecoder`/`SevenZPpmd7Decoder` (see `docs/SEVENZ_BCJ2_READER_READWIDE_1_0_11.md` and `docs/SEVENZ_PPMD_READER_READWIDE_1_0_11.md`). `SevenZPpmd7Decoder` is a Java port of the public-domain Ppmd7 reference - Dmitry Shkarin's PPMd var.H (2001, public domain) as maintained in Igor Pavlov's Ppmd7 codec (public domain) - obtained from pyppmd's source distribution; public-domain code carries no license obligations and is Apache-2.0 compatible. The bundled native libarchive also decodes unencrypted 7z PPMd as a fallback, via the same public-domain `Ppmd7.c` carried under libarchive's own BSD-style licensing. No code under the 7-Zip, UnRAR, or libarchive licenses is copied into the Readwide repository; test fixtures for these methods are self-made with p7zip from first-party content.
-- Binary-release requirement: `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt` is packaged into the APK and reproduces the applicable wrapper, libarchive, UC Regents, BLAKE2, bzip2, liblzma, LZ4, Zstandard, zlib, Mbed TLS, and Apache-2.0 notices from the exact v1.1.6 native inputs. Keep this asset in binary builds and keep this project-level notice with source/release materials.
+- Pinned source: wrapper commit `3a592be028c7be41847f667570bd343c0010bd9d`, advanced by Readwide to official libarchive commit `27cbc7827172698143e440801fc0ba39ccb4f1f5` (libarchive 3.8.9). Exact codec commits are recorded in `third_party/libarchive-android/UPSTREAM.md`.
+- Build boundary: Java/JNI and native codec sources are compiled by Gradle, Android NDK 29.0.14206865, and CMake 3.22.1. No prebuilt `.aar`, `.so`, or other native library is checked into the source module.
+- License position: Android wrapper under Apache License 2.0; libarchive and its native codec inputs under the permissive upstream notices retained within the vendored source tree.
+- 7z method note: 7z BCJ2 and PPMd entries (which Commons Compress cannot handle for AES-encrypted archives) are decoded by first-party Java in `SevenZBcj2ArchiveReader`/`SevenZBcj2Decoder`/`SevenZAesDecoder`/`SevenZPpmd7Decoder` (see `docs/SEVENZ_BCJ2_READER_READWIDE_1_0_11.md` and `docs/SEVENZ_PPMD_READER_READWIDE_1_0_11.md`). `SevenZPpmd7Decoder` is a Java port of the public-domain Ppmd7 reference - Dmitry Shkarin's PPMd var.H (2001, public domain) as maintained in Igor Pavlov's Ppmd7 codec (public domain) - obtained from pyppmd's source distribution; public-domain code carries no license obligations and is Apache-2.0 compatible. Vendored libarchive also decodes unencrypted 7z PPMd as a fallback, via the public-domain `Ppmd7.c` carried under libarchive's BSD-style licensing. No 7-Zip or UnRAR-license source is included; test fixtures for these methods are self-made with p7zip from first-party content.
+- Binary-release requirement: `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt` is packaged into the APK and reproduces the applicable wrapper, libarchive, UC Regents, BLAKE2, bzip2, liblzma, LZ4, Zstandard, zlib, Mbed TLS, and Apache-2.0 notices from the pinned source inputs. Keep this asset in binary builds and keep this project-level notice with source/release materials.
+
+### ZIPX JPEG/WavPack native codec module
+
+- Source module: `project(':zipxCodecsAndroid')`, vendored under `third_party/zipx-codecs-android`.
+- Purpose: WinZip ZIPX method 96 (JPEG) and method 97 (WavPack) decoding after Readwide's bounded WinZip AES authentication/decryption layer.
+- XADMaster WinZip JPEG: tag `v1.10.8`, commit `881e0ec25e249c9ad5bbc1b6782ae8dcdf48a6ed`, LGPL-2.1-or-later. Only the C WinZip JPEG decoder, its support files, and the public-domain LZMA SDK decoder subset are imported. Readwide's allocation/output hardening and modification summary are recorded in `third_party/zipx-codecs-android/UPSTREAM.md`.
+- WavPack: official tag `5.9.0`, commit `5803634a030e2a11dba602ba057b89cc34486c67`, BSD-3-Clause. It is compiled from the pinned source; no upstream binary is bundled.
+- Linking boundary: XAD-derived code and the Readwide JNI bridge are contained in the separate shared library `libreadwide-zipx-codecs.so`. The Apache-2.0 app calls its small Java API dynamically. Complete corresponding source and CMake/Gradle build scripts are included so recipients can modify and rebuild/relink the LGPL library, and Readwide imposes no reverse-engineering restriction for debugging such modifications.
+- Binary-release requirement: the APK packages the complete LGPL-2.1 license at `assets/open_source_licenses/xadmaster_winzip_jpeg_lgpl_2_1.txt` and the WavPack BSD-3-Clause notice at `assets/open_source_licenses/wavpack_bsd_3_clause.txt`. Keep both assets in binary builds.
 
 ### XZ for Java
 
@@ -110,17 +121,18 @@ License: Apache License 2.0.
 ## Build tooling
 
 - Gradle wrapper / Gradle build tool: Apache License 2.0.
-- Android Gradle Plugin `com.android.application` 9.2.0: Android SDK / Google Maven distribution terms for build tooling; not bundled as app runtime code.
+- Android Gradle Plugin `com.android.application` / `com.android.library` 9.2.0: Android SDK / Google Maven distribution terms for build tooling; not bundled as app runtime code.
+- Android NDK 29.0.14206865 and CMake 3.22.1: compile the vendored native source module; build tooling only.
 
 ## First-party / bundled algorithm notices
 
 ### RAR3/RAR4 PPMd decoder
 
-Readwide includes first-party extraction-only Java code for a scoped RAR3/RAR4 PPMd variant H decoding path. PPMd variant H is a public-domain algorithm by Dmitry Shkarin; the implementation follows public algorithm behavior and is used only for decoding covered unencrypted single-volume cases with CRC verification. No RARLAB UnRAR source code or libarchive source code is copied into the repository.
+Readwide includes first-party extraction-only Java code for a scoped RAR3/RAR4 PPMd variant H decoding path. PPMd variant H is a public-domain algorithm by Dmitry Shkarin; the implementation follows public algorithm behavior and is used only for decoding covered unencrypted single-volume cases with CRC verification. This first-party implementation contains no copied RARLAB UnRAR or libarchive code; the separately vendored libarchive backend is described above.
 
 ### RAR5 compressed decoder
 
-Readwide includes first-party extraction-only Java code for a scoped RAR5 v5.0 compressed decoding path. It is limited to covered cases, including fixture-tested visible-header AES multi-volume chains, and uses CRC/password-check safeguards. It does not implement RAR compression, RAR creation, password recovery, or broad encrypted/split/SFX compatibility. No RARLAB UnRAR source code or libarchive source code is copied into the repository.
+Readwide includes first-party extraction-only Java code for a scoped RAR5 v5.0 compressed decoding path. It is limited to covered cases, including fixture-tested visible-header AES multi-volume chains, and uses CRC/password-check safeguards. It does not implement RAR compression, RAR creation, password recovery, or broad encrypted/split/SFX compatibility. This first-party implementation contains no copied RARLAB UnRAR or libarchive code; the separately vendored libarchive backend is described above.
 
 ### AZO decoder
 
@@ -160,5 +172,5 @@ The Gradle packaging block may exclude duplicate dependency `META-INF/LICENSE*` 
 - `LICENSE`
 - `NOTICE`
 - `THIRD_PARTY_NOTICES.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_16.md`
-- `docs/SBOM_READWIDE_1_0_16.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_17.md`
+- `docs/SBOM_READWIDE_1_0_17.spdx.json`

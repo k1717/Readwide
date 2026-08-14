@@ -81,6 +81,8 @@ final class ReaderToolsDialogController {
         addMoreActionRow(list, activity.getString(R.string.text_encoding), fg, panel, this::showTextEncodingDialog, ref);
 
         addMoreSectionHeader(list, activity.getString(R.string.more_section_tools), sub);
+        addMoreActionRow(list, activity.getString(R.string.annotations_title), fg, panel,
+                activity::showAnnotationsDialog, ref);
         addMoreActionRow(list, activity.getString(R.string.tts_title), fg, panel, activity::showTtsDialog, ref);
         addMoreActionRow(list, activity.getString(R.string.file_info), fg, panel, activity::showFileInfoDialog, ref);
 

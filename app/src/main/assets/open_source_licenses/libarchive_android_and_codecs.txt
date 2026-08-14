@@ -1,20 +1,23 @@
 Readwide APK open-source notices: libarchive-android and native codecs
 ========================================================================
 
-This file is packaged inside the Readwide APK because the
-me.zhanghai.android.libarchive:library:1.1.6 AAR contributes native
-libarchive-jni.so binaries. The upstream v1.1.6 tag is commit
-d3ee9c472173fcaf28e737f59dd34ef6cf3d1c88 and pins:
+This file is packaged inside the Readwide APK because the source module at
+third_party/libarchive-android builds the native libarchive-jni.so library.
+The pinned libarchive-android wrapper commit is
+3a592be028c7be41847f667570bd343c0010bd9d. Readwide advances its libarchive
+source baseline to the official v3.8.9 tag while retaining the wrapper's
+codec revisions:
 
-  libarchive  9525f90ca4bd14c7b335e2f8c84a4607b0af6bdf (3.8.1)
+  libarchive  27cbc7827172698143e440801fc0ba39ccb4f1f5 (3.8.9)
   bzip2       6a8690fc8d26c815e798c588f796eabe9d684cf0
-  XZ Utils    a522a226545730551f7e7c2685fab27cf567746c
+  XZ Utils    4b73f2ec19a99ef465282fbce633e8deb33691b3
   LZ4         ebb370ca83af193212df4dcbadcc5d87bc0de2f0
   Zstandard   f8745da6ff1ad1e7bab384bd1f9d742439278e99
-  Mbed TLS    2fc8413bfcb51354c8e679141b17b3f1a5942561
+  Mbed TLS    068ff080b369adfac81509f9b57b2afabaf82dc5
 
-The Android NDK platform libz is also linked. The notices below reproduce
-the applicable upstream license/copyright terms for binary distribution.
+The Android NDK platform libz is also linked. The source tree contains no
+prebuilt AAR or shared library. The notices below reproduce the applicable
+upstream license/copyright terms for binary distribution.
 
 
 libarchive-android Java/JNI wrapper

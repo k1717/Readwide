@@ -62,10 +62,12 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.readwide.manager.controller.AutoPageTurnController;
 import com.readwide.manager.controller.ReaderToolbarController;
 import com.readwide.manager.model.Bookmark;
+import com.readwide.manager.model.DocumentAnnotation;
 import com.readwide.manager.model.LargeTextLinePartitionResult;
 import com.readwide.manager.search.LargeTextSearchEngine;
 import com.readwide.manager.search.LargeTextSearchTotalCache;
 import com.readwide.manager.util.BookmarkManager;
+import com.readwide.manager.util.DocumentAnnotationManager;
 import com.readwide.manager.util.FontManager;
 import com.readwide.manager.util.PrefsManager;
 import com.readwide.manager.util.ThemeManager;
@@ -143,6 +145,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     int totalLines;
 
     BookmarkManager bookmarkManager;
+    private DocumentAnnotationManager annotationManager;
     PrefsManager prefs;
     ThemeManager themeManager;
 
@@ -178,6 +181,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     private ActionMode txtSelectionActionMode;
     private String txtSelectionActionText = "";
     private int txtSelectionActionCharPosition = 0;
+    private int txtSelectionActionEndPosition = 0;
     final LargeTextSearchTotalCache largeTextSearchTotalCache = new LargeTextSearchTotalCache();
     LargeTextSearchEngine largeTextSearchEngine;
     ReaderToolbarController readerToolbarController;
@@ -840,7 +844,9 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
         new ReaderTextDisplayRuleDialogController(this).showQuickTextDisplayRuleDialog(prefillFind, defaultCurrentFileOnly);
     }
 
-    void showTxtSelectedTextActionDialog(@Nullable String selectedText, int charPosition) {
+    void showTxtSelectedTextActionDialog(@Nullable String selectedText,
+                                         int startPosition,
+                                         int endPosition) {
         final String safeText = selectedText != null ? selectedText : "";
         if (safeText.trim().isEmpty()) {
             if (readerView != null) readerView.clearTextSelection();
@@ -849,9 +855,12 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
         }
 
         txtSelectionActionText = safeText;
-        txtSelectionActionCharPosition = Math.max(0, charPosition);
+        txtSelectionActionCharPosition = Math.max(0, startPosition);
+        txtSelectionActionEndPosition = Math.max(txtSelectionActionCharPosition, endPosition);
         final int actionCopy = 1;
         final int actionDisplayRule = 2;
+        final int actionNote = 3;
+        final int actionHighlight = 4;
         if (txtSelectionActionMode != null) {
             txtSelectionActionMode.invalidate();
             return;
@@ -864,6 +873,10 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
                 menu.add(Menu.NONE, actionCopy, 0, getString(R.string.copy))
                         .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
                 menu.add(Menu.NONE, actionDisplayRule, 1, getString(R.string.txt_display_rule_quick_add))
+                        .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+                menu.add(Menu.NONE, actionNote, 2, getString(R.string.annotation_note))
+                        .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+                menu.add(Menu.NONE, actionHighlight, 3, getString(R.string.annotation_highlight))
                         .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
                 return true;
             }
@@ -882,6 +895,8 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
             @Override
             public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
                 String actionText = txtSelectionActionText != null ? txtSelectionActionText : "";
+                int actionStart = txtSelectionActionCharPosition;
+                int actionEnd = txtSelectionActionEndPosition;
                 int itemId = item.getItemId();
                 if (itemId == actionCopy) {
                     ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -897,6 +912,18 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
                     showQuickTextDisplayRuleDialog(actionText.trim(), true);
                     return true;
                 }
+                if (itemId == actionNote) {
+                    mode.finish();
+                    addTxtAnnotation(DocumentAnnotation.TYPE_NOTE,
+                            actionText, actionStart, actionEnd);
+                    return true;
+                }
+                if (itemId == actionHighlight) {
+                    mode.finish();
+                    addTxtAnnotation(DocumentAnnotation.TYPE_HIGHLIGHT,
+                            actionText, actionStart, actionEnd);
+                    return true;
+                }
                 return false;
             }
 
@@ -905,6 +932,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
                 txtSelectionActionMode = null;
                 txtSelectionActionText = "";
                 txtSelectionActionCharPosition = 0;
+                txtSelectionActionEndPosition = 0;
                 if (readerView != null) readerView.clearTextSelection();
             }
 
@@ -925,6 +953,105 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
         if (txtSelectionActionMode != null) {
             txtSelectionActionMode.invalidate();
         }
+    }
+
+    private DocumentAnnotationManager annotations() {
+        if (annotationManager == null) {
+            annotationManager = DocumentAnnotationManager.getInstance(this);
+        }
+        return annotationManager;
+    }
+
+    private DocumentAnnotation buildTxtAnnotation(String type,
+                                                   String selectedText,
+                                                   int localStart,
+                                                   int localEnd) {
+        int base = largeTextEstimateActive ? Math.max(0, largeTextPreviewBaseCharOffset) : 0;
+        int absoluteStart = Math.max(0, base + Math.max(0, localStart));
+        int absoluteEnd = Math.max(absoluteStart, base + Math.max(localStart, localEnd));
+        DocumentAnnotation annotation = new DocumentAnnotation();
+        annotation.setFilePath(filePath);
+        annotation.setFileName(fileName);
+        annotation.setDocumentType("TXT");
+        annotation.setType(type);
+        annotation.setStartPosition(absoluteStart);
+        annotation.setEndPosition(absoluteEnd);
+        annotation.setLineNumber(Math.max(1, countLinesUntilChar(absoluteStart)));
+        annotation.setSelectedText(selectedText);
+        annotation.setAnchorTextBefore(getAnchorTextBefore(absoluteStart));
+        annotation.setAnchorTextAfter(getAnchorTextAfter(absoluteStart));
+        return annotation;
+    }
+
+    private void addTxtAnnotation(String type,
+                                  String selectedText,
+                                  int localStart,
+                                  int localEnd) {
+        if (filePath == null || filePath.trim().isEmpty()) return;
+        DocumentAnnotation annotation = buildTxtAnnotation(
+                type, selectedText, localStart, localEnd);
+        if (annotation.isHighlight()) {
+            boolean added = annotations().add(annotation);
+            if (added) refreshTxtAnnotationHighlights();
+            ShortToast.show(this, added
+                    ? R.string.annotation_saved : R.string.annotation_already_saved);
+            return;
+        }
+        annotationDialogs().showNoteEditor(annotation, true);
+    }
+
+    private DocumentAnnotationDialogController annotationDialogs() {
+        return new DocumentAnnotationDialogController(
+                this,
+                annotations(),
+                filePath,
+                currentReaderBackgroundColor,
+                currentReaderTextColor,
+                new DocumentAnnotationDialogController.Navigator() {
+                    @Override
+                    public void open(@NonNull DocumentAnnotation annotation) {
+                        jumpToTxtAnnotation(annotation);
+                    }
+
+                    @Override
+                    public void annotationsChanged() {
+                        refreshTxtAnnotationHighlights();
+                    }
+                });
+    }
+
+    void showAnnotationsDialog() {
+        annotationDialogs().showList();
+    }
+
+    void refreshTxtAnnotationHighlights() {
+        if (readerView == null || filePath == null) return;
+        int base = largeTextEstimateActive ? Math.max(0, largeTextPreviewBaseCharOffset) : 0;
+        int limit = base + (fileContent != null ? fileContent.length() : 0);
+        ArrayList<CustomReaderView.AnnotationHighlightRange> ranges = new ArrayList<>();
+        for (DocumentAnnotation annotation : annotations().getForFile(filePath)) {
+            if (!annotation.isHighlight()) continue;
+            int start = annotation.getStartPosition();
+            int end = Math.max(start, annotation.getEndPosition());
+            if (end <= base || start >= limit) continue;
+            ranges.add(new CustomReaderView.AnnotationHighlightRange(
+                    Math.max(0, start - base),
+                    Math.min(limit, end) - base));
+        }
+        readerView.setAnnotationHighlights(ranges);
+    }
+
+    private void jumpToTxtAnnotation(@NonNull DocumentAnnotation annotation) {
+        Bookmark target = new Bookmark(
+                annotation.getFilePath(),
+                annotation.getFileName(),
+                annotation.getStartPosition(),
+                annotation.getLineNumber(),
+                annotation.getSelectedText());
+        target.setEndPosition(annotation.getEndPosition());
+        target.setAnchorTextBefore(annotation.getAnchorTextBefore());
+        target.setAnchorTextAfter(annotation.getAnchorTextAfter());
+        jumpToBookmark(target);
     }
 
     private void finishTxtSelectionActionMode(boolean clearSelection) {

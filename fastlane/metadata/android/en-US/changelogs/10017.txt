@@ -1,0 +1,1 @@
+Added List/Tiles browsing and large-screen two-page EPUB. Notes/highlights open from the toolbar, and archive viewers restore the same page after app switching. WinZip-AES ZIPX adds Deflate64, BZip2, LZMA, XZ, PPMd, Zstandard, JPEG, and WavPack. CAB/LHA/LZH add read-only extraction. RAR6 and bounded RAR7 decoding are improved. No new permissions.

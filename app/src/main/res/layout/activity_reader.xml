@@ -67,7 +67,7 @@
         android:background="#000000"
         android:gravity="bottom|center_horizontal"
         android:paddingBottom="4dp"
-        android:text="1 / 1"
+        android:text="@string/ui_page_status_initial"
         android:textColor="#E0E0E0"
         android:textSize="12sp"
         android:textStyle="bold" />
@@ -118,7 +118,7 @@
             android:includeFontPadding="false"
             android:paddingStart="24dp"
             android:paddingEnd="24dp"
-            android:text="1 / 1"
+            android:text="@string/ui_page_status_initial"
             android:textColor="#E0E0E0"
             android:textSize="12sp"
             android:textStyle="bold" />
@@ -202,6 +202,14 @@
                         android:layout_weight="0"
                         android:drawableTop="@drawable/ic_bottom_bookmark"
                         android:text="@string/bookmark" />
+
+                    <TextView
+                        android:id="@+id/btn_annotations"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_notes"
+                        android:text="@string/annotation_note" />
 
                     <TextView
                         android:id="@+id/btn_auto_page"

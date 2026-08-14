@@ -2755,7 +2755,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     private void addInfoRow(LinearLayout box, String label, String value) {
         TextView row = new TextView(this);
-        row.setText(label + "\n" + (value != null ? value : ""));
+        row.setText(getString(R.string.info_label_value_format,
+                label, value != null ? value : ""));
         row.setTextColor(dialogFg());
         row.setTextSize(14f);
         row.setPadding(0, dpToPx(5), 0, dpToPx(7));

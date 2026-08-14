@@ -171,7 +171,7 @@ final class RarNonSolidCompatibilityReport {
         StringBuilder sb = new StringBuilder();
         sb.append("# RAR non-solid compatibility audit\n\n");
         sb.append("This report excludes compressed-solid payload support from the compatibility view. ")
-                .append("RAR5 compressed payloads remain libarchive-primary, but covered RAR5 v5.0 entries have scoped first-party Java fallbacks. ")
+                .append("RAR5 compressed payloads remain libarchive-primary, but covered RAR5-container v0/v1 entries have scoped first-party Java fallbacks. ")
                 .append("RAR5 stored/stored-split remains first-party limited.\n\n");
         sb.append("- ").append(oneLineSummary()).append('\n');
         sb.append("- counts: ").append(countsLabel()).append("\n\n");
@@ -217,7 +217,7 @@ final class RarNonSolidCompatibilityReport {
                                 : "RAR5 stored method-0 path is first-party limited");
             }
             return new Row(entry, decision.route, Compatibility.LIBARCHIVE_PRIMARY,
-                    "RAR5 compressed non-solid payload is libarchive-primary with scoped first-party Java fallback for eligible unencrypted v5.0 entries");
+                    "RAR5 compressed non-solid payload is libarchive-primary with scoped first-party Java fallback for eligible unencrypted RAR5-container v0/v1 entries");
         }
         if (RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) {
             return new Row(entry, decision.route,

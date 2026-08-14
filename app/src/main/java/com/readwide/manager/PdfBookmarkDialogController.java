@@ -395,7 +395,8 @@ private void showBookmarkDeleteConfirm(@NonNull Bookmark bookmark, @NonNull Runn
     box.addView(activity.makeDialogTitle(activity.getString(R.string.delete_bookmark)));
 
     TextView message = new TextView(activity);
-    message.setText(bookmark.getFileName() + "\n\n" + bookmark.getDisplayText());
+    message.setText(activity.getString(R.string.dialog_header_body_format,
+            bookmark.getFileName(), bookmark.getDisplayText()));
     message.setTextColor(activity.dialogSub());
     message.setTextSize(14f);
     message.setLineSpacing(0f, 1.15f);
@@ -420,9 +421,10 @@ private void showBookmarkFolderDeleteConfirm(String folderFilePath, String folde
 
     TextView message = new TextView(activity);
     String displayName = folderName != null && !folderName.trim().isEmpty() ? folderName.trim() : activity.getString(R.string.bookmark);
-    message.setText(displayName + "\n\n"
-            + activity.getString(R.string.delete_bookmark_folder_message, bookmarkCount)
-            + "\n" + activity.getString(R.string.delete_bookmark_folder_note));
+    message.setText(activity.getString(R.string.dialog_header_two_body_format,
+            displayName,
+            activity.getString(R.string.delete_bookmark_folder_message, bookmarkCount),
+            activity.getString(R.string.delete_bookmark_folder_note)));
     message.setTextColor(activity.dialogSub());
     message.setTextSize(14f);
     message.setLineSpacing(0f, 1.15f);

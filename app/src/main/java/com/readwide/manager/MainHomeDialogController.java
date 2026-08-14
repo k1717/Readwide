@@ -43,6 +43,8 @@ final class MainHomeDialogController {
 
         boolean showHidden = activity.prefs != null && activity.prefs.getShowHiddenFiles();
         boolean thumbnails = activity.prefs != null && activity.prefs.getFileThumbnailsEnabled();
+        boolean tiles = activity.prefs != null
+                && activity.prefs.getFileDisplayMode() == PrefsManager.FILE_DISPLAY_TILES;
         String newFolderLabel = activity.getString(R.string.new_folder);
         String hiddenLabel = activity.getString(showHidden
                 ? R.string.show_hidden_files_on
@@ -50,6 +52,9 @@ final class MainHomeDialogController {
         String thumbnailLabel = activity.getString(thumbnails
                 ? R.string.file_cover_thumbnails_on
                 : R.string.file_cover_thumbnails_off);
+        String displayLabel = activity.getString(tiles
+                ? R.string.file_display_mode_tiles
+                : R.string.file_display_mode_list);
         final boolean showNewFolder = !activity.homeMode && activity.currentDirectory != null;
         ArrayList<String> widthLabels = new ArrayList<>();
         if (showNewFolder) widthLabels.add(newFolderLabel);
@@ -59,6 +64,9 @@ final class MainHomeDialogController {
         widthLabels.add(thumbnailLabel);
         widthLabels.add(activity.getString(R.string.file_cover_thumbnails_on));
         widthLabels.add(activity.getString(R.string.file_cover_thumbnails_off));
+        widthLabels.add(displayLabel);
+        widthLabels.add(activity.getString(R.string.file_display_mode_list));
+        widthLabels.add(activity.getString(R.string.file_display_mode_tiles));
         final int popupWidth = calculateMainOverflowWidth(
                 widthLabels.toArray(new String[0]));
         LinearLayout box = new LinearLayout(activity);
@@ -89,6 +97,11 @@ final class MainHomeDialogController {
                 activity.showNewFolderDialog();
             });
         }
+
+        addMainOverflowPopupRow(box, displayLabel, fg, () -> {
+            popup.dismiss();
+            showFileDisplayModeDialog();
+        });
 
         final TextView[] hiddenRow = new TextView[1];
         hiddenRow[0] = addMainOverflowPopupRow(box, hiddenLabel, fg, () -> {
@@ -136,6 +149,108 @@ final class MainHomeDialogController {
         } else {
             popup.showAsDropDown(activity.mainOverflowButton, xoff, 0);
         }
+    }
+
+    private void showFileDisplayModeDialog() {
+        final boolean dark = activity.prefs == null
+                || activity.prefs.shouldUseDarkColors(activity);
+        final int bg = activity.prefs != null
+                ? activity.prefs.getMainBgColor(activity)
+                : (dark ? Color.rgb(33, 33, 33) : Color.WHITE);
+        final int panel = activity.prefs != null
+                ? activity.prefs.getMainPanelColor(activity)
+                : (dark ? Color.rgb(48, 48, 48) : Color.rgb(245, 245, 245));
+        final int fg = activity.prefs != null
+                ? activity.prefs.getMainTextColor(activity)
+                : (dark ? Color.rgb(245, 245, 245) : Color.rgb(32, 33, 36));
+        final int sub = activity.prefs != null
+                ? activity.prefs.getMainSubTextColor(activity)
+                : (dark ? Color.rgb(190, 190, 190) : Color.rgb(95, 99, 104));
+        final int line = activity.prefs != null
+                ? activity.prefs.getMainOutlineColor(activity)
+                : (dark ? Color.rgb(92, 92, 92) : Color.rgb(210, 210, 210));
+
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(
+                activity.dpToPx(18),
+                activity.dpToPx(16),
+                activity.dpToPx(18),
+                activity.dpToPx(10));
+        GradientDrawable bgShape = new GradientDrawable();
+        bgShape.setColor(bg);
+        bgShape.setCornerRadius(activity.dpToPx(18));
+        bgShape.setStroke(Math.max(1, activity.dpToPx(1)), line);
+        box.setBackground(bgShape);
+
+        TextView title = new TextView(activity);
+        title.setText(R.string.file_display_mode);
+        title.setTextColor(fg);
+        title.setTextSize(21f);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setGravity(Gravity.CENTER);
+        title.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
+        title.setPadding(
+                activity.dpToPx(6),
+                0,
+                activity.dpToPx(6),
+                activity.dpToPx(12));
+        box.addView(title, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        RadioGroup group = new RadioGroup(activity);
+        group.setOrientation(RadioGroup.VERTICAL);
+        group.setPadding(0, 0, 0, activity.dpToPx(2));
+        box.addView(group, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        int listId = View.generateViewId();
+        int tilesId = View.generateViewId();
+        group.addView(makeSortRadioButton(
+                listId,
+                activity.getString(R.string.file_display_list),
+                fg,
+                panel,
+                line));
+        group.addView(makeSortRadioButton(
+                tilesId,
+                activity.getString(R.string.file_display_tiles),
+                fg,
+                panel,
+                line));
+        int current = activity.prefs != null
+                ? activity.prefs.getFileDisplayMode()
+                : PrefsManager.FILE_DISPLAY_LIST;
+        group.check(current == PrefsManager.FILE_DISPLAY_TILES ? tilesId : listId);
+
+        TextView cancel = new TextView(activity);
+        cancel.setText(R.string.cancel);
+        cancel.setTextColor(sub);
+        cancel.setTextSize(16f);
+        cancel.setGravity(Gravity.CENTER);
+        cancel.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(cancel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                activity.dpToPx(48)));
+
+        android.app.Dialog dialog = activity.createStableBottomDialog(
+                box,
+                activity.dpToPx(74),
+                0.22f);
+        group.setOnCheckedChangeListener((ignored, checkedId) -> {
+            int mode = checkedId == tilesId
+                    ? PrefsManager.FILE_DISPLAY_TILES
+                    : PrefsManager.FILE_DISPLAY_LIST;
+            if (activity.prefs != null) {
+                activity.prefs.setFileDisplayMode(mode);
+            }
+            activity.applyFileDisplayMode(mode);
+            dialog.dismiss();
+        });
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        dialog.show();
     }
 
     private TextView addMainOverflowPopupRow(@NonNull LinearLayout box, @NonNull String label, int textColor, @NonNull Runnable action) {

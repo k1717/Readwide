@@ -55,7 +55,7 @@ public final class ArchiveSupport {
     private ArchiveSupport() {}
 
 
-    private static final long MAX_EXTRACTION_TOTAL_BYTES = 32L * 1024L * 1024L * 1024L;
+    static final long MAX_EXTRACTION_TOTAL_BYTES = 128L * 1024L * 1024L * 1024L;
     private static final long MIN_EXTRACTION_FREE_MARGIN_BYTES = 64L * 1024L * 1024L;
     private static final int ZIP_RAW_NAME_CACHE_MAX_ENTRIES = 8;
     private static final Map<String, List<ZipRawName>> ZIP_RAW_NAME_CACHE = new LinkedHashMap<String, List<ZipRawName>>(
@@ -87,6 +87,7 @@ public final class ArchiveSupport {
         TAR_LZ4,
         SEVEN_Z,
         RAR,
+        LIBARCHIVE,
         ALZ,
         EGG,
         SINGLE_GZ,
@@ -266,6 +267,8 @@ public final class ArchiveSupport {
                     return requiresSevenZPasswordForExtraction(prepared.file);
                 case RAR:
                     return RarArchiveReader.requiresPasswordForExtraction(prepared.file);
+                case LIBARCHIVE:
+                    return false;
                 case ALZ:
                     return AlzipArchiveReader.requiresPasswordForExtraction(prepared.file);
                 case EGG:
@@ -304,6 +307,8 @@ public final class ArchiveSupport {
                     return listSevenZEntriesWithFallback(prepared.file, prepared.type, password);
                 case RAR:
                     return RarArchiveReader.listEntries(prepared.file, password);
+                case LIBARCHIVE:
+                    return LibarchiveArchiveReader.listEntries(prepared.file, password);
                 case ALZ:
                     return AlzipArchiveReader.listEntries(prepared.file, password);
                 case EGG:
@@ -866,7 +871,13 @@ public final class ArchiveSupport {
             workDir = tempDir;
         }
 
-        try {
+        long runtimeBudgetBytes = runtimeExtractionBudgetBytes(parent);
+        if (runtimeBudgetBytes <= 0L) {
+            return ExtractionResult.failed(ExtractionFailure.FAILED, "Not enough free space for extraction");
+        }
+
+        try (ArchiveExtractionByteBudget.Scope ignored =
+                     ArchiveExtractionByteBudget.begin(runtimeBudgetBytes)) {
             List<EntryInfo> extractionEntries = listEntries(archive, password);
             long estimatedPayloadBytes = estimatePayloadBytesFromEntries(extractionEntries);
             if (estimatedPayloadBytes > MAX_EXTRACTION_TOTAL_BYTES) {
@@ -875,7 +886,8 @@ public final class ArchiveSupport {
             }
             if (estimatedPayloadBytes > 0L) {
                 if (progress != null) progress.setTotalBytes(estimatedPayloadBytes);
-                if (!hasUsableSpaceForExtraction(parent, estimatedPayloadBytes)) {
+                if (estimatedPayloadBytes > runtimeBudgetBytes
+                        || !hasUsableSpaceForExtraction(parent, estimatedPayloadBytes)) {
                     return ExtractionResult.failed(ExtractionFailure.FAILED, "Not enough free space for extraction");
                 }
             }
@@ -969,6 +981,7 @@ public final class ArchiveSupport {
             case TAR_Z:
             case TAR_ZST:
             case TAR_LZ4:
+            case LIBARCHIVE:
                 return true;
             default:
                 return false;
@@ -1064,6 +1077,12 @@ public final class ArchiveSupport {
                             LibarchiveNativeBridge.openForwardStream(paths, password);
                     prepared.close();
                     return new LibarchiveForwardReader(stream);
+                }
+                case LIBARCHIVE: {
+                    LibarchiveNativeBridge.ForwardStream stream =
+                            LibarchiveNativeBridge.openForwardStream(
+                                    new String[]{prepared.file.getAbsolutePath()}, password);
+                    return new LibarchiveForwardReader(stream, prepared);
                 }
                 default:
                     prepared.close();
@@ -1227,7 +1246,14 @@ public final class ArchiveSupport {
             return ExtractionResult.failed(ExtractionFailure.FAILED, null);
         }
 
-        try (PreparedArchive prepared = prepareArchiveForRead(archive)) {
+        long runtimeBudgetBytes = runtimeExtractionBudgetBytes(parent);
+        if (runtimeBudgetBytes <= 0L) {
+            return ExtractionResult.failed(ExtractionFailure.FAILED, "Not enough free space for extraction");
+        }
+
+        try (ArchiveExtractionByteBudget.Scope ignored =
+                     ArchiveExtractionByteBudget.begin(runtimeBudgetBytes);
+             PreparedArchive prepared = prepareArchiveForRead(archive)) {
             boolean ok;
             switch (prepared.type) {
                 case ZIP:
@@ -1238,6 +1264,10 @@ public final class ArchiveSupport {
                     break;
                 case RAR:
                     ok = extractSingleRarEntry(prepared.file, normalized, outFile, password);
+                    break;
+                case LIBARCHIVE:
+                    ok = LibarchiveArchiveReader.extractSingleEntry(
+                            prepared.file, normalized, outFile, password, null);
                     break;
                 case ALZ:
                     ok = AlzipArchiveReader.extractSingleEntry(prepared.file, normalized, outFile, password);
@@ -1340,6 +1370,9 @@ public final class ArchiveSupport {
                     return extractSevenZIntoDirectoryWithFallback(prepared.file, prepared.type, targetDir, password, progress, entryProgress);
                 case RAR:
                     return extractRarIntoDirectory(prepared.file, targetDir, password, progress, entryProgress);
+                case LIBARCHIVE:
+                    return LibarchiveArchiveReader.extractArchiveIntoDirectory(
+                            prepared.file, targetDir, password, progress, entryProgress);
                 case ALZ:
                     return AlzipArchiveReader.extractArchiveIntoDirectory(prepared.file, targetDir, password, progress, entryProgress);
                 case EGG:
@@ -1374,6 +1407,14 @@ public final class ArchiveSupport {
                                                                @Nullable char[] password,
                                                                @Nullable FileOperationProgress progress,
                                                                @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
+        if (ZipxAesArchiveReader.canExtractArchive(archive)) {
+            return ZipxAesArchiveReader.extractArchiveIntoDirectory(
+                    archive, targetDir, password, progress, entryProgress);
+        }
+        if (ZipxAesArchiveReader.hasUnsupportedAesMethod(archive)) {
+            throw new UnsupportedArchiveFeatureException(
+                    "ZIPX AES compression method is unsupported");
+        }
         try {
             return extractZipIntoDirectory(archive, targetDir, password, progress, entryProgress);
         } catch (PasswordRequiredException e) {
@@ -1448,6 +1489,9 @@ public final class ArchiveSupport {
                                                              @NonNull String entryPath,
                                                              @NonNull File outFile,
                                                              @Nullable char[] password) throws IOException {
+        Boolean zipxAes = ZipxAesArchiveReader.tryExtractSingleEntry(
+                archive, entryPath, outFile, password);
+        if (zipxAes != null) return zipxAes;
         try {
             return extractSingleZipEntry(archive, entryPath, outFile, password);
         } catch (PasswordRequiredException e) {
@@ -1657,6 +1701,7 @@ public final class ArchiveSupport {
             case TAR_Z:
             case TAR_ZST:
             case TAR_LZ4:
+            case LIBARCHIVE:
                 return true;
             default:
                 return false;
@@ -2043,7 +2088,7 @@ public final class ArchiveSupport {
             if (!outParent.exists() && !outParent.mkdirs()) return false;
             byte[] buffer = new byte[1024 * 64];
             long decodedBytes = 0L;
-            try (OutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+            try (OutputStream out = openExtractionOutputStream(outFile)) {
                 int read;
                 while ((read = stream.read(buffer)) != -1) {
                     if (progress != null && !progress.checkpoint()) return false;
@@ -2408,7 +2453,7 @@ public final class ArchiveSupport {
                 if (outParent == null) return false;
                 if (!outParent.exists() && !outParent.mkdirs()) return false;
                 long decodedBytes = 0L;
-                try (OutputStream outStream = new BufferedOutputStream(new FileOutputStream(out))) {
+                try (OutputStream outStream = openExtractionOutputStream(out)) {
                     if (entry.hasStream()) {
                         int read;
                         while ((read = sevenZ.read(buffer)) > 0) {
@@ -2440,7 +2485,7 @@ public final class ArchiveSupport {
                     continue;
                 }
                 long decodedBytes = 0L;
-                try (OutputStream outStream = new BufferedOutputStream(new FileOutputStream(outFile))) {
+                try (OutputStream outStream = openExtractionOutputStream(outFile)) {
                     if (entry.hasStream()) {
                         int read;
                         while ((read = sevenZ.read(buffer)) > 0) {
@@ -2579,26 +2624,26 @@ public final class ArchiveSupport {
     }
 
     @Nullable
-    private static File resolveArchiveEntryOutput(@NonNull File targetDir, String rawEntryName) {
+    static File resolveArchiveEntryOutput(@NonNull File targetDir, String rawEntryName) {
         String entryName = sanitizeEntryPathForList(rawEntryName);
         if (entryName == null) return null;
         File out = new File(targetDir, entryName);
         return isSameOrDescendant(targetDir, out) ? out : null;
     }
 
-    private static boolean writeArchiveEntryStream(@NonNull InputStream in, @NonNull File out) throws IOException {
+    static boolean writeArchiveEntryStream(@NonNull InputStream in, @NonNull File out) throws IOException {
         return writeArchiveEntryStream(in, out, null);
     }
 
-    private static boolean writeArchiveEntryStream(@NonNull InputStream in,
-                                                   @NonNull File out,
-                                                   @Nullable FileOperationProgress progress) throws IOException {
+    static boolean writeArchiveEntryStream(@NonNull InputStream in,
+                                           @NonNull File out,
+                                           @Nullable FileOperationProgress progress) throws IOException {
         File outParent = out.getParentFile();
         if (outParent == null) return false;
         if (!outParent.exists() && !outParent.mkdirs()) return false;
         byte[] buffer = new byte[1024 * 64];
         long decodedBytes = 0L;
-        try (OutputStream outStream = new BufferedOutputStream(new FileOutputStream(out))) {
+        try (OutputStream outStream = openExtractionOutputStream(out)) {
             int read;
             while ((read = in.read(buffer)) != -1) {
                 if (progress != null && !progress.checkpoint()) return false;
@@ -2620,6 +2665,12 @@ public final class ArchiveSupport {
         return current + justRead;
     }
 
+    @NonNull
+    static OutputStream openExtractionOutputStream(@NonNull File out) throws IOException {
+        return new BufferedOutputStream(
+                ArchiveExtractionByteBudget.openOutputStream(out, MAX_EXTRACTION_TOTAL_BYTES));
+    }
+
     private static long sumZipPayloadBytes(@NonNull List<FileHeader> headers) {
         long total = 0L;
         for (FileHeader header : headers) {
@@ -2632,7 +2683,7 @@ public final class ArchiveSupport {
     }
 
     @Nullable
-    private static String sanitizeEntryPathForList(String rawEntryName) {
+    static String sanitizeEntryPathForList(String rawEntryName) {
         if (rawEntryName == null) return null;
         String entryName = rawEntryName.trim().replace('\\', '/');
         while (entryName.startsWith("./")) entryName = entryName.substring(2);
@@ -2724,6 +2775,18 @@ public final class ArchiveSupport {
         if (usable <= 0L) return true;
         long required = addMeasuredBytes(expectedBytes, MIN_EXTRACTION_FREE_MARGIN_BYTES);
         return required != Long.MAX_VALUE && usable >= required;
+    }
+
+    private static long runtimeExtractionBudgetBytes(@NonNull File parentDir) {
+        long usable;
+        try {
+            usable = parentDir.getUsableSpace();
+        } catch (SecurityException ignored) {
+            return MAX_EXTRACTION_TOTAL_BYTES;
+        }
+        if (usable <= 0L) return MAX_EXTRACTION_TOTAL_BYTES;
+        if (usable <= MIN_EXTRACTION_FREE_MARGIN_BYTES) return 0L;
+        return Math.min(MAX_EXTRACTION_TOTAL_BYTES, usable - MIN_EXTRACTION_FREE_MARGIN_BYTES);
     }
 
     private static boolean replaceExistingDirectoryWithTemp(@NonNull File destinationDir,

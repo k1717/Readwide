@@ -47,6 +47,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
 
+    private static final int VIEW_TYPE_LIST = 0;
+    private static final int VIEW_TYPE_TILE = 1;
     private static final int MAIN_ACTION_SHORT_HOLD_MS = 200;
     private static final int MULTI_SELECT_LONG_PRESS_MS = 800;
     private static final int MAIN_ROW_TEXT_END_PADDING_DP = 6;
@@ -77,6 +79,7 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     private boolean showReadingProgress = false;
     private boolean selectionMode = false;
     private boolean showThumbnails = false;
+    private boolean tileMode = false;
     private volatile boolean released = false;
     private final ThreadPoolExecutor thumbnailExecutor = new ThreadPoolExecutor(
             2,
@@ -138,6 +141,17 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
             thumbnailRetryAfter.clear();
         }
         if (getItemCount() > 0) notifyItemRangeChanged(0, getItemCount());
+    }
+
+    public void setTileMode(boolean enabled) {
+        if (tileMode == enabled) return;
+        tileMode = enabled;
+        invalidateThumbnailRequests();
+        notifyDataSetChanged();
+    }
+
+    public boolean isTileMode() {
+        return tileMode;
     }
 
     /**
@@ -470,8 +484,16 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     @NonNull
     @Override
     public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_file, parent, false);
-        return new ViewHolder(view);
+        int layout = viewType == VIEW_TYPE_TILE
+                ? R.layout.item_file_tile
+                : R.layout.item_file;
+        View view = LayoutInflater.from(parent.getContext()).inflate(layout, parent, false);
+        return new ViewHolder(view, viewType == VIEW_TYPE_TILE);
+    }
+
+    @Override
+    public int getItemViewType(int position) {
+        return tileMode ? VIEW_TYPE_TILE : VIEW_TYPE_LIST;
     }
 
     @Override
@@ -590,13 +612,15 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
 
     @NonNull
     private static String thumbnailKey(@NonNull FileListItem item,
-                                       boolean showHiddenFiles) {
+                                       boolean showHiddenFiles,
+                                       boolean tileMode) {
         // Folder cover selection changes with the hidden-file policy. Keeping
         // the policy in the cache key prevents a previously visible dot-image
         // from remaining as a cover after hidden files are disabled.
         return item.getAbsolutePath() + "|" + item.getSize()
                 + "|" + item.getLastModified()
-                + "|hidden=" + (showHiddenFiles ? "1" : "0");
+                + "|hidden=" + (showHiddenFiles ? "1" : "0")
+                + "|layout=" + (tileMode ? "tile" : "list");
     }
 
     private static final class ThumbnailCacheEntry {
@@ -623,6 +647,7 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
         LinearLayout textContainer;
         com.readwide.manager.view.ExtensionEllipsisTextView name;
         TextView info, path, progress, selectionMarker;
+        private final boolean tileLayout;
 
         private final Handler touchHandler = new Handler(Looper.getMainLooper());
         private float downX;
@@ -635,8 +660,9 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
         private Runnable pendingLongPress;
         private Runnable pendingMultiSelectPress;
 
-        ViewHolder(View v) {
+        ViewHolder(View v, boolean tileLayout) {
             super(v);
+            this.tileLayout = tileLayout;
             icon = v.findViewById(R.id.file_icon);
             iconBox = v.findViewById(R.id.file_icon_box);
             textContainer = v.findViewById(R.id.file_text_container);
@@ -812,7 +838,7 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
             }
             boolean showHiddenThumbnailSources =
                     PrefsManager.getInstance(context).getShowHiddenFiles();
-            String key = thumbnailKey(item, showHiddenThumbnailSources);
+            String key = thumbnailKey(item, showHiddenThumbnailSources, tileLayout);
             ThumbnailCacheEntry cached = thumbnailCache.get(key);
             long now = SystemClock.elapsedRealtime();
             if (cached != null && cached.isUsable(now)) {
@@ -841,7 +867,7 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
                             item.getFile(),
                             item.isDirectory(),
                             showHiddenThumbnailSources,
-                            192);
+                            tileLayout ? Math.max(256, dp(96)) : 192);
                     if (thumbnailGeneration.get() != generation) {
                         thumbnailRequests.remove(requestId);
                         if (decoded != null && !decoded.isRecycled()) decoded.recycle();
@@ -911,6 +937,23 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
 
         private void applyThumbnailLayout(boolean enabled) {
             if (iconBox == null) return;
+            if (tileLayout) {
+                int boxSize = dp(96);
+                ViewGroup.LayoutParams boxLp = iconBox.getLayoutParams();
+                if (boxLp != null && (boxLp.width != boxSize || boxLp.height != boxSize)) {
+                    boxLp.width = boxSize;
+                    boxLp.height = boxSize;
+                    iconBox.setLayoutParams(boxLp);
+                }
+                ViewGroup.LayoutParams iconLp = icon.getLayoutParams();
+                int iconSize = dp(enabled ? 92 : 52);
+                if (iconLp != null && (iconLp.width != iconSize || iconLp.height != iconSize)) {
+                    iconLp.width = iconSize;
+                    iconLp.height = iconSize;
+                    icon.setLayoutParams(iconLp);
+                }
+                return;
+            }
             // Keep the file-name column fixed when thumbnails are toggled.
             // Only the preview/icon itself and the vertical row footprint vary.
             int boxWidth = dp(42);
@@ -990,6 +1033,7 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
         }
 
         private void setTextReserveEnd(int reservePx) {
+            if (tileLayout) return;
             int baseEndPadding = dpToPx(MAIN_ROW_TEXT_END_PADDING_DP);
             int endPadding = baseEndPadding + Math.max(0, reservePx);
             if (textContainer != null) {
@@ -1053,7 +1097,10 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     private void notifyThumbnailKeyChanged(@NonNull String key,
                                            boolean showHiddenThumbnailSources) {
         for (int i = 0; i < items.size(); i++) {
-            if (key.equals(thumbnailKey(items.get(i), showHiddenThumbnailSources))) {
+            if (key.equals(thumbnailKey(
+                    items.get(i),
+                    showHiddenThumbnailSources,
+                    tileMode))) {
                 notifyItemChanged(i);
             }
         }

@@ -425,7 +425,7 @@
                     android:layout_height="38dp"
                     android:layout_marginStart="2dp"
                     android:gravity="center"
-                    android:text="&#215;"
+                    android:text="@string/ui_symbol_close"
                     android:textSize="24sp"
                     android:visibility="gone" />
 

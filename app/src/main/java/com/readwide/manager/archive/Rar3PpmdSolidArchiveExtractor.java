@@ -6,8 +6,8 @@ import androidx.annotation.Nullable;
 import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.List;
@@ -71,7 +71,7 @@ final class Rar3PpmdSolidArchiveExtractor {
             }
             if (isTarget) {
                 try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
-                    try (FileOutputStream out = new FileOutputStream(outFile)) {
+                    try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
                         out.write(result.data);
                     }
                     RarStoredPayloadIO.verifyCrc(entry, outFile);
@@ -165,7 +165,7 @@ final class Rar3PpmdSolidArchiveExtractor {
                         "RAR3 PPMd solid entry failed CRC verification: " + entry.path);
             }
             try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(out)) {
-                try (FileOutputStream fos = new FileOutputStream(out)) {
+                try (OutputStream fos = ArchiveSupport.openExtractionOutputStream(out)) {
                     fos.write(result.data);
                 }
                 RarStoredPayloadIO.verifyCrc(entry, out);

@@ -49,7 +49,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
 
     public interface ReaderListener {
         void onSingleTap(float x, float y);
-        void onTextLongPress(String selectedText, int charPosition, float x, float y);
+        void onTextLongPress(String selectedText, int startPosition, int endPosition, float x, float y);
         void onReaderScrollChanged();
         void onReaderManualScroll();
         void onReaderManualOverscroll(int direction);
@@ -72,6 +72,17 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
             this.charPosition = Math.max(0, charPosition);
             this.anchorTextBefore = anchorTextBefore != null ? anchorTextBefore : "";
             this.anchorTextAfter = anchorTextAfter != null ? anchorTextAfter : "";
+        }
+    }
+
+    /** Local rendered-text range used for persistent, app-owned annotations. */
+    public static final class AnnotationHighlightRange {
+        public final int start;
+        public final int end;
+
+        public AnnotationHighlightRange(int start, int end) {
+            this.start = Math.max(0, start);
+            this.end = Math.max(this.start, end);
         }
     }
 
@@ -234,11 +245,13 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     private final Paint searchHighlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint activeSearchHighlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint ttsHighlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint annotationHighlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textSelectionPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textSelectionHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textSelectionHandleOutlinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path searchHighlightPath = new Path();
     private final Path ttsHighlightPath = new Path();
+    private final Path annotationHighlightPath = new Path();
     private final Path textSelectionPath = new Path();
     private final OverScroller scroller;
     private final int touchSlop;
@@ -342,6 +355,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     private int activeSearchIndex = -1;
     private int ttsHighlightStart = -1;
     private int ttsHighlightEnd = -1;
+    private final List<AnnotationHighlightRange> annotationHighlights = new ArrayList<>();
     private int textSelectionStart = -1;
     private int textSelectionEnd = -1;
     private int textSelectionAnchorStart = -1;
@@ -386,12 +400,14 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         searchHighlightPaint.setStyle(Paint.Style.FILL);
         activeSearchHighlightPaint.setStyle(Paint.Style.FILL);
         ttsHighlightPaint.setStyle(Paint.Style.FILL);
+        annotationHighlightPaint.setStyle(Paint.Style.FILL);
         textSelectionHandlePaint.setStyle(Paint.Style.FILL);
         textSelectionHandlePaint.setStrokeWidth(Math.max(1f, dpToPx(2)));
         textSelectionHandleOutlinePaint.setStyle(Paint.Style.STROKE);
         textSelectionHandleOutlinePaint.setStrokeWidth(Math.max(1f, dpToPx(1)));
         updateSearchHighlightColors();
         updateTtsHighlightColor();
+        updateAnnotationHighlightColor();
         updateTextSelectionColor();
     }
 
@@ -413,6 +429,8 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         pageAnchors.clear();
         searchHighlightPath.reset();
         ttsHighlightPath.reset();
+        annotationHighlightPath.reset();
+        annotationHighlights.clear();
         textSelectionPath.reset();
         searchQuery = "";
         activeSearchIndex = -1;
@@ -507,6 +525,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         paint.setTypeface(this.typeface);
         updateSearchHighlightColors();
         updateTtsHighlightColor();
+        updateAnnotationHighlightColor();
         updateTextSelectionColor();
 
         boolean markdownColorChange = markdownHighlightingEnabled && colorChange;
@@ -612,6 +631,13 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         invalidate();
     }
 
+    public void setAnnotationHighlights(@Nullable List<AnnotationHighlightRange> ranges) {
+        annotationHighlights.clear();
+        if (ranges != null) annotationHighlights.addAll(ranges);
+        annotationHighlightPath.reset();
+        invalidate();
+    }
+
     private void updateSearchHighlightColors() {
         boolean light = isLightColor(backgroundColor);
         int passive = themeSearchColor(light ? 0.32f : 0.38f, light ? 0.82f : 1.20f);
@@ -626,6 +652,12 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         } else {
             ttsHighlightPaint.setColor(Color.argb(105, 110, 172, 255));
         }
+    }
+
+    private void updateAnnotationHighlightColor() {
+        annotationHighlightPaint.setColor(isLightColor(backgroundColor)
+                ? Color.argb(108, 255, 193, 7)
+                : Color.argb(126, 255, 202, 40));
     }
 
     private void updateTextSelectionColor() {
@@ -742,12 +774,26 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                 getFullLineClipBottom());
         canvas.translate(getPaddingLeft() + marginHorizontalPx + leftTextInsetPx,
                 viewportTop + marginVerticalPx - visualScrollY);
+        drawAnnotationHighlights(canvas);
         drawTextSelection(canvas);
         drawTtsHighlight(canvas);
         drawSearchHighlights(canvas);
         layout.draw(canvas);
         canvas.restore();
         drawTextSelectionHandles(canvas);
+    }
+
+    private void drawAnnotationHighlights(Canvas canvas) {
+        if (layout == null || annotationHighlights.isEmpty()) return;
+        int length = text != null ? text.length() : 0;
+        for (AnnotationHighlightRange range : annotationHighlights) {
+            int start = Math.max(0, Math.min(length, range.start));
+            int end = Math.max(start, Math.min(length, range.end));
+            if (end <= start) continue;
+            annotationHighlightPath.reset();
+            layout.getSelectionPath(start, end, annotationHighlightPath);
+            canvas.drawPath(annotationHighlightPath, annotationHighlightPaint);
+        }
     }
 
     private void drawTextSelection(Canvas canvas) {
@@ -877,7 +923,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                     cancelPendingLongPress();
                     if (hasActiveTextSelection()) {
                         clearTextSelection();
-                        if (listener != null) listener.onTextLongPress("", -1, event.getX(), event.getY());
+                        if (listener != null) listener.onTextLongPress("", -1, -1, event.getX(), event.getY());
                     } else {
                         clearTextSelection();
                     }
@@ -911,7 +957,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                 if (!dragging && Math.abs(event.getX() - downX) < touchSlop && Math.abs(event.getY() - downY) < touchSlop) {
                     if (hasActiveTextSelection()) {
                         clearTextSelection();
-                        if (listener != null) listener.onTextLongPress("", -1, event.getX(), event.getY());
+                        if (listener != null) listener.onTextLongPress("", -1, -1, event.getX(), event.getY());
                     } else if (listener != null) {
                         listener.onSingleTap(event.getX(), event.getY());
                     }
@@ -1040,7 +1086,10 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
             return;
         }
         if (listener != null) {
-            listener.onTextLongPress(selected, Math.max(0, textSelectionStart), x, y);
+            listener.onTextLongPress(selected,
+                    Math.max(0, textSelectionStart),
+                    Math.max(0, textSelectionEnd),
+                    x, y);
         }
     }
 

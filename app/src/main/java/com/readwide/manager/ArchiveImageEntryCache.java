@@ -557,6 +557,7 @@ final class ArchiveImageEntryCache {
             case TAR_Z:
             case TAR_ZST:
             case TAR_LZ4:
+            case LIBARCHIVE:
                 return true;
             default:
                 return false;

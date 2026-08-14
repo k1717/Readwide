@@ -38,7 +38,8 @@ final class ReaderBookmarkMemoDialogController {
         box.setPadding(activity.dpToPx(22), activity.dpToPx(12), activity.dpToPx(22), activity.dpToPx(8));
 
         TextView message = new TextView(activity);
-        message.setText(bookmark.getFileName() + "\n\n" + bookmark.getExcerpt());
+        message.setText(activity.getString(R.string.dialog_header_body_format,
+                bookmark.getFileName(), bookmark.getExcerpt()));
         message.setTextColor(sub);
         message.setTextSize(13f);
         message.setLineSpacing(0f, 1.15f);

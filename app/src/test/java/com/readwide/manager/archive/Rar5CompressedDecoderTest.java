@@ -1,6 +1,8 @@
 package com.readwide.manager.archive;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
@@ -9,6 +11,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -16,7 +19,7 @@ import java.nio.file.Files;
 import java.util.zip.CRC32;
 
 /**
- * End-to-end verification of the first-party RAR5 (v5.0) compressed
+ * End-to-end verification of the first-party RAR5-container compressed
  * decoder. The embedded fixtures originate from the CC0-dedicated
  * "RAR Test Files" collection (see docs/ASSET_PROVENANCE.md) and cover a
  * compressed entry, a stored+compressed mix, and a solid continuation.
@@ -140,11 +143,52 @@ public class Rar5CompressedDecoderTest {
     }
 
     @Test
-    public void decoderRejectsNonV50AlgorithmVersions() {
+    public void rar7V0SolidCompatibilityMarkerDecodesExistingV0Stream() {
+        byte[] cbr = hexToBytes(CBR_HEX);
+        byte[] packed = new byte[236];
+        System.arraycopy(cbr, 0x3e, packed, 0, packed.length);
+
         Rar5CompressedDecoder decoder = new Rar5CompressedDecoder();
+        byte[] data = decoder.decodeEntry(
+                packed, 220, 0x0e80L | 1L | 0x100000L);
+        CRC32 crc = new CRC32();
+        crc.update(data);
+        assertEquals(JPG_CRC, crc.getValue());
+    }
+
+    @Test
+    public void rar7VersionOneParsesExtendedDictionaryAndDistanceGeometry() {
+        long fortyEightMiB = 1L
+                | (8L << 10)   // 128 KiB * 2^8 = 32 MiB
+                | (16L << 15); // plus 16/32 = 16 MiB
+        assertEquals(48L * 1024 * 1024,
+                Rar5CompressedDecoder.declaredWindowSize(fortyEightMiB));
+        assertTrue(Rar5CompressedDecoder.usesExtendedDistanceTable(fortyEightMiB));
+        assertTrue(Rar5CompressedArchiveExtractor.isSupportedCompressionInfo(fortyEightMiB));
+
+        long oneTiB = 1L | (23L << 10);
+        assertEquals(1L << 40, Rar5CompressedDecoder.declaredWindowSize(oneTiB));
+
+        long v0SolidCompatibility = fortyEightMiB | 0x100000L;
+        assertFalse(Rar5CompressedDecoder.usesExtendedDistanceTable(v0SolidCompatibility));
+        assertTrue(Rar5CompressedArchiveExtractor.isSupportedCompressionInfo(
+                v0SolidCompatibility));
+    }
+
+    @Test
+    public void rar7ExtendedDistanceStreamUsesBoundedWindowAndZeroFillsVoid() {
+        long oneTiBMethodOne = 1L | 0x80L | (23L << 10);
+        byte[] decoded = new Rar5CompressedDecoder().decodeEntry(
+                buildRar7ExtendedDistancePayload(), 6, oneTiBMethodOne);
+        assertArrayEquals(new byte[] {'A', 0, 0, 0, 0, 0}, decoded);
+    }
+
+    @Test
+    public void decoderStillRejectsUnknownPostRar7AlgorithmVersions() {
+        assertFalse(Rar5CompressedArchiveExtractor.isSupportedCompressionInfo(2L));
         try {
-            decoder.decodeEntry(new byte[8], 4, 0x0e80L | 1L); // algo version 1 (RAR7-era)
-            fail("Non-5.0 algorithm versions must be rejected");
+            Rar5CompressedDecoder.declaredWindowSize(2L);
+            fail("Unknown algorithm versions must be rejected");
         } catch (Rar5CompressedDecoder.Rar5DataException expected) {
             assertTrue(expected.getMessage(), expected.getMessage().contains("version"));
         }
@@ -199,6 +243,97 @@ public class Rar5CompressedDecoderTest {
             out[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
         }
         return out;
+    }
+
+    /**
+     * Builds one version-1 block from the public RAR5-container grammar:
+     * literal 'A', then a long-distance match using extended distance slot 64
+     * (base length 2 plus the three standard distance-dependent increments).
+     * The declared 1 TiB dictionary is never allocated; the match points into
+     * the initial zero-filled portion of the logical window.
+     */
+    private static byte[] buildRar7ExtendedDistancePayload() {
+        ByteArrayOutputStream data = new ByteArrayOutputStream();
+        // Bit-length alphabet: symbols 1 and 19 have one-bit codes (0 and 1).
+        for (int i = 0; i < 10; i++) {
+            data.write(i == 0 || i == 9 ? 0x01 : 0x00);
+        }
+
+        BitWriter bits = new BitWriter();
+        writeZeroLengths(bits, 65);
+        bits.write(0, 1); // main literal 65 ('A') length 1
+        writeZeroLengths(bits, 196);
+        bits.write(0, 1); // main match symbol 262 length 1
+        writeZeroLengths(bits, 107);
+        bits.write(0, 1); // extended distance slot 64 length 1
+        writeZeroLengths(bits, 15);
+        bits.write(0, 1); // low-distance symbol 0 length 1
+        writeZeroLengths(bits, 59);
+
+        bits.write(0, 1);  // literal 'A'
+        bits.write(1, 1);  // match symbol 262 => length 2
+        bits.write(0, 1);  // distance slot 64
+        bits.write(0, 27); // high bits of the 33-bit distance
+        bits.write(0, 1);  // low-distance symbol 0
+        byte[] tail = bits.toByteArray();
+        data.write(tail, 0, tail.length);
+
+        byte[] block = data.toByteArray();
+        int finalBits = bits.bitCount() & 7;
+        if (finalBits == 0) finalBits = 8;
+        int flags = 0xC0 | (finalBits - 1); // last block + tables present
+        int checksum = 0x5A ^ flags ^ block.length;
+        ByteArrayOutputStream packed = new ByteArrayOutputStream();
+        packed.write(flags);
+        packed.write(checksum & 0xFF);
+        packed.write(block.length);
+        packed.write(block, 0, block.length);
+        return packed.toByteArray();
+    }
+
+    private static void writeZeroLengths(BitWriter bits, int count) {
+        while (count > 0) {
+            int chunk = Math.min(count, 138);
+            if (chunk < 11) {
+                throw new AssertionError("test table zero run is too short: " + chunk);
+            }
+            bits.write(1, 1); // bit-length symbol 19
+            bits.write(chunk - 11, 7);
+            count -= chunk;
+        }
+    }
+
+    private static final class BitWriter {
+        private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        private int current;
+        private int used;
+        private int count;
+
+        void write(long value, int width) {
+            for (int i = width - 1; i >= 0; i--) {
+                current = (current << 1) | (int) ((value >>> i) & 1L);
+                used++;
+                count++;
+                if (used == 8) {
+                    out.write(current);
+                    current = 0;
+                    used = 0;
+                }
+            }
+        }
+
+        int bitCount() {
+            return count;
+        }
+
+        byte[] toByteArray() {
+            if (used > 0) {
+                out.write(current << (8 - used));
+                current = 0;
+                used = 0;
+            }
+            return out.toByteArray();
+        }
     }
 
     private static File externalFixtureBuildDir() {

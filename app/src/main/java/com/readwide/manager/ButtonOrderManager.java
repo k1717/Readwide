@@ -50,6 +50,7 @@ final class ButtonOrderManager {
                 items.add(new Item("find", R.string.find, R.id.btn_find));
                 items.add(new Item("page", R.string.bottom_page, R.id.btn_page_move));
                 items.add(new Item("bookmark", R.string.bookmark, R.id.btn_bookmark));
+                items.add(new Item("annotations", R.string.annotations_title, R.id.btn_annotations));
                 items.add(new Item("auto_page", R.string.auto_page_turn_toolbar, R.id.btn_auto_page));
                 items.add(new Item("settings", R.string.settings, R.id.btn_settings));
                 items.add(new Item("tts", R.string.tts_toolbar, R.id.btn_tts));
@@ -65,6 +66,7 @@ final class ButtonOrderManager {
                 items.add(new Item("find", R.string.find, R.id.btn_document_search));
                 items.add(new Item("page", R.string.bottom_page, R.id.btn_page_move));
                 items.add(new Item("bookmark", R.string.bookmark, R.id.btn_bookmarks));
+                items.add(new Item("annotations", R.string.annotations_title, R.id.btn_annotations));
                 items.add(new Item("tts", R.string.tts_toolbar, R.id.btn_document_tts));
                 items.add(new Item("screen_rotation", R.string.screen_orientation_rotate, R.id.btn_screen_rotation));
                 items.add(new Item("settings", R.string.settings, R.id.btn_document_settings));

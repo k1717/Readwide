@@ -1,6 +1,8 @@
 package com.readwide.manager.archive;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.zip.CRC32;
 
 /**
@@ -30,8 +32,187 @@ final class Rar3VmFilter {
     static final class PendingFilter {
         StandardFilter type;
         long blockStartAbs; // absolute output position where the filtered block begins
+        long fileOffset; // output position within the current unpacked file
         int blockLength;
         final int[] initR = new int[7];
+    }
+
+    /** Persistent program slots used by consecutive VM records (and solid entries). */
+    static final class ProgramState {
+        private static final int MAX_VM_CODE_SIZE = 0x10000;
+        private static final int MAX_USER_GLOBAL_SIZE = 0x1fc0;
+        private static final int PROGRAM_SYSTEM_GLOBAL_ADDRESS = 0x3c000;
+
+        private final List<Program> programs = new ArrayList<>();
+        private int lastProgramNumber;
+
+        static final class Parsed {
+            final PendingFilter filter;
+            final boolean resetPendingFilters;
+
+            Parsed(PendingFilter filter, boolean resetPendingFilters) {
+                this.filter = filter;
+                this.resetPendingFilters = resetPendingFilters;
+            }
+        }
+
+        private static final class Program {
+            final StandardFilter type;
+            int oldBlockLength;
+            int usageCount;
+
+            Program(StandardFilter type) {
+                this.type = type;
+            }
+        }
+
+        Parsed parse(int flags, byte[] code, long currentOutput, int dictionarySize)
+                throws IOException {
+            VmCodeReader reader = new VmCodeReader(code);
+            boolean resetPending = false;
+            int number;
+            if ((flags & 0x80) != 0) {
+                long encoded = reader.readData();
+                if (encoded == 0) {
+                    programs.clear();
+                    resetPending = true;
+                    number = 0;
+                } else {
+                    encoded--;
+                    if (encoded > Integer.MAX_VALUE) throw invalid("program number");
+                    number = (int) encoded;
+                }
+                if (number > programs.size()) throw invalid("program number");
+                lastProgramNumber = number;
+            } else {
+                number = lastProgramNumber;
+                if (number > programs.size()) throw invalid("remembered program number");
+            }
+
+            Program program = number < programs.size() ? programs.get(number) : null;
+            if (program != null && program.usageCount < Integer.MAX_VALUE) program.usageCount++;
+
+            long relativeStart = reader.readData();
+            if ((flags & 0x40) != 0) relativeStart += 258L;
+            if (relativeStart < 0 || currentOutput > Long.MAX_VALUE - relativeStart) {
+                throw invalid("block start");
+            }
+            long blockStart = currentOutput + relativeStart;
+
+            long encodedLength = (flags & 0x20) != 0
+                    ? reader.readData() : program == null ? 0L : program.oldBlockLength;
+            if (encodedLength <= 0 || encodedLength > dictionarySize || encodedLength > Integer.MAX_VALUE) {
+                throw invalid("block length");
+            }
+            int blockLength = (int) encodedLength;
+
+            PendingFilter pending = new PendingFilter();
+            pending.blockStartAbs = blockStart;
+            pending.fileOffset = blockStart;
+            pending.blockLength = blockLength;
+            pending.initR[3] = PROGRAM_SYSTEM_GLOBAL_ADDRESS;
+            pending.initR[4] = blockLength;
+            pending.initR[5] = program == null ? 0 : program.usageCount;
+
+            if ((flags & 0x10) != 0) {
+                int initMask = reader.readBits(7);
+                for (int i = 0; i < 7; i++) {
+                    if ((initMask & (1 << i)) != 0) pending.initR[i] = (int) reader.readData();
+                }
+            }
+
+            if (program == null) {
+                long encodedCodeSize = reader.readData();
+                if (encodedCodeSize <= 0 || encodedCodeSize > MAX_VM_CODE_SIZE) {
+                    throw invalid("program size");
+                }
+                byte[] inner = new byte[(int) encodedCodeSize];
+                for (int i = 0; i < inner.length; i++) inner[i] = (byte) reader.readBits(8);
+                StandardFilter type = identify(inner);
+                if (type == StandardFilter.NONE) {
+                    throw new RarArchiveReader.UnsupportedRarFeatureException(
+                            "RAR3 uses a non-standard VM filter program");
+                }
+                program = new Program(type);
+                programs.add(program);
+            }
+            program.oldBlockLength = blockLength;
+            pending.type = program.type;
+
+            if ((flags & 0x08) != 0) {
+                long globalLength = reader.readData();
+                if (globalLength > MAX_USER_GLOBAL_SIZE) throw invalid("global data length");
+                for (long i = 0; i < globalLength; i++) reader.readBits(8);
+                // Standard filters do not consume user global data. Reading and validating it
+                // still preserves the VM-record grammar and rejects truncated records.
+            }
+            reader.requireNotPastEnd();
+            return new Parsed(pending, resetPending);
+        }
+
+        void reset() {
+            programs.clear();
+            lastProgramNumber = 0;
+        }
+
+        int programCount() {
+            return programs.size();
+        }
+
+        private static IOException invalid(String field) {
+            return new IOException("Invalid RAR3 VM filter " + field);
+        }
+    }
+
+    /** MSB-first reader for the compact integer grammar used inside RAR VM records. */
+    private static final class VmCodeReader {
+        private final byte[] data;
+        private int bitPosition;
+
+        VmCodeReader(byte[] data) {
+            this.data = data;
+        }
+
+        private int peek16() {
+            int address = bitPosition >>> 3;
+            int bit = bitPosition & 7;
+            int field = ((address < data.length ? data[address] & 0xff : 0) << 16)
+                    | ((address + 1 < data.length ? data[address + 1] & 0xff : 0) << 8)
+                    | (address + 2 < data.length ? data[address + 2] & 0xff : 0);
+            return (field >>> (8 - bit)) & 0xffff;
+        }
+
+        int readBits(int count) throws IOException {
+            if (count < 0 || count > 16 || bitPosition > data.length * 8 - count) {
+                throw ProgramState.invalid("record bit range");
+            }
+            int value = peek16() >>> (16 - count);
+            bitPosition += count;
+            return value;
+        }
+
+        long readData() throws IOException {
+            int prefix = peek16();
+            switch (prefix & 0xc000) {
+                case 0:
+                    return readBits(6) & 0xfL;
+                case 0x4000:
+                    if ((prefix & 0x3c00) == 0) {
+                        return (0xffffff00L | (readBits(14) & 0xffL)) & 0xffffffffL;
+                    }
+                    return readBits(10) & 0xffL;
+                case 0x8000:
+                    readBits(2);
+                    return readBits(16) & 0xffffL;
+                default:
+                    readBits(2);
+                    return ((long) readBits(16) << 16) | (readBits(16) & 0xffffL);
+            }
+        }
+
+        void requireNotPastEnd() throws IOException {
+            if (bitPosition > data.length * 8) throw ProgramState.invalid("record length");
+        }
     }
 
     private Rar3VmFilter() {}

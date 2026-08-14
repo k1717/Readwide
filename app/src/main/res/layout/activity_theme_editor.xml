@@ -51,11 +51,11 @@
                 android:text="@string/choose_from_palette"
                 android:textAllCaps="false"
                 android:layout_marginBottom="6dp" />
-            <TextView android:text="R" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
+            <TextView android:text="@string/ui_rgb_red" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
             <SeekBar android:id="@+id/bg_red" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="255" />
-            <TextView android:text="G" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
+            <TextView android:text="@string/ui_rgb_green" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
             <SeekBar android:id="@+id/bg_green" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="255" />
-            <TextView android:text="B" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
+            <TextView android:text="@string/ui_rgb_blue" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
             <SeekBar android:id="@+id/bg_blue" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="255"
                 android:layout_marginBottom="16dp" />
 
@@ -80,11 +80,11 @@
                 android:text="@string/choose_from_palette"
                 android:textAllCaps="false"
                 android:layout_marginBottom="6dp" />
-            <TextView android:text="R" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
+            <TextView android:text="@string/ui_rgb_red" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
             <SeekBar android:id="@+id/toolbar_red" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="255" />
-            <TextView android:text="G" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
+            <TextView android:text="@string/ui_rgb_green" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
             <SeekBar android:id="@+id/toolbar_green" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="255" />
-            <TextView android:text="B" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
+            <TextView android:text="@string/ui_rgb_blue" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
             <SeekBar android:id="@+id/toolbar_blue" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="255"
                 android:layout_marginBottom="16dp" />
 
@@ -109,11 +109,11 @@
                 android:text="@string/choose_from_palette"
                 android:textAllCaps="false"
                 android:layout_marginBottom="6dp" />
-            <TextView android:text="R" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
+            <TextView android:text="@string/ui_rgb_red" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
             <SeekBar android:id="@+id/txt_red" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="255" />
-            <TextView android:text="G" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
+            <TextView android:text="@string/ui_rgb_green" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
             <SeekBar android:id="@+id/txt_green" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="255" />
-            <TextView android:text="B" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
+            <TextView android:text="@string/ui_rgb_blue" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" />
             <SeekBar android:id="@+id/txt_blue" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="255"
                 android:layout_marginBottom="16dp" />
 

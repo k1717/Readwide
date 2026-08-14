@@ -320,7 +320,7 @@ final class TextEncodingDetector {
         }
 
         boolean koreanSignalOverride = false;
-        if (bestKorean != null && hasOverwhelmingKoreanSignal(bestKorean)
+        if (bestKorean != null && hasOverwhelmingKoreanSignal(bestKorean, data)
                 && !"korean".equals(guessEncodingFamily(best.charsetName))) {
             // Do not let the Korean override fire when the same bytes are
             // Han-dominant under a Chinese charset, or a detector reports a
@@ -748,14 +748,22 @@ final class TextEncodingDetector {
         }
     }
 
-    private static boolean hasOverwhelmingKoreanSignal(TextEncodingProfile result) {
+    private static boolean hasOverwhelmingKoreanSignal(TextEncodingProfile result, byte[] data) {
         if (result == null || result.text == null) return false;
         int length = Math.max(1, result.text.length());
         int signal = result.hangulCount + result.cjkCount;
 
         if (result.replacementCount > Math.max(3, length / 250)) return false;
         if (result.nulCount > 0) return false;
-        if (result.badControlCount > Math.max(4, length / 160)) return false;
+        // Literal ASCII control bytes survive every ASCII-compatible legacy
+        // decode unchanged, so they cannot distinguish CP949 from a competing
+        // single-byte code page. Discount those source-invariant controls here;
+        // otherwise a CP949 document containing many literal ESC bytes can lose
+        // its strong Hangul override and be selected as Windows-874 mojibake.
+        // Decoded controls not present literally in the byte stream still count
+        // against the candidate, and NUL remains an unconditional rejection.
+        int sourceControls = countSourceInvariantBadControlBytes(data);
+        if (result.badControlCount - sourceControls > Math.max(4, length / 160)) return false;
 
         // This deliberately requires strong sustained Hangul evidence. It prevents
         // PC/browser detector hints from stealing Korean CP949/MS949 novels as Thai,
@@ -764,6 +772,18 @@ final class TextEncodingDetector {
         return result.hangulCount >= 48
                 && signal >= 80
                 && (signal / (double) length) >= 0.08;
+    }
+
+    private static int countSourceInvariantBadControlBytes(byte[] data) {
+        if (data == null || data.length == 0) return 0;
+        int count = 0;
+        for (byte value : data) {
+            int b = value & 0xFF;
+            if ((b > 0 && b < 0x20 && b != '\t' && b != '\n' && b != '\r') || b == 0x7F) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static int accuracyConfidence(TextEncodingProfile best, double bestScore, TextEncodingProfile second, double secondScore) {

@@ -31,6 +31,8 @@ final class Rar3UnpackContext {
     private final int[] oldTableLengths = new int[Rar3HuffmanTables.TABLE_SIZE];
     private final Rar3UnpackState state = new Rar3UnpackState();
     private final Rar3PpmdState ppmdState = new Rar3PpmdState();
+    private final Rar3VmFilter.ProgramState vmFilterState =
+            new Rar3VmFilter.ProgramState();
     private byte[] window;
     private int writePosition;
 
@@ -204,6 +206,7 @@ final class Rar3UnpackContext {
         writePosition = 0;
         state.resetNonSolid();
         ppmdState.resetNonSolid();
+        vmFilterState.reset();
     }
 
     @NonNull
@@ -271,5 +274,10 @@ final class Rar3UnpackContext {
     @NonNull
     Rar3PpmdState ppmdState() {
         return solidState != null ? solidState.ppmdState() : ppmdState;
+    }
+
+    @NonNull
+    Rar3VmFilter.ProgramState vmFilterState() {
+        return solidState != null ? solidState.vmFilterState() : vmFilterState;
     }
 }

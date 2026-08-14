@@ -52,6 +52,7 @@ final class Rar3ClassicLzEngine {
     private final RarBitInput in;
     private final RarLzWindow window;
     private final long limit;
+    @NonNull private final Rar3VmFilter.ProgramState vmProgramState;
 
     private RarCanonicalHuffman ldTable, ddTable, lddTable, rdTable;
     private final int[] oldDist = new int[4];
@@ -65,10 +66,12 @@ final class Rar3ClassicLzEngine {
     private final List<Rar3VmFilter.PendingFilter> filters = new ArrayList<>();
 
     private Rar3ClassicLzEngine(@NonNull RarBitInput in, @NonNull RarLzWindow window, long limit,
-                                @Nullable int[] seedOldTable) {
+                                @Nullable int[] seedOldTable,
+                                @NonNull Rar3VmFilter.ProgramState vmProgramState) {
         this.in = in;
         this.window = window;
         this.limit = limit;
+        this.vmProgramState = vmProgramState;
         if (seedOldTable != null && seedOldTable.length >= HUFF_TABLE_SIZE30) {
             System.arraycopy(seedOldTable, 0, unpOldTable, 0, HUFF_TABLE_SIZE30);
         }
@@ -83,7 +86,17 @@ final class Rar3ClassicLzEngine {
                                       @NonNull RarLzWindow window,
                                       long unpackedLimit,
                                       @Nullable int[] seedOldTable) throws IOException {
-        Rar3ClassicLzEngine engine = new Rar3ClassicLzEngine(in, window, unpackedLimit, seedOldTable);
+        return decode(in, window, unpackedLimit, seedOldTable, new Rar3VmFilter.ProgramState());
+    }
+
+    static Rar3ClassicLzEngine decode(@NonNull RarBitInput in,
+                                      @NonNull RarLzWindow window,
+                                      long unpackedLimit,
+                                      @Nullable int[] seedOldTable,
+                                      @NonNull Rar3VmFilter.ProgramState vmProgramState)
+            throws IOException {
+        Rar3ClassicLzEngine engine = new Rar3ClassicLzEngine(
+                in, window, unpackedLimit, seedOldTable, vmProgramState);
         engine.run();
         return engine;
     }
@@ -277,87 +290,10 @@ final class Rar3ClassicLzEngine {
         addVMCode(firstByte, code);
     }
 
-    private static final class VmCodeReader {
-        private final byte[] data;
-        private int bitPos;
-        VmCodeReader(byte[] data) { this.data = data; }
-        int fgetbits() {
-            int addr = bitPos >> 3;
-            int bit = bitPos & 7;
-            int bf = ((addr < data.length ? (data[addr] & 0xff) : 0) << 16)
-                    | ((addr + 1 < data.length ? (data[addr + 1] & 0xff) : 0) << 8)
-                    | (addr + 2 < data.length ? (data[addr + 2] & 0xff) : 0);
-            bf >>>= (8 - bit);
-            return bf & 0xffff;
-        }
-        void addbits(int n) { bitPos += n; }
-        long readData() {
-            int d0 = fgetbits();
-            switch (d0 & 0xc000) {
-                case 0:
-                    addbits(6);
-                    return (d0 >> 10) & 0xf;
-                case 0x4000:
-                    if ((d0 & 0x3c00) == 0) {
-                        long d = 0xffffff00L | ((d0 >> 2) & 0xff);
-                        addbits(14);
-                        return d & 0xffffffffL;
-                    } else {
-                        long d = (d0 >> 6) & 0xff;
-                        addbits(10);
-                        return d;
-                    }
-                case 0x8000: {
-                    addbits(2);
-                    long d = fgetbits();
-                    addbits(16);
-                    return d;
-                }
-                default: {
-                    addbits(2);
-                    long d = ((long) fgetbits()) << 16;
-                    addbits(16);
-                    d |= fgetbits();
-                    addbits(16);
-                    return d & 0xffffffffL;
-                }
-            }
-        }
-    }
-
     private void addVMCode(int firstByte, byte[] code) throws IOException {
-        VmCodeReader vci = new VmCodeReader(code);
-        if ((firstByte & 0x80) != 0) {
-            long filtPos = vci.readData();
-            if (filtPos == 0) filters.clear();
-        }
-        Rar3VmFilter.PendingFilter pf = new Rar3VmFilter.PendingFilter();
-        long blockStart = vci.readData();
-        if ((firstByte & 0x40) != 0) blockStart += 258;
-        pf.blockStartAbs = window.written() + blockStart;
-        if ((firstByte & 0x20) != 0) pf.blockLength = (int) vci.readData();
-        pf.initR[4] = pf.blockLength;
-        if ((firstByte & 0x10) != 0) {
-            int initMask = vci.fgetbits() >> 9;
-            vci.addbits(7);
-            for (int i = 0; i < 7; i++) {
-                if ((initMask & (1 << i)) != 0) pf.initR[i] = (int) vci.readData();
-            }
-        }
-        long vmCodeSize = vci.readData();
-        if (vmCodeSize >= 0x10000 || vmCodeSize == 0) {
-            throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3 VM program too large or empty");
-        }
-        byte[] inner = new byte[(int) vmCodeSize];
-        for (int i = 0; i < vmCodeSize; i++) {
-            inner[i] = (byte) (vci.fgetbits() >> 8);
-            vci.addbits(8);
-        }
-        Rar3VmFilter.StandardFilter type = Rar3VmFilter.identify(inner);
-        if (type == Rar3VmFilter.StandardFilter.NONE) {
-            throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3 uses a non-standard VM filter program");
-        }
-        pf.type = type;
-        filters.add(pf);
+        Rar3VmFilter.ProgramState.Parsed parsed = vmProgramState.parse(
+                firstByte, code, window.written(), window.size());
+        if (parsed.resetPendingFilters) filters.clear();
+        filters.add(parsed.filter);
     }
 }

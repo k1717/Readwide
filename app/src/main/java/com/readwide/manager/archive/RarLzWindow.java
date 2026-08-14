@@ -65,4 +65,8 @@ final class RarLzWindow {
     int position() {
         return position;
     }
+
+    int size() {
+        return window.length;
+    }
 }

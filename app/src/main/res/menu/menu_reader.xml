@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
-    <item android:id="@+id/action_add_bookmark" android:icon="@drawable/ic_bookmark_add" android:title="Add Bookmark" app:showAsAction="ifRoom" />
-    <item android:id="@+id/action_bookmarks" android:icon="@drawable/ic_bookmark" android:title="Bookmarks" app:showAsAction="ifRoom" />
-    <item android:id="@+id/action_search" android:icon="@drawable/ic_search" android:title="Find" app:showAsAction="ifRoom" />
-    <item android:id="@+id/action_go_to" android:title="Go To Position" app:showAsAction="never" />
-    <item android:id="@+id/action_brightness" android:title="Brightness" app:showAsAction="never" />
-    <item android:id="@+id/action_font" android:title="Font" app:showAsAction="never" />
-    <item android:id="@+id/action_font_increase" android:title="Increase Font" app:showAsAction="never" />
-    <item android:id="@+id/action_font_decrease" android:title="Decrease Font" app:showAsAction="never" />
-    <item android:id="@+id/action_font_reset" android:title="Reset Font Size" app:showAsAction="never" />
-    <item android:id="@+id/action_file_info" android:title="File Info" app:showAsAction="never" />
+    <item android:id="@+id/action_add_bookmark" android:icon="@drawable/ic_bookmark_add" android:title="@string/add_bookmark" app:showAsAction="ifRoom" />
+    <item android:id="@+id/action_bookmarks" android:icon="@drawable/ic_bookmark" android:title="@string/title_bookmarks" app:showAsAction="ifRoom" />
+    <item android:id="@+id/action_search" android:icon="@drawable/ic_search" android:title="@string/find" app:showAsAction="ifRoom" />
+    <item android:id="@+id/action_go_to" android:title="@string/go_to_position" app:showAsAction="never" />
+    <item android:id="@+id/action_brightness" android:title="@string/brightness" app:showAsAction="never" />
+    <item android:id="@+id/action_font" android:title="@string/font" app:showAsAction="never" />
+    <item android:id="@+id/action_font_increase" android:title="@string/increase_font" app:showAsAction="never" />
+    <item android:id="@+id/action_font_decrease" android:title="@string/decrease_font" app:showAsAction="never" />
+    <item android:id="@+id/action_font_reset" android:title="@string/reset_font_size" app:showAsAction="never" />
+    <item android:id="@+id/action_file_info" android:title="@string/file_info" app:showAsAction="never" />
 </menu>

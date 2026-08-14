@@ -37,6 +37,7 @@ final class ReaderLargeTextPartitionApplier {
         activity.readerView.setLargeTextPartitionMode(true);
         activity.readerView.setOverlapLines(activity.prefs.getPagingOverlapLines());
         activity.readerView.setTextContent(activity.fileContent);
+        activity.refreshTxtAnnotationHighlights();
         activity.applySearchHighlight();
 
         activity.readerView.post(() -> finishAfterLayout(

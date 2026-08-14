@@ -5,11 +5,9 @@ import androidx.annotation.Nullable;
 
 import com.readwide.manager.util.FileOperationProgress;
 
-import java.io.BufferedOutputStream;
 import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
@@ -26,7 +24,7 @@ final class RarStoredPayloadIO {
                                      long size,
                                      @NonNull File outFile,
                                      @Nullable FileOperationProgress progress) throws IOException {
-        try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             copyToStream(raf, size, out, progress);
             out.flush();
         }
@@ -35,7 +33,7 @@ final class RarStoredPayloadIO {
     static void copySegmentsToFile(@NonNull List<RarCryptoStreams.EncryptedSegment> segments,
                                    @NonNull File outFile,
                                    @Nullable FileOperationProgress progress) throws IOException {
-        try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             for (RarCryptoStreams.EncryptedSegment segment : segments) {
                 if (segment == null) continue;
                 try (RandomAccessFile raf = new RandomAccessFile(segment.archive, "r")) {

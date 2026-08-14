@@ -5,10 +5,8 @@ import androidx.annotation.Nullable;
 
 import com.readwide.manager.util.FileOperationProgress;
 
-import java.io.BufferedOutputStream;
 import java.io.EOFException;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
@@ -39,7 +37,7 @@ final class RarCryptoStreams {
                               @Nullable FileOperationProgress progress,
                               boolean reportWrittenBytes) throws IOException {
         if (plaintextLimit < 0L) throw new IOException("Invalid decrypted RAR stored size");
-        try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             long remaining = decryptToStream(
                     in,
                     encryptedSize,
@@ -64,7 +62,7 @@ final class RarCryptoStreams {
                                       @Nullable FileOperationProgress progress,
                                       boolean reportWrittenBytes) throws IOException {
         if (plaintextLimit < 0L) throw new IOException("Invalid decrypted split RAR stored size");
-        try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             long remaining = decryptSegmentsToStream(
                     segments,
                     cipher,

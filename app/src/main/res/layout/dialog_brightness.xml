@@ -8,7 +8,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Screen Brightness"
+        android:text="@string/screen_brightness"
         android:textSize="14sp"
         android:layout_marginBottom="8dp" />
 
@@ -23,7 +23,7 @@
         android:id="@+id/switch_brightness_override"
         android:layout_width="match_parent"
         android:layout_height="48dp"
-        android:text="Override system brightness"
+        android:text="@string/override_system_brightness"
         android:textSize="14sp"
         android:layout_marginTop="8dp" />
 

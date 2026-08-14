@@ -501,8 +501,9 @@ public class FileUtils {
         if (lower.matches(".*\\.(7z|cb7)\\.\\d{3}$")) {
             return true;
         }
-        return lower.endsWith(".zip") || lower.endsWith(".cbz")
+        return lower.endsWith(".zip") || lower.endsWith(".zipx") || lower.endsWith(".cbz")
                 || lower.endsWith(".rar") || lower.endsWith(".cbr")
+                || lower.endsWith(".cab") || lower.endsWith(".lha") || lower.endsWith(".lzh")
                 || lower.matches(".*\\.r\\d{2,3}$")
                 || lower.endsWith(".alz")
                 || lower.endsWith(".egg")

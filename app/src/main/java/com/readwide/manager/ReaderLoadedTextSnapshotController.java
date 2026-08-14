@@ -168,6 +168,7 @@ final class ReaderLoadedTextSnapshotController {
         activity.readerView.setMarkdownHighlightingEnabled(FileUtils.isMarkdownFile(restoredName));
 
         activity.readerView.setTextContent(activity.fileContent);
+        activity.refreshTxtAnnotationHighlights();
         activity.applySearchHighlight();
         activity.readerView.post(() -> {
             if (activity.activityDestroyed) return;

@@ -55,6 +55,8 @@ public class PrefsManager {
     public static final int SORT_SIZE_LARGE = 4;
     public static final int SORT_SIZE_SMALL = 5;
     public static final int SORT_TYPE = 6;
+    public static final int FILE_DISPLAY_LIST = 0;
+    public static final int FILE_DISPLAY_TILES = 1;
     public static final int LANGUAGE_SYSTEM = -1;
     public static final int LANGUAGE_ENGLISH = 0;
     public static final int LANGUAGE_KOREAN = 1;
@@ -1543,6 +1545,15 @@ public class PrefsManager {
     }
     public void setFileThumbnailsEnabled(boolean enabled) {
         prefs.edit().putBoolean("file_thumbnails_enabled", enabled).apply();
+    }
+    public int getFileDisplayMode() {
+        int mode = prefs.getInt("file_display_mode", FILE_DISPLAY_LIST);
+        return mode == FILE_DISPLAY_TILES ? FILE_DISPLAY_TILES : FILE_DISPLAY_LIST;
+    }
+    public void setFileDisplayMode(int mode) {
+        prefs.edit().putInt(
+                "file_display_mode",
+                mode == FILE_DISPLAY_TILES ? FILE_DISPLAY_TILES : FILE_DISPLAY_LIST).apply();
     }
     public String getArchiveLastImageEntryPath(String archivePath) {
         if (archivePath == null || archivePath.trim().isEmpty()) return "";

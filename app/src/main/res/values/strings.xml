@@ -126,7 +126,7 @@
     <string name="archive_extract_unsupported_7z">This 7z/CB7 uses an unsupported method, split chain, solid block, or encryption combination</string>
     <string name="archive_support_boundary_title">Archive support boundary</string>
     <string name="archive_support_boundary_rar">RAR support is limited. Readwide can list many RAR files, open stored entries, and try compressed RAR through the bundled libarchive backend, but solid, split, encrypted, header-encrypted, RAR5 compressed, PPMd/VM-filtered, and unusual SFX variants are not guaranteed.</string>
-    <string name="archive_support_boundary_zip">ZIP/CBZ support is broad for normal and encrypted ZIP through Zip4j. Some ZIPX combinations, especially encryption plus special compression methods such as XZ, BZip2, ZSTD, or Deflate64, may not be extractable by the current backend routing.</string>
+    <string name="archive_support_boundary_zip">ZIP/CBZ/ZIPX supports normal Store/Deflate and encrypted ZIP through Zip4j. WinZip-AES ZIPX also supports Deflate64, BZip2, LZMA, and XZ, plus PPMd and Zstandard through libarchive 3.8.9. AES ZIPX using JPEG or WavPack is supported by the bundled FOSS native codec module.</string>
     <string name="archive_support_boundary_7z">7z/CB7 support depends on Apache Commons Compress. Normal, password, and standard split chains are attempted, but unsupported method chains, damaged/missing volumes, and some solid archive single-entry reads may fail or be slow.</string>
     <string name="archive_support_boundary_alz">ALZ support covers Store, Deflate, BZip2, and covered ZipCrypto-style entries. Broader split, encrypted, descriptor-heavy, or unusual ESTsoft variants remain best-effort.</string>
     <string name="archive_support_boundary_egg">EGG support covers Store, Deflate, BZip2, AZO, and LZMA blocks in non-solid, non-split, non-encrypted archives. Encrypted, split, and solid EGG archives are not supported.</string>
@@ -759,4 +759,71 @@ Rules: %2$d enabled rules</string>
     <string name="image_tap_paging_off">Touch page zones: Off</string>
     <string name="image_slider_direction_rtl">Image flow: right to left</string>
     <string name="epub_force_reader_theme_colors">EPUB: use reading theme colors</string>
+    <string name="file_display_mode">File display</string>
+    <string name="file_display_list">List</string>
+    <string name="file_display_tiles">Tiles</string>
+    <string name="file_display_mode_list">Display style: List</string>
+    <string name="file_display_mode_tiles">Display style: Tiles</string>
+    <string name="annotations_title">Notes &amp; highlights</string>
+    <string name="annotation_note">Note</string>
+    <string name="annotation_highlight">Highlight</string>
+    <string name="annotation_add_note">Add note</string>
+    <string name="annotation_edit_note">Edit note</string>
+    <string name="annotation_note_hint">Write a note about the selected text</string>
+    <string name="annotation_note_required">Enter a note</string>
+    <string name="annotation_saved">Annotation saved</string>
+    <string name="annotation_already_saved">This highlight is already saved</string>
+    <string name="annotation_deleted">Annotation deleted</string>
+    <string name="annotation_empty">No notes or highlights for this file.</string>
+    <string name="annotation_list_hint">Tap to open. Long-press to edit or delete.</string>
+    <string name="annotation_delete_title">Delete annotation?</string>
+    <string name="annotation_delete_message">This removes the separately saved note or highlight. The original document is not changed.</string>
+    <string name="annotation_selection_required">Select some text first</string>
+    <string name="annotation_line">Line %1$d</string>
+    <string name="no_bookmarks_yet">No bookmarks yet</string>
+    <string name="bookmark_memo_format">Memo: %1$s</string>
+    <string name="bookmark_file_memo_format">%1$s • Memo: %2$s</string>
+    <string name="bookmark_current_file_format">Current file • %1$s</string>
+    <string name="bookmark_count_format">Bookmarks: %1$d</string>
+    <string name="bookmark_position_format">Position %1$d</string>
+    <string name="bookmark_metadata_format">%1$s • %2$s</string>
+    <string name="lock_enter_new_pin">Enter a new PIN</string>
+    <string name="lock_enter_current_pin">Enter your current PIN</string>
+    <string name="lock_enter_pin_to_unlock">Enter your PIN to unlock</string>
+    <string name="lock_pin_minimum_digits">PIN must contain at least 4 digits</string>
+    <string name="lock_wrong_pin_retry">Incorrect PIN. Try again.</string>
+    <string name="lock_confirm_pin">Confirm your PIN</string>
+    <string name="lock_pin_set_success">PIN set</string>
+    <string name="lock_pin_mismatch_restart">PINs did not match. Start again.</string>
+    <string name="lock_wrong_current_pin">Incorrect current PIN</string>
+    <string name="lock_confirm_new_pin">Confirm your new PIN</string>
+    <string name="lock_pin_changed">PIN changed</string>
+    <string name="lock_pin_mismatch_enter_new">PINs did not match. Enter a new PIN.</string>
+    <string name="lock_delete_digit">Delete last digit</string>
+    <string name="font_picker_hint">Choose a .ttf/.otf font file or select a readable font found on this device.</string>
+    <string name="font_add_file">Add font file (.ttf/.otf)</string>
+    <string name="font_no_system_found">No readable system fonts found.</string>
+    <string name="font_remove_title">Remove font</string>
+    <string name="font_remove_confirm">%1$s\n\nRemove this user-added font from Readwide?\nSystem fonts and document files are not affected.</string>
+    <string name="font_removed">Font removed</string>
+    <string name="font_remove_failed">This font cannot be removed from inside the app.</string>
+    <string name="file_picker_open_failed">Could not open the file picker.</string>
+    <string name="font_importing">Importing font…</string>
+    <string name="font_added">Font added</string>
+    <string name="font_import_failed">Could not import the font file.</string>
+    <string name="epub_original_layout_kept">This EPUB keeps its original page layout.</string>
+    <string name="rendered_page_current_layout">Rendered page based on the current layout.</string>
+    <string name="ui_symbol_close" translatable="false">×</string>
+    <string name="ui_page_status_initial" translatable="false">1 / 1</string>
+    <string name="ui_rgb_red" translatable="false">R</string>
+    <string name="ui_rgb_green" translatable="false">G</string>
+    <string name="ui_rgb_blue" translatable="false">B</string>
+    <string name="ui_symbol_expand" translatable="false">▸</string>
+    <string name="ui_symbol_selected" translatable="false">✓</string>
+    <string name="dialog_header_body_format" translatable="false">%1$s\n\n%2$s</string>
+    <string name="dialog_header_two_body_format" translatable="false">%1$s\n\n%2$s\n%3$s</string>
+    <string name="info_label_value_format" translatable="false">%1$s\n%2$s</string>
+    <string name="text_rule_preview_format" translatable="false">%1$s %2$s → %3$s</string>
+    <string name="metadata_triplet_format" translatable="false">%1$s · %2$s · %3$s</string>
+    <string name="section_marker_title_format" translatable="false">%1$s%2$s</string>
 </resources>

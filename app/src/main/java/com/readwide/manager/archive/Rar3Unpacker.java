@@ -6,7 +6,6 @@ import androidx.annotation.Nullable;
 import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 
@@ -58,7 +57,7 @@ final class Rar3Unpacker {
         }
 
         boolean success = false;
-        try (OutputStream raw = new FileOutputStream(outFile)) {
+        try (OutputStream raw = ArchiveSupport.openExtractionOutputStream(outFile)) {
             RarCrcDecodedOutput checked = new RarCrcDecodedOutput(RarOutputStreamDecodedOutput.wrapOrMemory(raw));
             Rar3UnpackFileResult fileResult = unpackToDecodedOutput(
                     context, checked, progress, failOnCrcMismatch);
@@ -138,7 +137,7 @@ final class Rar3Unpacker {
         RarLzWindow window = context.openWindow(collected);
 
         Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decode(
-                input, window, limit, context.oldTableLengths());
+                input, window, limit, context.oldTableLengths(), context.vmFilterState());
 
         // Persist table state for solid keep-old-table continuity.
         System.arraycopy(engine.tableState(), 0, context.oldTableLengths(), 0,
@@ -203,15 +202,18 @@ final class Rar3Unpacker {
             if (f.type == Rar3VmFilter.StandardFilter.NONE) {
                 throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3 non-standard VM filter is not supported");
             }
+            if (f.blockStartAbs < 0L || f.blockStartAbs > Integer.MAX_VALUE) {
+                throw new IOException("RAR3 filter block start is out of range");
+            }
             int start = (int) f.blockStartAbs;
             int len = f.blockLength;
-            if (start < 0 || len < 0 || start + len > data.length) {
+            if (len < 0 || start > data.length || len > data.length - start) {
                 throw new IOException("RAR3 filter block out of range");
             }
             byte[] region = java.util.Arrays.copyOfRange(data, start, start + len);
             int[] r = f.initR.clone();
             r[4] = len;
-            long fileOffset = f.initR[6] & 0xffffffffL;
+            long fileOffset = f.fileOffset;
             byte[] filtered = Rar3VmFilter.apply(f.type, region, len, r, fileOffset);
             System.arraycopy(filtered, 0, data, start, Math.min(filtered.length, len));
         }

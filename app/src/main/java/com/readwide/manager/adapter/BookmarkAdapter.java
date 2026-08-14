@@ -203,7 +203,8 @@ public class BookmarkAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             boolean dark = isDark(itemView);
             title.setBackgroundColor(dark ? Color.BLACK : Color.WHITE);
             title.setTextColor(dark ? Color.rgb(138, 180, 248) : Color.rgb(26, 115, 232));
-            title.setText(row.sectionTitle + "  •  " + row.count);
+            title.setText(itemView.getContext().getString(
+                    R.string.bookmark_metadata_format, row.sectionTitle, String.valueOf(row.count)));
         }
     }
 
@@ -265,20 +266,22 @@ public class BookmarkAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             if (showFileName) {
                 String file = safeFileName(bookmark);
                 if (memo != null && !memo.isEmpty()) {
-                    excerpt.setText(file + "  •  Memo: " + memo);
+                    excerpt.setText(itemView.getContext().getString(
+                            R.string.bookmark_file_memo_format, file, memo));
                 } else {
                     excerpt.setText(file);
                 }
                 excerpt.setVisibility(file.isEmpty() && (memo == null || memo.isEmpty()) ? View.GONE : View.VISIBLE);
             } else if (memo != null && !memo.isEmpty()) {
-                excerpt.setText("Memo: " + memo);
+                excerpt.setText(itemView.getContext().getString(R.string.bookmark_memo_format, memo));
                 excerpt.setVisibility(View.VISIBLE);
             } else {
                 excerpt.setVisibility(View.GONE);
             }
 
             String dateStr = dateFormat.format(new Date(bookmark.getUpdatedAt()));
-            meta.setText(positionLabel(bookmark) + "  •  " + dateStr);
+            meta.setText(itemView.getContext().getString(
+                    R.string.bookmark_metadata_format, positionLabel(bookmark), dateStr));
 
             title.setTextColor(fg);
             excerpt.setTextColor(sub);

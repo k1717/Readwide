@@ -6,15 +6,16 @@ import androidx.annotation.Nullable;
 import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.CRC32;
 
 /**
- * Extracts RAR5 (algorithm version 5.0) compressed entries with the
+ * Extracts compressed entries from the RAR5 container (RAR 5/6 algorithm
+ * version 0 and bounded RAR 7 algorithm version 1) with the
  * first-party {@link Rar5CompressedDecoder}.
  *
  * <p>Solid semantics: a solid entry's window depends on every compressed
@@ -64,7 +65,7 @@ final class Rar5CompressedArchiveExtractor {
                 }
                 if (isTarget) {
                     try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
-                        try (FileOutputStream out = new FileOutputStream(outFile)) {
+                        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
                             out.write(data);
                         }
                         verifyCrcIfPlaintext(entry, outFile);
@@ -83,7 +84,7 @@ final class Rar5CompressedArchiveExtractor {
 
     /**
      * Extracts a whole archive whose compressed members are all first-party
-     * decodable RAR5 v5.0 entries (stored members are delegated to the
+     * decodable RAR5-container entries (stored members are delegated to the
      * stored path). One shared decoder pass keeps solid window state
      * without re-priming per entry.
      *
@@ -148,7 +149,7 @@ final class Rar5CompressedArchiveExtractor {
                 }
                 byte[] data = decodeOne(decoder, entry, entries, password);
                 try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(out)) {
-                    try (FileOutputStream fos = new FileOutputStream(out)) {
+                    try (OutputStream fos = ArchiveSupport.openExtractionOutputStream(out)) {
                         fos.write(data);
                     }
                     verifyCrcIfPlaintext(entry, out);
@@ -269,8 +270,8 @@ final class Rar5CompressedArchiveExtractor {
             return false;
         }
         long info = entry.rar5CompressionInfo;
-        if (info < 0 || (info & 0x3F) != 0) {
-            return false; // unknown header or non-5.0 algorithm version
+        if (!isSupportedCompressionInfo(info)) {
+            return false;
         }
         if (entry.packedSize < 1 || entry.packedSize > MAX_PACKED_BYTES) {
             return false;
@@ -279,6 +280,22 @@ final class Rar5CompressedArchiveExtractor {
             return false;
         }
         return entry.sourceArchive != null;
+    }
+
+    static boolean isSupportedCompressionInfo(long info) {
+        if (info < 0) {
+            return false;
+        }
+        int algorithmVersion = (int) (info & 0x3F);
+        if (algorithmVersion != 0 && algorithmVersion != 1) {
+            return false;
+        }
+        try {
+            Rar5CompressedDecoder.declaredWindowSize(info);
+        } catch (Rar5CompressedDecoder.Rar5DataException invalidHeader) {
+            return false;
+        }
+        return true;
     }
 
     private static int indexOfEntry(@NonNull RarArchiveReader.RarEntry target,

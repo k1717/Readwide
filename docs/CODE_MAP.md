@@ -3,7 +3,7 @@
 A connection map of the codebase for future maintenance: which screen owns
 which controllers, where the shared seams are, and where each subsystem's
 logic actually lives. Relationships listed here were verified against the
-1.0.16 sources (creation sites, interface implementations, call sites); areas
+1.0.17 sources (creation sites, interface implementations, call sites); areas
 not yet explored in depth are described at the package level and marked as
 such rather than guessed at.
 
@@ -29,19 +29,19 @@ such rather than guessed at.
 ## Top-level layout
 
 ```
-com.readwide.manager            166 classes - activities, per-screen controllers,
+com.readwide.manager            167 classes - activities, per-screen controllers,
                                 readers' front ends, TTS core
-├── archive/                    138 classes - archive detection, browsing,
+├── archive/                    139 classes - archive detection, browsing,
 │                               extraction, split-volume handling, password
 │                               routing, and format-specific readers. This
 │                               package mixes first-party parsers/decoders
 │                               with bundled-library backends; creation
 │                               support is limited. [package-level summary]
-├── util/                        63 classes - shared helpers and pure math
+├── util/                        64 classes - shared helpers and pure math
 ├── document/render              15 classes - HTML/document rendering pipeline
 │                               (FixedHtmlRenderer, RenderedDocument, blocks,
 │                               styles) [package-level summary]
-├── model/                       13 classes - persisted/value types (Bookmark, ...)
+├── model/                       14 classes - persisted/value types (Bookmark, DocumentAnnotation, ...)
 ├── view/                         6 classes - custom views (CustomReaderView, ...)
 ├── adapter/                      6 classes - list/grid adapters
 ├── document/doc                  4 classes - legacy .doc (Word 97-2003) reader
@@ -55,9 +55,9 @@ com.readwide.manager            166 classes - activities, per-screen controllers
 └── ui/                           1 class
 ```
 
-The tree above covers all 425 classes under `com.readwide.manager`. One
+The tree above covers all 428 classes under `com.readwide.manager`. One
 additional main-source compatibility shim lives outside that package at
-`javax/xml/bind/DatatypeConverter.java`, for 426 main Java files in total.
+`javax/xml/bind/DatatypeConverter.java`, for 430 main Java files in total.
 
 ## Activities (screens)
 
@@ -116,22 +116,27 @@ keeps provider directory queries and archive-to-local-cache copies on separate
 executors, with independent busy state and stale-result guards, so a long copy
 cannot serialize ordinary folder navigation behind it.
 
-The toolbar overflow remains fixed beside the `Readwide` title on the Recent
-home screen and switches roles only while multi-select is active.
-`MainHomeDialogController` owns the adaptive Home/folder preference menu;
+The toolbar overflow remains fixed beside the current title (`Readwide`,
+`Download`, or the active folder) and switches roles only while multi-select
+is active. `MainHomeDialogController` owns the adaptive Home/folder preference
+menu, including the persisted list/tile display choice;
 `MainSelectionActionDropdownController` measures the selection count and
 available localized actions and lets rows wrap at the screen edge rather than
 clipping them.
 
-`FileAdapter` also owns the optional lightweight list-thumbnail path. It
-uses one persisted toggle for the main and Recent lists and presents square
-40dp list previews in 42dp containers; the OFF-state icon keeps the same 42dp
-horizontal slot so the text column remains stable. Its two-worker request queue
+`MainActivityStartupController` applies the display preference to both browser
+and Recent lists, swaps `LinearLayoutManager`/`GridLayoutManager`, preserves the
+visible adapter position, and keeps tile mode at two columns across
+configuration changes. `FileAdapter` owns stable list/tile view types:
+`item_file.xml` retains the compact 40dp preview in a fixed 42dp horizontal
+slot, while `item_file_tile.xml` uses a 96dp cover area and reuses the same
+selection, progress, path, open, and long-hold binding path. The optional
+thumbnail toggle remains shared by the browser and Recent views. Its two-worker request queue
 is bounded, generation-cancelled on dataset replacement, and uses expiring
 failure records capped per visible generation plus short-lived directory memory
 entries.
 `FileThumbnailLoader` supplies loose/folder images, ZIP/CBZ, RAR/CBR,
-7z/CB7, ALZ, EGG, and TAR/CBT-family first-image covers, PDF page 1, and
+7z/CB7, ALZ, EGG, CAB, LHA/LZH, and TAR/CBT-family first-image covers, PDF page 1, and
 raster EPUB package covers. It checks a source-fingerprinted, bounded
 app-private PNG disk cache before decoding; source snapshots prevent a changing
 file from being committed under stale metadata, disk replacement is atomic,
@@ -141,7 +146,8 @@ queued work exit before expensive format decoding, posts completion through an
 adapter-owned main handler, and rebinds the current row when an asynchronous
 result arrives. Folder/archive selection is ordered and
 bounded but can fall through past a corrupt or device-unsupported first image.
-It does not switch RecyclerView layout managers.
+Layout-specific thumbnail keys prevent a list-sized memory result from being
+reused as a low-resolution tile cover.
 
 Provider URI copies are coordinated by `FileUtils` with an interruptible fair
 lock. This preserves serialized atomic `opened_files` prune/commit semantics
@@ -149,7 +155,7 @@ without trapping a cancelled SAF worker behind another long provider copy.
 
 ## ReaderActivity (TXT reader)
 
-The most finely decomposed screen: 36 `Reader*` controllers. Groups:
+The most finely decomposed screen: 41 `Reader*` controllers. Groups:
 
 - **Lifecycle/shell:** `ReaderLifecycleController` (owns onDestroy teardown),
   `ReaderActivityStartupController`, `ReaderShellController`,
@@ -183,6 +189,12 @@ The most finely decomposed screen: 36 `Reader*` controllers. Groups:
 - **TTS:** `ReaderTtsController` (shared core, see TTS section). Text and
   highlight live in `view/CustomReaderView` (`setTtsHighlightRange`, fully
   bounds-clamped).
+- **Notes/highlights:** TXT selection endpoints are converted to absolute
+  document offsets by `ReaderActivity`; `DocumentAnnotationManager` persists
+  them outside the source file and `CustomReaderView` projects persistent
+  highlight ranges into the currently loaded large-TXT partition. The reader
+  toolbar exposes the shared annotation list directly; exact duplicate
+  highlight ranges are rejected and older duplicates are collapsed on load.
 
 Rendering is the custom-drawn `view/CustomReaderView` (not a WebView).
 
@@ -223,10 +235,21 @@ DocumentPageActivity  (implements TtsHost)
                                         page load; DocumentTtsHighlightMath
 ```
 
-Two-page EPUB spread: gate `isLandscapeTwoPageDocumentMode()` = EPUB &&
-`epubImagePageLike` && pages>1 && landscape. `DocumentArchiveUtils` delegates
-image-page classification to pure `EpubImagePageClassifier`; fixed-layout
-metadata alone is not enough. `DocumentTextDecoder` decodes spine/metadata text
+Markdown annotation actions are added by `widget/SelectionContrastWebView`.
+`DocumentPageActivity` resolves the selected rendered block through the
+renderer-owned `data-rw-src-offset`, stores the quote/source range in
+`DocumentAnnotationManager`, and reapplies saved highlight markup after the
+primary WebView page finishes loading. `DocumentAnnotationDialogController`
+is shared with TXT for adaptive themed, scrollable list/open/edit/delete UI and
+refreshes a visible list immediately after mutation.
+
+Two-page EPUB spread: `isLandscapeTwoPageDocumentMode()` delegates to
+`SpreadMath.shouldUseEpubSpread()`. A landscape image-page EPUB spreads on any
+device; ordinary EPUBs also spread on Android large screens (`sw600dp` or
+wider). Portrait and compact-phone text EPUBs stay single-pane.
+`DocumentArchiveUtils` delegates image-page classification to pure
+`EpubImagePageClassifier`; fixed-layout metadata alone is not enough.
+`DocumentTextDecoder` decodes spine/metadata text
 and `EpubViewportParser` supplies order-independent fixed-layout dimensions.
 Typed `DocumentArchiveUtils.EpubSpineItem` values also retain direct image
 spine entries, fallback chains, itemref/spine identity, package-wide layout,
@@ -323,8 +346,11 @@ ImageReaderActivity
 └── lifecycle: 5 executors + LruCache (min(128MB, heap/5), recycle-on-evict),
     with two-worker lightweight neighbor decode. Archive pages upgrade to a
     denser preview profile when current, and a visible spread companion uses
-    that same profile; explicit zoom uses the detail tier. All workers shut
-    down in onDestroy.
+    that same profile; explicit zoom uses the detail tier. A stopped viewer
+    answers background memory pressure by invalidating decode generations and
+    releasing bitmap surfaces/cache while retaining the current archive index;
+    onStart reloads that same page. The separate ten-minute expiry still closes
+    a genuinely stale viewer. All workers shut down in onDestroy.
 ```
 
 ## Shared TTS core (cross-viewer subsystem)
@@ -372,7 +398,7 @@ line start -> `indexOfCollapsed` -> `snapToNaturalStart`).
 | `PdfPageRenderPlan` | shared fit/display/allocation plan for visible, prefetch, and continuous PDF page renders |
 | `PdfRenderSize` | overflow-safe bitmap pixel/dimension cap used by PDF render plans and patches |
 
-## util/ highlights (63 classes; the load-bearing ones)
+## util/ highlights (64 classes; the load-bearing ones)
 
 | Class | Role |
 |---|---|
@@ -388,6 +414,7 @@ line start -> `indexOfCollapsed` -> `snapToNaturalStart`).
 | `UriPathCodec` | percent-decodes archive/document URI paths while preserving literal `+`, and encodes synthetic image-page path segments without form semantics; shared by EPUB manifest parsing, WebView resource/navigation routing, extraction, and display-name normalization |
 | `EpubBindingRewriter` | converts validated OPF custom objects to `allow-scripts`-only local handler frames, sanitizes active content from a binding-only non-scripted parent, and resolves only the actual binding-payload XML URI attributes without exposing filesystem paths |
 | `ReaderRestoreTargetMath` | pure target matching for TXT restore intents; prevents stale background restore from reopening a previous file after an in-place file switch |
+| `DocumentAnnotationManager` | crash-safe app-private `annotations.json` CRUD, exact-highlight deduplication, file/folder move rebinding, and backup array import/export; it never writes the annotated TXT/Markdown source |
 | `TtsAnchorTextMath` | whitespace-insensitive anchor search + natural-start snapping for read-aloud |
 | `FileSystemOps` | case-only rename two-hop (`renameInPlace`) |
 | `FileUtils` | shared file/text helpers incl. `htmlToPlainText` (strips head/title - TTS buffer depends on this) |
@@ -404,16 +431,27 @@ listing when hunting.
 These have not been mapped class-by-class in this document; treat the notes
 as orientation, and read the package before changing it:
 
-- **`archive/` (138 classes):** archive support lives here: ZIP/CBZ,
-  RAR/CBR/RAR5 including scoped encrypted/header-encrypted paths, 7z/CB7
+- **`archive/` (139 classes):** archive support lives here: ZIP/CBZ/ZIPX,
+  RAR/CBR/RAR5 including scoped encrypted/header-encrypted paths, CAB and
+  LHA/LZH through the generic native route, 7z/CB7
   including scoped PPMd/LZMA paths, EGG, ALZ, tar and single-compressor
   streams including zstd/lz4, split volumes, password routing, and
-  archive-wide filename charset detection. Some paths are first-party; others
+  archive-wide filename charset detection. `ZipxAesArchiveReader` supplements
+  Zip4j for authenticated WinZip-AES Deflate64/BZip2/LZMA/XZ entries; PPMd and
+  Zstandard route to the source-built libarchive 3.8.9 backend, while JPEG and
+  WavPack route to the source-built `zipxCodecsAndroid` module. The
+  first-party `Rar5CompressedDecoder` covers RAR5-container algorithm v0
+  (RAR 5/6) and a bounded algorithm-v1 path (RAR 7) with 80 distance codes and
+  a 64 MiB retained-history cap. Some paths are first-party; others
   route through bundled-library backends such as libarchive-android and
   Apache Commons Compress. Creation support is limited and should not be
   implied for every archive format. Unsupported variants should surface
   explicit errors. A standalone `readwide-rar` library extraction exists as a
   separate repo.
+- **`third_party/libarchive-android/`:** pinned source-only Android JNI backend.
+  It contains the exact libarchive 3.8.9, bzip2, XZ, LZ4, Zstandard, and Mbed TLS
+  sources used by `:libarchiveAndroid`; upstream test assets and all prebuilt
+  AAR/`.so` files are excluded. `UPSTREAM.md` records immutable revisions.
 - **`document/render` (15):** the HTML rendering pipeline used by the
   document viewer (`FixedHtmlRenderer`, `RenderedDocument`, block/style
   types).
@@ -433,5 +471,9 @@ as orientation, and read the package before changing it:
   `DocumentPageDisplayController.showPage`.
 - **File operations:** `util/FileSystemOps` (browser dialogs and the image
   viewer both route renames through it - keep it that way).
+- **Browser list/tile display:** the persisted policy is in
+  `PrefsManager`; the fixed top-right entry and radio dialog are in
+  `MainHomeDialogController`; layout-manager switching belongs to
+  `MainActivityStartupController`; row/tile binding stays in `FileAdapter`.
 - **Anything with index/geometry/string math:** put it in a `*Math` class and
   add or extend a JVM harness case where practical.

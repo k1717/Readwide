@@ -28,7 +28,7 @@ final class ArchiveTypeDetector {
             ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.lzma", ".tar.z", ".tar.zst", ".tar.lz4",
             ".tgz", ".tbz2", ".tbz", ".txz", ".tlz", ".taz", ".tzst",
             ".lzma", ".zst", ".lz4", ".bz2", ".gz", ".xz", ".z",
-            ".zip", ".zipx", ".cbz", ".rar", ".cbr",
+            ".zip", ".zipx", ".cbz", ".rar", ".cbr", ".cab", ".lha", ".lzh",
             ".alz", ".egg", ".cb7", ".7z", ".cbt", ".tar"
     };
 
@@ -55,6 +55,9 @@ final class ArchiveTypeDetector {
         if (EGG_VOLUME_PART.matcher(name).matches()) return ArchiveSupport.Type.EGG;
         if (name.endsWith(".zip") || name.endsWith(".zipx") || name.endsWith(".cbz")) return ArchiveSupport.Type.ZIP;
         if (name.endsWith(".rar") || name.endsWith(".cbr")) return ArchiveSupport.Type.RAR;
+        if (name.endsWith(".cab") || name.endsWith(".lha") || name.endsWith(".lzh")) {
+            return ArchiveSupport.Type.LIBARCHIVE;
+        }
         if (name.endsWith(".alz")) return ArchiveSupport.Type.ALZ;
         if (name.endsWith(".egg")) return ArchiveSupport.Type.EGG;
         if (name.endsWith(".7z") || name.endsWith(".cb7")) return ArchiveSupport.Type.SEVEN_Z;

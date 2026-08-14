@@ -1,8 +1,8 @@
 package com.readwide.manager.archive;
 
 /**
- * Original Java implementation of the RAR5 (compression algorithm version
- * 5.0) decompressor: block-structured bitstream, five canonical Huffman
+ * Original Java implementation of the RAR5 container's compression algorithm
+ * versions 0 (RAR 5/6) and 1 (RAR 7) decompressor: block-structured bitstream, five canonical Huffman
  * tables, an LZ77 window with a four-entry distance cache, and the DELTA /
  * x86 / ARM post-processing filters.
  *
@@ -31,19 +31,19 @@ final class Rar5CompressedDecoder {
     // ---- bitstream / table geometry of the RAR5 format ----
     private static final int BIT_LENGTH_TABLE_SIZE = 20;
     private static final int MAIN_TABLE_SIZE = 306;
-    private static final int DIST_TABLE_SIZE = 64;
+    private static final int DIST_TABLE_SIZE_V0 = 64;
+    private static final int DIST_TABLE_SIZE_V1 = 80;
     private static final int LOW_DIST_TABLE_SIZE = 16;
     private static final int REP_LEN_TABLE_SIZE = 44;
-    private static final int ALL_TABLES_SIZE =
-            MAIN_TABLE_SIZE + DIST_TABLE_SIZE + LOW_DIST_TABLE_SIZE + REP_LEN_TABLE_SIZE;
-
     private static final int FILTER_DELTA = 0;
     private static final int FILTER_E8 = 1;
     private static final int FILTER_E8E9 = 2;
     private static final int FILTER_ARM = 3;
 
     private static final long BASE_WINDOW_SIZE = 0x20000L; // 128 KiB
-    private static final long MAX_WINDOW_SIZE = 64L * 1024 * 1024; // format limit for v5.0
+    private static final long MAX_DECLARED_WINDOW_SIZE = 1L << 40; // RAR7 field limit: 1 TiB
+    private static final int MAX_RETAINED_WINDOW_SIZE = 64 * 1024 * 1024;
+    private static final long RAR7_V0_SOLID_COMPAT = 0x100000L;
 
     // ---- canonical Huffman decode table ----
     private static final class DecodeTable {
@@ -66,11 +66,11 @@ final class Rar5CompressedDecoder {
     // ---- persistent (solid-carrying) state ----
     private byte[] window;
     private long windowSize;
-    private long windowMask;
     private long solidOffset;
-    private final int[] distCache = new int[4];
+    private final long[] distCache = new long[4];
     private int lastLength;
     private boolean primed; // at least one entry fully decoded since last reset
+    private int distanceTableSize = DIST_TABLE_SIZE_V0;
 
     // ---- per-entry state ----
     private byte[] input;       // packed payload + zero padding
@@ -99,7 +99,6 @@ final class Rar5CompressedDecoder {
     void reset() {
         window = null;
         windowSize = 0;
-        windowMask = 0;
         solidOffset = 0;
         java.util.Arrays.fill(distCache, 0);
         lastLength = 0;
@@ -116,7 +115,10 @@ final class Rar5CompressedDecoder {
     }
 
     /**
-     * Decodes one RAR5 v5.0 compressed entry.
+     * Decodes one compressed entry in the RAR5 container. WinRAR 6 continues
+     * to write algorithm version 0. WinRAR 7 can write version 1, which uses
+     * 80 distance codes and an extended, potentially non-power-of-two
+     * dictionary-size field.
      *
      * @param packed          packed payload bytes of the entry
      * @param unpackedSize    expected unpacked size
@@ -125,16 +127,14 @@ final class Rar5CompressedDecoder {
      */
     byte[] decodeEntry(byte[] packed, long unpackedSize, long compressionInfo) {
         int algoVersion = (int) (compressionInfo & 0x3F);
-        if (algoVersion != 0) {
+        if (algoVersion != 0 && algoVersion != 1) {
             throw new Rar5DataException(
                     "Unsupported RAR5 compression algorithm version: " + algoVersion);
         }
         boolean solid = (compressionInfo & 0x40L) != 0;
-        long declaredWindow = BASE_WINDOW_SIZE << ((compressionInfo >> 10) & 15);
-        if (declaredWindow > MAX_WINDOW_SIZE) {
-            throw new Rar5DataException(
-                    "Declared RAR5 dictionary size is not supported: " + declaredWindow);
-        }
+        long declaredWindow = declaredWindowSize(compressionInfo);
+        int entryDistanceTableSize = usesExtendedDistanceTable(compressionInfo)
+                ? DIST_TABLE_SIZE_V1 : DIST_TABLE_SIZE_V0;
         if (unpackedSize < 0 || unpackedSize > Integer.MAX_VALUE - 8) {
             throw new Rar5DataException(
                     "RAR5 entry unpacked size is outside supported bounds: " + unpackedSize);
@@ -147,21 +147,29 @@ final class Rar5CompressedDecoder {
                                 + "solid predecessors must be decoded first");
             }
             if (declaredWindow != windowSize) {
+                // RAR encoders guarantee one dictionary size throughout a
+                // solid stream. Growing it mid-stream makes ring positions
+                // ambiguous and is rejected by the reference decoder too.
                 throw new Rar5DataException(
-                        "RAR5 solid entry declares a different window size ("
+                        "RAR5 solid entry declares an incompatible window size ("
                                 + declaredWindow + " vs " + windowSize + ")");
             }
             solidOffset += writePtr;
         } else {
-            window = new byte[(int) declaredWindow];
+            // A RAR7 header can declare as much as 1 TiB. Allocating that amount
+            // on Android would turn an otherwise harmless archive into an OOM
+            // primitive. Retain at most 64 MiB and reject only if the stream
+            // actually asks for older history. Initial, not-yet-produced history
+            // remains the format-defined zero-filled window.
+            window = new byte[(int) Math.min(declaredWindow, MAX_RETAINED_WINDOW_SIZE)];
             windowSize = declaredWindow;
-            windowMask = declaredWindow - 1;
             solidOffset = 0;
             java.util.Arrays.fill(distCache, 0);
             lastLength = 0;
             invalidateTables();
             primed = false;
         }
+        distanceTableSize = entryDistanceTableSize;
 
         this.input = new byte[packed.length + 8];
         System.arraycopy(packed, 0, this.input, 0, packed.length);
@@ -216,6 +224,42 @@ final class Rar5CompressedDecoder {
         return out;
     }
 
+    /** Returns the dictionary size declared by a RAR5-container file header. */
+    static long declaredWindowSize(long compressionInfo) {
+        int algoVersion = (int) (compressionInfo & 0x3F);
+        int exponent = (int) ((compressionInfo >> 10) & 0x1F);
+        if (algoVersion == 0) {
+            if (exponent > 15) {
+                throw new Rar5DataException(
+                        "RAR5 algorithm version 0 has an invalid dictionary exponent: "
+                                + exponent);
+            }
+            return BASE_WINDOW_SIZE << exponent;
+        }
+        if (algoVersion != 1) {
+            throw new Rar5DataException(
+                    "Unsupported RAR5 compression algorithm version: " + algoVersion);
+        }
+        if (exponent > 23) {
+            throw new Rar5DataException(
+                    "RAR7 dictionary exponent is outside the format limit: " + exponent);
+        }
+        long base = BASE_WINDOW_SIZE << exponent;
+        int fraction = (int) ((compressionInfo >> 15) & 0x1F);
+        long declared = base + (base >>> 5) * fraction;
+        if (declared <= 0 || declared > MAX_DECLARED_WINDOW_SIZE) {
+            throw new Rar5DataException(
+                    "Declared RAR7 dictionary size is outside the format limit: " + declared);
+        }
+        return declared;
+    }
+
+    /** RAR7 version-1 streams have 80 distance codes unless marked as v0 solid data. */
+    static boolean usesExtendedDistanceTable(long compressionInfo) {
+        return (compressionInfo & 0x3FL) == 1L
+                && (compressionInfo & RAR7_V0_SOLID_COMPAT) == 0L;
+    }
+
     // ---- block management ----
 
     private boolean blockExhausted() {
@@ -262,7 +306,8 @@ final class Rar5CompressedDecoder {
         boolean tablePresent = ((flags >> 7) & 1) != 0;
         if (tablePresent) {
             parseTables();
-        } else if (!mainTable.valid) {
+        } else if (!mainTable.valid || !distTable.valid
+                || distTable.size != distanceTableSize) {
             throw new Rar5DataException(
                     "RAR5 block reuses Huffman tables, but no tables are available");
         }
@@ -283,20 +328,6 @@ final class Rar5CompressedDecoder {
         return bits & 0xFFFF;
     }
 
-    private long peekBits32() {
-        if (inAddr >= blockSize) {
-            throw new Rar5DataException("Premature end of RAR5 block data");
-        }
-        int base = blockStart + inAddr;
-        long bits = ((long) (input[base] & 0xFF)) << 24;
-        bits |= (input[base + 1] & 0xFF) << 16;
-        bits |= (input[base + 2] & 0xFF) << 8;
-        bits |= input[base + 3] & 0xFF;
-        bits = (bits << bitAddr) & 0xFFFFFFFFL;
-        bits |= (input[base + 4] & 0xFF) >> (8 - bitAddr);
-        return bits;
-    }
-
     private void skipBits(int bits) {
         int next = bitAddr + bits;
         inAddr += next >> 3;
@@ -307,6 +338,21 @@ final class Rar5CompressedDecoder {
         int v = peekBits16() >> (16 - n);
         skipBits(n);
         return v;
+    }
+
+    /** Reads up to 56 raw bits in stream order without relying on a 32-bit lookahead. */
+    private long readRawBitsLong(int count) {
+        if (count < 0 || count > 56) {
+            throw new Rar5DataException("Invalid RAR5 raw bit count: " + count);
+        }
+        long value = 0;
+        int remaining = count;
+        while (remaining > 0) {
+            int chunk = Math.min(remaining, 15);
+            value = (value << chunk) | readBits(chunk);
+            remaining -= chunk;
+        }
+        return value;
     }
 
     // ---- canonical Huffman tables ----
@@ -423,8 +469,10 @@ final class Rar5CompressedDecoder {
 
         createDecodeTable(bitLength, 0, bitLengthTable, BIT_LENGTH_TABLE_SIZE);
 
-        byte[] table = new byte[ALL_TABLES_SIZE];
-        for (int idx = 0; idx < ALL_TABLES_SIZE; ) {
+        int allTablesSize = MAIN_TABLE_SIZE + distanceTableSize
+                + LOW_DIST_TABLE_SIZE + REP_LEN_TABLE_SIZE;
+        byte[] table = new byte[allTablesSize];
+        for (int idx = 0; idx < allTablesSize; ) {
             int num = decodeNumber(bitLengthTable);
             if (num < 16) {
                 table[idx++] = (byte) num;
@@ -441,7 +489,7 @@ final class Rar5CompressedDecoder {
                     throw new Rar5DataException(
                             "RAR5 Huffman table starts with a repeat code");
                 }
-                while (n-- > 0 && idx < ALL_TABLES_SIZE) {
+                while (n-- > 0 && idx < allTablesSize) {
                     table[idx] = table[idx - 1];
                     idx++;
                 }
@@ -454,7 +502,7 @@ final class Rar5CompressedDecoder {
                     n = (peekBits16() >> 9) + 11;
                     skipBits(7);
                 }
-                while (n-- > 0 && idx < ALL_TABLES_SIZE) {
+                while (n-- > 0 && idx < allTablesSize) {
                     table[idx++] = 0;
                 }
             }
@@ -463,8 +511,8 @@ final class Rar5CompressedDecoder {
         int off = 0;
         createDecodeTable(table, off, mainTable, MAIN_TABLE_SIZE);
         off += MAIN_TABLE_SIZE;
-        createDecodeTable(table, off, distTable, DIST_TABLE_SIZE);
-        off += DIST_TABLE_SIZE;
+        createDecodeTable(table, off, distTable, distanceTableSize);
+        off += distanceTableSize;
         createDecodeTable(table, off, lowDistTable, LOW_DIST_TABLE_SIZE);
         off += LOW_DIST_TABLE_SIZE;
         createDecodeTable(table, off, repLenTable, REP_LEN_TABLE_SIZE);
@@ -479,22 +527,19 @@ final class Rar5CompressedDecoder {
         } else if (num >= 262) {
             int len = decodeCodeLength(num - 262);
             int distSlot = decodeNumber(distTable);
-            int dist = 1;
+            long dist = 1;
             int dBits;
             if (distSlot < 4) {
                 dBits = 0;
                 dist += distSlot;
             } else {
                 dBits = distSlot / 2 - 1;
-                dist += (2 | (distSlot & 1)) << dBits;
+                dist += (2L | (distSlot & 1)) << dBits;
             }
             if (dBits > 0) {
                 if (dBits >= 4) {
                     if (dBits > 4) {
-                        long add = peekBits32();
-                        skipBits(dBits - 4);
-                        add = (add >>> (36 - dBits)) << 4;
-                        dist += (int) add;
+                        dist += readRawBitsLong(dBits - 4) << 4;
                     }
                     int lowDist = decodeNumber(lowDistTable);
                     dist += lowDist;
@@ -522,7 +567,7 @@ final class Rar5CompressedDecoder {
             }
         } else {
             // 258..261: distance-cache repetition
-            int dist = distCacheTouch(num - 258);
+            long dist = distCacheTouch(num - 258);
             int lenSlot = decodeNumber(repLenTable);
             int len = decodeCodeLength(lenSlot);
             lastLength = len;
@@ -546,15 +591,15 @@ final class Rar5CompressedDecoder {
         return length;
     }
 
-    private void distCachePush(int value) {
+    private void distCachePush(long value) {
         distCache[3] = distCache[2];
         distCache[2] = distCache[1];
         distCache[1] = distCache[0];
         distCache[0] = value;
     }
 
-    private int distCacheTouch(int idx) {
-        int dist = distCache[idx];
+    private long distCacheTouch(int idx) {
+        long dist = distCache[idx];
         for (int i = idx; i > 0; i--) {
             distCache[i] = distCache[i - 1];
         }
@@ -563,8 +608,8 @@ final class Rar5CompressedDecoder {
     }
 
     private void emitByte(byte b) {
-        long writeIdx = (solidOffset + writePtr) & windowMask;
-        window[(int) writeIdx] = b;
+        long absoluteWrite = solidOffset + writePtr;
+        window[windowIndex(absoluteWrite)] = b;
         if (writePtr >= out.length) {
             throw new Rar5DataException(
                     "RAR5 stream produced more data than the declared unpacked size");
@@ -573,14 +618,19 @@ final class Rar5CompressedDecoder {
         writePtr++;
     }
 
-    private void copyString(int len, int dist) {
-        if (dist <= 0 || (long) dist > windowSize) {
+    private void copyString(int len, long dist) {
+        if (dist <= 0 || dist > windowSize) {
             throw new Rar5DataException("RAR5 match distance is outside the window: " + dist);
         }
         long base = solidOffset + writePtr;
+        if (dist > window.length && base + len > dist) {
+            throw new Rar5DataException(
+                    "RAR7 match distance exceeds the safe retained-history limit: " + dist);
+        }
         for (int i = 0; i < len; i++) {
-            byte b = window[(int) ((base + i - dist) & windowMask)];
-            window[(int) ((base + i) & windowMask)] = b;
+            long source = base + i - dist;
+            byte b = source < 0 ? 0 : window[windowIndex(source)];
+            window[windowIndex(base + i)] = b;
             if (writePtr + i >= out.length) {
                 throw new Rar5DataException(
                         "RAR5 match overshot the declared unpacked size");
@@ -588,6 +638,10 @@ final class Rar5CompressedDecoder {
             out[(int) (writePtr + i)] = b;
         }
         writePtr += len;
+    }
+
+    private int windowIndex(long absolutePosition) {
+        return (int) (absolutePosition % window.length);
     }
 
     /** Consumes remaining non-data symbols (filters / no-op reps) at the end of an entry. */

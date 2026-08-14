@@ -1,5 +1,43 @@
 # Changelog
 
+## Readwide 1.0.17 - 2026-08-14
+
+### File browser display
+
+- Added a persistent **File display** choice to the fixed upper-right overflow beside the current location title (`Readwide`, `Download`, and folders).
+- File and Recent views can switch between the existing compact list and a two-column tile grid. The grid keeps cover thumbnails, file-type icons, reading progress, selection, search paths, and existing open/long-hold behavior.
+- The two-column layout gives covers and filenames more room than the previous three-column phone layout. Switching modes preserves the visible list position instead of jumping back to the beginning.
+- The display choice is not added to per-file or long-hold action menus.
+
+### TXT and Markdown annotations
+
+- Selected TXT or Markdown text can now be saved as a note or persistent highlight without changing the original document.
+- Notes and highlights are stored in Readwide's separate app-private annotation file, follow file/folder moves made in the browser, and are included in JSON backup export/import.
+- A dedicated reader-toolbar shortcut opens **Notes & highlights** without going through More. The themed list updates immediately after edits or deletion.
+- Saving the same highlight range again is rejected, and exact duplicate highlights left by an earlier build are cleaned when annotation data is loaded.
+- The list can reopen a saved position and edit or delete its separately stored note.
+
+### EPUB layout on large screens
+
+- In landscape on Android large-screen devices (`sw600dp` or wider), ordinary EPUBs now use the existing side-by-side two-page layout instead of stretching one text pane across the tablet.
+- Image-page EPUBs keep their existing landscape spread on phones and tablets. Portrait mode and ordinary EPUB behavior on smaller phones are unchanged.
+- PDF landscape spread behavior is unchanged.
+
+### Archive reader return and localization
+
+- Switching to another app no longer closes an active archive/image reader when Android reports background memory pressure. Decoded image memory is released when requested, then the same archive page is decoded again on return.
+- ZIPX support is now explicit and tested: WinZip-AES entries using Deflate64, BZip2, LZMA, or XZ extract through the authenticated Java supplement. The Android backend is upgraded from the Maven AAR carrying libarchive 3.8.1 to source-built libarchive 3.8.9, adding encrypted ZIPX PPMd and Zstandard fallback plus upstream ZIPX streaming and archive-parser hardening. AES ZIPX using JPEG or WavPack now extracts through a separate source-built FOSS native module (XADMaster WinZip JPEG under LGPL-2.1-or-later and WavPack 5.9.0 under BSD-3-Clause), with bounded streaming, authentication-before-commit, and in-APK license texts.
+- CAB and LHA/LZH are now exposed as read-only archive types using the already-bundled libarchive decoders, including listing, image browsing, and extraction. Creation, password handling, and broad multi-volume compatibility are not claimed. libarchive 3.8.9 also tightens RAR/RAR5 seek and declared-size handling without changing Readwide's conservative RAR support boundary.
+- The independent RAR3/RAR4 classic-LZ fallback now implements standard VM-program slot selection/reset, program reuse, prior block-length reuse, usage registers, user-global-data consumption, and correct per-file filter offsets. This improves common standard E8/E8E9/Itanium/Delta/RGB/Audio filtered archives without adding Junrar or RARLAB UnRAR-license code; custom VM bytecode remains unsupported.
+- The first-party RAR5-container decoder now keeps the existing algorithm-v0 path used by RAR 5/6 and adds bounded RAR 7 algorithm-v1 handling: 80 distance codes, the extended fractional dictionary field, non-power-of-two wrapping, long distance values, and the v0-solid compatibility marker. Declared dictionaries up to the 1 TB format limit are parsed, but Android retains at most 64 MB of history and rejects a stream only when it actually needs older data. Synthetic public-grammar tests exercise the extended distance table and a slot-64 long-distance match; complete RAR 7 compatibility is not claimed.
+- Archive extraction now enforces one operation-wide runtime byte budget across dedicated Java decoders, fallback engines, and libarchive. Unknown-size entries can no longer reset the counter per file, and native libarchive output is copied in bounded blocks instead of writing unchecked directly to a file descriptor. The decoded-output ceiling is raised from 32 GB to 128 GB; the effective runtime budget is the smaller of that ceiling and the starting usable space minus the existing 64 MB reserve.
+- Refined annotation wording across translations and standardized Korean reader/theme terminology and several Indonesian file-browser labels.
+- Removed the remaining English-only PIN, reader-menu, bookmark, and font-picker text. PIN setup/change errors, bookmark metadata, font selection/import/removal, and related accessibility labels now use the complete English plus 21 localized resource sets; the former English/Korean-only font-label branch was removed.
+
+### Release boundary
+
+- No permission was added. The existing libarchive Android backend is now built from pinned vendored 3.8.9 source with Android NDK 29 instead of resolving its 3.8.1 native AAR from Maven Central.
+
 ## Readwide 1.0.16 - 2026-07-27
 
 ### Archive and image reading
@@ -31,6 +69,7 @@
 ### Reliability
 
 - URI archive copies remain atomic and serialized, but waiting for the shared cache is now interruptible so cancelled SAF/open-document work cannot remain blocked behind another large copy.
+- No permission or runtime dependency was added.
 
 ## Readwide 1.0.15 - 2026-07-14
 
@@ -258,7 +297,7 @@
 
 ### Archives - 7z PPMd first-party decoder; AES-encrypted PPMd now extracts
 
-- 7z archives compressed with PPMd now decode first party, closing the last unsupported 7z combination: AES-encrypted PPMd archives, which no bundled backend could handle (Commons Compress has no PPMd coder, and the bundled libarchive cannot decrypt 7z). `SevenZPpmd7Decoder` is a Java port of the public-domain Ppmd7 reference (Dmitry Shkarin's PPMd var.H, Igor Pavlov's Ppmd7 codec - both explicitly public domain, which is Apache-2.0 compatible; provenance in `THIRD_PARTY_NOTICES.md`). The model lives in one flat byte array mirroring the reference memory layout, because in PPMd the memory allocator is part of the format: the encoder and decoder must rescale, glue free blocks, and restart the model at exactly the same points. Validation followed the project's oracle discipline - a Python reference was debugged to byte-exactness first, then the Java port re-verified against the reference `7z` tool and pyppmd across orders 2-32, memory sizes 64 KiB-1 MiB, and text/repetitive/random/zero payloads, with the hard paths instrumented to confirm they ran (one fixture alone triggers 8 model restarts and 7 free-block glue passes, all byte-exact). Wired into the same gated fallback as BCJ2: only archives actually containing PPMd or BCJ2 folders are intercepted, and on any failure other than a missing password the previous libarchive path still runs, so existing behaviour cannot regress. Plain PPMd, and AES+PPMd with an encrypted header, all extract byte-identically; wrong passwords fail cleanly. Details in `docs/SEVENZ_PPMD_READER_READWIDE_1_0_11.md`.
+- 7z archives compressed with PPMd now decode first party, closing the last unsupported 7z combination: AES-encrypted PPMd archives, which no bundled backend could handle (Commons Compress has no PPMd coder, and the bundled libarchive cannot decrypt 7z). `SevenZPpmd7Decoder` is a Java port of the public-domain Ppmd7 reference (Dmitry Shkarin's PPMd var.H, Igor Pavlov's Ppmd7 codec - both explicitly public domain, which is Apache-2.0 compatible; provenance in `THIRD_PARTY_NOTICES.md`). The model lives in one flat byte array mirroring the reference memory layout, because in PPMd the memory allocator is part of the format: the encoder and decoder must rescale, glue free blocks, and restart the model at exactly the same points. Validation followed the project's oracle discipline - a Python reference was debugged to byte-exactness first, then the Java port re-verified against the reference `7z` tool and pyppmd across orders 2-32, memory sizes 64 KiB-1 MB, and text/repetitive/random/zero payloads, with the hard paths instrumented to confirm they ran (one fixture alone triggers 8 model restarts and 7 free-block glue passes, all byte-exact). Wired into the same gated fallback as BCJ2: only archives actually containing PPMd or BCJ2 folders are intercepted, and on any failure other than a missing password the previous libarchive path still runs, so existing behaviour cannot regress. Plain PPMd, and AES+PPMd with an encrypted header, all extract byte-identically; wrong passwords fail cleanly. Details in `docs/SEVENZ_PPMD_READER_READWIDE_1_0_11.md`.
 
 ### Archives - 7z BCJ2 archives now extract, including AES-encrypted ones
 

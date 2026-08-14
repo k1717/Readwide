@@ -11,6 +11,7 @@ import androidx.appcompat.app.ActionBarDrawerToggle;
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.view.GravityCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
+import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -19,6 +20,8 @@ import com.readwide.manager.util.BookmarkManager;
 import com.readwide.manager.util.EdgeToEdgeUtil;
 
 final class MainActivityStartupController {
+    private static final int FILE_TILE_SPAN_COUNT = 2;
+
     private final MainActivity activity;
 
     MainActivityStartupController(@NonNull MainActivity activity) {
@@ -148,11 +151,16 @@ final class MainActivityStartupController {
     }
 
     private void bindFileLists() {
+        boolean tileMode = activity.prefs.getFileDisplayMode()
+                == com.readwide.manager.util.PrefsManager.FILE_DISPLAY_TILES;
+
         activity.fileAdapter = new FileAdapter(activity);
         activity.fileAdapter.setListener(activity);
         activity.fileAdapter.setSortMode(activity.prefs.getSortMode());
         activity.fileAdapter.setShowThumbnails(activity.prefs.getFileThumbnailsEnabled());
-        activity.fileRecyclerView.setLayoutManager(new LinearLayoutManager(activity));
+        activity.fileAdapter.setTileMode(tileMode);
+        activity.fileRecyclerView.setLayoutManager(
+                createFileLayoutManager(activity.fileRecyclerView, tileMode));
         activity.fileRecyclerView.setItemAnimator(null);
         activity.fileRecyclerView.setAdapter(activity.fileAdapter);
         installFastScrollIfReady(
@@ -166,7 +174,9 @@ final class MainActivityStartupController {
         activity.recentAdapter.setSortEnabled(false);
         activity.recentAdapter.setShowReadingProgress(true);
         activity.recentAdapter.setShowThumbnails(activity.prefs.getFileThumbnailsEnabled());
-        activity.recentRecyclerView.setLayoutManager(new LinearLayoutManager(activity));
+        activity.recentAdapter.setTileMode(tileMode);
+        activity.recentRecyclerView.setLayoutManager(
+                createFileLayoutManager(activity.recentRecyclerView, tileMode));
         activity.recentRecyclerView.setItemAnimator(null);
         activity.recentRecyclerView.setAdapter(activity.recentAdapter);
         installFastScrollIfReady(
@@ -175,6 +185,79 @@ final class MainActivityStartupController {
                 activity.recentFastScrollRail,
                 activity.recentFastScrollThumb);
         activity.attachRecentSwipeToDismiss();
+    }
+
+    void applyFileDisplayMode(int mode) {
+        boolean tileMode = mode == com.readwide.manager.util.PrefsManager.FILE_DISPLAY_TILES;
+        applyFileDisplayMode(activity.fileRecyclerView, activity.fileAdapter, tileMode);
+        applyFileDisplayMode(activity.recentRecyclerView, activity.recentAdapter, tileMode);
+    }
+
+    void refreshFileDisplayLayoutForConfiguration() {
+        if (activity.prefs == null) return;
+        int mode = activity.prefs.getFileDisplayMode();
+        // onConfigurationChanged() can run before RecyclerView reports its new
+        // width. Recalculate grid spans after the new layout pass.
+        if (activity.fileRecyclerView != null) {
+            activity.fileRecyclerView.post(() -> applyFileDisplayMode(mode));
+        } else {
+            applyFileDisplayMode(mode);
+        }
+    }
+
+    private void applyFileDisplayMode(RecyclerView recyclerView,
+                                      FileAdapter adapter,
+                                      boolean tileMode) {
+        if (recyclerView == null || adapter == null) return;
+
+        RecyclerView.LayoutManager oldManager = recyclerView.getLayoutManager();
+        boolean oldTile = oldManager instanceof GridLayoutManager;
+        int desiredSpan = tileMode ? resolveTileSpanCount() : 1;
+        boolean sameManager = oldManager != null && oldTile == tileMode;
+        if (tileMode && oldManager instanceof GridLayoutManager) {
+            sameManager = ((GridLayoutManager) oldManager).getSpanCount() == desiredSpan;
+        }
+        if (sameManager && adapter.isTileMode() == tileMode) return;
+
+        int firstPosition = RecyclerView.NO_POSITION;
+        int firstOffset = 0;
+        if (oldManager instanceof LinearLayoutManager) {
+            LinearLayoutManager linear = (LinearLayoutManager) oldManager;
+            firstPosition = linear.findFirstVisibleItemPosition();
+            View firstView = firstPosition != RecyclerView.NO_POSITION
+                    ? linear.findViewByPosition(firstPosition)
+                    : null;
+            if (firstView != null) {
+                firstOffset = firstView.getTop() - recyclerView.getPaddingTop();
+            }
+        }
+
+        recyclerView.stopScroll();
+        adapter.setTileMode(tileMode);
+        LinearLayoutManager newManager = (LinearLayoutManager) createFileLayoutManager(
+                recyclerView,
+                tileMode);
+        recyclerView.setLayoutManager(newManager);
+        if (firstPosition != RecyclerView.NO_POSITION && adapter.getItemCount() > 0) {
+            newManager.scrollToPositionWithOffset(
+                    Math.min(firstPosition, adapter.getItemCount() - 1),
+                    firstOffset);
+        }
+        recyclerView.requestLayout();
+    }
+
+    @NonNull
+    private RecyclerView.LayoutManager createFileLayoutManager(RecyclerView recyclerView,
+                                                               boolean tileMode) {
+        if (!tileMode) return new LinearLayoutManager(activity);
+        return new GridLayoutManager(activity, resolveTileSpanCount());
+    }
+
+    private int resolveTileSpanCount() {
+        // Keep browser and Recent tiles at a predictable two-column width.
+        // The previous density-based calculation produced three narrow columns
+        // on ordinary phones, which reduced cover and filename readability.
+        return FILE_TILE_SPAN_COUNT;
     }
 
     private void installFastScrollIfReady(RecyclerView recyclerView,

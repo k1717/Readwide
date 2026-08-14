@@ -42,6 +42,7 @@ final class ReaderBottomControlsController {
         activity.readerToolbarController.bindScrollableButton(R.id.btn_find, activity::showTextSearch);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_page_move, this::showPageMoveBubble);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_bookmark, activity::showBookmarksForFile);
+        activity.readerToolbarController.bindScrollableButton(R.id.btn_annotations, activity::showAnnotationsDialog);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_auto_page, activity::showAutoPageTurnDialog);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_tts, activity::showTtsDialog);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_screen_rotation,
