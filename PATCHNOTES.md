@@ -6,7 +6,7 @@
 
 - `PrefsManager.file_display_mode` stores either the list or tile policy and defaults existing installations to the unchanged list layout.
 - `MainHomeDialogController` exposes the choice only through the fixed upper-right overflow next to the current location title. The row reports the active state and opens a localized list/tile radio dialog.
-- `MainActivityStartupController` applies the same policy to browser and Recent adapters, swaps `LinearLayoutManager`/`GridLayoutManager`, preserves the first visible item and offset, and uses a fixed two-column tile grid so ordinary phones no longer render three narrow tiles.
+- `MainActivityStartupController` applies the same policy to browser and Recent adapters, swaps `LinearLayoutManager`/`GridLayoutManager`, preserves the first visible item and offset, and uses a fixed two-column tile grid.
 - `FileAdapter` now has stable list/tile view types. `item_file_tile.xml` reuses the existing row IDs and interaction path while presenting a 96dp cover area, two-line filename, metadata, optional path, reading-progress badge, and selection marker.
 - Thumbnail cache/request keys include the layout kind so a list-sized result is not reused as a low-resolution tile cover. Existing bounded decoding, retry, cancellation, and disk-cache behavior remains in place.
 - No file-row overflow or long-hold action was added or changed.
