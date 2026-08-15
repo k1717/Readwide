@@ -37,6 +37,7 @@
 ### Release boundary
 
 - No permission was added. The existing libarchive Android backend is now built from pinned vendored 3.8.9 source with Android NDK 29 instead of resolving its 3.8.1 native AAR from Maven Central.
+- Public-source ignore and ZIP filters retain libarchive's upstream `external/libarchive/build/cmake/` source modules while continuing to exclude generated build output.
 
 ## Readwide 1.0.16 - 2026-07-27
 

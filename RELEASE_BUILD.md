@@ -111,7 +111,7 @@ Expected result:
 
 ## Source ZIP portability
 
-The public source ZIP must use `/` path separators and preserve POSIX modes. Store `gradlew` and `*.sh` as executable (`0755`) and ordinary source/document files as `0644`. After creating the archive, run a full CRC read and compare its normalized file list with the filtered source tree; exclude `.gradle/`, every `build/` directory, IDE state, local properties, signing material, and compiled artifacts.
+The public source ZIP must use `/` path separators and preserve POSIX modes. Store `gradlew` and `*.sh` as executable (`0755`) and ordinary source/document files as `0644`. Create it with `python3 scripts/create_source_zip.py <output.zip>`; the script performs a full CRC read and compares the normalized file list with the filtered source tree. It excludes generated `.gradle/` and `build/` trees, IDE state, local properties, signing material, and compiled artifacts, while retaining libarchive's checked-in `external/libarchive/build/cmake/` source modules.
 
 Gradle 9.4.1 integrity baseline:
 

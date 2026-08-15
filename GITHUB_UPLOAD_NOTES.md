@@ -51,7 +51,11 @@ Do not commit or attach private release materials:
 
 ## Pre-upload checks
 
-The source ZIP must use `/` entry separators and preserve POSIX file modes. In particular, `gradlew` and shell scripts should be stored as executable (`0755`); source and documentation files should be regular non-executable files (`0644`). Do not create the public source ZIP with a Windows-only path format.
+The source ZIP must use `/` entry separators and preserve POSIX file modes. In particular, `gradlew` and shell scripts should be stored as executable (`0755`); source and documentation files should be regular non-executable files (`0644`). Do not create the public source ZIP with a Windows-only path format. Use `scripts/create_source_zip.py` so generated `build/` trees are excluded without dropping libarchive's checked-in `third_party/libarchive-android/library/src/main/jni/external/libarchive/build/cmake/` source modules.
+
+```bash
+python3 scripts/create_source_zip.py Readwide-1.0.17-github-source-full.zip
+```
 
 ```bash
 ./gradlew clean testDebugUnitTest assembleDebug lintDebug

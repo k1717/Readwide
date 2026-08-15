@@ -51,6 +51,7 @@ This note records the implementation delta from 1.0.16.
 - Replaced the Maven `libarchive-android:1.1.6` runtime AAR (libarchive 3.8.1) with the pinned, vendored upstream wrapper/native sources. `:libarchiveAndroid` builds official libarchive 3.8.9 and its permissive codec stack for ARM32/ARM64 with NDK 29; no prebuilt AAR or `.so` is stored in source. The update adds upstream ZIPX streaming and RAR/RAR5/7z/CAB/LHA parser hardening without claiming full RAR compatibility.
 - Exposed the backend's already-compiled CAB and LHA/LZH readers for read-only listing, archive-image browsing, and extraction. Creation, password handling, and broad multi-volume support are deliberately excluded.
 - Extended the first-party RAR5-container decoder from algorithm v0 (RAR 5/6) to bounded algorithm v1 (RAR 7): 80 distance symbols, dynamic table size, fractional/non-power-of-two dictionary parsing, 64-bit distance reads, and the v0-solid compatibility marker. The logical declaration can reach 1 TiB while physical retained history stays capped at 64 MiB.
+- Exempted libarchive's checked-in `external/libarchive/build/cmake/` source modules from generated-build ignore/package filters and added a portable source-ZIP creator that preserves POSIX modes and validates the complete filtered file list.
 - Updated version metadata to `1.0.17` / `10017`.
 - Updated the changelog, patch notes, code map, release notes, Fastlane changelogs, license report, SBOM, FOSS status, and release/submission checklists.
 

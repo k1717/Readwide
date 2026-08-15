@@ -61,5 +61,6 @@ Release APK packaging filters Android native ABIs to `armeabi-v7a` and `arm64-v8
 - The default source package contains no optional decoder jar under `app/libs`.
 - Release signing is conditional, so source-build review can run `assembleRelease` without a private developer keystore.
 - The 1.0.17 F-Droid build entry must declare `ndk: 29.0.14206865` and `buildjni: no`; Gradle/CMake performs the JNI build.
+- The vendored libarchive path `third_party/libarchive-android/library/src/main/jni/external/libarchive/build/cmake/` contains upstream CMake source modules despite its `build` directory name. `.gitignore` and source-ZIP filtering must retain it; omitting it makes CMake fail before native compilation.
 - `fdroid/metadata/com.readwide.manager.yml` is a historical local mirror. For an F-Droid merge request, start from current fdroiddata upstream and add only the 1.0.17 release, pinned to the final 40-character release commit hash.
 - If any local jar or native binary is added later, re-audit that custom build before describing it as FOSS.
