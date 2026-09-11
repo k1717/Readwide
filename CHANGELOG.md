@@ -60,7 +60,6 @@
 ### Release boundary
 
 - Version metadata is `1.0.18` / `10018`. No permission or runtime dependency changed.
-- Complete archive-format compatibility and measured speedups are not claimed. Remaining support boundaries and validation status are recorded in [current source status](docs/CURRENT_SOURCE_STATUS_1_0_18.md) and [release readiness](docs/RELEASE_READINESS_1_0_18.md).
 
 ## Readwide 1.0.17 - 2026-08-14
 
