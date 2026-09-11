@@ -92,12 +92,12 @@ Builds:
 
   - versionName: 1.0.18
     versionCode: 10018
-    commit: xxxxxx
+    commit: 89548c98d1c28cf61441cb46c13376eac9f2d672
     subdir: app
     gradle:
       - yes
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 1.0.17
-CurrentVersionCode: 10017
+CurrentVersion: 1.0.18
+CurrentVersionCode: 10018
