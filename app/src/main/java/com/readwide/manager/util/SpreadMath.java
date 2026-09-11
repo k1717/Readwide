@@ -3,8 +3,9 @@ package com.readwide.manager.util;
 /**
  * Pure math for the landscape two-page spread, shared by the document (EPUB)
  * and PDF viewers so their paging semantics cannot drift apart. Activities keep
- * their own mode gates (orientation / document type / continuous-mode checks);
- * everything index-related lives here and is unit-tested off-device.
+ * most mode gates (document type / continuous-mode checks); everything
+ * index-related and the EPUB large-screen policy lives here and is unit-tested
+ * off-device.
  */
 public final class SpreadMath {
 
@@ -14,6 +15,21 @@ public final class SpreadMath {
     /** Pages advanced per user page-turn: 2 in the spread, 1 otherwise. */
     public static int displayStep(boolean spreadActive) {
         return spreadActive ? 2 : 1;
+    }
+
+    /**
+     * EPUB spread policy. Image-page publications keep the existing landscape
+     * spread on every device. Reflowable/text publications gain the same
+     * side-by-side layout only on Android large screens (sw600dp or wider), so
+     * a narrow phone in landscape is not forced into two cramped WebViews.
+     */
+    public static boolean shouldUseEpubSpread(boolean landscape,
+                                              int pageCount,
+                                              boolean imagePageLike,
+                                              int smallestScreenWidthDp) {
+        return landscape
+                && pageCount > 1
+                && (imagePageLike || smallestScreenWidthDp >= 600);
     }
 
     /**

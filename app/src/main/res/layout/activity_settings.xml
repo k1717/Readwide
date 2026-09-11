@@ -822,6 +822,44 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
+                android:layout_marginBottom="4dp"
+                android:text="@string/archive_viewer_background_timeout"
+                android:labelFor="@id/input_archive_viewer_background_timeout"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="14sp" />
+
+            <EditText
+                android:id="@+id/input_archive_viewer_background_timeout"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginBottom="6dp"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:paddingTop="0dp"
+                android:paddingBottom="0dp"
+                android:gravity="start|center_vertical"
+                android:digits="0123456789"
+                android:hint="@string/archive_viewer_background_timeout_hint"
+                android:inputType="number"
+                android:imeOptions="actionDone"
+                android:saveEnabled="false"
+                android:maxLength="5"
+                android:singleLine="true"
+                android:textColor="?attr/colorOnSurface"
+                android:textColorHint="?attr/colorOnSurfaceVariant" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:text="@string/archive_viewer_background_timeout_description"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
                 android:layout_marginBottom="8dp"
                 android:id="@+id/section_header_button_order"
                 android:text="@string/settings_section_button_order"

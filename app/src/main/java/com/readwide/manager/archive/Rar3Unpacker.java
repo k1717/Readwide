@@ -6,18 +6,16 @@ import androidx.annotation.Nullable;
 import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 
 /**
  * First-party RAR3/RAR4 compressed unpacker entry point.
  *
- * <p>This is deliberately still narrower than a support claim for real-world compressed RAR.
- * Normal compressed RAR remains owned by libarchive until this decoder has broader
- * CRC-verified real fixture coverage. The first-party path can now complete synthetic
- * classic-LZ blocks and a small set of real non-solid classic-LZ fixtures, write output, stop at
- * the declared unpacked size, and validate CRC where the caller supplies one.</p>
+ * <p>Native libarchive remains primary. Production decoding streams LZ/PPMd blocks through
+ * shared raw history and standard-filter output; the extractor restricts extended solid
+ * admission to CRC/boundary-checked plain runs. Mixed-mode and new solid behavior still
+ * require real-fixture runtime validation. The old array PPMd adapter below is test-only.</p>
  */
 final class Rar3Unpacker {
 
@@ -51,6 +49,7 @@ final class Rar3Unpacker {
                                                      @NonNull File outFile,
                                                      @Nullable FileOperationProgress progress,
                                                      boolean failOnCrcMismatch) throws IOException {
+        context.ensureUsable();
         if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
         File parent = outFile.getParentFile();
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
@@ -58,12 +57,16 @@ final class Rar3Unpacker {
         }
 
         boolean success = false;
-        try (OutputStream raw = new FileOutputStream(outFile)) {
+        try (OutputStream raw = ArchiveSupport.openExtractionOutputStream(outFile)) {
             RarCrcDecodedOutput checked = new RarCrcDecodedOutput(RarOutputStreamDecodedOutput.wrapOrMemory(raw));
             Rar3UnpackFileResult fileResult = unpackToDecodedOutput(
                     context, checked, progress, failOnCrcMismatch);
             success = true;
             return fileResult;
+        } catch (IOException | RuntimeException | Error failure) {
+            success = false;
+            context.invalidateSolidState();
+            throw failure;
         } finally {
             if (!success && outFile.exists() && !outFile.delete()) {
                 // Best-effort cleanup. Leaving a partial file is worse than surfacing the original
@@ -77,16 +80,32 @@ final class Rar3Unpacker {
                                                               @NonNull RarCrcDecodedOutput checked,
                                                               @Nullable FileOperationProgress progress,
                                                               boolean failOnCrcMismatch) throws IOException {
+        try {
+            context.ensureUsable();
+            return decodeAndCheck(context, checked, progress, failOnCrcMismatch);
+        } catch (IOException | RuntimeException | Error failure) {
+            context.invalidateSolidState();
+            throw failure;
+        }
+    }
+
+    @NonNull
+    private static Rar3UnpackFileResult decodeAndCheck(@NonNull Rar3UnpackContext context,
+                                                       @NonNull RarCrcDecodedOutput checked,
+                                                       @Nullable FileOperationProgress progress,
+                                                       boolean failOnCrcMismatch) throws IOException {
         if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
         context.resetWindow();
         if (context.windowSize() <= 0 || (!context.solid && context.writePosition() != 0)) {
             throw new RarArchiveReader.UnsupportedRarFeatureException("Invalid RAR3/RAR4 unpacker state");
         }
-        byte[] packed = context.readPackedPayload();
-        if (packed.length != context.packedSize) {
-            throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3/RAR4 compressed payload read length mismatch");
+        Rar3DecodeResult result;
+        try (java.io.BufferedInputStream packed = context.openPackedPayload(progress)) {
+            boolean reuse = context.reuseClassicTables();
+            context.setReuseClassicTables(false);
+            result = unpackStreamingPayload(context, new RarBitInput(packed, context.packedSize),
+                    checked, !failOnCrcMismatch, reuse);
         }
-        Rar3DecodeResult result = unpackPayload(context, packed, checked, progress, !failOnCrcMismatch);
         if (result.written != context.unpackedSize || checked.written() != context.unpackedSize) {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
                     "RAR3/RAR4 first-party unpacker did not reach the declared unpacked size");
@@ -100,8 +119,11 @@ final class Rar3Unpacker {
                 context.hasExpectedCrc(),
                 context.hasExpectedCrc() ? context.expectedCrc() : -1L,
                 result.classicLzTrace);
-        if (failOnCrcMismatch && !fileResult.crcMatches()) {
-            throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3/RAR4 first-party unpacker decoded the payload but CRC did not match; real compressed fixture support remains incomplete");
+        if (!fileResult.crcMatches()) {
+            context.invalidateSolidState();
+            if (failOnCrcMismatch) {
+                throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3/RAR4 first-party unpacker decoded the payload but CRC did not match; real compressed fixture support remains incomplete");
+            }
         }
         return fileResult;
     }
@@ -110,8 +132,14 @@ final class Rar3Unpacker {
     static Rar3DecodeResult unpackPayloadForTest(@NonNull Rar3UnpackContext context,
                                                  @NonNull byte[] packed,
                                                  @NonNull OutputStream out) throws IOException {
-        context.resetWindow();
-        return unpackPayload(context, packed, RarOutputStreamDecodedOutput.wrapOrMemory(out), null, false);
+        try {
+            context.ensureUsable();
+            context.resetWindow();
+            return unpackPayload(context, packed, RarOutputStreamDecodedOutput.wrapOrMemory(out), null, false);
+        } catch (IOException | RuntimeException | Error failure) {
+            context.invalidateSolidState();
+            throw failure;
+        }
     }
 
     @NonNull
@@ -121,43 +149,63 @@ final class Rar3Unpacker {
                                                   @Nullable FileOperationProgress progress,
                                                   boolean collectClassicLzTrace) throws IOException {
         if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
-        Rar3PpmdBlockHeader ppmdHeader = Rar3PpmdBlockHeader.fromPackedPayload(packed);
-        if (ppmdHeader.isPpmd()) {
-            return unpackPpmdPayload(context, packed, out, progress, ppmdHeader);
+        boolean reuseClassicTables = context.reuseClassicTables();
+        context.setReuseClassicTables(false);
+        // A table-less solid payload starts with Huffman data, not a PPMd mode bit.
+        if (!reuseClassicTables) {
+            Rar3PpmdBlockHeader ppmdHeader = Rar3PpmdBlockHeader.fromPackedPayload(packed);
+            if (ppmdHeader.isPpmd()) {
+                return unpackPpmdPayload(context, packed, out, progress, ppmdHeader);
+            }
         }
 
-        RarBitInput input = new RarBitInput(packed);
+        return unpackStreamingPayload(context, new RarBitInput(packed), out,
+                collectClassicLzTrace, reuseClassicTables);
+    }
+
+    @NonNull
+    private static Rar3DecodeResult unpackStreamingPayload(@NonNull Rar3UnpackContext context,
+                                                         @NonNull RarBitInput input,
+                                                         @NonNull RarDecodedOutput out,
+                                                         boolean collectClassicLzTrace,
+                                                         boolean reuseClassicTables) throws IOException {
         long limit = Math.max(0L, context.unpackedSize);
 
-        // The verified classic-LZ engine needs random access to its own output to apply VM filters.
-        // Decode into an in-memory buffer (bounded by the declared unpacked size), apply any
-        // standard VM filters, then forward the filtered bytes to the real output. Solid dictionary
-        // continuity is preserved by seeding the window via the shared context window.
-        java.io.ByteArrayOutputStream collected = new java.io.ByteArrayOutputStream(
-                (int) Math.min(Math.max(limit, 0L), 1 << 24));
-        RarLzWindow window = context.openWindow(collected);
-
-        Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decode(
-                input, window, limit, context.oldTableLengths());
-
-        // Persist table state for solid keep-old-table continuity.
-        System.arraycopy(engine.tableState(), 0, context.oldTableLengths(), 0,
-                Math.min(engine.tableState().length, context.oldTableLengths().length));
-        context.saveWindow(window);
-
-        byte[] output = collected.toByteArray();
-        if (engine.hasFilters()) {
-            output = applyFilters(output, engine.filters());
+        OutputStream target = new OutputStream() {
+            @Override public void write(int value) throws IOException { out.writeDecodedByte(value); }
+            @Override public void write(byte[] b, int off, int len) throws IOException {
+                out.writeDecodedBytes(b, off, len);
+            }
+        };
+        // Only pending standard-filter regions are retained; normal bytes flow to the checked sink.
+        // This stream never closes/commits the caller's file. Failure leaves cleanup to its guard.
+        try (Rar3PpmdFilterOutput filtered = new Rar3PpmdFilterOutput(
+                new java.io.BufferedOutputStream(target, 64 * 1024), limit, context.vmFilterState(),
+                4 * 1024 * 1024)) {
+            OutputStream clipped = new OutputStream() {
+                private long published;
+                @Override public void write(int value) throws IOException {
+                    // Preserve legacy final-match dictionary surplus, without publishing it.
+                    if (published < limit) { filtered.write(value); published++; }
+                }
+            };
+            RarLzWindow window = context.openWindow(clipped);
+            Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(input, window, limit,
+                    context.oldTableLengths(), context.vmFilterState(), context.state(),
+                    context.mixedPpmd(), filtered, reuseClassicTables,
+                    context.solid || context.requiresFileBoundary());
+            if (context.requiresFileBoundary() && !engine.fileEndSeen()) {
+                throw new IOException("RAR3 solid fallback requires an explicit file boundary");
+            }
+            filtered.finish();
+            System.arraycopy(engine.tableState(), 0, context.oldTableLengths(), 0,
+                    Math.min(engine.tableState().length, context.oldTableLengths().length));
+            context.saveWindow(window);
+            context.setReuseClassicTables(engine.reuseTablesForNextEntry());
+            return new Rar3DecodeResult(Math.min(window.written(), limit), input.bitsRead(),
+                    Math.max(1, engine.tableReads()),
+                    collectClassicLzTrace ? new Rar3ClassicLzStateTrace().snapshot() : null);
         }
-        // Reference-compatible boundary: a final match may run past the declared
-        // unpacked size; the surplus stays in the LZ window (preserving solid
-        // continuity) but the produced output is cut at the declared size.
-        // The CRC gate still decides whether the cut output is correct.
-        int produced = (int) Math.min(output.length, limit);
-        out.writeDecodedBytes(output, 0, produced);
-
-        return new Rar3DecodeResult(produced, input.bitsRead(), Math.max(1, engine.tableReads()),
-                collectClassicLzTrace ? new Rar3ClassicLzStateTrace().snapshot() : null);
     }
 
 
@@ -195,27 +243,5 @@ final class Rar3Unpacker {
         }
     }
 
-    /** Applies pending standard VM filters to the decoded output region(s), in decode order. */
-    @NonNull
-    private static byte[] applyFilters(@NonNull byte[] data,
-                                       @NonNull java.util.List<Rar3VmFilter.PendingFilter> filters) throws IOException {
-        for (Rar3VmFilter.PendingFilter f : filters) {
-            if (f.type == Rar3VmFilter.StandardFilter.NONE) {
-                throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3 non-standard VM filter is not supported");
-            }
-            int start = (int) f.blockStartAbs;
-            int len = f.blockLength;
-            if (start < 0 || len < 0 || start + len > data.length) {
-                throw new IOException("RAR3 filter block out of range");
-            }
-            byte[] region = java.util.Arrays.copyOfRange(data, start, start + len);
-            int[] r = f.initR.clone();
-            r[4] = len;
-            long fileOffset = f.initR[6] & 0xffffffffL;
-            byte[] filtered = Rar3VmFilter.apply(f.type, region, len, r, fileOffset);
-            System.arraycopy(filtered, 0, data, start, Math.min(filtered.length, len));
-        }
-        return data;
-    }
 
 }

@@ -6,11 +6,8 @@ import androidx.annotation.Nullable;
 import org.tukaani.xz.LZMA2InputStream;
 import org.tukaani.xz.LZMAInputStream;
 
-import java.io.ByteArrayInputStream;
-import java.io.BufferedOutputStream;
 import java.io.EOFException;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -19,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.List;
+import java.util.zip.CRC32;
 
 import com.readwide.manager.util.FileOperationProgress;
 
@@ -36,7 +34,8 @@ import com.readwide.manager.util.FileOperationProgress;
  * <p>This reader parses the 7z header itself (clean-room, from the documented
  * container format; no 7-Zip source is used), resolves each folder's coder
  * dependency graph, decodes the base streams with the app's bundled decoders
- * (LZMA/LZMA2 via xz-java; the Copy coder is a pass-through), decrypts AES
+ * (LZMA/LZMA2 via xz-java; additional bundled codecs via {@link SevenZAdditionalCoders};
+ * the Copy coder is a pass-through), decrypts AES
  * streams with {@link SevenZAesDecoder}, and applies {@link SevenZBcj2Decoder}
  * for the BCJ2 join and {@link SevenZPpmd7Decoder} for PPMd streams. Folders
  * whose coders are fully handled by Commons Compress are left to it; this
@@ -45,7 +44,175 @@ import com.readwide.manager.util.FileOperationProgress;
  * rather than guessing.</p>
  */
 final class SevenZBcj2ArchiveReader {
+    @Nullable
+    static ArchiveSupport.ForwardArchiveReader openSpecialForwardReader(File archive,
+            char[] password, File spoolDirectory) throws IOException {
+        if (Thread.currentThread().isInterrupted()) throw new IOException("7z extraction cancelled");
+        if (SevenZSplitVolumeResolver.isSevenZSplitPart(archive)) {
+            return openSplitSpecialForwardReader(archive, password, spoolDirectory);
+        }
+        SevenZArchive parsed;
+        try { parsed = parse(archive, password); }
+        catch (IntegrityException failure) { throw failure; }
+        catch (IOException unsupportedHeader) { return null; } // Keep Commons' broader header support.
+        boolean special = false;
+        for (Folder folder : parsed.folders) special |= folder.usesBcj2() || folder.usesPpmd();
+        return special ? new ForwardReader(archive, parsed, password, spoolDirectory) : null;
+    }
+
+    @Nullable
+    private static ArchiveSupport.ForwardArchiveReader openSplitSpecialForwardReader(
+            File archive, char[] password, File directory) throws IOException {
+        ArchiveSourceSnapshot snapshot = ArchiveSourceSnapshot.capture(archive);
+        SevenZSplitVolumeResolver.VolumeSet volumes = SevenZSplitVolumeResolver.resolve(archive);
+        if (volumes == null || snapshot == null || !snapshot.matches(archive)) {
+            throw new IOException("7z split source changed or is unavailable");
+        }
+        List<SplitVolumeInput.Segment> segments = new ArrayList<>();
+        for (File part : volumes.parts) segments.add(new SplitVolumeInput.Segment(part, 0, part.length()));
+        SplitVolumeInput source = new SplitVolumeInput(segments);
+        boolean transferred = false;
+        try {
+            SevenZArchive parsed;
+            try { parsed = parse(archive, password, source); }
+            catch (IntegrityException failure) { throw failure; }
+            catch (IOException unsupportedHeader) {
+                if (Thread.currentThread().isInterrupted()) throw unsupportedHeader;
+                return null;
+            }
+            if (!snapshot.matches(archive)) throw new IOException("7z split source changed while reading header");
+            boolean special = false;
+            for (Folder folder : parsed.folders) special |= folder.usesBcj2() || folder.usesPpmd();
+            if (!special) return null;
+            ForwardReader result = new ForwardReader(archive, parsed, password, directory, source, snapshot);
+            transferred = true;
+            return result;
+        } finally {
+            if (!transferred) source.close();
+        }
+    }
+
+    /** A folder is fully checked once, then all its entry slices share the disk spool. */
+    private static final class ForwardReader implements ArchiveSupport.ForwardArchiveReader {
+        private final File archive, directory;
+        private final SevenZArchive parsed;
+        private final char[] password;
+        private final SplitVolumeInput splitSource;
+        private final ArchiveSourceSnapshot sourceSnapshot;
+        private int index, folderIndex = -1;
+        private FileEntry current;
+        private File spool;
+        private RandomAccessFile input;
+        private long remaining;
+        private boolean closed, failed;
+        ForwardReader(File archive, SevenZArchive parsed, char[] password, File directory) {
+            this(archive, parsed, password, directory, null, null);
+        }
+        ForwardReader(File archive, SevenZArchive parsed, char[] password, File directory,
+                      SplitVolumeInput splitSource, ArchiveSourceSnapshot sourceSnapshot) {
+            this.archive = archive; this.parsed = parsed; this.directory = directory;
+            this.password = password == null ? null : password.clone();
+            this.splitSource = splitSource; this.sourceSnapshot = sourceSnapshot;
+        }
+        private void checkpoint() throws IOException {
+            if (closed || failed) throw new IOException("7z forward reader is closed or failed");
+            if (Thread.currentThread().isInterrupted()) throw new IOException("7z extraction cancelled");
+        }
+        @Override public ArchiveSupport.ForwardEntry nextEntry() throws IOException {
+            try { return advance(); }
+            catch (IOException | RuntimeException | Error failure) { retire(failure); throw failure; }
+        }
+        private ArchiveSupport.ForwardEntry advance() throws IOException {
+            checkpoint();
+            current = index < parsed.files.size() ? parsed.files.get(index++) : null;
+            remaining = current == null ? 0 : current.size;
+            if (current == null) {
+                clearSpool();
+                if (splitSource != null) splitSource.close();
+                if (password != null) Arrays.fill(password, '\0');
+                return null;
+            }
+            return new ArchiveSupport.ForwardEntry(ArchiveSupport.sanitizeEntryPathForList(current.name),
+                    current.isDirectory, !current.isDirectory);
+        }
+        private void prepareCurrent() throws IOException {
+            if (current == null || current.folderIndex < 0) return;
+            try {
+                if (folderIndex != current.folderIndex) {
+                    clearSpool();
+                    checkSourceSnapshot();
+                    if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create 7z spool directory");
+                    spool = File.createTempFile("sevenz_verified_folder_", ".spool", directory);
+                    try (FolderStream folder = openFolder(archive, parsed, current.folderIndex, password, null, splitSource);
+                         OutputStream output = ArchiveSupport.openExtractionOutputStream(spool)) {
+                        folder.transfer(folder.size, output);
+                        folder.drain();
+                    }
+                    checkSourceSnapshot();
+                    input = new RandomAccessFile(spool, "r");
+                    folderIndex = current.folderIndex;
+                }
+                input.seek(checkedStreamSum(current.offsetInFolder, current.size - remaining));
+            } catch (IOException | RuntimeException failure) {
+                failed = true;
+                try { clearSpool(); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+                throw failure;
+            }
+        }
+        @Override public int read(byte[] buffer) throws IOException {
+            try { return readCurrent(buffer); }
+            catch (IOException | RuntimeException | Error failure) { retire(failure); throw failure; }
+        }
+        private int readCurrent(byte[] buffer) throws IOException {
+            checkpoint();
+            if (buffer.length == 0) return 0;
+            if (current == null || current.isDirectory) return -1;
+            prepareCurrent(); // Also validates a zero-length entry's folder.
+            if (remaining == 0) return -1;
+            int count = input.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+            if (count < 0) throw new EOFException("Truncated verified 7z spool");
+            remaining -= count;
+            return count;
+        }
+        @Override public boolean drainCurrentEntry(long maximum) throws IOException {
+            try {
+                checkpoint();
+                if (maximum < 0 || remaining > maximum) throw new IOException("7z entry exceeds requested drain bound");
+                remaining = 0;
+                return true;
+            } catch (IOException | RuntimeException | Error failure) { retire(failure); throw failure; }
+        }
+        private void checkSourceSnapshot() throws IOException {
+            if (sourceSnapshot != null && !sourceSnapshot.matches(archive)) {
+                throw new IOException("7z split source changed before folder publication");
+            }
+        }
+        private void retire(Throwable failure) {
+            failed = true;
+            try { close(); }
+            catch (IOException | RuntimeException | Error cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
+            }
+        }
+        @Override public boolean skipsUnreadEntryOnAdvance() { return true; }
+        private void clearSpool() throws IOException {
+            try { if (input != null) input.close(); }
+            finally {
+                input = null; folderIndex = -1;
+                if (spool != null) { spool.delete(); spool = null; }
+            }
+        }
+        @Override public void close() throws IOException {
+            if (closed) return;
+            closed = true;
+            if (password != null) Arrays.fill(password, '\0');
+            try { clearSpool(); }
+            finally { if (splitSource != null) splitSource.close(); }
+        }
+    }
+
     private static final byte[] SIGNATURE = {'7', 'z', (byte) 0xBC, (byte) 0xAF, 0x27, 0x1C};
+    // Only encoded/plain metadata uses this array guard; PPMd file streams do not.
     private static final long MAX_STREAM_BYTES = 512L * 1024 * 1024;
 
     // Property IDs.
@@ -95,12 +262,14 @@ final class SevenZBcj2ArchiveReader {
      * party because the Commons Compress path cannot (BCJ2 or PPMd). Used to
      * gate the fallback so all other 7z archives keep their existing paths.
      */
-    static boolean archiveUsesSpecialCoder(@NonNull File archive, @Nullable char[] password) {
+    static boolean archiveUsesSpecialCoder(@NonNull File archive, @Nullable char[] password) throws IntegrityException {
         try {
             SevenZArchive parsed = parse(archive, password);
             for (Folder folder : parsed.folders) {
                 if (folder.usesBcj2() || folder.usesPpmd()) return true;
             }
+        } catch (IntegrityException failure) {
+            throw failure;
         } catch (IOException ignored) {
         }
         return false;
@@ -125,8 +294,9 @@ final class SevenZBcj2ArchiveReader {
         for (FileEntry entry : parsed.files) {
             if (entry.isDirectory || entry.folderIndex < 0) continue;
             if (!entryPath.equals(entry.name)) continue;
-            byte[] folderData = decodeFolder(archive, parsed, entry.folderIndex, password);
-            writeSlice(folderData, entry.offsetInFolder, entry.size, outFile);
+            try (FolderStream folder = openFolder(archive, parsed, entry.folderIndex, password, null)) {
+                folder.writeEntry(entry.offsetInFolder, entry.size, outFile, true);
+            }
             return true;
         }
         return false;
@@ -140,174 +310,373 @@ final class SevenZBcj2ArchiveReader {
         SevenZArchive parsed = parse(archive, password);
         boolean any = false;
         int currentFolder = -1;
-        byte[] folderData = null;
-        for (FileEntry entry : parsed.files) {
-            if (progress != null && !progress.checkpoint()) return false;
-            if (entry.isDirectory) {
-                if (entryProgress != null) entryProgress.onDirectory(entry.name);
-                File dir = safeChild(targetDir, entry.name);
-                if (dir != null && !dir.exists() && !dir.mkdirs()) return false;
-                continue;
-            }
-            File out = safeChild(targetDir, entry.name);
-            if (out == null) continue;
-            File parent = out.getParentFile();
-            if (parent != null && !parent.exists() && !parent.mkdirs()) return false;
-            if (entryProgress != null) entryProgress.onFile(entry.name);
-            else if (progress != null) progress.setDetail(entry.name);
-            if (entry.folderIndex < 0 || entry.size == 0) {
-                writeSlice(new byte[0], 0, 0, out);
+        FolderStream folderData = null;
+        try {
+            for (FileEntry entry : parsed.files) {
+                if (progress != null && !progress.checkpoint()) return false;
+                if (entry.isDirectory) {
+                    if (entryProgress != null) entryProgress.onDirectory(entry.name);
+                    File dir = safeChild(targetDir, entry.name);
+                    if (dir != null && !dir.exists() && !dir.mkdirs()) return false;
+                    continue;
+                }
+                File out = safeChild(targetDir, entry.name);
+                if (out == null) continue;
+                File parent = out.getParentFile();
+                if (parent != null && !parent.exists() && !parent.mkdirs()) return false;
+                if (entryProgress != null) entryProgress.onFile(entry.name);
+                else if (progress != null) progress.setDetail(entry.name);
+                if (entry.folderIndex < 0 || entry.size == 0) {
+                    writeSlice(new byte[0], 0, 0, out);
+                    any = true;
+                    continue;
+                }
+                if (entry.folderIndex != currentFolder) {
+                    if (folderData != null) { folderData.drain(); folderData.close(); folderData = null; }
+                    folderData = openFolder(archive, parsed, entry.folderIndex, password, progress);
+                    currentFolder = entry.folderIndex;
+                }
+                folderData.writeEntry(entry.offsetInFolder, entry.size, out, false);
                 any = true;
-                continue;
             }
-            if (entry.folderIndex != currentFolder) {
-                folderData = decodeFolder(archive, parsed, entry.folderIndex, password);
-                currentFolder = entry.folderIndex;
-            }
-            writeSlice(folderData, entry.offsetInFolder, entry.size, out);
-            if (progress != null) progress.addDoneBytes(entry.size);
-            any = true;
+            if (folderData != null) folderData.drain();
+            return any;
+        } finally {
+            if (folderData != null) folderData.close();
         }
-        return any;
     }
 
     // ----- Folder decoding -----
 
     /**
-     * Decodes an entire folder to its final uncompressed bytes by resolving
-     * the coder dependency graph: each coder's inputs are either pack streams
-     * (read from disk) or the outputs of earlier coders (via bind pairs); the
-     * folder's output is the coder output that is not bound to any input.
+     * Decodes an encoded metadata header into the header parser's bounded array.
+     * File extraction opens the same coder graph as a stream instead.
      */
     @NonNull
-    private static byte[] decodeFolder(@NonNull File archive,
-                                       @NonNull SevenZArchive parsed,
-                                       int folderIndex,
-                                       @Nullable char[] password) throws IOException {
+    private static byte[] decodeFolder(@NonNull File archive, @NonNull SevenZArchive parsed,
+                                       int folderIndex, @Nullable char[] password,
+                                       @Nullable SplitVolumeInput source) throws IOException {
+        // Encoded metadata headers still need an array for the header parser.
+        // File extraction uses openFolder directly and does not inherit this cap.
+        long size = parsed.folders.get(folderIndex).getUnpackSize();
+        if (size < 0 || size > MAX_STREAM_BYTES) throw new IOException("7z decoded header exceeds memory guard");
+        try (FolderStream stream = openFolder(archive, parsed, folderIndex, password, null, source)) {
+            byte[] header = readExact(stream.input, size);
+            stream.position = size;
+            stream.drain();
+            return header;
+        }
+    }
+
+    private static FolderStream openFolder(File archive, SevenZArchive parsed, int folderIndex,
+                                            char[] password, FileOperationProgress progress) throws IOException {
+        return openFolder(archive, parsed, folderIndex, password, progress, null);
+    }
+
+    private static FolderStream openFolder(File archive, SevenZArchive parsed, int folderIndex,
+            char[] password, FileOperationProgress progress, SplitVolumeInput source) throws IOException {
         Folder folder = parsed.folders.get(folderIndex);
-        long[] packSizes = parsed.packSizes;
-        long basePackOffset = 32 + parsed.packPos;
-        long packStreamOffset = basePackOffset;
-        for (int i = 0; i < folder.firstPackStreamIndex; i++) {
-            packStreamOffset += packSizes[i];
-        }
-
-        // Read this folder's pack streams from disk into memory.
-        byte[][] packStreams = new byte[folder.numPackStreams][];
-        try (RandomAccessFile raf = new RandomAccessFile(archive, "r")) {
-            long offset = packStreamOffset;
+        validateStreamingGraph(folder);
+        List<InputStream> owned = new ArrayList<>();
+        List<InputStream> packedStreams = new ArrayList<>();
+        try {
+            long offset = checkedStreamSum(32L, parsed.packPos);
+            for (int i = 0; i < folder.firstPackStreamIndex; i++) {
+                offset = checkedStreamSum(offset, parsed.packSizes[i]);
+            }
+            InputStream[] inputData = new InputStream[folder.totalInputStreams];
             for (int i = 0; i < folder.numPackStreams; i++) {
-                long size = packSizes[folder.firstPackStreamIndex + i];
-                if (size < 0 || size > MAX_STREAM_BYTES) throw new IOException("7z pack stream too large");
-                byte[] buffer = new byte[(int) size];
-                raf.seek(offset);
-                raf.readFully(buffer);
-                packStreams[i] = buffer;
-                offset += size;
+                long size = parsed.packSizes[folder.firstPackStreamIndex + i];
+                InputStream packed = new java.io.BufferedInputStream(
+                        source == null ? new FileRangeInputStream(archive, offset, size, progress)
+                                : source.boundedStream(offset, size), 64 * 1024);
+                packed = new IntegrityStream(packed, size,
+                        parsed.packCrcs == null ? -1 : parsed.packCrcs[folder.firstPackStreamIndex + i],
+                        new long[0], new long[0]);
+                owned.add(packed);
+                packedStreams.add(packed);
+                inputData[folder.packedInputIndices[i]] = packed;
+                offset = checkedStreamSum(offset, size);
             }
+            InputStream[] outputs = new InputStream[folder.coders.length];
+            InputStream finalStream = resolveCoderStream(folder, folder.findFinalOutputCoder(),
+                    inputData, outputs, new boolean[folder.coders.length], password, owned);
+            for (InputStream output : outputs) {
+                if (output == null) throw new IOException("Disconnected 7z coder graph");
+            }
+            finalStream = new IntegrityStream(finalStream, folder.getUnpackSize(), folder.crc,
+                    folder.subStreamSizes, folder.subStreamCrcs);
+            return new FolderStream(finalStream, folder.getUnpackSize(), owned, packedStreams, progress);
+        } catch (IOException | RuntimeException | Error failure) {
+            try { closeStreams(owned); } catch (IOException closeFailure) { failure.addSuppressed(closeFailure); }
+            throw failure;
         }
-
-        // Map each global input index to its pack stream (if packed).
-        byte[][] inputData = new byte[folder.totalInputStreams][];
-        for (int i = 0; i < folder.packedInputIndices.length; i++) {
-            inputData[folder.packedInputIndices[i]] = packStreams[i];
-        }
-
-        // Resolve each coder's single output on demand.
-        byte[][] coderOutput = new byte[folder.coders.length][];
-        boolean[] resolving = new boolean[folder.coders.length];
-        int finalCoder = folder.findFinalOutputCoder();
-        byte[] result = resolveCoderOutput(folder, finalCoder, inputData, coderOutput, resolving, password);
-        if (result.length > folder.getUnpackSize()) {
-            return Arrays.copyOf(result, (int) folder.getUnpackSize());
-        }
-        return result;
     }
 
-    @NonNull
-    private static byte[] resolveCoderOutput(@NonNull Folder folder,
-                                             int coderIndex,
-                                             @NonNull byte[][] inputData,
-                                             @NonNull byte[][] coderOutput,
-                                             @NonNull boolean[] resolving,
-                                             @Nullable char[] password) throws IOException {
-        if (coderOutput[coderIndex] != null) return coderOutput[coderIndex];
-        if (resolving[coderIndex]) throw new IOException("7z coder graph has a cycle");
-        resolving[coderIndex] = true;
-
-        Coder coder = folder.coders[coderIndex];
-        int firstInput = folder.coderInputBase[coderIndex];
-        byte[][] inputs = new byte[coder.numInStreams][];
-        for (int i = 0; i < coder.numInStreams; i++) {
-            int globalInput = firstInput + i;
-            byte[] packed = inputData[globalInput];
-            if (packed != null) {
-                inputs[i] = packed;
-            } else {
-                int sourceCoder = folder.boundInputToCoder(globalInput);
-                if (sourceCoder < 0) throw new IOException("7z input stream is unbound");
-                inputs[i] = resolveCoderOutput(folder, sourceCoder, inputData, coderOutput, resolving, password);
+    private static void validateStreamingGraph(Folder folder) throws IOException {
+        boolean[] inputs = new boolean[folder.totalInputStreams];
+        boolean[] outputs = new boolean[folder.totalOutputStreams];
+        for (Coder coder : folder.coders) {
+            int expectedInputs = matchesId(coder.id, ID_BCJ2) ? 4 : 1;
+            if (coder.numInStreams != expectedInputs || coder.numOutStreams != 1) {
+                throw new IOException("Unsupported 7z coder stream arity");
             }
         }
-
-        long unpackSize = folder.coderUnpackSizes[coderIndex];
-        byte[] output = runCoder(coder, inputs, unpackSize, password);
-        coderOutput[coderIndex] = output;
-        resolving[coderIndex] = false;
-        return output;
+        for (int i = 0; i < folder.bindPairInIndex.length; i++) {
+            int in = folder.bindPairInIndex[i], out = folder.bindPairOutIndex[i];
+            if (in < 0 || in >= inputs.length || out < 0 || out >= outputs.length
+                    || inputs[in] || outputs[out]) throw new IOException("Invalid 7z coder binding");
+            inputs[in] = true; outputs[out] = true;
+        }
+        if (folder.packedInputIndices.length != folder.numPackStreams) throw new IOException("Invalid 7z pack count");
+        for (int index : folder.packedInputIndices) {
+            if (index < 0 || index >= inputs.length || inputs[index]) throw new IOException("Duplicate 7z packed input");
+            inputs[index] = true;
+        }
+        for (boolean assigned : inputs) if (!assigned) throw new IOException("Unbound 7z coder input");
     }
 
-    @NonNull
-    private static byte[] runCoder(@NonNull Coder coder,
-                                   @NonNull byte[][] inputs,
-                                   long unpackSize,
-                                   @Nullable char[] password) throws IOException {
-        if (unpackSize < 0 || unpackSize > MAX_STREAM_BYTES) {
-            throw new IOException("7z coder output size out of range");
+    private static InputStream resolveCoderStream(Folder folder, int index,
+            InputStream[] inputData, InputStream[] outputs, boolean[] resolving,
+            char[] password, List<InputStream> owned) throws IOException {
+        if (outputs[index] != null) return outputs[index];
+        if (resolving[index]) throw new IOException("7z coder graph has a cycle");
+        resolving[index] = true;
+        Coder coder = folder.coders[index];
+        InputStream[] inputs = new InputStream[coder.numInStreams];
+        for (int i = 0; i < inputs.length; i++) {
+            int global = folder.coderInputBase[index] + i;
+            inputs[i] = inputData[global];
+            if (inputs[i] == null) {
+                int source = folder.boundInputToCoder(global);
+                if (source < 0) throw new IOException("Unbound 7z input");
+                inputs[i] = resolveCoderStream(folder, source, inputData, outputs, resolving, password, owned);
+            }
         }
-        if (matchesId(coder.id, ID_COPY)) {
-            return inputs[0];
-        }
+        long size = folder.coderUnpackSizes[folder.coderOutputBase[index]];
+        InputStream decoded = runStreamingCoder(coder, inputs, size, password);
+        InputStream bounded = new java.io.BufferedInputStream(new ExactStream(decoded, size), 64 * 1024);
+        owned.add(bounded);
+        outputs[index] = bounded;
+        resolving[index] = false;
+        return bounded;
+    }
+
+    private static InputStream runStreamingCoder(Coder coder, InputStream[] inputs,
+                                                  long size, char[] password) throws IOException {
+        if (size < 0) throw new IOException("Invalid 7z coder size");
+        if (matchesId(coder.id, ID_COPY)) return inputs[0];
         if (matchesId(coder.id, ID_LZMA)) {
-            return decodeLzma(inputs[0], coder.properties, unpackSize);
+            byte[] props = coder.properties;
+            if (props == null || props.length < 5) throw new IOException("Missing 7z LZMA properties");
+            int dictionary = (props[1] & 255) | ((props[2] & 255) << 8)
+                    | ((props[3] & 255) << 16) | ((props[4] & 255) << 24);
+            return new LZMAInputStream(inputs[0], size, props[0], dictionary);
         }
         if (matchesId(coder.id, ID_LZMA2)) {
-            return decodeLzma2(inputs[0], coder.properties, unpackSize);
+            if (coder.properties == null || coder.properties.length < 1) throw new IOException("Missing 7z LZMA2 properties");
+            return new LZMA2InputStream(inputs[0], dictSizeFromProp(coder.properties[0]));
         }
         if (matchesId(coder.id, ID_AES)) {
-            if (password == null || password.length == 0) {
-                throw new ArchiveSupport.PasswordRequiredException();
-            }
-            return SevenZAesDecoder.decode(inputs[0], coder.properties, password, unpackSize);
+            if (password == null || password.length == 0) throw new ArchiveSupport.PasswordRequiredException();
+            return SevenZAesDecoder.decodeStream(inputs[0], coder.properties, password, size);
         }
         if (matchesId(coder.id, ID_BCJ2)) {
-            return SevenZBcj2Decoder.decode(inputs[0], inputs[1], inputs[2], inputs[3], unpackSize);
+            return SevenZBcj2Decoder.decodeStream(inputs[0], inputs[1], inputs[2], inputs[3], size);
         }
         if (matchesId(coder.id, ID_PPMD)) {
-            return SevenZPpmd7Decoder.decode(inputs[0], coder.properties, unpackSize);
+            return SevenZPpmd7Decoder.decodeStream(inputs[0], coder.properties, size);
         }
-        throw new ArchiveSupport.UnsupportedArchiveFeatureException(
-                "Unsupported 7z coder " + hex(coder.id));
+        InputStream additional = SevenZAdditionalCoders.open(coder.id, coder.properties, inputs[0]);
+        if (additional != null) return additional;
+        throw new ArchiveSupport.UnsupportedArchiveFeatureException("Unsupported 7z coder " + hex(coder.id));
     }
 
-    @NonNull
-    private static byte[] decodeLzma(@NonNull byte[] data, @Nullable byte[] props, long unpackSize) throws IOException {
-        if (props == null || props.length < 5) throw new IOException("7z LZMA properties missing");
-        byte propsByte = props[0];
-        int dictSize = (props[1] & 0xff) | ((props[2] & 0xff) << 8)
-                | ((props[3] & 0xff) << 16) | ((props[4] & 0xff) << 24);
-        try (InputStream in = new LZMAInputStream(new ByteArrayInputStream(data), unpackSize, propsByte, dictSize)) {
-            return readExact(in, unpackSize);
-        }
+    static long checkedStreamSum(long left, long right) throws IOException {
+        if (left < 0 || right < 0 || right > Long.MAX_VALUE - left) throw new IOException("7z stream offset overflow");
+        return left + right;
     }
 
-    @NonNull
-    private static byte[] decodeLzma2(@NonNull byte[] data, @Nullable byte[] props, long unpackSize) throws IOException {
-        if (props == null || props.length < 1) throw new IOException("7z LZMA2 properties missing");
-        int dictSize = dictSizeFromProp(props[0]);
-        try (InputStream in = new LZMA2InputStream(new ByteArrayInputStream(data), dictSize)) {
-            return readExact(in, unpackSize);
+    private static void closeStreams(List<InputStream> streams) throws IOException {
+        IOException failure = null;
+        for (int i = streams.size() - 1; i >= 0; i--) {
+            try { streams.get(i).close(); }
+            catch (IOException e) { if (failure == null) failure = e; else failure.addSuppressed(e); }
         }
+        if (failure != null) throw failure;
+    }
+
+    private static final class FileRangeInputStream extends InputStream {
+        private final RandomAccessFile file;
+        private final FileOperationProgress progress;
+        private long remaining;
+        FileRangeInputStream(File archive, long offset, long size, FileOperationProgress progress) throws IOException {
+            file = new RandomAccessFile(archive, "r");
+            this.progress = progress;
+            try {
+                if (offset < 0 || size < 0 || offset > file.length() || size > file.length() - offset) {
+                    throw new EOFException("7z packed stream exceeds archive bounds");
+                }
+                file.seek(offset);
+                remaining = size;
+            } catch (IOException e) { file.close(); throw e; }
+        }
+        @Override public int read() throws IOException {
+            byte[] one = new byte[1];
+            return read(one, 0, 1) < 0 ? -1 : one[0] & 255;
+        }
+        @Override public int read(byte[] data, int offset, int length) throws IOException {
+            if (data == null) throw new NullPointerException("data");
+            if ((offset | length) < 0 || length > data.length - offset) throw new IndexOutOfBoundsException();
+            if (length == 0) return 0;
+            if (progress != null && !progress.checkpoint()) throw new IOException("7z extraction cancelled");
+            if (remaining == 0) return -1;
+            int count = file.read(data, offset, (int) Math.min(length, remaining));
+            if (count < 0) throw new EOFException("Truncated 7z packed stream");
+            remaining -= count;
+            return count;
+        }
+        @Override public void close() throws IOException { file.close(); }
+    }
+
+    private static final class ExactStream extends InputStream {
+        private final InputStream input;
+        private long remaining;
+        private boolean validatedEnd;
+        ExactStream(InputStream input, long size) throws IOException {
+            if (size < 0) throw new IOException("Invalid 7z output size");
+            this.input = input; remaining = size;
+        }
+        @Override public int read() throws IOException {
+            byte[] one = new byte[1];
+            return read(one, 0, 1) < 0 ? -1 : one[0] & 255;
+        }
+        @Override public int read(byte[] data, int offset, int length) throws IOException {
+            if (data == null) throw new NullPointerException("data");
+            if ((offset | length) < 0 || length > data.length - offset) throw new IndexOutOfBoundsException();
+            if (length == 0) return 0;
+            if (remaining == 0) {
+                if (!validatedEnd) {
+                    if (input.read() != -1) throw new IOException("7z coder exceeds declared output size");
+                    validatedEnd = true;
+                }
+                return -1;
+            }
+            int count = input.read(data, offset, (int) Math.min(remaining, length));
+            if (count < 0) throw new EOFException("7z coder output ended early");
+            remaining -= count;
+            return count;
+        }
+        @Override public void close() throws IOException { input.close(); }
+    }
+
+    private static final class FolderStream implements java.io.Closeable {
+        final InputStream input;
+        final long size;
+        final List<InputStream> owned;
+        final List<InputStream> packedStreams;
+        final FileOperationProgress progress;
+        final byte[] buffer = new byte[64 * 1024];
+        long position;
+        FolderStream(InputStream input, long size, List<InputStream> owned,
+                List<InputStream> packedStreams, FileOperationProgress progress) {
+            this.input = input; this.size = size; this.owned = owned;
+            this.packedStreams = packedStreams; this.progress = progress;
+        }
+        void transfer(long count, OutputStream target) throws IOException {
+            if (count < 0 || count > size - position) throw new IOException("7z entry slice out of range");
+            while (count > 0) {
+                if (Thread.currentThread().isInterrupted()) throw new IOException("7z extraction cancelled");
+                if (progress != null && !progress.checkpoint()) throw new IOException("7z extraction cancelled");
+                int read = input.read(buffer, 0, (int) Math.min(count, buffer.length));
+                if (read < 0) throw new EOFException("7z folder ended early");
+                if (target != null) target.write(buffer, 0, read);
+                position += read; count -= read;
+                if (target != null && progress != null) progress.addDoneBytes(read);
+            }
+        }
+        void writeEntry(long offset, long length, File target, boolean finishFolder) throws IOException {
+            if (offset < position || offset > size || length < 0 || length > size - offset) {
+                throw new IOException("Invalid 7z entry range");
+            }
+            transfer(offset - position, null);
+            try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(target)) {
+                try (OutputStream output = ArchiveSupport.openExtractionOutputStream(target)) {
+                    transfer(length, output);
+                    if (finishFolder) drain();
+                }
+                guard.commit();
+            }
+        }
+        void drain() throws IOException {
+            transfer(size - position, null);
+            if (input.read() != -1) throw new IOException("7z folder exceeds declared size");
+            // Coders can leave padding in packed streams. Verify those declared bytes too.
+            for (InputStream packed : packedStreams) {
+                while (packed.read(buffer) != -1) {
+                    if (Thread.currentThread().isInterrupted()) throw new IOException("7z extraction cancelled");
+                }
+            }
+        }
+        @Override public void close() throws IOException { closeStreams(owned); }
+    }
+
+    /** Checks every present CRC, including zero-length substreams, without whole-output arrays. */
+    private static final class IntegrityStream extends InputStream {
+        private final InputStream input;
+        private final long size, expected;
+        private final long[] sizes, crcs;
+        private final CRC32 totalCrc = new CRC32(), partCrc = new CRC32();
+        private long position, partBytes;
+        private int part;
+        private boolean endChecked;
+        IntegrityStream(InputStream input, long size, long expected, long[] sizes, long[] crcs) {
+            this.input = input; this.size = size; this.expected = expected;
+            this.sizes = sizes; this.crcs = crcs;
+        }
+        private void checkParts() throws IOException {
+            while (part < sizes.length && partBytes == sizes[part]) {
+                if (part < crcs.length) requireCrc(partCrc.getValue(), crcs[part], "substream");
+                part++; partBytes = 0; partCrc.reset();
+            }
+        }
+        @Override public int read() throws IOException {
+            byte[] one = new byte[1];
+            return read(one, 0, 1) < 0 ? -1 : one[0] & 255;
+        }
+        @Override public int read(byte[] data, int offset, int length) throws IOException {
+            if ((offset | length) < 0 || length > data.length - offset) throw new IndexOutOfBoundsException();
+            if (length == 0) return 0;
+            if (Thread.currentThread().isInterrupted()) throw new IOException("7z extraction cancelled");
+            checkParts();
+            if (position == size) {
+                if (!endChecked) {
+                    if (input.read() != -1) throw new IOException("7z stream exceeds declared size");
+                    requireCrc(totalCrc.getValue(), expected, "stream");
+                    endChecked = true;
+                }
+                return -1;
+            }
+            long available = size - position;
+            if (part < sizes.length) available = Math.min(available, sizes[part] - partBytes);
+            int count = input.read(data, offset, (int) Math.min(length, available));
+            if (count < 0) throw new EOFException("Truncated 7z stream");
+            totalCrc.update(data, offset, count);
+            partCrc.update(data, offset, count);
+            position += count; partBytes += count;
+            checkParts();
+            if (position == size) requireCrc(totalCrc.getValue(), expected, "stream");
+            return count;
+        }
+        @Override public void close() throws IOException { input.close(); }
+    }
+
+    static final class IntegrityException extends IOException {
+        IntegrityException(String message) { super(message); }
+    }
+
+    private static void requireCrc(long actual, long expected, String kind) throws IOException {
+        if (expected >= 0 && actual != expected) throw new IntegrityException("7z " + kind + " CRC mismatch");
     }
 
     private static int dictSizeFromProp(byte prop) {
@@ -321,48 +690,69 @@ final class SevenZBcj2ArchiveReader {
 
     @NonNull
     private static SevenZArchive parse(@NonNull File archive, @Nullable char[] password) throws IOException {
-        try (RandomAccessFile raf = new RandomAccessFile(archive, "r")) {
-            byte[] sig = new byte[6];
-            raf.readFully(sig);
-            if (!Arrays.equals(sig, SIGNATURE)) throw new IOException("Not a 7z archive");
-            raf.skipBytes(2); // version
-            raf.skipBytes(4); // start header CRC
-            long nextHeaderOffset = readUInt64LE(raf);
-            long nextHeaderSize = readUInt64LE(raf);
-            if (nextHeaderSize <= 0 || nextHeaderSize > MAX_STREAM_BYTES) {
-                throw new IOException("7z header size out of range");
-            }
-            byte[] header = new byte[(int) nextHeaderSize];
-            raf.seek(32 + nextHeaderOffset);
-            raf.readFully(header);
-
-            ByteReader reader = new ByteReader(header);
-            int id = reader.readByte();
-            if (id == K_ENCODED_HEADER) {
-                header = decodeEncodedHeader(archive, reader, password);
-                reader = new ByteReader(header);
-                id = reader.readByte();
-            }
-            if (id != K_HEADER) {
-                throw new IOException(password != null
-                        ? "7z header could not be read (wrong password?)"
-                        : "7z header not found");
-            }
-            return parseHeader(reader);
+        try (SplitVolumeInput source = new SplitVolumeInput(java.util.Collections.singletonList(
+                new SplitVolumeInput.Segment(archive, 0, archive.length())))) {
+            return parse(archive, password, source);
         }
+    }
+
+    private static SevenZArchive parse(@NonNull File archive, @Nullable char[] password,
+                                       @NonNull SplitVolumeInput raf) throws IOException {
+        byte[] sig = new byte[6];
+        raf.readFully(sig);
+        if (!Arrays.equals(sig, SIGNATURE)) throw new IOException("Not a 7z archive");
+        raf.seek(8); // version
+        long startCrc = readUIntLE(raf, 4);
+        byte[] start = new byte[20];
+        raf.readFully(start);
+        CRC32 crc = new CRC32();
+        crc.update(start);
+        requireCrc(crc.getValue(), startCrc, "start header");
+        raf.seek(12);
+        long nextHeaderOffset = readUInt64LE(raf);
+        long nextHeaderSize = readUInt64LE(raf);
+        long nextCrc = readUIntLE(raf, 4);
+        if (nextHeaderSize <= 0 || nextHeaderSize > MAX_STREAM_BYTES) {
+            throw new IOException("7z header size out of range");
+        }
+        long headerOffset = checkedStreamSum(32L, nextHeaderOffset);
+        if (headerOffset > raf.length() || nextHeaderSize > raf.length() - headerOffset) {
+            throw new EOFException("7z next header exceeds archive bounds");
+        }
+        byte[] header = new byte[(int) nextHeaderSize];
+        raf.seek(headerOffset);
+        raf.readFully(header);
+        crc.reset(); crc.update(header);
+        requireCrc(crc.getValue(), nextCrc, "next header");
+
+        ByteReader reader = new ByteReader(header);
+        int id = reader.readByte();
+        if (id == K_ENCODED_HEADER) {
+            header = decodeEncodedHeader(archive, reader, password, raf);
+            reader = new ByteReader(header);
+            id = reader.readByte();
+        }
+        if (id != K_HEADER) {
+            throw new IOException(password != null
+                    ? "7z header could not be read (wrong password?)"
+                    : "7z header not found");
+        }
+        return parseHeader(reader);
     }
 
     @NonNull
     private static byte[] decodeEncodedHeader(@NonNull File archive,
                                               @NonNull ByteReader reader,
-                                              @Nullable char[] password) throws IOException {
+                                              @Nullable char[] password,
+                                              @NonNull SplitVolumeInput source) throws IOException {
         StreamsInfo info = readStreamsInfo(reader);
         SevenZArchive tmp = new SevenZArchive();
         tmp.packPos = info.packPos;
         tmp.packSizes = info.packSizes;
+        tmp.packCrcs = info.packCrcs;
         tmp.folders = info.folders;
         if (info.folders.isEmpty()) throw new IOException("7z encoded header has no folder");
-        return decodeFolder(archive, tmp, 0, password);
+        return decodeFolder(archive, tmp, 0, password, source);
     }
 
     @NonNull
@@ -385,6 +775,7 @@ final class SevenZBcj2ArchiveReader {
         if (streams != null) {
             result.packPos = streams.packPos;
             result.packSizes = streams.packSizes;
+            result.packCrcs = streams.packCrcs;
             result.folders = streams.folders;
         }
         if (id == K_FILES_INFO) {
@@ -418,7 +809,7 @@ final class SevenZBcj2ArchiveReader {
             }
             while (type != K_END) {
                 if (type == K_CRC) {
-                    skipDigests(reader, (int) numPack);
+                    info.packCrcs = readDigests(reader, (int) numPack);
                 } else {
                     reader.skip(reader.readNumber());
                 }
@@ -439,6 +830,7 @@ final class SevenZBcj2ArchiveReader {
             for (Folder folder : info.folders) {
                 folder.numUnpackSubStreams = 1;
                 folder.subStreamSizes = new long[] {folder.getUnpackSize()};
+                folder.subStreamCrcs = new long[] {folder.crc};
             }
         }
         // id should be K_END here.
@@ -467,7 +859,8 @@ final class SevenZBcj2ArchiveReader {
         id = reader.readByte();
         while (id != K_END) {
             if (id == K_CRC) {
-                skipDigests(reader, info.folders.size());
+                long[] crcs = readDigests(reader, info.folders.size());
+                for (int i = 0; i < crcs.length; i++) info.folders.get(i).crc = crcs[i];
             } else {
                 reader.skip(reader.readNumber());
             }
@@ -561,18 +954,34 @@ final class SevenZBcj2ArchiveReader {
                 for (int i = 0; i < folder.numUnpackSubStreams - 1; i++) {
                     long s = reader.readNumber();
                     sizes[i] = s;
-                    sum += s;
+                    sum = checkedStreamSum(sum, s);
                 }
             }
+            if (folder.getUnpackSize() < sum) throw new IOException("7z substreams exceed folder size");
             sizes[folder.numUnpackSubStreams - 1] = folder.getUnpackSize() - sum;
             folder.subStreamSizes = sizes;
         }
         if (id == K_SIZE) id = reader.readByte();
+        for (Folder folder : info.folders) {
+            folder.subStreamCrcs = new long[folder.numUnpackSubStreams];
+            Arrays.fill(folder.subStreamCrcs, -1L);
+            if (folder.numUnpackSubStreams == 1) folder.subStreamCrcs[0] = folder.crc;
+        }
         while (id != K_END) {
             if (id == K_CRC) {
                 int numDigests = 0;
-                for (Folder folder : info.folders) numDigests += folder.numUnpackSubStreams;
-                skipDigests(reader, numDigests);
+                for (Folder folder : info.folders) {
+                    if (folder.numUnpackSubStreams == 1 && folder.crc >= 0) continue;
+                    if (folder.numUnpackSubStreams > Integer.MAX_VALUE - numDigests) throw new IOException("Too many 7z digests");
+                    numDigests += folder.numUnpackSubStreams;
+                }
+                long[] crcs = readDigests(reader, numDigests);
+                int digest = 0;
+                for (Folder folder : info.folders) {
+                    // A single substream inherits its folder CRC and has no separate digest.
+                    if (folder.numUnpackSubStreams == 1 && folder.crc >= 0) continue;
+                    for (int i = 0; i < folder.numUnpackSubStreams; i++) folder.subStreamCrcs[i] = crcs[digest++];
+                }
             } else {
                 reader.skip(reader.readNumber());
             }
@@ -580,12 +989,16 @@ final class SevenZBcj2ArchiveReader {
         }
     }
 
-    private static void assignPackStreamsToFolders(@NonNull StreamsInfo info) {
+    private static void assignPackStreamsToFolders(@NonNull StreamsInfo info) throws IOException {
         int packIndex = 0;
         for (Folder folder : info.folders) {
             folder.firstPackStreamIndex = packIndex;
             folder.numPackStreams = folder.packedInputIndices.length;
+            if (folder.numPackStreams > info.packSizes.length - packIndex) throw new IOException("7z folder references missing packed stream");
             packIndex += folder.numPackStreams;
+        }
+        if (packIndex != info.packSizes.length || (info.packCrcs != null && info.packCrcs.length != packIndex)) {
+            throw new IOException("7z packed stream count mismatch");
         }
     }
 
@@ -656,7 +1069,8 @@ final class SevenZBcj2ArchiveReader {
                 entry.folderIndex = folderIndex;
                 entry.offsetInFolder = offsetInFolder;
                 entry.size = folder.subStreamSizes[subInFolder];
-                offsetInFolder += entry.size;
+                offsetInFolder = checkedStreamSum(offsetInFolder, entry.size);
+                if (offsetInFolder > folder.getUnpackSize()) throw new IOException("7z file exceeds folder size");
                 subInFolder++;
             }
             files.add(entry);
@@ -666,14 +1080,18 @@ final class SevenZBcj2ArchiveReader {
 
     // ----- Small helpers -----
 
-    private static void skipDigests(@NonNull ByteReader reader, int count) throws IOException {
+    private static long[] readDigests(@NonNull ByteReader reader, int count) throws IOException {
         int allDefined = reader.readByte();
-        int defined = count;
-        if (allDefined == 0) {
-            BitSet set = readBitVector(reader, count);
-            defined = set.cardinality();
+        BitSet defined = allDefined == 0 ? readBitVector(reader, count) : null;
+        long[] crcs = new long[count];
+        Arrays.fill(crcs, -1L);
+        for (int i = 0; i < count; i++) {
+            if (defined != null && !defined.get(i)) continue;
+            long crc = 0;
+            for (int b = 0; b < 4; b++) crc |= (long) reader.readByte() << (8 * b);
+            crcs[i] = crc;
         }
-        reader.skip((long) defined * 4);
+        return crcs;
     }
 
     @NonNull
@@ -707,6 +1125,7 @@ final class SevenZBcj2ArchiveReader {
 
     @NonNull
     private static byte[] readExact(@NonNull InputStream in, long size) throws IOException {
+        if (size < 0 || size > MAX_STREAM_BYTES) throw new IOException("7z metadata exceeds memory guard");
         byte[] out = new byte[(int) size];
         int done = 0;
         while (done < out.length) {
@@ -722,7 +1141,7 @@ final class SevenZBcj2ArchiveReader {
             throw new IOException("7z entry slice out of range");
         }
         boolean ok = false;
-        try (OutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             out.write(data, (int) offset, (int) size);
             out.flush();
             ok = true;
@@ -763,9 +1182,13 @@ final class SevenZBcj2ArchiveReader {
         return sb.toString();
     }
 
-    private static long readUInt64LE(@NonNull RandomAccessFile raf) throws IOException {
+    private static long readUInt64LE(@NonNull SplitVolumeInput raf) throws IOException {
+        return readUIntLE(raf, 8);
+    }
+
+    private static long readUIntLE(@NonNull SplitVolumeInput raf, int bytes) throws IOException {
         long value = 0;
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < bytes; i++) {
             int b = raf.read();
             if (b < 0) throw new EOFException("7z header truncated");
             value |= (long) b << (8 * i);
@@ -777,6 +1200,7 @@ final class SevenZBcj2ArchiveReader {
 
     private static final class SevenZArchive {
         long packPos;
+        long[] packCrcs;
         long[] packSizes = new long[0];
         List<Folder> folders = new ArrayList<>();
         List<FileEntry> files = new ArrayList<>();
@@ -784,6 +1208,7 @@ final class SevenZBcj2ArchiveReader {
 
     private static final class StreamsInfo {
         long packPos;
+        long[] packCrcs;
         long[] packSizes;
         List<Folder> folders = new ArrayList<>();
     }
@@ -796,6 +1221,8 @@ final class SevenZBcj2ArchiveReader {
     }
 
     private static final class Folder {
+        long crc = -1;
+        long[] subStreamCrcs = new long[0];
         Coder[] coders = new Coder[0];
         int[] coderInputBase = new int[0];
         int[] coderOutputBase = new int[0];

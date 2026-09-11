@@ -23,12 +23,13 @@ final class RarSplitStoredExtractor {
         try {
             plan = RarSplitStoredPlan.fromFirstEntry(first, allEntries);
             try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
+                Rar5Crypto.Secrets checksumSecrets = null;
                 if (plan.encrypted()) {
-                    extractEncrypted(plan, outFile, password, progress);
+                    checksumSecrets = extractEncrypted(plan, outFile, password, progress);
                 } else {
                     RarStoredPayloadIO.copySegmentsToFile(plan.payloadSegments(), outFile, progress);
                 }
-                RarStoredPayloadIO.verifyCrc(plan.crcEntry(), outFile);
+                RarStoredPayloadIO.verifyCrc(plan.crcEntry(), outFile, checksumSecrets);
                 guard.commit();
             }
         } catch (IOException e) {
@@ -36,7 +37,8 @@ final class RarSplitStoredExtractor {
         }
     }
 
-    private static void extractEncrypted(@NonNull RarSplitStoredPlan plan,
+    @Nullable
+    private static Rar5Crypto.Secrets extractEncrypted(@NonNull RarSplitStoredPlan plan,
                                          @NonNull File outFile,
                                          @Nullable char[] password,
                                          @Nullable FileOperationProgress progress) throws IOException {
@@ -49,12 +51,14 @@ final class RarSplitStoredExtractor {
         }
 
         Cipher cipher;
+        Rar5Crypto.Secrets checksumSecrets = null;
         String errorMessage;
         if (plan.kind() == RarSplitStoredPlan.Kind.RAR4_AES_STORED) {
             cipher = Rar3Crypto.createAesCbcDecryptCipher(password, encryption.salt);
             errorMessage = "RAR3/RAR4 AES split decrypt failed";
         } else if (plan.kind() == RarSplitStoredPlan.Kind.RAR5_AES_STORED) {
             Rar5Crypto.Secrets secrets = Rar5Crypto.deriveSecrets(password, encryption.kdfCount, encryption.salt);
+            checksumSecrets = secrets;
             if (!Rar5Crypto.passwordMatches(secrets, encryption.check)) {
                 throw new ArchiveSupport.PasswordRequiredException();
             }
@@ -72,6 +76,8 @@ final class RarSplitStoredExtractor {
                 outFile,
                 errorMessage,
                 progress,
-                true);
+                true,
+                checksumSecrets);
+        return checksumSecrets;
     }
 }

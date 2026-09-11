@@ -7,7 +7,6 @@ import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
 
 import com.readwide.manager.archive.ArchiveSupport;
-import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.PrefsManager;
 
 import java.io.File;
@@ -61,7 +60,13 @@ final class MainArchiveImageOpenController {
                     ? activity.prefs.getArchiveSortMode()
                     : PrefsManager.SORT_NAME_ASC;
             List<ArchiveSupport.EntryInfo> entries = ArchiveSupport.listEntries(archiveFile, null);
-            List<ArchiveSupport.EntryInfo> images = collectArchiveImages(entries, sortMode);
+            // Comic page order is independent of the archive-browser sort mode.
+            // Use the same full-path natural order as ArchiveBrowserActivity so
+            // Part1/1.jpg, Part1/2.jpg, Part2/1.jpg is never flattened into
+            // 1.jpg, 1.jpg, 2.jpg merely because this direct-open route skipped
+            // the archive preview screen.
+            List<ArchiveSupport.EntryInfo> images =
+                    collectDirectArchiveImages(entries, sortMode);
             if (images.isEmpty()) {
                 result = DirectOpenResult.fallbackToPreview();
             } else {
@@ -96,15 +101,11 @@ final class MainArchiveImageOpenController {
     }
 
     @NonNull
-    private static List<ArchiveSupport.EntryInfo> collectArchiveImages(@NonNull List<ArchiveSupport.EntryInfo> entries,
-                                                                       int sortMode) {
-        ArrayList<ArchiveSupport.EntryInfo> images = new ArrayList<>();
-        for (ArchiveSupport.EntryInfo entry : entries) {
-            if (entry == null || entry.directory) continue;
-            if (FileUtils.isImageFile(entry.name())) images.add(entry);
-        }
-        ArchiveEntryListController.sort(images, sortMode);
-        return images;
+    static List<ArchiveSupport.EntryInfo> collectDirectArchiveImages(
+            @NonNull List<ArchiveSupport.EntryInfo> entries,
+            int sortMode) {
+        return ArchiveEntryListController.collectImageSequence(
+                entries, "", null, sortMode);
     }
 
     private int resolveSavedImageIndex(@NonNull File archiveFile,
@@ -195,7 +196,8 @@ final class MainArchiveImageOpenController {
                         verifiedPathsForHandoff,
                         result.archivePathSnapshot,
                         result.archiveLengthSnapshot,
-                        result.archiveLastModifiedSnapshot);
+                        result.archiveLastModifiedSnapshot,
+                        result.sourceSnapshot);
             }
 
             @Override

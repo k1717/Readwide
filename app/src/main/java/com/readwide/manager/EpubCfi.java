@@ -113,14 +113,24 @@ final class EpubCfi {
 
     /** Returns {@code null} for malformed or unsupported CFI forms. */
     static EpubCfi parse(String value) {
+        return parse(value, true);
+    }
+
+    /** Android Uri.getFragment() has already decoded percent escapes. */
+    static EpubCfi parseDecodedFragment(String value) {
+        return parse(value, false);
+    }
+
+    private static EpubCfi parse(String value, boolean encodedReference) {
         if (value == null) return null;
         String raw = value.trim();
-        int hash = raw.lastIndexOf('#');
-        if (hash >= 0) raw = raw.substring(hash + 1).trim();
-        if (raw.startsWith("#")) raw = raw.substring(1).trim();
+        if (encodedReference) {
+            int hash = raw.lastIndexOf('#');
+            if (hash >= 0) raw = raw.substring(hash + 1).trim();
+        }
         if (raw.isEmpty() || raw.length() > MAX_CFI_LENGTH) return null;
 
-        raw = decodePercentEscapes(raw);
+        if (encodedReference) raw = decodePercentEscapes(raw);
         if (raw == null || raw.length() > MAX_CFI_LENGTH
                 || !raw.startsWith("epubcfi(") || !raw.endsWith(")")) {
             return null;

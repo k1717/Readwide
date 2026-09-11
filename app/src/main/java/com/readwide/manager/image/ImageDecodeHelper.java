@@ -86,7 +86,8 @@ public final class ImageDecodeHelper {
                                                     int displayScale,
                                                     long directOriginalPixels,
                                                     long maxBitmapPixels) throws Exception {
-        if (shouldInspectAnimatedCandidate(displayName, Build.VERSION.SDK_INT)) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && shouldInspectAnimatedCandidate(displayName, Build.VERSION.SDK_INT)) {
             Drawable drawable = decodeAnimatedDrawable(
                     context,
                     filePath,
@@ -130,7 +131,8 @@ public final class ImageDecodeHelper {
                                              @Nullable String filePath,
                                              @Nullable String fileUri,
                                              @Nullable String displayName) throws Exception {
-        if (shouldInspectAnimatedCandidate(displayName, Build.VERSION.SDK_INT)) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && shouldInspectAnimatedCandidate(displayName, Build.VERSION.SDK_INT)) {
             Drawable drawable = decodeAnimatedDrawable(
                     context,
                     filePath,
@@ -168,7 +170,8 @@ public final class ImageDecodeHelper {
                                            @Nullable String filePath,
                                            @Nullable String fileUri,
                                            @Nullable String displayName) throws Exception {
-        if (shouldInspectAnimatedCandidate(displayName, Build.VERSION.SDK_INT)) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && shouldInspectAnimatedCandidate(displayName, Build.VERSION.SDK_INT)) {
             Drawable drawable = decodeAnimatedDrawable(
                     context,
                     filePath,

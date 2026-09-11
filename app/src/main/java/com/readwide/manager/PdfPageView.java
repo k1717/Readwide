@@ -98,6 +98,7 @@ public class PdfPageView extends View {
     private final Matrix matrix = new Matrix();
     private final Matrix tmpMatrix = new Matrix();
     private final float[] matrixVals = new float[9];
+    private final Runnable resetFitRunnable = this::resetToFit;
 
     private float minScale = 1f;       // fit (page fully visible)
     private float maxScale = 4.5f;
@@ -282,7 +283,9 @@ public class PdfPageView extends View {
         clearSharpPatch();
         if (resetView) {
             clearHighlights();
-            post(this::resetToFit);
+            removeCallbacks(resetFitRunnable);
+            if (getWidth() > 0 && getHeight() > 0) resetToFit();
+            else post(resetFitRunnable);
         } else if (getWidth() > 0) {
             resetToFit();
         }
@@ -301,6 +304,7 @@ public class PdfPageView extends View {
      * — e.g. on a mode switch — so onDraw can't touch a freed bitmap.
      */
     public void detachBitmaps() {
+        removeCallbacks(resetFitRunnable);
         viewportResizePrepared = false;
         handler.removeCallbacks(sharpenRunnable);
         clearSharpPatch();
@@ -423,6 +427,41 @@ public class PdfPageView extends View {
         clearSharpPatch();
         invalidate();
         scheduleSharpen();
+    }
+
+    /** Bitmap-normalized viewport center and zoom relative to fit. */
+    @Nullable
+    public float[] captureViewportAnchor() {
+        if (fitBitmap == null || fitBitmap.isRecycled() || getWidth() <= 0
+                || getHeight() <= 0 || fitScale <= 0f || !matrix.invert(tmpMatrix)) return null;
+        float[] point = {getWidth() * 0.5f, getHeight() * 0.5f};
+        tmpMatrix.mapPoints(point);
+        return new float[] {clamp01(point[0] / fitBitmap.getWidth()),
+                clamp01(point[1] / fitBitmap.getHeight()), Math.max(1f, currentScale() / fitScale)};
+    }
+
+    /** Restores after bitmap/layout readiness; legacy anchors target the viewport top-left. */
+    public boolean restoreViewportAnchor(float x, float y, float relativeZoom, boolean center) {
+        if (fitBitmap == null || fitBitmap.isRecycled() || getWidth() <= 0 || getHeight() <= 0
+                || Float.isNaN(x) || Float.isInfinite(x) || Float.isNaN(y) || Float.isInfinite(y)
+                || Float.isNaN(relativeZoom) || Float.isInfinite(relativeZoom)) return false;
+        removeCallbacks(resetFitRunnable); // an earlier setFitBitmap post must not erase restoration
+        viewportResizePrepared = false;
+        scroller.forceFinished(true);
+        resetToFit();
+        float targetScale = Math.max(minScale, Math.min(Math.max(minScale, maxScale),
+                fitScale * Math.max(1f, relativeZoom)));
+        float factor = targetScale / currentScale();
+        matrix.postScale(factor, factor);
+        float[] point = {clamp01(x) * fitBitmap.getWidth(), clamp01(y) * fitBitmap.getHeight()};
+        matrix.mapPoints(point);
+        matrix.postTranslate((center ? getWidth() * 0.5f : 0f) - point[0],
+                (center ? getHeight() * 0.5f : 0f) - point[1]);
+        clampMatrix();
+        clearSharpPatch();
+        invalidate();
+        scheduleSharpen();
+        return true;
     }
 
     private float currentScale() {

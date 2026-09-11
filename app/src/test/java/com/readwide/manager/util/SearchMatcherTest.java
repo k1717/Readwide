@@ -13,6 +13,50 @@ import org.junit.Test;
  */
 public class SearchMatcherTest {
 
+    @Test public void regexLineAnchorsAgreeForWholeInputAndSeparateLines() {
+        SearchMatcher matcher = m("^cat$", true, false, true, false);
+        assertEquals(1, matcher.count("dog\ncat\nbird"));
+        assertEquals(1, matcher.count("dog\r\ncat\r\nbird"));
+        assertEquals(1, matcher.count("cat"));
+        assertEquals(4, matcher.nthStart("dog\ncat\nbird", 1));
+    }
+
+    @Test public void regexRangeDoesNotInventOverlappingSuffixMatches() {
+        SearchMatcher.PreparedText text = m("aa", true, false, true, false).prepareText("aaaa");
+        java.util.List<Integer> hits = new java.util.ArrayList<>();
+        text.forEachInRange(1, 4, (start, end) -> { hits.add(start); return true; });
+        assertEquals(java.util.Arrays.asList(2), hits);
+    }
+
+    @Test public void preparedRangesKeepOverlapAndCrossBandTail() {
+        SearchMatcher.PreparedText text = SearchMatcher.compile("aa", SearchOptions.literal()).prepareText("aaaaZaa");
+        java.util.List<String> hits = new java.util.ArrayList<>();
+        text.forEachInRange(1, 3, (start, end) -> { hits.add(start + ":" + end); return true; });
+        assertEquals(java.util.Arrays.asList("1:3", "2:4"), hits);
+        hits.clear();
+        text.forEachInRange(5, 6, (start, end) -> { hits.add(start + ":" + end); return true; });
+        assertEquals(java.util.Arrays.asList("5:7"), hits);
+    }
+
+    @Test public void preparedRangeUsesOriginalWordBoundariesAndOffsets() {
+        SearchMatcher.PreparedText text = SearchMatcher.compile("CAT", new SearchOptions(false, true, false, true))
+                .prepareText("xcat cat!");
+        java.util.List<Integer> hits = new java.util.ArrayList<>();
+        text.forEachInRange(1, 6, (start, end) -> { hits.add(start); return true; });
+        assertEquals(java.util.Arrays.asList(5), hits);
+    }
+
+    @Test public void preparedRegexRetainsLookaroundOutsideBand() {
+        SearchMatcher.PreparedText text = SearchMatcher.compile("(?<=x)cat(?=!)", new SearchOptions(true, false, true, false))
+                .prepareText("xcat! xcat!");
+        java.util.List<Integer> hits = new java.util.ArrayList<>();
+        text.forEachInRange(1, 2, (start, end) -> { hits.add(start); return true; });
+        assertEquals(java.util.Arrays.asList(1), hits);
+        hits.clear();
+        text.forEachInRange(7, 8, (start, end) -> { hits.add(start); return true; });
+        assertEquals(java.util.Arrays.asList(7), hits);
+    }
+
     private static SearchMatcher m(String q, boolean caseSensitive, boolean wholeWord, boolean regex, boolean normalize) {
         return SearchMatcher.compile(q, new SearchOptions(caseSensitive, wholeWord, regex, normalize));
     }
@@ -87,8 +131,9 @@ public class SearchMatcherTest {
         String decomposed = "cafe\u0301";
         SearchMatcher mm = m("\u00e9", false, false, false, true);
         SearchMatcher.Match hit = mm.firstFrom(decomposed, 0);
-        // Must not crash and any returned offsets stay within the original string.
-        assertTrue(hit == null || (hit.start >= 0 && hit.end <= decomposed.length()));
+        // Length-changing NFC is deliberately not adopted in literal mode.
+        assertNull(hit);
+        assertEquals(3, m("e\u0301", true, false, false, true).firstFrom(decomposed, 0).start);
     }
 
     @Test

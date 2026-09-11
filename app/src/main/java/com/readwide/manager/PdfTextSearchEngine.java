@@ -3,7 +3,6 @@ package com.readwide.manager;
 import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.LruCache;
 
 import androidx.annotation.Nullable;
 
@@ -16,13 +15,10 @@ import com.tom_roush.pdfbox.text.TextPosition;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
 
 /**
  * Production text-search engine for the PDF reader, compatibility path.
@@ -40,16 +36,16 @@ import java.util.regex.PatternSyntaxException;
  * query cancels the previous scan via a generation token. Listener callbacks
  * are posted to the main thread.
  *
- * Memory: holds the PDDocument open for lazy per-page extraction and caches a
- * bounded number of page indexes. This is a second handle on the file,
+ * Memory: holds the PDDocument open and extracts all page text/geometry on the
+ * first nonempty valid query. The retained map is not a bounded page LRU.
+ * This is a second handle on the file,
  * separate from the render PdfRenderer. Call close() when leaving the reader
  * (the same lifecycle care the 1.0.7/1.0.8 trim work taught us).
  *
  * Setup: implementation "com.tom-roush:pdfbox-android"; and once at startup
  * com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(appContext).
  *
- * Unbuilt reference (no Android SDK in the authoring environment); build and
- * test it in your own build.
+ * Verification history and pending device checks are recorded in docs.
  */
 final class PdfTextSearchEngine {
 
@@ -82,7 +78,7 @@ final class PdfTextSearchEngine {
         void onSearchProgress(int matchesSoFar, int scannedPages, int totalPages,
                               @Nullable Match firstMatch);
 
-        /** Called once the whole document has been scanned (or cancelled). */
+        /** Completion for the current query only; superseded/cleared queries are silent. */
         void onSearchFinished(int totalMatches, boolean cancelled);
     }
 
@@ -102,8 +98,9 @@ final class PdfTextSearchEngine {
 
     private final PDDocument document;
     private final int pageCount;
-    private java.util.Map<Integer, PageText> pageTexts;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private volatile java.util.Map<Integer, PageText> pageTexts;
+    private final ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 0L,
+            TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>());
     private final Handler main = new Handler(Looper.getMainLooper());
     private final AtomicInteger generation = new AtomicInteger();
     private volatile boolean closed;
@@ -125,11 +122,8 @@ final class PdfTextSearchEngine {
     synchronized void startSearch(final String rawQuery, final Options options,
                                   final Listener listener) {
         if (closed) return;
-        final int gen = generation.incrementAndGet();
-        synchronized (matches) {
-            matches.clear();
-            currentIndex = -1;
-        }
+        clearSearch();
+        final int gen = generation.get();
         if (rawQuery == null || rawQuery.isEmpty()) {
             main.post(() -> {
                 if (!closed && gen == generation.get()) {
@@ -138,31 +132,55 @@ final class PdfTextSearchEngine {
             });
             return;
         }
+        // Snapshot mutable controller options before handing work to the scan thread.
+        final boolean caseSensitive = options.caseSensitive;
+        final boolean wholeWord = options.wholeWord;
+        final boolean regex = options.regex;
         try {
-            executor.execute(() -> scan(gen, rawQuery, options, listener));
+            executor.execute(() -> {
+                if (closed || gen != generation.get()) return;
+                PdfSearchText.Query query = PdfSearchText.compile(rawQuery, caseSensitive, wholeWord, regex);
+                scan(gen, query, listener);
+            });
         } catch (java.util.concurrent.RejectedExecutionException ignored) {
-            postCancelled(listener);
+            postCancelled(gen, listener);
         }
     }
 
-    private void scan(int gen, String query, Options options, Listener listener) {
+    /** Invalidate matches immediately, including while the next query is debouncing. */
+    synchronized void clearSearch() {
+        if (closed) return;
+        generation.incrementAndGet();
+        executor.getQueue().clear(); // One running scan plus at most one newest pending query.
+        synchronized (matches) {
+            matches.clear();
+            currentIndex = -1;
+        }
+    }
+
+    private void scan(int gen, PdfSearchText.Query query, Listener listener) {
+        if (closed || gen != generation.get()) return;
+        if (query == null) {
+            main.post(() -> {
+                if (!closed && gen == generation.get()) listener.onSearchFinished(0, false);
+            });
+            return;
+        }
         ensureExtracted();
-        if (gen != generation.get()) {
-            postCancelled(listener);
+        if (closed || gen != generation.get()) {
             return;
         }
         final int n = document.getNumberOfPages();
         boolean reportedFirst = false;
         for (int page = 0; page < n; page++) {
-            if (gen != generation.get()) {
-                main.post(() -> listener.onSearchFinished(matchCount(), true));
+            if (closed || gen != generation.get()) {
                 return;
             }
             PageText pt = pageTexts == null ? null : pageTexts.get(page);
             if (pt == null) {
                 continue; // no extractable text on this page
             }
-            List<Match> pageMatches = findOnPage(pt, page, query, options);
+            List<Match> pageMatches = findOnPage(pt, page, query, gen);
             if (!pageMatches.isEmpty()) {
                 boolean cancelled;
                 synchronized (matches) {
@@ -179,7 +197,6 @@ final class PdfTextSearchEngine {
                     }
                 }
                 if (cancelled) {
-                    postCancelled(listener);
                     return;
                 }
             }
@@ -211,9 +228,9 @@ final class PdfTextSearchEngine {
         }
     }
 
-    private void postCancelled(Listener listener) {
+    private void postCancelled(int gen, Listener listener) {
         main.post(() -> {
-            if (!closed) listener.onSearchFinished(matchCount(), true);
+            if (!closed && gen == generation.get()) listener.onSearchFinished(matchCount(), true);
         });
     }
 
@@ -274,7 +291,8 @@ final class PdfTextSearchEngine {
      *  Returns null if not yet extracted. */
     @Nullable
     float[] pageSizePts(int pageIndex) {
-        PageText pt = pageTexts == null ? null : pageTexts.get(pageIndex);
+        java.util.Map<Integer, PageText> snapshot = pageTexts;
+        PageText pt = snapshot == null ? null : snapshot.get(pageIndex);
         return pt == null ? null : new float[]{pt.pageWpts, pt.pageHpts};
     }
 
@@ -282,6 +300,7 @@ final class PdfTextSearchEngine {
         if (closed) return;
         closed = true;
         generation.incrementAndGet();
+        executor.getQueue().clear();
         main.removeCallbacksAndMessages(null);
         synchronized (matches) {
             matches.clear();
@@ -321,9 +340,10 @@ final class PdfTextSearchEngine {
             stripper.setSortByPosition(true);
             stripper.getText(document);
         } catch (IOException | RuntimeException e) {
-            stripper = null; // use whatever pages were finalized before failure
+            stripper = null; // Do not publish a partially extracted document as complete.
         }
-        pageTexts = (stripper != null) ? stripper.result : new java.util.HashMap<>();
+        pageTexts = java.util.Collections.unmodifiableMap(
+                (stripper != null) ? stripper.result : new java.util.HashMap<>());
     }
 
     private static RectF glyphBox(TextPosition tp) {
@@ -378,6 +398,16 @@ final class PdfTextSearchEngine {
         }
 
         @Override
+        protected void writeWordSeparator() {
+            if (builder != null) PdfSearchText.appendSeparator(builder, rects, " ");
+        }
+
+        @Override
+        protected void writeLineSeparator() {
+            if (builder != null) PdfSearchText.appendSeparator(builder, rects, "\n");
+        }
+
+        @Override
         protected void endPage(PDPage page) throws IOException {
             if (pageIndex0 >= 0 && builder != null) {
                 result.put(pageIndex0, new PageText(builder.toString(), rects, pageWpts, pageHpts));
@@ -390,57 +420,12 @@ final class PdfTextSearchEngine {
     /* Matching                                                            */
     /* ------------------------------------------------------------------ */
 
-    private static List<Match> findOnPage(PageText pt, int pageIndex, String query,
-                                          Options opt) {
+    private List<Match> findOnPage(PageText pt, int pageIndex, PdfSearchText.Query query, int gen) {
         List<Match> out = new ArrayList<>();
-        if (pt.text.isEmpty()) {
-            return out;
-        }
-        if (opt.regex) {
-            try {
-                int flags = opt.caseSensitive ? 0 : (Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-                Matcher m = Pattern.compile(query, flags).matcher(pt.text);
-                while (m.find()) {
-                    if (m.end() == m.start()) {
-                        break; // empty match guard
-                    }
-                    addMatch(out, pt, pageIndex, m.start(), m.end(), opt);
-                }
-            } catch (PatternSyntaxException ignored) {
-                // invalid regex while typing; treat as no matches
-            }
-            return out;
-        }
-        String hay = opt.caseSensitive ? pt.text : pt.text.toLowerCase(Locale.ROOT);
-        String needle = opt.caseSensitive ? query : query.toLowerCase(Locale.ROOT);
-        int from = 0;
-        while (true) {
-            int at = hay.indexOf(needle, from);
-            if (at < 0) {
-                break;
-            }
-            addMatch(out, pt, pageIndex, at, at + needle.length(), opt);
-            from = at + needle.length();
-        }
+        query.forEach(pt.text, () -> closed || gen != generation.get(),
+                (start, end) -> out.add(new Match(pageIndex, start, end,
+                        mergeRun(pt.charRectsPts, start, end))));
         return out;
-    }
-
-    private static void addMatch(List<Match> out, PageText pt, int pageIndex,
-                                 int start, int end, Options opt) {
-        if (opt.wholeWord && !isWholeWord(pt.text, start, end)) {
-            return;
-        }
-        out.add(new Match(pageIndex, start, end, mergeRun(pt.charRectsPts, start, end)));
-    }
-
-    private static boolean isWholeWord(String text, int start, int end) {
-        boolean leftOk = start == 0 || !isWordChar(text.charAt(start - 1));
-        boolean rightOk = end >= text.length() || !isWordChar(text.charAt(end));
-        return leftOk && rightOk;
-    }
-
-    private static boolean isWordChar(char c) {
-        return Character.isLetterOrDigit(c) || c == '_';
     }
 
     /** Merge charRects[start, end) into one box per visual line. */

@@ -31,8 +31,7 @@ import java.util.concurrent.Executors;
  * continuous scroll mode jumps to the match page (highlight rendering there is
  * a follow-up).
  *
- * Unbuilt reference (no Android SDK in the authoring environment); build and
- * test in your own build.
+ * Verification history and pending device checks are recorded in docs.
  */
 final class PdfSearchController {
 
@@ -107,6 +106,7 @@ final class PdfSearchController {
             queryGeneration++;
             main.removeCallbacks(searchRunnable);
             currentMatch = null;
+            if (engine != null) engine.clearSearch();
             clearHighlights();
         }
     }
@@ -119,6 +119,10 @@ final class PdfSearchController {
         queryGeneration++;
         pendingQuery = query == null ? "" : query;
         main.removeCallbacks(searchRunnable);
+        if (engine != null) engine.clearSearch();
+        currentMatch = null;
+        clearHighlights();
+        emitStatus();
         main.postDelayed(searchRunnable, 250);
     }
 

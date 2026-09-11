@@ -200,6 +200,7 @@ final class ReaderFileApplyController {
                 : activity.fileName;
         activity.readerView.setMarkdownHighlightingEnabled(FileUtils.isMarkdownFile(markdownName));
         activity.readerView.setTextContent(activity.fileContent);
+        activity.refreshTxtAnnotationHighlights();
         activity.applySearchHighlight();
     }
 

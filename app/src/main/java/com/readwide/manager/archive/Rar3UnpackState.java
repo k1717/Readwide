@@ -79,6 +79,11 @@ final class Rar3UnpackState {
         for (int i = 0; i < oldDistances.length; i++) oldDistances[i] = 0;
         lastDistance = 0;
         lastLength = 0;
+        resetLowDistanceForTable();
+    }
+
+    /** New LZ tables reset only the low-distance run, not the solid match history. */
+    void resetLowDistanceForTable() {
         previousLowDistance = 0;
         lowDistanceRepeatCount = 0;
     }

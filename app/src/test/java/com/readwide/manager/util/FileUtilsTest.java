@@ -6,7 +6,6 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Assume;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -117,13 +116,6 @@ public class FileUtilsTest {
         assertNotEquals("HZ-GB-2312", result.charsetName);
     }
 
-    @Ignore("Partially addressed: detectWithAndroidIcu no longer discards a high-confidence "
-            + "ICU hint for stray control bytes (ICU now reports EUC-KR for this input). The "
-            + "remaining gap is in base scoring: a CP949 file containing hundreds of literal ESC "
-            + "(0x1B) bytes scores worse than its windows-874 misdecode, which the ICU exact bonus "
-            + "does not fully overcome. Real Korean files do not contain sustained ESC runs, so "
-            + "this is a low-risk synthetic case. The ISO-2022-JP misdetection this test guards "
-            + "against does NOT occur.")
     @Test
     public void detect_koreanWindows949WithIso2022JpEscape_doesNotBecomeIso2022Jp() throws Exception {
         Assume.assumeTrue(Charset.isSupported("windows-949"));
@@ -133,14 +125,11 @@ public class FileUtilsTest {
 
         FileUtils.EncodingResult result = FileUtils.detectEncodingDetailed(file);
 
-        assertEquals("windows-949", result.charsetName);
+        assertEquals("source=" + result.source + ", family=" + result.family,
+                "windows-949", result.charsetName);
         assertNotEquals("ISO-2022-JP", result.charsetName);
     }
 
-    @Ignore("Same root cause as the ISO-2022-JP escape test: ICU now correctly reports EUC-KR, "
-            + "but base scoring still favors the windows-874 misdecode for text saturated with "
-            + "literal ESC bytes. Low-risk synthetic case; the ISO-2022-KR misdetection this test "
-            + "guards against does NOT occur.")
     @Test
     public void detect_koreanWindows949WithIso2022KrDesignation_doesNotBecomeIso2022Kr() throws Exception {
         Assume.assumeTrue(Charset.isSupported("windows-949"));
@@ -150,7 +139,8 @@ public class FileUtilsTest {
 
         FileUtils.EncodingResult result = FileUtils.detectEncodingDetailed(file);
 
-        assertEquals("windows-949", result.charsetName);
+        assertEquals("source=" + result.source + ", family=" + result.family,
+                "windows-949", result.charsetName);
         assertNotEquals("ISO-2022-KR", result.charsetName);
     }
 
@@ -315,6 +305,22 @@ public class FileUtilsTest {
                 FileUtils.isTextFile("index.ts"));
         assertTrue("Short taps route .ts through external video-capable apps",
                 FileUtils.isVideoFile("index.ts"));
+    }
+
+    @Test
+    public void archiveDetection_includesZipxAcrossFileUtilsEntryPoints() {
+        assertTrue(FileUtils.isArchiveFile("sample.zipx"));
+        assertTrue(FileUtils.isSupportedReadableFile("sample.zipx"));
+        assertEquals("Archive", FileUtils.getReadableFileType("sample.zipx"));
+    }
+
+    @Test
+    public void archiveDetection_includesCabAndLhaFamilies() {
+        assertTrue(FileUtils.isArchiveFile("installer.cab"));
+        assertTrue(FileUtils.isArchiveFile("legacy.lha"));
+        assertTrue(FileUtils.isArchiveFile("legacy.lzh"));
+        assertTrue(FileUtils.isSupportedReadableFile("installer.cab"));
+        assertEquals("Archive", FileUtils.getReadableFileType("legacy.lzh"));
     }
 
     private File writeText(String name, String text, Charset charset) throws Exception {

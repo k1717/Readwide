@@ -12,4 +12,8 @@ that contains the modified port.
 
 Third-party dependency notices are maintained in THIRD_PARTY_NOTICES.md.
 The APK also packages the exact libarchive-android/native-codec terms at
-assets/open_source_licenses/libarchive_android_and_codecs.txt.
+assets/open_source_licenses/libarchive_android_and_codecs.txt, the full
+XADMaster WinZip JPEG LGPL-2.1 text at
+assets/open_source_licenses/xadmaster_winzip_jpeg_lgpl_2_1.txt, and the
+WavPack BSD-3-Clause notice at
+assets/open_source_licenses/wavpack_bsd_3_clause.txt.

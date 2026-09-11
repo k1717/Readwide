@@ -37,6 +37,9 @@ public class FileThumbnailMathTest {
         assertTrue(FileThumbnailMath.isThumbnailArchiveName("images.zip"));
         assertTrue(FileThumbnailMath.isThumbnailArchiveName("images.zipx"));
         assertTrue(FileThumbnailMath.isThumbnailArchiveName("images.rar"));
+        assertTrue(FileThumbnailMath.isThumbnailArchiveName("images.cab"));
+        assertTrue(FileThumbnailMath.isThumbnailArchiveName("images.lha"));
+        assertTrue(FileThumbnailMath.isThumbnailArchiveName("images.lzh"));
         assertTrue(FileThumbnailMath.isThumbnailArchiveName("images.7z"));
         assertTrue(FileThumbnailMath.isThumbnailArchiveName("images.CB7"));
         assertTrue(FileThumbnailMath.isThumbnailArchiveName("images.cbt"));

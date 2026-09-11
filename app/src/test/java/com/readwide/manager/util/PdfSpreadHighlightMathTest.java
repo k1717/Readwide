@@ -10,6 +10,41 @@ public class PdfSpreadHighlightMathTest {
     private static final float EPSILON = 0.00001f;
 
     @Test
+    public void viewportPointRoundTripsThroughMixedSizeRightPage() {
+        PdfSpreadHighlightMath.Layout layout = new PdfSpreadHighlightMath.Layout(
+                10, 11, 1010, 1000, 0, 0, 400, 1000, 410, 350, 600, 300);
+        float[] bitmap = layout.map(11, 0.7f, 0.6f, 0.7f, 0.6f);
+        assertArrayEquals(new float[]{11, 0.7f, 0.6f},
+                layout.unmapPoint(bitmap[0], bitmap[1]), EPSILON);
+    }
+
+    @Test
+    public void gapTieSelectsLeftPageAndClampsToItsEdge() {
+        PdfSpreadHighlightMath.Layout layout = new PdfSpreadHighlightMath.Layout(
+                4, 5, 1220, 800, 0, 0, 600, 800, 620, 0, 600, 800);
+        assertArrayEquals(new float[]{4, 1, 0.5f}, layout.unmapPoint(0.5f, 0.5f), EPSILON);
+        assertArrayEquals(new float[]{4, 0, 0}, layout.unmapPoint(-1f, -1f), EPSILON);
+    }
+
+    @Test
+    public void marginUsesNearestPageRectangleNotOnlyHorizontalHalf() {
+        PdfSpreadHighlightMath.Layout layout = new PdfSpreadHighlightMath.Layout(
+                10, 11, 1010, 1000, 0, 0, 400, 1000, 410, 350, 600, 300);
+        assertArrayEquals(new float[]{10, 1, 0}, layout.unmapPoint(450f / 1010f, 0), EPSILON);
+    }
+
+    @Test
+    public void invalidViewportCoordinatesOrGeometryAreRejected() {
+        PdfSpreadHighlightMath.Layout layout = new PdfSpreadHighlightMath.Layout(
+                4, 5, 1220, 800, 0, 0, 600, 800, 620, 0, 600, 800);
+        assertNull(layout.unmapPoint(Float.NaN, 0));
+        assertNull(layout.unmapPoint(0, Float.POSITIVE_INFINITY));
+        PdfSpreadHighlightMath.Layout invalid = new PdfSpreadHighlightMath.Layout(
+                4, 5, 1220, 800, 0, 0, 600, 800, 620, 0, 601, 800);
+        assertNull(invalid.unmapPoint(0.5f, 0.5f));
+    }
+
+    @Test
     public void mapsBothPagesAndPreservesGap() {
         PdfSpreadHighlightMath.Layout layout = new PdfSpreadHighlightMath.Layout(
                 4, 5, 1220, 800,

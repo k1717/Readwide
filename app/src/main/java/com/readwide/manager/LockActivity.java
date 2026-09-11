@@ -9,7 +9,6 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -49,13 +48,13 @@ public class LockActivity extends AppCompatActivity {
 
         switch (mode) {
             case MODE_SET_PIN:
-                messageText.setText("Enter a new PIN");
+                messageText.setText(R.string.lock_enter_new_pin);
                 break;
             case MODE_CHANGE_PIN:
-                messageText.setText("Enter current PIN");
+                messageText.setText(R.string.lock_enter_current_pin);
                 break;
             default:
-                messageText.setText("Enter PIN to unlock");
+                messageText.setText(R.string.lock_enter_pin_to_unlock);
                 break;
         }
 
@@ -73,7 +72,7 @@ public class LockActivity extends AppCompatActivity {
                 btn.setOnClickListener(v -> {
                     String current = pinInput.getText().toString();
                     if (current.length() < 8) {
-                        pinInput.setText(current + digit);
+                        pinInput.getText().append(digit);
                         pinInput.setSelection(pinInput.length());
                     }
                 });
@@ -172,7 +171,7 @@ public class LockActivity extends AppCompatActivity {
     private void onConfirm() {
         String pin = pinInput.getText().toString();
         if (pin.length() < 4) {
-            ShortToast.show(this, "PIN must be at least 4 digits");
+            ShortToast.show(this, R.string.lock_pin_minimum_digits);
             return;
         }
 
@@ -184,7 +183,7 @@ public class LockActivity extends AppCompatActivity {
                     setResult(RESULT_OK);
                     finish();
                 } else {
-                    messageText.setText("Wrong PIN. Try again.");
+                    messageText.setText(R.string.lock_wrong_pin_retry);
                     pinInput.setText("");
                 }
                 break;
@@ -192,17 +191,17 @@ public class LockActivity extends AppCompatActivity {
             case MODE_SET_PIN:
                 if (firstEntry == null) {
                     firstEntry = pin;
-                    messageText.setText("Confirm your PIN");
+                    messageText.setText(R.string.lock_confirm_pin);
                     pinInput.setText("");
                 } else {
                     if (pin.equals(firstEntry)) {
                         prefs.setLockPin(pin);
                         prefs.setLockEnabled(true);
-                        ShortToast.show(this, "PIN set successfully");
+                        ShortToast.show(this, R.string.lock_pin_set_success);
                         setResult(RESULT_OK);
                         finish();
                     } else {
-                        messageText.setText("PINs don't match. Start over.");
+                        messageText.setText(R.string.lock_pin_mismatch_restart);
                         firstEntry = null;
                         pinInput.setText("");
                     }
@@ -214,24 +213,24 @@ public class LockActivity extends AppCompatActivity {
                     // Verify current PIN
                     if (prefs.verifyLockPin(pin)) {
                         firstEntry = "VERIFIED";
-                        messageText.setText("Enter new PIN");
+                        messageText.setText(R.string.lock_enter_new_pin);
                         pinInput.setText("");
                     } else {
-                        messageText.setText("Wrong current PIN");
+                        messageText.setText(R.string.lock_wrong_current_pin);
                         pinInput.setText("");
                     }
                 } else if (firstEntry.equals("VERIFIED")) {
                     firstEntry = pin;
-                    messageText.setText("Confirm new PIN");
+                    messageText.setText(R.string.lock_confirm_new_pin);
                     pinInput.setText("");
                 } else {
                     if (pin.equals(firstEntry)) {
                         prefs.setLockPin(pin);
-                        ShortToast.show(this, "PIN changed");
+                        ShortToast.show(this, R.string.lock_pin_changed);
                         setResult(RESULT_OK);
                         finish();
                     } else {
-                        messageText.setText("PINs don't match. Enter new PIN.");
+                        messageText.setText(R.string.lock_pin_mismatch_enter_new);
                         firstEntry = "VERIFIED";
                         pinInput.setText("");
                     }

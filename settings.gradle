@@ -15,3 +15,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "Readwide"
 include ':app'
+include ':libarchiveAndroid'
+project(':libarchiveAndroid').projectDir = file('third_party/libarchive-android/library')
+include ':zipxCodecsAndroid'
+project(':zipxCodecsAndroid').projectDir = file('third_party/zipx-codecs-android/library')

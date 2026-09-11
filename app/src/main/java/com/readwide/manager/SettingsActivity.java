@@ -516,7 +516,8 @@ public class SettingsActivity extends AppCompatActivity {
         Spinner largeTxtModeSpinner = findViewById(R.id.spinner_large_txt_partition_mode);
         Spinner epubDirectionSpinner = findViewById(R.id.spinner_epub_page_direction);
         Spinner textAlignSpinner = findViewById(R.id.spinner_text_alignment);
-        Spinner[] spinners = new Spinner[]{overlapSpinner, tapZoneSpinner, largeTxtModeSpinner, epubDirectionSpinner, textAlignSpinner};
+        Spinner[] spinners = new Spinner[]{overlapSpinner, tapZoneSpinner, largeTxtModeSpinner,
+                epubDirectionSpinner, textAlignSpinner};
         for (Spinner spinner : spinners) {
             if (spinner == null) continue;
             spinner.setBackgroundColor(bg);
@@ -584,7 +585,18 @@ public class SettingsActivity extends AppCompatActivity {
             } else {
                 et.setTextColor(text);
                 et.setHintTextColor(sub);
-                et.setBackgroundColor(bg);
+                if (et.getId() == R.id.input_archive_viewer_background_timeout) {
+                    float density = getResources().getDisplayMetrics().density;
+                    GradientDrawable fieldBackground = new GradientDrawable();
+                    fieldBackground.setColor(bg);
+                    fieldBackground.setCornerRadius(8 * density);
+                    et.setBackground(fieldBackground);
+                    // Reapply padding after background replacement on every theme refresh.
+                    int horizontalPadding = Math.round(14 * density);
+                    et.setPaddingRelative(horizontalPadding, 0, horizontalPadding, 0);
+                } else {
+                    et.setBackgroundColor(bg);
+                }
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                     et.setBackgroundTintList(outlineTint);
                 }

@@ -35,14 +35,14 @@ final class RarBackendRouter {
                 // AES-encrypted RAR5 compressed payloads have no libarchive path
                 // because the bundled backend does not decrypt RAR5, so the scoped
                 // first-party Rar5 AES-decrypt + decompress path is the only route;
-                // it covers the supported RAR5 v5.0 decode subset and cleanly
+                // it covers the bounded RAR5-container v0/v1 decode subset and cleanly
                 // reports anything outside it as unsupported.
                 return RarBackendDecision.firstParty(
                         RarBackendRoute.Kind.TRY_FIRST_PARTY_RAR5_COMPRESSED,
-                        "RAR5 encrypted compressed payload is first-party-only (libarchive cannot decrypt RAR5); handled by the scoped RAR5 v5.0 AES decode path");
+                        "RAR5 encrypted compressed payload is first-party-only (libarchive cannot decrypt RAR5); handled by the scoped RAR5/RAR7 AES decode path");
             }
             return RarBackendDecision.libarchive(
-                    "RAR5 compressed payload is libarchive-primary, with scoped first-party Java fallbacks for covered RAR5 v5.0 entries");
+                    "RAR5 compressed payload is libarchive-primary, with scoped first-party Java fallbacks for covered RAR5-container v0/v1 entries");
         }
 
         if (RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) {

@@ -7,7 +7,10 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 
 /**
  * RAR multi-volume helpers.
@@ -25,9 +28,27 @@ final class RarVolumeChain {
                                                   @NonNull List<RarArchiveReader.RarEntry> allEntries) throws IOException {
         List<RarArchiveReader.RarEntry> chain = new ArrayList<>();
         chain.add(first);
+        int cursor = allEntries.indexOf(first) + 1;
+        if (cursor == 0 && first.splitAfter) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException("RAR split head is missing");
+        }
+        Set<RarArchiveReader.RarEntry> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        seen.add(first);
         RarArchiveReader.RarEntry current = first;
         while (current.splitAfter) {
-            RarArchiveReader.RarEntry next = nextPart(current, first, allEntries);
+            RarArchiveReader.RarEntry next = null;
+            while (cursor < allEntries.size()) {
+                RarArchiveReader.RarEntry candidate = allEntries.get(cursor++);
+                if (candidate == null || candidate.directory) continue;
+                if (candidate.splitBefore && candidate.path.equals(first.path)) {
+                    if (!seen.add(candidate)) {
+                        throw new RarArchiveReader.UnsupportedRarFeatureException(
+                                "Repeated RAR split continuation");
+                    }
+                    next = candidate;
+                    break;
+                }
+            }
             if (next == null) {
                 throw new RarArchiveReader.UnsupportedRarFeatureException("Missing RAR split continuation");
             }
@@ -35,19 +56,6 @@ final class RarVolumeChain {
             current = next;
         }
         return chain;
-    }
-
-    @Nullable
-    private static RarArchiveReader.RarEntry nextPart(@NonNull RarArchiveReader.RarEntry current,
-                                                       @NonNull RarArchiveReader.RarEntry first,
-                                                       @NonNull List<RarArchiveReader.RarEntry> allEntries) {
-        int currentIndex = allEntries.indexOf(current);
-        for (int i = Math.max(0, currentIndex + 1); i < allEntries.size(); i++) {
-            RarArchiveReader.RarEntry candidate = allEntries.get(i);
-            if (candidate == null || candidate.directory) continue;
-            if (candidate.splitBefore && candidate.path.equals(first.path)) return candidate;
-        }
-        return null;
     }
 
     static boolean isComplete(@NonNull List<RarArchiveReader.RarEntry> chain) {
@@ -74,7 +82,14 @@ final class RarVolumeChain {
         for (RarArchiveReader.RarEntry part : chain) {
             File source = part.sourceArchive;
             if (source == null) throw new IOException("RAR entry source volume is missing");
-            segments.add(new RarCryptoStreams.EncryptedSegment(source, part.dataOffset, part.packedSize));
+            // Intermediate checks cover bytes as stored, before any AES decryption.
+            // Final members describe the decoded logical file, not this segment.
+            // RAR4 uses all-one CRC as an absent intermediate-check sentinel.
+            boolean absentLegacyCheck = part.rarVersion < 5 && part.dataCrc == 0xffffffffL;
+            RarArchiveReader.RarEntry packedCheck = part.splitAfter && !absentLegacyCheck
+                    && (part.dataCrc >= 0 || part.blake2sp != null) ? part : null;
+            segments.add(new RarCryptoStreams.EncryptedSegment(source, part.dataOffset, part.packedSize,
+                    packedCheck));
         }
         return segments;
     }
@@ -104,6 +119,7 @@ final class RarVolumeChain {
         return actual != null
                 && actual.isRar5Aes256()
                 && expected.version == actual.version
+                // Flags describe per-volume password/checksum records, not the AES stream.
                 && expected.kdfCount == actual.kdfCount
                 && Arrays.equals(expected.salt, actual.salt)
                 && Arrays.equals(expected.iv, actual.iv)

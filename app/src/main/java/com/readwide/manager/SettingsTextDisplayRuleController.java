@@ -138,8 +138,10 @@ final class SettingsTextDisplayRuleController {
         row.setBackground(bg);
 
         TextView rowTitle = new TextView(activity);
-        rowTitle.setText((rule.enabled ? "✓ " : "○ ")
-                + safePreview(rule.findText) + " → " + safePreview(rule.replacementText));
+        rowTitle.setText(activity.getString(R.string.text_rule_preview_format,
+                rule.enabled ? "✓" : "○",
+                safePreview(rule.findText),
+                safePreview(rule.replacementText)));
         rowTitle.setTextColor(text);
         rowTitle.setTextSize(15f);
         rowTitle.setTypeface(null, android.graphics.Typeface.BOLD);
@@ -155,7 +157,7 @@ final class SettingsTextDisplayRuleController {
         String mode = rule.useRegex
                 ? activity.getString(R.string.txt_display_rule_regex_mode)
                 : activity.getString(R.string.txt_display_rule_plain_mode);
-        meta.setText(scope + " · " + caseMode + " · " + mode);
+        meta.setText(activity.getString(R.string.metadata_triplet_format, scope, caseMode, mode));
         meta.setTextColor(sub);
         meta.setTextSize(12f);
         meta.setSingleLine(true);

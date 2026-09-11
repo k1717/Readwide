@@ -45,7 +45,7 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:padding="32dp"
-            android:text="No bookmarks yet"
+            android:text="@string/no_bookmarks_yet"
             android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="16sp"
             android:visibility="gone" />

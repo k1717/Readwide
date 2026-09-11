@@ -6,9 +6,8 @@ import androidx.annotation.Nullable;
 import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.RandomAccessFile;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -32,8 +31,135 @@ import java.util.List;
 final class Rar3PpmdSolidArchiveExtractor {
     private Rar3PpmdSolidArchiveExtractor() {}
 
-    /** Per-entry packed payload guard for in-memory decoding. */
-    private static final long MAX_PACKED_BYTES = 64L * 1024 * 1024;
+    /** Mixed classic-LZ/PPMd archives retain the broader extraction routes. */
+    @Nullable
+    static ArchiveSupport.ForwardArchiveReader openForwardReader(File archive, File spoolDirectory,
+            boolean nativeAvailable) throws IOException {
+        return openForwardReader(archive, null, spoolDirectory, nativeAvailable);
+    }
+
+    @Nullable
+    static ArchiveSupport.ForwardArchiveReader openForwardReader(File archive, char[] password,
+            File spoolDirectory, boolean nativeAvailable) throws IOException {
+        if (RarArchiveLocator.detectRarVersion(archive) != 4) return null;
+        List<RarArchiveReader.RarEntry> entries = RarArchiveReader.readEntries(archive, password);
+        return openForwardReader(entries, password, spoolDirectory, nativeAvailable);
+    }
+
+    @Nullable
+    static ArchiveSupport.ForwardArchiveReader openForwardReader(List<RarArchiveReader.RarEntry> entries,
+            char[] password, File spoolDirectory, boolean nativeAvailable) throws IOException {
+        boolean sawPpmd = false, needsFirstParty = !nativeAvailable;
+        for (RarArchiveReader.RarEntry entry : entries) {
+            if (entry.rarVersion != 4) return null;
+            if (entry.directory || entry.splitBefore) continue;
+            if (entry.unpackedSize < 0 || entry.dataCrc < 0) return null;
+            if (RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) continue;
+            if (!isPpmdBlockStart(entry, entries, password)) return null;
+            if (!sawPpmd && entry.solid) return null; // Missing solid-set primer.
+            sawPpmd = true;
+            needsFirstParty |= entry.solid || entry.encrypted() || entry.splitAfter;
+        }
+        // Keep ordinary non-solid PPMd on native when available. The scoped solid
+        // engine handles model carryover that otherwise degrades to bulk extraction.
+        return sawPpmd && needsFirstParty
+                ? new ForwardReader(entries, password, spoolDirectory) : null;
+    }
+
+    private static final class ForwardReader implements ArchiveSupport.ForwardArchiveReader {
+        private final List<RarArchiveReader.RarEntry> entries;
+        private final File directory;
+        private final char[] password;
+        private Rar3PpmdSolidStreamDecoder decoder;
+        private RarArchiveReader.RarEntry current;
+        private int index;
+        private File spool;
+        private java.io.InputStream input;
+        private boolean decoded, failed, closed;
+
+        ForwardReader(List<RarArchiveReader.RarEntry> entries, char[] password, File directory) {
+            this.entries = entries; this.directory = directory;
+            this.password = password == null ? null : password.clone();
+        }
+
+        private void checkpoint() throws IOException {
+            if (closed || failed) throw new IOException("RAR3 PPMd forward reader is closed or failed");
+            if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+        }
+
+        @Override public ArchiveSupport.ForwardEntry nextEntry() throws IOException {
+            checkpoint();
+            drainCurrentEntry(Long.MAX_VALUE);
+            do { current = index < entries.size() ? entries.get(index++) : null; }
+            while (current != null && current.splitBefore);
+            decoded = false;
+            return current == null ? null : new ArchiveSupport.ForwardEntry(
+                    current.path, current.directory, !current.directory);
+        }
+
+        private void decode(boolean retain) throws IOException {
+            checkpoint();
+            if (current == null || current.directory || decoded) return;
+            try {
+                boolean stored = RarFeatureClassifier.isRar3Or4StoredMethod(current.method);
+                if (!stored && !current.solid) decoder = new Rar3PpmdSolidStreamDecoder();
+                if (!stored && decoder == null) throw new IOException("Missing RAR3 PPMd solid primer");
+                if (retain || stored) {
+                    if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create RAR spool directory");
+                    spool = File.createTempFile("rar3_ppmd_verified_", ".spool", directory);
+                    if (stored) RarArchiveReader.extractStoredEntry(current, spool, password, entries, null);
+                    else writeVerifiedEntry(decoder, current, entries, password, spool, null);
+                    if (retain) input = new java.io.BufferedInputStream(new java.io.FileInputStream(spool));
+                    else clearSpool();
+                } else {
+                    // Skipping output must still advance the model/window and check the primer CRC.
+                    decodeOne(decoder, current, entries, password, DISCARD, null);
+                }
+                decoded = true;
+            } catch (IOException | RuntimeException failure) {
+                failed = true;
+                decoder = null;
+                if (password != null) java.util.Arrays.fill(password, '\0');
+                try { clearSpool(); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+                if (failure instanceof IOException) throw (IOException) failure;
+                throw new IOException("RAR3 PPMd forward decode failed", failure);
+            }
+        }
+
+        @Override public int read(byte[] buffer) throws IOException {
+            checkpoint();
+            if (buffer.length == 0) return 0;
+            decode(true);
+            return input == null ? -1 : input.read(buffer);
+        }
+
+        @Override public boolean drainCurrentEntry(long maximum) throws IOException {
+            checkpoint();
+            if (current != null && !current.directory && !decoded && current.unpackedSize > maximum) {
+                throw new IOException("RAR entry exceeds requested drain bound");
+            }
+            decode(false);
+            clearSpool();
+            return true;
+        }
+
+        private void clearSpool() throws IOException {
+            try { if (input != null) input.close(); }
+            finally {
+                input = null;
+                if (spool != null) { spool.delete(); spool = null; }
+            }
+        }
+
+        @Override public void close() throws IOException {
+            if (closed) return;
+            closed = true;
+            decoder = null;
+            if (password != null) java.util.Arrays.fill(password, '\0');
+            clearSpool();
+        }
+    }
+
 
     /**
      * @return true if the entry was extracted (CRC-verified) to outFile;
@@ -44,7 +170,13 @@ final class Rar3PpmdSolidArchiveExtractor {
                                             @NonNull List<RarArchiveReader.RarEntry> allEntries,
                                             @NonNull File outFile,
                                             @Nullable FileOperationProgress progress) throws IOException {
-        List<RarArchiveReader.RarEntry> chain = buildSolidChain(target, allEntries);
+        return tryExtractSolidPpmdEntry(target, allEntries, outFile, null, progress);
+    }
+
+    static boolean tryExtractSolidPpmdEntry(RarArchiveReader.RarEntry target,
+            List<RarArchiveReader.RarEntry> allEntries, File outFile, char[] password,
+            FileOperationProgress progress) throws IOException {
+        List<RarArchiveReader.RarEntry> chain = buildSolidChain(target, allEntries, password);
         if (chain == null) {
             return false;
         }
@@ -56,29 +188,12 @@ final class Rar3PpmdSolidArchiveExtractor {
             if (progress != null && !progress.checkpoint()) {
                 throw new IOException("RAR extraction cancelled");
             }
-            byte[] packed = readPackedPayload(entry);
-            Rar3PpmdSolidStreamDecoder.EntryResult result =
-                    decoder.decodeEntry(packed, entry.unpackedSize);
-            if (entry.dataCrc >= 0 && result.crc32 != (entry.dataCrc & 0xFFFFFFFFL)) {
-                throw new RarArchiveReader.UnsupportedRarFeatureException(
-                        (isTarget
-                                ? "RAR3 PPMd solid entry failed CRC verification: "
-                                : "RAR3 PPMd solid primer entry failed CRC verification: ")
-                                + entry.path);
-            }
-            if (progress != null) {
-                progress.addDoneBytes(entry.unpackedSize > 0 ? entry.unpackedSize : 0);
-            }
+            if (!entry.solid) decoder = new Rar3PpmdSolidStreamDecoder();
             if (isTarget) {
-                try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
-                    try (FileOutputStream out = new FileOutputStream(outFile)) {
-                        out.write(result.data);
-                    }
-                    RarStoredPayloadIO.verifyCrc(entry, outFile);
-                    guard.commit();
-                }
+                writeVerifiedEntry(decoder, entry, allEntries, password, outFile, progress);
                 return true;
             }
+            decodeOne(decoder, entry, allEntries, password, DISCARD, progress);
         }
         // Unreachable: the chain always ends with the target.
         throw new RarArchiveReader.UnsupportedRarFeatureException(
@@ -108,14 +223,13 @@ final class Rar3PpmdSolidArchiveExtractor {
             if (RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) {
                 continue; // handled by the stored path below
             }
-            if (entry.rarVersion >= 5 || entry.encrypted() || entry.splitAfter) {
+            if (entry.rarVersion != 4) {
                 return false;
             }
-            if (entry.packedSize < 2 || entry.packedSize > MAX_PACKED_BYTES
-                    || entry.unpackedSize < 0) {
+            if (entry.unpackedSize < 0) {
                 return false;
             }
-            if (!isPpmdBlockStart(entry)) {
+            if (!isPpmdBlockStart(entry, entries, password)) {
                 return false;
             }
             sawPpmd = true;
@@ -157,23 +271,8 @@ final class Rar3PpmdSolidArchiveExtractor {
                 RarArchiveReader.extractStoredEntry(entry, out, password, entries, progress);
                 continue;
             }
-            byte[] packed = readPackedPayload(entry);
-            Rar3PpmdSolidStreamDecoder.EntryResult result =
-                    decoder.decodeEntry(packed, entry.unpackedSize);
-            if (entry.dataCrc >= 0 && result.crc32 != (entry.dataCrc & 0xFFFFFFFFL)) {
-                throw new RarArchiveReader.UnsupportedRarFeatureException(
-                        "RAR3 PPMd solid entry failed CRC verification: " + entry.path);
-            }
-            try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(out)) {
-                try (FileOutputStream fos = new FileOutputStream(out)) {
-                    fos.write(result.data);
-                }
-                RarStoredPayloadIO.verifyCrc(entry, out);
-                guard.commit();
-            }
-            if (progress != null) {
-                progress.addDoneBytes(entry.unpackedSize > 0 ? entry.unpackedSize : 0);
-            }
+            if (!entry.solid) decoder = new Rar3PpmdSolidStreamDecoder();
+            writeVerifiedEntry(decoder, entry, entries, password, out, progress);
         }
         return sawEntry;
     }
@@ -182,7 +281,10 @@ final class Rar3PpmdSolidArchiveExtractor {
         long total = 0;
         for (RarArchiveReader.RarEntry entry : entries) {
             if (entry == null || entry.directory || entry.splitBefore) continue;
-            if (entry.unpackedSize > 0) total += entry.unpackedSize;
+            if (entry.unpackedSize > 0) {
+                if (entry.unpackedSize > Long.MAX_VALUE - total) return Long.MAX_VALUE;
+                total += entry.unpackedSize;
+            }
         }
         return total;
     }
@@ -195,11 +297,11 @@ final class Rar3PpmdSolidArchiveExtractor {
     @Nullable
     private static List<RarArchiveReader.RarEntry> buildSolidChain(
             @NonNull RarArchiveReader.RarEntry target,
-            @NonNull List<RarArchiveReader.RarEntry> allEntries) throws IOException {
+            @NonNull List<RarArchiveReader.RarEntry> allEntries, char[] password) throws IOException {
         if (target.rarVersion >= 5 || target.directory) {
             return null;
         }
-        if (target.encrypted() || target.splitBefore || target.splitAfter) {
+        if (target.splitBefore) {
             return null;
         }
         if (RarFeatureClassifier.isRar3Or4StoredMethod(target.method)) {
@@ -215,7 +317,7 @@ final class Rar3PpmdSolidArchiveExtractor {
         int startIndex = -1;
         for (int i = targetIndex; i >= 0; i--) {
             RarArchiveReader.RarEntry entry = allEntries.get(i);
-            if (entry.directory) {
+            if (entry.directory || entry.splitBefore) {
                 continue;
             }
             if (RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) {
@@ -234,21 +336,19 @@ final class Rar3PpmdSolidArchiveExtractor {
         List<RarArchiveReader.RarEntry> chain = new ArrayList<>();
         for (int i = startIndex; i <= targetIndex; i++) {
             RarArchiveReader.RarEntry entry = allEntries.get(i);
-            if (entry.directory) {
+            if (entry.directory || entry.splitBefore) {
                 continue;
             }
             if (RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) {
                 continue;
             }
-            if (entry.rarVersion >= 5 || entry.encrypted()
-                    || entry.splitBefore || entry.splitAfter) {
+            if (entry.rarVersion != 4) {
                 return null;
             }
-            if (entry.packedSize < 2 || entry.packedSize > MAX_PACKED_BYTES
-                    || entry.unpackedSize < 0) {
+            if (entry.unpackedSize < 0) {
                 return null;
             }
-            if (!isPpmdBlockStart(entry)) {
+            if (!isPpmdBlockStart(entry, allEntries, password)) {
                 // Classic-LZ solid members are a different decoder problem.
                 return null;
             }
@@ -270,29 +370,73 @@ final class Rar3PpmdSolidArchiveExtractor {
         return -1;
     }
 
-    private static boolean isPpmdBlockStart(@NonNull RarArchiveReader.RarEntry entry)
+    private static boolean isPpmdBlockStart(@NonNull RarArchiveReader.RarEntry entry,
+            List<RarArchiveReader.RarEntry> entries, char[] password)
             throws IOException {
-        if (entry.sourceArchive == null) {
-            return false;
+        if (entry.sourceArchive == null) return false;
+        if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+        if (entry.encrypted() || entry.splitAfter) {
+            try (Rar3PpmdPayload payload = Rar3PpmdPayload.open(entry, entries, password, null)) {
+                int first = payload.input.read();
+                return first >= 0 && (first & 0x80) != 0;
+            }
         }
-        try (RandomAccessFile raf = new RandomAccessFile(entry.sourceArchive, "r")) {
-            raf.seek(entry.dataOffset);
-            int first = raf.read();
+        // Classification needs one byte, not a 64 KiB buffered payload read per member.
+        try (java.io.RandomAccessFile input = new java.io.RandomAccessFile(entry.sourceArchive, "r")) {
+            if (entry.dataOffset < 0 || entry.packedSize < 2 || entry.dataOffset > input.length()
+                    || entry.packedSize > input.length() - entry.dataOffset) return false;
+            input.seek(entry.dataOffset);
+            int first = input.read();
             return first >= 0 && (first & 0x80) != 0;
         }
     }
 
-    @NonNull
-    private static byte[] readPackedPayload(@NonNull RarArchiveReader.RarEntry entry)
-            throws IOException {
-        byte[] packed = new byte[(int) entry.packedSize];
-        if (entry.sourceArchive == null) {
-            throw new IOException("RAR entry source volume is missing");
+    private static final OutputStream DISCARD = new OutputStream() {
+        @Override public void write(int value) {}
+        @Override public void write(byte[] bytes, int offset, int length) {}
+    };
+
+    private static void writeVerifiedEntry(Rar3PpmdSolidStreamDecoder decoder,
+            RarArchiveReader.RarEntry entry, List<RarArchiveReader.RarEntry> entries, char[] password,
+            File target, FileOperationProgress progress) throws IOException {
+        try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(target)) {
+            try (OutputStream out = ArchiveSupport.openExtractionOutputStream(target)) {
+                decodeOne(decoder, entry, entries, password, out, progress);
+            }
+            guard.commit();
         }
-        try (RandomAccessFile raf = new RandomAccessFile(entry.sourceArchive, "r")) {
-            raf.seek(entry.dataOffset);
-            raf.readFully(packed);
+    }
+
+    private static void decodeOne(Rar3PpmdSolidStreamDecoder decoder,
+            RarArchiveReader.RarEntry entry, List<RarArchiveReader.RarEntry> entries,
+            char[] password, OutputStream destination,
+            FileOperationProgress progress) throws IOException {
+        OutputStream checked = new OutputStream() {
+            @Override public void write(int value) throws IOException {
+                if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+                if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+                destination.write(value);
+                if (progress != null) progress.addDoneBytes(1);
+            }
+            @Override public void write(byte[] bytes, int offset, int length) throws IOException {
+                if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+                if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+                destination.write(bytes, offset, length);
+                if (progress != null) progress.addDoneBytes(length);
+            }
+        };
+        try (Rar3PpmdPayload payload = Rar3PpmdPayload.open(entry, entries, password, progress)) {
+            java.io.InputStream input = payload.input;
+            long crc = decoder.decodeEntry(input, payload.checksumEntry.unpackedSize, checked);
+            // Force physical range/truncation checks even when the range coder stopped early.
+            byte[] tail = new byte[64 * 1024];
+            while (input.read(tail) != -1) {
+                if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+            }
+            if (crc != (payload.checksumEntry.dataCrc & 0xffffffffL)) {
+                throw new RarArchiveReader.UnsupportedRarFeatureException(
+                        "RAR3 PPMd solid entry or primer failed CRC verification: " + entry.path);
+            }
         }
-        return packed;
     }
 }

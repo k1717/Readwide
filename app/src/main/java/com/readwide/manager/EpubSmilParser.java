@@ -94,8 +94,14 @@ final class EpubSmilParser {
      * usable overlay.
      */
     static Timeline parse(ZipFile zip, String linkedSmilPath) throws IOException {
+        return parseResolvedPath(zip, normalizeLinkedPath(linkedSmilPath));
+    }
+
+    /** The OPF parser already decoded this ZIP entry name; never decode it again. */
+    static Timeline parseResolvedPath(ZipFile zip, String resolvedSmilPath) throws IOException {
         if (zip == null) throw new IOException("EPUB archive is unavailable");
-        String smilPath = normalizeLinkedPath(linkedSmilPath);
+        String smilPath = resolvedSmilPath == null || isExternalReference(resolvedSmilPath)
+                ? "" : DocumentArchiveUtils.normalizeZipPath(resolvedSmilPath);
         if (smilPath.isEmpty()) throw new IOException("SMIL path is empty or external");
 
         ZipEntry smilEntry = zip.getEntry(smilPath);

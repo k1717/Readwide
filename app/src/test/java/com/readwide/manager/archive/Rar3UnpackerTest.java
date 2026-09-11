@@ -19,6 +19,466 @@ public class Rar3UnpackerTest {
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
+    @Test public void mixedDispatchPreservesOneReservoirAcrossLzPpmdLz() throws Exception {
+        BitWriter packed = new BitWriter();
+        writeTable(packed, new int[]{'A', 256}, new int[0]);
+        packed.writeBitString("00011"); // A, EOF symbol, same-file new table.
+        packed.alignToByte(); packed.writeBits(0xa1, 8);
+        writeTable(packed, new int[]{'C', 256}, new int[0]);
+        packed.writeBitString("000100"); // C, explicit EOF with table reuse.
+        int[] symbols = {'B', 2, 0};
+        int[] cursor = {0};
+        Rar3ClassicLzEngine.PpmdSource source = new Rar3ClassicLzEngine.PpmdSource() {
+            @Override public void readTable(java.io.InputStream in) throws java.io.IOException {
+                assertEquals(0xa1, in.read());
+            }
+            @Override public int symbol() { return symbols[cursor[0]++]; }
+            @Override public int escape() { return 2; }
+        };
+        ByteArrayOutputStream actual = new ByteArrayOutputStream();
+        Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(actual, 3, programs)) {
+            RarLzWindow window = new RarLzWindow(new byte[8], 0, 0,
+                    RarOutputStreamDecodedOutput.wrapOrMemory(output));
+            Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(new RarBitInput(packed.toByteArray()),
+                    window, 3, new int[Rar3HuffmanTables.TABLE_SIZE], programs,
+                    new Rar3UnpackState(), source, output, false, true);
+            output.finish();
+            assertTrue(engine.fileEndSeen());
+            assertTrue(engine.reuseTablesForNextEntry());
+            assertEquals(3, cursor[0]);
+            assertArrayEquals(new byte[]{'A','B','C'}, actual.toByteArray());
+        }
+    }
+
+    @Test public void mixedPpmdMatchUsesLzHistoryWithoutChangingLzMatchCache() throws Exception {
+        BitWriter packed = new BitWriter();
+        writeTable(packed, new int[]{'A', 256}, new int[0]);
+        packed.writeBitString("00011"); packed.alignToByte(); packed.writeBits(0xa1, 8);
+        int[] symbols = {2, 5, 0, 2, 2}; // Repeat previous byte four times, then file marker.
+        int[] cursor = {0};
+        Rar3UnpackState matches = new Rar3UnpackState();
+        matches.rememberNewDistanceMatch(3, 7);
+        Rar3ClassicLzEngine.PpmdSource source = new Rar3ClassicLzEngine.PpmdSource() {
+            @Override public void readTable(java.io.InputStream in) throws java.io.IOException { assertEquals(0xa1, in.read()); }
+            @Override public int symbol() { return symbols[cursor[0]++]; }
+            @Override public int escape() { return 2; }
+        };
+        ByteArrayOutputStream actual = new ByteArrayOutputStream();
+        Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(actual, 5, programs)) {
+            Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(new RarBitInput(packed.toByteArray()),
+                    new RarLzWindow(new byte[8], 0, 0, RarOutputStreamDecodedOutput.wrapOrMemory(output)),
+                    5, new int[Rar3HuffmanTables.TABLE_SIZE], programs, matches, source, output, false, true);
+            output.finish();
+            assertTrue(engine.fileEndSeen()); assertFalse(engine.reuseTablesForNextEntry());
+            assertEquals(3, matches.oldDistance(0)); assertEquals(7, matches.lastLength());
+            assertArrayEquals(new byte[]{'A','A','A','A','A'}, actual.toByteArray());
+        }
+    }
+
+    @Test public void mixedPpmdToLzMatchReadsSharedUnfilteredHistory() throws Exception {
+        BitWriter packed = new BitWriter(); packed.writeBits(0xa1,8);
+        writeTable(packed, new int[]{256,271}, new int[]{0});
+        packed.writeBitString("0100000"); // Match symbol 01, distance 0, EOF 00, flags 00.
+        int[] symbols = {'A',2,0}; int[] cursor = {0};
+        Rar3ClassicLzEngine.PpmdSource source = new Rar3ClassicLzEngine.PpmdSource() {
+            @Override public void readTable(java.io.InputStream in) throws java.io.IOException { assertEquals(0xa1,in.read()); }
+            @Override public int symbol() { return symbols[cursor[0]++]; }
+            @Override public int escape() { return 2; }
+        };
+        ByteArrayOutputStream actual = new ByteArrayOutputStream();
+        Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
+        try (Rar3PpmdFilterOutput out = new Rar3PpmdFilterOutput(actual,4,programs)) {
+            Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(new RarBitInput(packed.toByteArray()),
+                    new RarLzWindow(new byte[8],0,0,RarOutputStreamDecodedOutput.wrapOrMemory(out)),4,
+                    new int[Rar3HuffmanTables.TABLE_SIZE],programs,new Rar3UnpackState(),source,out,false,true);
+            out.finish(); assertTrue(engine.fileEndSeen());
+            assertArrayEquals(new byte[]{'A','A','A','A'},actual.toByteArray());
+        }
+    }
+
+    @Test public void mixedModelResetDropsContinuationAndPropagatesInputErrors() throws Exception {
+        Rar3MixedPpmdState state = new Rar3MixedPpmdState();
+        state.readTable(new java.io.ByteArrayInputStream(new byte[]{(byte)0xe1,0,7,0,0,0,0}));
+        assertEquals(7,state.escape());
+        state.readTable(new java.io.ByteArrayInputStream(new byte[]{(byte)0x80,0,0,0,0}));
+        assertEquals(7,state.escape());
+        state.reset(); assertEquals(2,state.escape());
+        try { state.readTable(new java.io.ByteArrayInputStream(new byte[]{(byte)0x80})); throw new AssertionError("Missing model"); }
+        catch (java.io.IOException expected) { }
+        java.io.IOException sentinel = new java.io.IOException("range input");
+        try {
+            state.readTable(new java.io.InputStream() {
+                int position;
+                @Override public int read() throws java.io.IOException {
+                    if (position++ == 0) return 0xa1;
+                    if (position == 2) return 0;
+                    throw sentinel;
+                }
+            });
+            throw new AssertionError("Expected range I/O failure");
+        } catch (java.io.IOException expected) { org.junit.Assert.assertSame(sentinel,expected); }
+    }
+
+    @Test public void mixedHistoryGrowthPreservesWrappedBytes() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        RarLzWindow window = new RarLzWindow(new byte[8], 0, 0,
+                RarOutputStreamDecodedOutput.wrapOrMemory(output));
+        for (int i = 0; i < 12; i++) window.writeLiteral(i);
+        window.ensureHistoryCapacity(16); output.reset();
+        window.copyMatch(8, 8);
+        assertArrayEquals(new byte[]{4,5,6,7,8,9,10,11}, output.toByteArray());
+    }
+
+    @Test public void requiredSolidBoundaryRejectsSizeOnlySuccess() throws Exception {
+        byte[] packed = syntheticPayload(block(new int[]{'A'}, "00"));
+        Rar3UnpackContext context = contextFor(writeArchive("missing-boundary.rar", packed), packed, 1, crc("A"));
+        context.requireFileBoundary();
+        File output = new File(tempFolder.getRoot(), "missing-boundary.out");
+        try { Rar3Unpacker.unpack(context, output, null); throw new AssertionError("Missing boundary"); }
+        catch (java.io.IOException expected) { assertFalse(output.exists()); }
+    }
+
+    @Test public void streamingLzWritesBeforeTheWholeEntryIsDecoded() throws Exception {
+        BitWriter packed = new BitWriter();
+        writeTable(packed, new int[]{'A',256}, new int[0]);
+        for (int i = 0; i < 70000; i++) packed.writeBitString("00");
+        byte[] bytes = packed.toByteArray();
+        int[] written = {0};
+        Rar3UnpackContext context = contextFor(writeArchive("streaming-output.rar", bytes), bytes, 70100, -1);
+        // An intentionally truncated final symbol must fail after at least one 64 KiB flush.
+        try {
+            Rar3Unpacker.unpackPayloadForTest(context, bytes, new java.io.OutputStream() {
+                @Override public void write(int value) { written[0]++; }
+                @Override public void write(byte[] b, int off, int len) { written[0] += len; }
+            });
+            throw new AssertionError("Truncated input");
+        } catch (java.io.IOException expected) { assertTrue(written[0] >= 65536); }
+    }
+
+    @Test
+    public void unpack_streamedClassicPayloadHonorsPhysicalOffsetAndSize() throws Exception {
+        byte[] packed = syntheticPayload(block(new int[] {'A'}, "00"));
+        byte[] fileBytes = new byte[packed.length + 32];
+        java.util.Arrays.fill(fileBytes, (byte) 0xff);
+        System.arraycopy(packed, 0, fileBytes, 7, packed.length);
+        File archive = writeArchive("stream-offset.rar", fileBytes);
+        Rar3UnpackContext context = Rar3UnpackContext.forEntry(archive, 7, packed.length,
+                1, 0x33, false, false, false, false, crc("A"));
+        File out = tempFolder.newFile("stream-offset.out");
+        Rar3Unpacker.unpack(context, out, null);
+        assertArrayEquals(new byte[] {'A'}, Files.readAllBytes(out.toPath()));
+        try (java.io.InputStream input = context.openPackedPayload(null)) {
+            ByteArrayOutputStream actual = new ByteArrayOutputStream();
+            int value;
+            while ((value = input.read()) != -1) actual.write(value);
+            assertArrayEquals(packed, actual.toByteArray());
+        }
+    }
+
+    @Test
+    public void unpack_streamRejectsPayloadTruncatedAfterContextCreation() throws Exception {
+        byte[] packed = syntheticPayload(block(new int[] {'A'}, "00"));
+        File archive = writeArchive("stream-truncated.rar", packed);
+        Rar3UnpackContext context = contextFor(archive, packed, 1, crc("A"));
+        try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(archive, "rw")) {
+            file.setLength(packed.length - 1);
+        }
+        File out = new File(tempFolder.getRoot(), "stream-truncated.out");
+        try {
+            Rar3Unpacker.unpack(context, out, null);
+            throw new AssertionError("Truncated physical range must fail");
+        } catch (java.io.IOException expected) {
+            assertFalse(out.exists());
+        }
+    }
+
+    @Test
+    public void unpack_largePackedClassicPayloadDoesNotNeedAnInputArray() throws Exception {
+        org.junit.Assume.assumeTrue("Opt-in >2 GiB payload test (may use disk space)",
+                Boolean.getBoolean("readwide.largeArchiveTests"));
+        byte[] packed = syntheticPayload(block(new int[] {'A'}, "00"));
+        File archive = writeArchive("large-packed-classic.rar", packed);
+        long packedSize = (long) Integer.MAX_VALUE + 1;
+        try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(archive, "rw")) {
+            file.setLength(packedSize);
+        }
+        Rar3UnpackContext context = Rar3UnpackContext.forEntry(archive, 0, packedSize,
+                1, 0x33, false, false, false, false, crc("A"));
+        File out = tempFolder.newFile("large-packed-classic.out");
+        Rar3Unpacker.unpack(context, out, null);
+        assertArrayEquals(new byte[] {'A'}, Files.readAllBytes(out.toPath()));
+    }
+
+    @Test
+    public void unpack_tablelessHighBitLiteralsDoNotRouteToPpmd() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        unpackSolidDiscard("tables-first.rar", syntheticPayload(
+                block(new int[] {'A', 'B', 'C', 256}, "001100")), "A", state);
+        assertTrue(state.reuseClassicTables());
+        unpackSolidDiscard("tables-second.rar", rawBits("101100"), "C", state);
+        assertTrue(state.reuseClassicTables());
+        unpackSolidDiscard("tables-third.rar", rawBits("011101"), "B", state);
+        assertFalse(state.reuseClassicTables());
+        unpackSolidDiscard("tables-fresh.rar", syntheticPayload(
+                block(new int[] {'D', 256}, "000101")), "D", state);
+    }
+
+    @Test
+    public void unpack_tablelessRepeatKeepsMatchAndLowDistanceHistory() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        unpackSolidDiscard("reuse-match-first.rar", syntheticPayload(
+                block(new int[] {'A', 256, 258, 263}, "0011000100")), "AAA", state);
+        state.unpackState().rememberLowDistance(7);
+        state.unpackState().startLowDistanceRepeat(15);
+        unpackSolidDiscard("reuse-match-next.rar", rawBits("100100"), "AA", state);
+        assertEquals(1, state.unpackState().oldDistance(0));
+        assertEquals(2, state.unpackState().lastLength());
+        assertEquals(7, state.unpackState().previousLowDistance());
+        assertEquals(15, state.unpackState().lowDistanceRepeatCount());
+    }
+
+    @Test
+    public void unpack_tablelessEntryCanReloadTablesWithinFile() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        unpackSolidDiscard("transition-first.rar", syntheticPayload(
+                block(new int[] {'A', 'B', 'C', 256}, "001100")), "A", state);
+        BitWriter bits = new BitWriter();
+        bits.writeBitString("10111"); // C, end-block, new table in this file.
+        bits.alignToByte();
+        writeTable(bits, new int[] {'Z', 256}, new int[0]);
+        bits.writeBitString("000101"); // Z, EOF, fresh table for the next file.
+        unpackSolidDiscard("transition-next.rar", bits.toByteArray(), "CZ", state);
+        assertFalse(state.reuseClassicTables());
+    }
+
+    @Test
+    public void unpack_missingEndMarkerDoesNotEnableTableReuse() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        unpackSolidDiscard("no-marker.rar", syntheticPayload(
+                block(new int[] {'A'}, "00")), "A", state);
+        assertFalse(state.reuseClassicTables());
+    }
+
+    @Test
+    public void unpack_partialEndFlagDoesNotEnableTableReuse() throws Exception {
+        int[] tables = new int[Rar3HuffmanTables.TABLE_SIZE];
+        tables['A'] = 2;
+        tables[256] = 2;
+        RarBitInput input = new RarBitInput(new byte[] {2});
+        input.skipBits(3); // Remaining bits: A=00, EOF=01, first flag=0; second absent.
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeSolid(input,
+                new RarLzWindow(16, out), 1, tables,
+                new Rar3VmFilter.ProgramState(), new Rar3UnpackState(), true);
+        assertArrayEquals(new byte[] {'A'}, out.toByteArray());
+        assertFalse(engine.reuseTablesForNextEntry());
+    }
+
+    @Test
+    public void unpack_boundaryProbeHandlesUnequalAndMaximumCodeLengths() throws Exception {
+        for (int endLength : new int[] {2, 15}) {
+            int[] tables = new int[Rar3HuffmanTables.TABLE_SIZE];
+            tables['A'] = 1;
+            tables[256] = endLength;
+            BitWriter bits = new BitWriter();
+            bits.writeBits(0, 1); // A's one-bit code.
+            bits.writeBits(1 << (endLength - 1), endLength); // Canonical EOF after A.
+            bits.writeBits(0, 2);
+            RarBitInput input = new RarBitInput(bits.toByteArray());
+            Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeSolid(input,
+                    new RarLzWindow(16, new ByteArrayOutputStream()), 1, tables,
+                    new Rar3VmFilter.ProgramState(), new Rar3UnpackState(), true);
+            assertTrue(engine.reuseTablesForNextEntry());
+            assertEquals(0, engine.tableReads());
+            assertEquals(endLength + 3, input.bitsRead());
+        }
+    }
+
+    @Test
+    public void unpack_shortSolidOutputInvalidatesContinuation() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        byte[] packed = syntheticPayload(block(new int[] {'A', 256}, "0100"));
+        try {
+            unpackSolidDiscard("short-output.rar", packed, "AA", state);
+            throw new AssertionError("Early EOF must fail the declared size check");
+        } catch (java.io.IOException expected) {
+            assertTrue(expected.getMessage().contains("declared unpacked size"));
+        }
+        assertInvalidSolidState(state);
+    }
+
+    @Test
+    public void unpack_badSolidCrcRequiresExplicitResetBeforeFreshEntry() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        byte[] packed = syntheticPayload(block(new int[] {'A', 256}, "000100"));
+        try {
+            unpackSolidDiscard("crc-first.rar", packed, "B", state);
+            throw new AssertionError("CRC mismatch must fail");
+        } catch (java.io.IOException expected) {
+            assertTrue(expected.getMessage().contains("CRC"));
+        }
+        assertInvalidSolidState(state);
+        try {
+            unpackSolidDiscard("crc-next.rar", packed, "A", state);
+            throw new AssertionError("Failed history must not be reused");
+        } catch (java.io.IOException expected) {
+            assertTrue(expected.getMessage().contains("requires reset"));
+        }
+        state.reset();
+        assertFalse(state.reuseClassicTables());
+        unpackSolidDiscard("crc-reset.rar", packed, "A", state);
+    }
+
+    @Test
+    public void unpack_diagnosticCrcMismatchAlsoInvalidatesContinuation() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        byte[] packed = syntheticPayload(block(new int[] {'A', 256}, "000100"));
+        Rar3UnpackContext context = Rar3UnpackContext.forSolidEntry(
+                writeArchive("diagnostic-crc.rar", packed), 0, packed.length, 1,
+                0x33, false, false, false, crc("B"), state);
+        Rar3UnpackFileResult result = Rar3Unpacker.unpackForDiagnostics(
+                context, tempFolder.newFile("diagnostic-crc.out"), null);
+        assertFalse(result.crcMatches());
+        assertInvalidSolidState(state);
+    }
+
+    @Test
+    public void unpack_outputFailureInvalidatesSolidContinuation() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        byte[] packed = syntheticPayload(block(new int[] {'A', 256}, "000100"));
+        Rar3UnpackContext context = Rar3UnpackContext.forSolidEntry(
+                writeArchive("output-failure.rar", packed), 0, packed.length, 1,
+                0x33, false, false, false, crc("A"), state);
+        try {
+            Rar3Unpacker.unpackPayloadForTest(context, packed, new java.io.OutputStream() {
+                @Override public void write(int value) throws java.io.IOException {
+                    throw new java.io.IOException("simulated sink failure");
+                }
+            });
+            throw new AssertionError("Output failure must propagate");
+        } catch (java.io.IOException expected) {
+            assertTrue(expected.getMessage().contains("simulated sink failure"));
+        }
+        assertInvalidSolidState(state);
+    }
+
+    @Test
+    public void unpack_cancellationInvalidatesSolidContinuation() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        byte[] packed = syntheticPayload(block(new int[] {'A', 256}, "000100"));
+        Rar3UnpackContext context = Rar3UnpackContext.forSolidEntry(
+                writeArchive("cancel-solid.rar", packed), 0, packed.length, 1,
+                0x33, false, false, false, crc("A"), state);
+        Thread.currentThread().interrupt();
+        try {
+            Rar3Unpacker.unpackSolidPrimerToDiscard(context, null);
+            throw new AssertionError("Interruption must propagate");
+        } catch (java.io.IOException expected) {
+            assertTrue(expected.getMessage().contains("cancelled"));
+        } finally {
+            Thread.interrupted();
+        }
+        assertInvalidSolidState(state);
+    }
+
+    private static byte[] rawBits(String value) {
+        BitWriter bits = new BitWriter();
+        bits.writeBitString(value);
+        return bits.toByteArray();
+    }
+
+    private static void assertInvalidSolidState(Rar3SolidState state) throws Exception {
+        assertFalse(state.reuseClassicTables());
+        try {
+            state.ensureUsable();
+            throw new AssertionError("Failed solid state must reject reuse");
+        } catch (java.io.IOException expected) {
+            assertTrue(expected.getMessage().contains("requires reset"));
+        }
+    }
+
+    @Test
+    public void unpack_solidRepeatLastUsesDiscardedPrimersMatchHistory() throws Exception {
+        byte[] primer = syntheticPayload(blockWithDistance(new int[] {'A', 'B', 'C', 271},
+                new int[] {2}, "000110110")); // ABC, distance 3 / length 3 -> ABCABC.
+        Rar3SolidState state = new Rar3SolidState();
+        unpackSolidDiscard("match-primer.rar", primer, "ABCABC", state);
+        assertEquals(3, state.unpackState().oldDistance(0));
+        assertEquals(3, state.unpackState().lastLength());
+
+        state.unpackState().rememberLowDistance(7);
+        state.unpackState().startLowDistanceRepeat(15);
+        byte[] repeat = syntheticPayload(block(new int[] {258}, "00"));
+        unpackSolidDiscard("match-repeat.rar", repeat, "ABC", state);
+        assertEquals(3, state.unpackState().oldDistance(0));
+        assertEquals(0, state.unpackState().oldDistance(1));
+        assertEquals(0, state.unpackState().previousLowDistance());
+        assertEquals(0, state.unpackState().lowDistanceRepeatCount());
+    }
+
+    @Test
+    public void unpack_solidOldDistanceSlotsPromoteSharedHistory() throws Exception {
+        String[] expected = {"CA", "AB", "BC", "CC"};
+        for (int slot = 0; slot < 4; slot++) {
+            Rar3SolidState state = new Rar3SolidState();
+            byte[] primer = syntheticPayload(blockWithDistance(new int[] {'A', 'B', 'C', 271},
+                    new int[] {2}, "000110110"));
+            unpackSolidDiscard("slot-primer-" + slot + ".rar", primer, "ABCABC", state);
+            // Populate distinct offsets to exercise each selector and its move-to-front order.
+            state.unpackState().resetNonSolid();
+            for (int distance = 1; distance <= 4; distance++) {
+                state.unpackState().rememberNewDistanceMatch(distance, 3);
+            }
+            BitWriter bits = new BitWriter();
+            writeTable(bits, new int[] {259 + slot}, new int[0], new int[] {0});
+            bits.writeBitString("000"); // Main selector 00; repeat-length slot 0 -> length 2.
+            unpackSolidDiscard("slot-target-" + slot + ".rar", bits.toByteArray(), expected[slot], state);
+            assertEquals(4 - slot, state.unpackState().oldDistance(0));
+            assertEquals(2, state.unpackState().lastLength());
+            if (slot > 0) assertEquals(4, state.unpackState().oldDistance(1));
+        }
+    }
+
+    @Test
+    public void unpack_solidShortMatchCarriesLengthTwoToNextEntry() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        byte[] primer = syntheticPayload(block(new int[] {'A', 263}, "000100"));
+        unpackSolidDiscard("short-primer.rar", primer, "AAA", state);
+        unpackSolidDiscard("short-repeat.rar", syntheticPayload(block(new int[] {258}, "00")),
+                "AA", state);
+        assertEquals(1, state.unpackState().lastDistance());
+        assertEquals(2, state.unpackState().lastLength());
+    }
+
+    @Test
+    public void unpack_newTableWithinEntryKeepsRepeatLastHistory() throws Exception {
+        byte[] packed = syntheticPayload(
+                blockWithDistance(new int[] {'A', 256, 271}, new int[] {0}, "0010001"),
+                block(new int[] {258}, "00"));
+        unpackSolidDiscard("table-repeat.rar", packed, "AAAAAAA", new Rar3SolidState());
+    }
+
+    @Test
+    public void unpack_nonSolidContextClearsPreviouslySeededMatchHistory() throws Exception {
+        byte[] packed = syntheticPayload(block(new int[] {'A'}, "00"));
+        Rar3UnpackContext context = contextFor(writeArchive("reset-history.rar", packed), packed, 1, crc("A"));
+        context.state().rememberNewDistanceMatch(9, 12);
+        Rar3Unpacker.unpack(context, tempFolder.newFile("reset-history.out"), null);
+        assertEquals(0, context.state().lastLength());
+        assertEquals(0, context.state().oldDistance(0));
+    }
+
+    private void unpackSolidDiscard(String name, byte[] packed, String expected, Rar3SolidState state)
+            throws Exception {
+        Rar3UnpackFileResult result = Rar3Unpacker.unpackSolidPrimerToDiscard(
+                Rar3UnpackContext.forSolidEntry(writeArchive(name, packed), 0, packed.length,
+                        expected.length(), 0x33, false, false, false, crc(expected), state), null);
+        assertTrue(result.crcMatches());
+        assertEquals(expected.length(), result.written);
+    }
+
     @Test
     public void unpack_writesSyntheticLiteralPayloadAndValidatesCrc() throws Exception {
         byte[] packed = syntheticPayload(block(new int[] {'A', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001"));
@@ -117,7 +577,7 @@ public class Rar3UnpackerTest {
     @Test
     public void unpack_syntheticSolidEntryCopiesFromPreviousEntryWindow() throws Exception {
         byte[] firstPacked = syntheticPayload(
-                block(new int[] {'A', 'B', 'C', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "00011011"));
+                block(new int[] {'A', 'B', 'C', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001101101"));
         byte[] secondPacked = syntheticPayload(blockWithDistance(
                 new int[] {'X', Rar3SymbolDecoder.SYMBOL_LONG_MATCH_FIRST},
                 new int[] {2},
@@ -161,7 +621,7 @@ public class Rar3UnpackerTest {
     @Test
     public void unpack_syntheticSolidPrimerCanDiscardOutputAndPreserveDictionary() throws Exception {
         byte[] firstPacked = syntheticPayload(
-                block(new int[] {'A', 'B', 'C', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "00011011"));
+                block(new int[] {'A', 'B', 'C', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001101101"));
         byte[] secondPacked = syntheticPayload(blockWithDistance(
                 new int[] {'X', Rar3SymbolDecoder.SYMBOL_LONG_MATCH_FIRST},
                 new int[] {2},
@@ -233,7 +693,7 @@ public class Rar3UnpackerTest {
     @Test
     public void unpack_syntheticSolidStateResetDropsPreviousDictionary() throws Exception {
         byte[] firstPacked = syntheticPayload(
-                block(new int[] {'A', 'B', 'C', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "00011011"));
+                block(new int[] {'A', 'B', 'C', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001101101"));
         byte[] secondPacked = syntheticPayload(blockWithDistance(
                 new int[] {'X', Rar3SymbolDecoder.SYMBOL_LONG_MATCH_FIRST},
                 new int[] {2},
@@ -424,6 +884,11 @@ public class Rar3UnpackerTest {
     }
 
     private static void writeTable(BitWriter bits, int[] mainSymbols, int[] distanceSymbols) {
+        writeTable(bits, mainSymbols, distanceSymbols, new int[0]);
+    }
+
+    private static void writeTable(BitWriter bits, int[] mainSymbols, int[] distanceSymbols,
+                                   int[] repeatSymbols) {
         bits.writeBits(0, 2); // PPM=false, keep-old-table=false.
         for (int i = 0; i < Rar3HuffmanTables.BC; i++) {
             bits.writeBits(i == 0 || i == 1 || i == 2 || i == 18 ? 2 : 0, 4);
@@ -431,6 +896,9 @@ public class Rar3UnpackerTest {
         int[] lengths = new int[Rar3HuffmanTables.TABLE_SIZE];
         for (int symbol : mainSymbols) lengths[symbol] = 2;
         for (int symbol : distanceSymbols) lengths[Rar3HuffmanTables.NC + symbol] = 1;
+        for (int symbol : repeatSymbols) {
+            lengths[Rar3HuffmanTables.NC + Rar3HuffmanTables.DC + Rar3HuffmanTables.LDC + symbol] = 1;
+        }
         writeMainTableLengths(bits, lengths);
     }
 

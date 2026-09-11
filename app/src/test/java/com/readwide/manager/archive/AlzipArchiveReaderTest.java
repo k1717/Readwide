@@ -28,6 +28,165 @@ public class AlzipArchiveReaderTest {
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
     @Test
+    public void index_reusesMetadataAndReadsEntriesInReverseOrder() throws Exception {
+        AlzipArchiveReader.clearIndexes();
+        File first = buildAlzArchive("first.txt", "first".getBytes(StandardCharsets.UTF_8), 0, false, null);
+        File second = buildAlzArchive("second.txt", "second".getBytes(StandardCharsets.UTF_8), 2, false, null);
+        appendLocalEntries(first, second);
+        AlzipArchiveReader.Index index = AlzipArchiveReader.indexFor(first);
+        File out = tempFolder.newFile("indexed-reverse.txt");
+        assertTrue(AlzipArchiveReader.extractSingleEntry(first, "second.txt", out, null));
+        assertEquals("second", new String(Files.readAllBytes(out.toPath()), StandardCharsets.UTF_8));
+        assertTrue(AlzipArchiveReader.extractSingleEntry(first, "first.txt", out, null));
+        assertEquals("first", new String(Files.readAllBytes(out.toPath()), StandardCharsets.UTF_8));
+        org.junit.Assert.assertSame(index, AlzipArchiveReader.indexFor(first));
+    }
+
+    @Test
+    public void index_duplicateNameStillUsesFirstFile() throws Exception {
+        File first = buildAlzArchive("same.txt", new byte[] {1}, 0, false, null);
+        File second = buildAlzArchive("same.txt", new byte[] {2}, 0, false, null);
+        appendLocalEntries(first, second);
+        File out = tempFolder.newFile("duplicate-index.txt");
+        assertTrue(AlzipArchiveReader.extractSingleEntry(first, "same.txt", out, null));
+        org.junit.Assert.assertArrayEquals(new byte[] {1}, Files.readAllBytes(out.toPath()));
+    }
+
+    @Test
+    public void index_rebuildsAfterFirstVolumeSizeChanges() throws Exception {
+        File first = buildAlzArchive("first.txt", new byte[] {1}, 0, false, null);
+        AlzipArchiveReader.Index old = AlzipArchiveReader.indexFor(first);
+        appendLocalEntries(first, buildAlzArchive("second.txt", new byte[] {2}, 0, false, null));
+        org.junit.Assert.assertNotSame(old, AlzipArchiveReader.indexFor(first));
+        assertEquals(2, AlzipArchiveReader.listEntries(first, null).size());
+    }
+
+    @Test
+    public void index_checksLaterVolumeTimestampAndReleasesThroughContinuation() throws Exception {
+        writeSplitAlzFixture("index-split", "data.txt", "split data repeated split data".getBytes(StandardCharsets.UTF_8));
+        File first = new File(tempFolder.getRoot(), "index-split.alz");
+        File part = new File(tempFolder.getRoot(), "index-split.a00");
+        AlzipArchiveReader.Index old = AlzipArchiveReader.indexFor(first);
+        assertTrue(part.setLastModified(part.lastModified() + 10000));
+        AlzipArchiveReader.Index changed = AlzipArchiveReader.indexFor(first);
+        org.junit.Assert.assertNotSame(old, changed);
+        AlzipArchiveReader.releaseArchiveIndex(part);
+        org.junit.Assert.assertNotSame(changed, AlzipArchiveReader.indexFor(first));
+    }
+
+    @Test
+    public void index_missingContinuationCannotReuseWarmMetadata() throws Exception {
+        writeSplitAlzFixture("index-missing", "data.txt", "split data repeated split data".getBytes(StandardCharsets.UTF_8));
+        File first = new File(tempFolder.getRoot(), "index-missing.alz");
+        AlzipArchiveReader.indexFor(first);
+        assertTrue(new File(tempFolder.getRoot(), "index-missing.a00").delete());
+        File out = new File(tempFolder.getRoot(), "missing-index.txt");
+        try {
+            AlzipArchiveReader.extractSingleEntry(first, "data.txt", out, null);
+            fail("Missing volume must not succeed through a cached offset");
+        } catch (IOException expected) { assertFalse(out.exists()); }
+    }
+
+    @Test
+    public void index_passwordSuccessDoesNotAuthorizeLaterExtraction() throws Exception {
+        File archive = buildAlzArchive("secret.txt", "secret".getBytes(StandardCharsets.UTF_8), 2, true, "pw".toCharArray());
+        File out = tempFolder.newFile("password-index.txt");
+        assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "secret.txt", out, "pw".toCharArray()));
+        AlzipArchiveReader.Index index = AlzipArchiveReader.indexFor(archive);
+        for (char[] password : new char[][] {null, "wrong".toCharArray()}) {
+            try {
+                AlzipArchiveReader.extractSingleEntry(archive, "secret.txt", out, password);
+                fail("Metadata reuse must not cache password authorization");
+            } catch (IOException expected) {
+                assertEquals("secret", new String(Files.readAllBytes(out.toPath()), StandardCharsets.UTF_8));
+            }
+        }
+        org.junit.Assert.assertSame(index, AlzipArchiveReader.indexFor(archive));
+    }
+
+    @Test
+    public void index_stillChecksPayloadCrcOnWarmHitAndPreservesExistingTarget() throws Exception {
+        File archive = buildAlzArchive("data.txt", new byte[] {1, 2, 3}, 0, false, null);
+        AlzipArchiveReader.Index index = AlzipArchiveReader.indexFor(archive);
+        long modified = archive.lastModified();
+        byte[] corrupt = Files.readAllBytes(archive.toPath());
+        corrupt[corrupt.length - 5] ^= 1; // Last payload byte, before the four-byte end marker.
+        Files.write(archive.toPath(), corrupt);
+        assertTrue(archive.setLastModified(modified));
+        org.junit.Assert.assertSame(index, AlzipArchiveReader.indexFor(archive));
+        File out = tempFolder.newFile("crc-index.txt");
+        Files.write(out.toPath(), new byte[] {9});
+        try {
+            AlzipArchiveReader.extractSingleEntry(archive, "data.txt", out, null);
+            fail("Cached metadata must not bypass payload CRC");
+        } catch (IOException expected) {
+            org.junit.Assert.assertArrayEquals(new byte[] {9}, Files.readAllBytes(out.toPath()));
+        }
+    }
+
+    @Test
+    public void index_lruRetainsRecentlyUsedArchiveAndEvictsOldest() throws Exception {
+        AlzipArchiveReader.clearIndexes();
+        File[] archives = new File[4];
+        AlzipArchiveReader.Index[] indexes = new AlzipArchiveReader.Index[3];
+        for (int i = 0; i < 4; i++) {
+            archives[i] = buildAlzArchive("page.txt", new byte[] {(byte) i}, 0, false, null);
+            if (i < 3) indexes[i] = AlzipArchiveReader.indexFor(archives[i]);
+        }
+        org.junit.Assert.assertSame(indexes[0], AlzipArchiveReader.indexFor(archives[0]));
+        AlzipArchiveReader.indexFor(archives[3]);
+        org.junit.Assert.assertSame(indexes[0], AlzipArchiveReader.indexFor(archives[0]));
+        org.junit.Assert.assertNotSame(indexes[1], AlzipArchiveReader.indexFor(archives[1]));
+    }
+
+    @Test
+    public void index_interruptionRejectsEvenWarmCacheWithoutClearingInterrupt() throws Exception {
+        File archive = buildAlzArchive("page.txt", new byte[] {1}, 0, false, null);
+        AlzipArchiveReader.indexFor(archive);
+        Thread.currentThread().interrupt();
+        try {
+            AlzipArchiveReader.indexFor(archive);
+            fail("Cancelled indexed operation must fail");
+        } catch (IOException expected) { assertTrue(Thread.currentThread().isInterrupted()); }
+        finally { Thread.interrupted(); }
+    }
+
+    @Test
+    public void index_largeMetadataRemainsUsableWithoutCacheAdmission() throws Exception {
+        File archive = buildAlzArchive("page.txt", new byte[] {1}, 0, false, null);
+        byte[] template = Files.readAllBytes(archive.toPath());
+        ByteArrayOutputStream repeated = new ByteArrayOutputStream();
+        repeated.write(template, 0, 8);
+        for (int i = 0; i < 20001; i++) repeated.write(template, 8, template.length - 12);
+        repeated.write(template, template.length - 4, 4);
+        Files.write(archive.toPath(), repeated.toByteArray());
+        AlzipArchiveReader.Index first = AlzipArchiveReader.indexFor(archive);
+        org.junit.Assert.assertNotSame(first, AlzipArchiveReader.indexFor(archive));
+        File out = tempFolder.newFile("uncached-large-index.txt");
+        assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "page.txt", out, null));
+        org.junit.Assert.assertArrayEquals(new byte[] {1}, Files.readAllBytes(out.toPath()));
+    }
+
+    @Test
+    public void index_doesNotKeepArchiveFileOpen() throws Exception {
+        File archive = buildAlzArchive("page.txt", new byte[] {1}, 0, false, null);
+        AlzipArchiveReader.indexFor(archive);
+        AlzipArchiveReader.releaseArchiveIndex(archive);
+        File renamed = new File(tempFolder.getRoot(), "renamed-index.alz");
+        assertTrue(archive.renameTo(renamed));
+        assertEquals(1, AlzipArchiveReader.listEntries(renamed, null).size());
+    }
+
+    private static void appendLocalEntries(File first, File second) throws IOException {
+        byte[] a = Files.readAllBytes(first.toPath());
+        byte[] b = Files.readAllBytes(second.toPath());
+        ByteArrayOutputStream merged = new ByteArrayOutputStream();
+        merged.write(a, 0, a.length - 4); // Drop first archive's end marker.
+        merged.write(b, 8, b.length - 8); // Omit second archive's container header.
+        Files.write(first.toPath(), merged.toByteArray());
+    }
+
+    @Test
     public void archiveSupport_detectsAlzAndEggNames() {
         assertEquals(ArchiveSupport.Type.ALZ, ArchiveSupport.getSupportedArchiveType("sample.alz"));
         assertEquals(ArchiveSupport.Type.EGG, ArchiveSupport.getSupportedArchiveType("sample.egg"));

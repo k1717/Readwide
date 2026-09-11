@@ -468,6 +468,85 @@ public class RarArchiveReaderTest {
         return out;
     }
 
+    @Test
+    public void rar5UnixNanosecondsFollowAllWholeSecondTimes() throws Exception {
+        byte[] record = bytes(vint(3), vint(0x1f),
+                uint32(1_700_000_000L), uint32(1_600_000_000L), uint32(1_500_000_000L),
+                uint32(123_456_789L), uint32(234_567_890L), uint32(345_678_901L));
+        File archive = buildRar5ArchiveWithExtra(bytes(vint(record.length), record));
+        List<RarArchiveReader.RarEntry> entries =
+                RarArchiveReader.readEntriesForSplitStoredDiagnostics(archive, null);
+        assertEquals(1_700_000_000_123L, entries.get(0).timeMillis);
+    }
+
+    @Test
+    public void rar5ModificationOnlyNanosecondsKeepSecondsAndFractionSeparate() throws Exception {
+        byte[] record = bytes(vint(3), vint(0x13),
+                uint32(1_700_000_000L), uint32(999_999_999L));
+        File archive = buildRar5ArchiveWithExtra(bytes(vint(record.length), record));
+        assertEquals(1_700_000_000_999L,
+                RarArchiveReader.readEntriesForSplitStoredDiagnostics(archive, null).get(0).timeMillis);
+    }
+
+    @Test(expected = java.io.IOException.class)
+    public void truncatedTimeRecordCannotBorrowBytesFromNextRecord() throws Exception {
+        byte[] shortTime = bytes(vint(3), vint(3)); // mtime required but missing
+        byte[] nextRecord = bytes(vint(99), new byte[16]);
+        File archive = buildRar5ArchiveWithExtra(bytes(
+                vint(shortTime.length), shortTime, vint(nextRecord.length), nextRecord));
+        RarArchiveReader.readEntriesForSplitStoredDiagnostics(archive, null);
+    }
+
+    @Test(expected = java.io.IOException.class)
+    public void requiredPasswordCheckCannotBeSilentlyDropped() throws Exception {
+        byte[] record = bytes(vint(1), vint(0), vint(1), new byte[] {8},
+                new byte[16], new byte[16]); // flag 1 requires twelve more bytes
+        File archive = buildRar5ArchiveWithExtra(bytes(vint(record.length), record));
+        RarArchiveReader.readEntriesForSplitStoredDiagnostics(archive, null);
+    }
+
+    @Test(expected = java.io.IOException.class)
+    public void rar5InvalidNanosecondFractionIsRejected() throws Exception {
+        byte[] record = bytes(vint(3), vint(0x13), uint32(1_700_000_000L), uint32(1_000_000_000L));
+        File archive = buildRar5ArchiveWithExtra(bytes(vint(record.length), record));
+        RarArchiveReader.readEntriesForSplitStoredDiagnostics(archive, null);
+    }
+
+    @Test public void rar5BlakeExtraIsRetained() throws Exception {
+        byte[] hash = RarBlake2spTest.sequence(32);
+        byte[] record = bytes(vint(2),vint(0),hash);
+        File archive = buildRar5ArchiveWithExtra(bytes(vint(record.length),record));
+        assertArrayEquals(hash,RarArchiveReader.readEntries(archive,null).get(0).blake2sp);
+    }
+
+    @Test(expected = java.io.IOException.class)
+    public void truncatedBlakeCannotBorrowFromFollowingRecord() throws Exception {
+        byte[] hash = bytes(vint(2),vint(0),new byte[31]);
+        byte[] next = bytes(vint(99),new byte[32]);
+        File archive = buildRar5ArchiveWithExtra(bytes(vint(hash.length),hash,vint(next.length),next));
+        RarArchiveReader.readEntries(archive,null);
+    }
+
+    @Test(expected = java.io.IOException.class)
+    public void duplicateBlakeRecordIsRejected() throws Exception {
+        byte[] hash = bytes(vint(2),vint(0),new byte[32]);
+        File archive = buildRar5ArchiveWithExtra(bytes(vint(hash.length),hash,vint(hash.length),hash));
+        RarArchiveReader.readEntries(archive,null);
+    }
+
+    private File buildRar5ArchiveWithExtra(byte[] extra) throws Exception {
+        File archive = tempFolder.newFile("metadata.rar");
+        byte[] name = "data.txt".getBytes(StandardCharsets.UTF_8);
+        try (FileOutputStream out = new FileOutputStream(archive)) {
+            out.write(new byte[] {0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00});
+            out.write(header(bytes(vint(1), vint(0), vint(0))));
+            out.write(header(bytes(vint(2), vint(3), vint(extra.length), vint(0),
+                    vint(0), vint(0), vint(0), vint(0), vint(1), vint(name.length), name, extra)));
+            out.write(header(bytes(vint(5), vint(0), vint(0))));
+        }
+        return archive;
+    }
+
     private File buildRar5Archive(String entryName, byte[] payload, int method) throws Exception {
         return buildRar5Archive(entryName, payload, method, false);
     }

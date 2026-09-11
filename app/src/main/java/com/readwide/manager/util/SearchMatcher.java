@@ -54,7 +54,7 @@ public final class SearchMatcher {
         if (query == null || query.isEmpty()) return null;
         SearchOptions opt = options != null ? options : SearchOptions.literal();
         if (opt.regex) {
-            int flags = Pattern.UNICODE_CASE;
+            int flags = Pattern.UNICODE_CASE | Pattern.MULTILINE;
             if (!opt.caseSensitive) flags |= Pattern.CASE_INSENSITIVE;
             if (opt.normalizeUnicode) flags |= Pattern.CANON_EQ;
             try {
@@ -112,7 +112,7 @@ public final class SearchMatcher {
         int count = 0;
         Object ctx = prepare(text);
         Match m = firstPrepared(ctx, text, 0);
-        while (m != null) {
+        while (m != null && !Thread.currentThread().isInterrupted()) {
             count++;
             m = firstPrepared(ctx, text, nextStart(m));
         }
@@ -165,7 +165,7 @@ public final class SearchMatcher {
         if (text == null || text.isEmpty() || consumer == null) return;
         Object ctx = prepare(text);
         Match m = firstPrepared(ctx, text, 0);
-        while (m != null) {
+        while (m != null && !Thread.currentThread().isInterrupted()) {
             if (!consumer.accept(m.start, m.end)) return;
             m = firstPrepared(ctx, text, nextStart(m));
         }
@@ -179,12 +179,41 @@ public final class SearchMatcher {
      * buffer on every frame.
      */
     public void forEachMatchInRange(String text, int from, int toExclusive, MatchConsumer consumer) {
-        if (text == null || text.isEmpty() || consumer == null) return;
-        Object ctx = prepare(text);
-        Match m = firstPrepared(ctx, text, Math.max(0, from));
-        while (m != null && m.start < toExclusive) {
-            if (!consumer.accept(m.start, m.end)) return;
-            m = firstPrepared(ctx, text, nextStart(m));
+        prepareText(text).forEachInRange(from, toExclusive, consumer);
+    }
+
+    /** Reusable comparison snapshot. Confine each instance to one worker thread. */
+    public PreparedText prepareText(String text) { return new PreparedText(text == null ? "" : text); }
+
+    public final class PreparedText {
+        private final String text;
+        private final Object context;
+        private PreparedText(String text) { this.text = text; context = prepare(text); }
+
+        public void forEachInRange(int from, int toExclusive, MatchConsumer consumer) {
+            int start = Math.max(0, from), end = Math.min(text.length(), toExclusive);
+            if (consumer == null || start >= end) return;
+            if (regexPattern == null) {
+                // Include the query tail so matches crossing the visible band's
+                // end retain their full length. Word boundaries use original text.
+                String band = ((String) context).substring(start,
+                        (int) Math.min(text.length(), (long) end + comparableQuery.length() - 1L));
+                int at = band.indexOf(comparableQuery);
+                while (at >= 0 && start + at < end && !Thread.currentThread().isInterrupted()) {
+                    int hit = start + at, hitEnd = hit + comparableQuery.length();
+                    if (passesWholeWord(text, hit, hitEnd) && !consumer.accept(hit, hitEnd)) return;
+                    at = band.indexOf(comparableQuery, at + 1);
+                }
+                return;
+            }
+            // Keep whole-input regex context (lookbehind/lookahead/anchors).
+            // Iterating from an arbitrary band start can manufacture a suffix
+            // match inside an earlier regex hit. Preserve whole-input ordinals.
+            Match match = firstPrepared(context, text, 0);
+            while (match != null && match.start < end && !Thread.currentThread().isInterrupted()) {
+                if (match.start >= start && !consumer.accept(match.start, match.end)) return;
+                match = firstPrepared(context, text, nextStart(match));
+            }
         }
     }
 

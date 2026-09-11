@@ -4,7 +4,6 @@ import androidx.annotation.NonNull;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 
 /**
  * Mutable state holder for the first-party RAR3/RAR4 compressed unpacker.
@@ -31,8 +30,17 @@ final class Rar3UnpackContext {
     private final int[] oldTableLengths = new int[Rar3HuffmanTables.TABLE_SIZE];
     private final Rar3UnpackState state = new Rar3UnpackState();
     private final Rar3PpmdState ppmdState = new Rar3PpmdState();
+    private final Rar3VmFilter.ProgramState vmFilterState =
+            new Rar3VmFilter.ProgramState();
     private byte[] window;
     private int writePosition;
+    private int retained;
+    private final Rar3MixedPpmdState mixedPpmd = new Rar3MixedPpmdState();
+    private boolean requireFileBoundary;
+
+    void requireFileBoundary() { requireFileBoundary = true; }
+    boolean requiresFileBoundary() { return requireFileBoundary; }
+    Rar3MixedPpmdState mixedPpmd() { return solidState != null ? solidState.mixedPpmd() : mixedPpmd; }
 
     private Rar3UnpackContext(@NonNull File archive,
                               long dataOffset,
@@ -204,6 +212,26 @@ final class Rar3UnpackContext {
         writePosition = 0;
         state.resetNonSolid();
         ppmdState.resetNonSolid();
+        vmFilterState.reset();
+        mixedPpmd.reset();
+        retained = 0;
+    }
+
+    void ensureUsable() throws IOException {
+        if (solidState != null) solidState.ensureUsable();
+    }
+
+    boolean reuseClassicTables() {
+        return solidState != null && solidState.reuseClassicTables();
+    }
+
+    void setReuseClassicTables(boolean reuse) {
+        if (solidState != null) solidState.setReuseClassicTables(reuse);
+    }
+
+    void invalidateSolidState() {
+        mixedPpmd.reset();
+        if (solidState != null) solidState.invalidate();
     }
 
     @NonNull
@@ -214,16 +242,18 @@ final class Rar3UnpackContext {
     @NonNull
     RarLzWindow openWindow(@NonNull RarDecodedOutput out) {
         if (solidState != null) {
-            return new RarLzWindow(solidState.window(), solidState.writePosition(), out);
+            return new RarLzWindow(solidState.window(), solidState.writePosition(), solidState.retained(), out);
         }
         if (window == null) window = new byte[DEFAULT_WINDOW_SIZE];
-        return new RarLzWindow(window, writePosition, out);
+        return new RarLzWindow(window, writePosition, retained, out);
     }
 
     void saveWindow(@NonNull RarLzWindow lzWindow) {
         if (solidState != null) {
-            solidState.updateWritePosition(lzWindow.position());
+            solidState.saveWindow(lzWindow);
         } else {
+            window = lzWindow.bytes();
+            retained = lzWindow.retained();
             writePosition = lzWindow.position();
         }
     }
@@ -246,14 +276,39 @@ final class Rar3UnpackContext {
 
     @NonNull
     byte[] readPackedPayload() throws IOException {
+        try (java.io.InputStream input = openPackedPayload(null)) {
+            return readPackedPayload(input);
+        }
+    }
+
+    /** Bounded plain payload; the segment type also serves unencrypted RAR readers. */
+    @NonNull
+    java.io.BufferedInputStream openPackedPayload(
+            com.readwide.manager.util.FileOperationProgress progress) throws IOException {
+        ensureUsable();
+        return new java.io.BufferedInputStream(new RarPackedInputStream(
+                java.util.Collections.singletonList(new RarCryptoStreams.EncryptedSegment(
+                        archive, dataOffset, packedSize)), progress), 64 * 1024);
+    }
+
+    /** Legacy PPMd diagnostic array path only; classic-LZ uses the bounded stream. */
+    @NonNull
+    byte[] readPackedPayload(java.io.InputStream input) throws IOException {
         if (packedSize > Integer.MAX_VALUE) {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
                     "RAR3/RAR4 first-party compressed payload is too large for the current in-memory decoder scaffold");
         }
         byte[] packed = new byte[(int) packedSize];
-        try (RandomAccessFile raf = new RandomAccessFile(archive, "r")) {
-            raf.seek(dataOffset);
-            raf.readFully(packed);
+        int offset = 0;
+        while (offset < packed.length) {
+            if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+            int count = input.read(packed, offset, packed.length - offset);
+            if (count < 0) throw new java.io.EOFException("Truncated RAR3/RAR4 packed payload");
+            if (count == 0) {
+                int value = input.read();
+                if (value < 0) throw new java.io.EOFException("Truncated RAR3/RAR4 packed payload");
+                packed[offset++] = (byte) value;
+            } else offset += count;
         }
         return packed;
     }
@@ -271,5 +326,10 @@ final class Rar3UnpackContext {
     @NonNull
     Rar3PpmdState ppmdState() {
         return solidState != null ? solidState.ppmdState() : ppmdState;
+    }
+
+    @NonNull
+    Rar3VmFilter.ProgramState vmFilterState() {
+        return solidState != null ? solidState.vmFilterState() : vmFilterState;
     }
 }

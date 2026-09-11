@@ -39,23 +39,24 @@ public class ExternalArchiveFixtureSmokeTest {
     }
 
     @Test
-    public void passwordZipxFixture_listsAndReportsUnsupportedExtraction() throws Exception {
+    public void passwordZipxFixture_matchesDeclaredMethodBoundary() throws Exception {
         File root = fixtureRoot();
         File archive = new File(root, "zipx_sample_password.zipx");
+        if (ZipxAesArchiveReader.canExtractArchive(archive)) {
+            assertPasswordArchiveWorks(archive);
+            return;
+        }
         assumeTrue("Missing fixture: " + archive.getAbsolutePath(), archive.isFile());
-        assertTrue("Not supported: " + archive.getName(), ArchiveSupport.isSupportedArchive(archive));
-        assertTrue("Password was not detected for " + archive.getName(),
-                ArchiveSupport.requiresPasswordForExtraction(archive));
-
+        if (!ZipxAesArchiveReader.hasUnsupportedAesMethod(archive)) {
+            // Store/Deflate WinZip AES remains on the normal Zip4j path.
+            assertPasswordArchiveWorks(archive);
+            return;
+        }
         List<ArchiveSupport.EntryInfo> entries = ArchiveSupport.listEntries(archive, PASSWORD);
         ArchiveSupport.EntryInfo entry = firstFileEntry(entries);
         File out = tempFolder.newFile("zipx-entry.out");
         ArchiveSupport.ExtractionResult result = ArchiveSupport.extractSingleEntryDetailed(
-                archive,
-                entry.path,
-                out,
-                PASSWORD);
-
+                archive, entry.path, out, PASSWORD);
         assertFalse(result.success);
         assertEquals(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, result.failure);
         assertFalse(out.exists());

@@ -476,7 +476,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                     seg.startChar,
                     host.ttsDisplayedCurrentPageNumber(),
                     continuous,
-                    host.ttsHostPrefs().getTtsSleepTimerMinutes());
+                    host.ttsHostPrefs().getTtsSleepTimerMinutes(), host.ttsTextFormatVersion());
         }
         updatePlaybackNotification(false);
     }
@@ -978,7 +978,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
                         segment.startChar,
                         host.ttsDisplayedCurrentPageNumber(),
                         continuous,
-                        host.ttsHostPrefs().getTtsSleepTimerMinutes());
+                        host.ttsHostPrefs().getTtsSleepTimerMinutes(), host.ttsTextFormatVersion());
             }
             updatePlaybackNotification(true);
         });

@@ -3,10 +3,21 @@
 Reference notes for `AlzipArchiveReader`. Verified empirically against real
 ALZip-created archives (store, deflate, bzip2, ZipCrypto-encrypted, CP949
 file names, and a two-segment split set). All multi-byte integers are little
-endian. Provenance: the reader is first-party Java; no third-party extractor
-code or fixtures are in this repository.
+endian. Provenance: the container parser is first-party Java. Its trimmed-BZip2
+decoder is a modified Apache Commons Compress source file, with attribution
+retained in `AlzBzip2InputStream.java`; no unalz extractor code is included.
+Synthetic and embedded codec fixtures are present in the test sources. See
+`../THIRD_PARTY_NOTICES.md` for the decoder provenance.
 
 ## Layout
+
+In 1.0.18, listing and single-entry extraction reuse an
+immutable local-header index (including archive-wide name decoding). All ordered
+volume paths/sizes/timestamps participate in invalidation; payload password/CRC
+checks still run independently. Retention is bounded, larger indexes work
+uncached, and no file handles or decrypted data are cached. This changes lookup,
+not container/codec support. Source regressions are unexecuted; see
+`ARCHIVE_VIEWER_PERFORMANCE_1_0_18.md` for limits and pending validation.
 
 ```
 "ALZ\x01" (0x015a4c41)  version u16  segment-id u16
@@ -82,6 +93,13 @@ data; compression is applied before encryption.
 
 ## Split archives
 
+Current shared-stream safeguards (source-only batch fifteen): `SplitVolumeInput`
+validates physical segments and logical payload windows, retires handles after
+cancellation/physical I/O failure, and gives bounded views independent cursors
+and close state. Raw positional skipping does not verify skipped data; ALZ's
+decoded-length/CRC checks remain separate. Binary-search volume lookup and
+reusable one-byte storage are unbenchmarked, with no codec or size-policy change.
+
 `name.alz` is the first segment; continuations are `name.a00`, `name.a01`,
 ... in order. The logical archive is a byte-level cut with per-segment
 framing:
@@ -93,8 +111,9 @@ framing:
   segment header (`sig u32 + version u16 + segment-id u16`) before its
   payload bytes; a continuation without the signature is used as-is.
 
-Reassembly = first segment minus its trailer, then each continuation minus
-its header and trailer, concatenated. `SplitVolumeInput` presents this as one
+The current parser removes the first part's trailer when continuations exist;
+it removes header/trailer framing from ALZ-signature continuations and leaves
+unframed continuations unchanged. `SplitVolumeInput` presents the result as one
 seekable stream, so entry data straddling a boundary decodes normally. The
 continuation set must be contiguous from `.a00`; a gap fails cleanly with no
 partial output. Verified (CRC) against a real 76 KB two-segment set.

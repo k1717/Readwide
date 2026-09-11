@@ -84,5 +84,29 @@ public final class PdfSpreadHighlightMath {
                     (y + bottom * height) / bitmapHeight
             };
         }
+
+        /** Source page and normalized point nearest a composite point, including gaps/margins. */
+        public float[] unmapPoint(float xRatio, float yRatio) {
+            if (Float.isNaN(xRatio) || Float.isInfinite(xRatio)
+                    || Float.isNaN(yRatio) || Float.isInfinite(yRatio)
+                    || map(leftPageIndex, 0, 0, 1, 1) == null
+                    || map(rightPageIndex, 0, 0, 1, 1) == null) return null;
+            double px = Math.max(0f, Math.min(1f, xRatio)) * (double) bitmapWidth;
+            double py = Math.max(0f, Math.min(1f, yRatio)) * (double) bitmapHeight;
+            double leftDistance = distanceSquared(px, py, leftX, leftY, leftWidth, leftHeight);
+            double rightDistance = distanceSquared(px, py, rightX, rightY, rightWidth, rightHeight);
+            boolean right = rightDistance < leftDistance; // deterministic left-page tie in the gap
+            int x = right ? rightX : leftX, y = right ? rightY : leftY;
+            int width = right ? rightWidth : leftWidth, height = right ? rightHeight : leftHeight;
+            return new float[] {right ? rightPageIndex : leftPageIndex,
+                    (float) Math.max(0d, Math.min(1d, (px - x) / width)),
+                    (float) Math.max(0d, Math.min(1d, (py - y) / height))};
+        }
+
+        private static double distanceSquared(double px, double py, int x, int y, int w, int h) {
+            double dx = Math.max(x - px, Math.max(0d, px - ((double) x + w)));
+            double dy = Math.max(y - py, Math.max(0d, py - ((double) y + h)));
+            return dx * dx + dy * dy;
+        }
     }
 }

@@ -1,137 +1,98 @@
-# GitHub upload notes for Readwide 1.0.16
+# GitHub upload notes — Readwide 1.0.18
 
-Use this checklist before publishing the public GitHub source and release assets.
+This checklist is for the maintainer's manual upload. It does not authorize or
+record a commit, tag, release, F-Droid submission or device installation.
+The maintainer reported a successful 1.0.18 build before the latest timeout-field
+and translation changes. That UI/resource follow-up has not been rebuilt;
+remaining validation is tracked in the release handoff below.
 
-## Identity
+## Source identity and handoff
 
-- App name: Readwide
-- Android `applicationId`: `com.readwide.manager`
-- `versionName`: `1.0.16`
-- `versionCode`: `10016`
-- First-party license: Apache-2.0
-- Repository: `https://github.com/k1717/Readwide`
+- Repository: [k1717/Readwide](https://github.com/k1717/Readwide).
+- Application ID: `com.readwide.manager`.
+- Version name/code: `1.0.18` / `10018`.
+- First-party license: Apache-2.0; dependencies keep their own notices and licenses.
+- Release text: [1.0.18 release notes](docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_18.md).
+- Remaining validation and exclusions: [release handoff](docs/RELEASE_READINESS_1_0_18.md).
 
-The `applicationId` has been `com.readwide.manager` since 1.0.4. 1.0.16 keeps the `readwide` release signing key introduced in 1.0.6, so it installs in place over 1.0.15, 1.0.14, 1.0.13, 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.16, and transferring data with the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Older `com.textview.reader` builds also install as a separate app and migrate the same way.
+The full-source ZIP contains the **repository-root contents**, not an outer
+`source/` directory and not only changed files. After unpacking, `settings.gradle`,
+`gradlew`, `app/` and `third_party/` belong at the repository root. Review the
+diff before committing; do not accidentally retain obsolete files from an older
+checkout. Do not nest this project inside another `source/` or `app/` directory.
 
-## Files expected in the source release
+## Keep in the source commit
 
-Keep these files in the public source package:
+Keep the Gradle wrapper, app/native source, scripts, tests, fastlane metadata and
+these documents:
 
-- `LICENSE`
-- `NOTICE`
-- `README.md`
-- `CHANGELOG.md`
-- `PRIVACY.md`
-- `THIRD_PARTY_NOTICES.md`
-- `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt`
-- `RELEASE_BUILD.md`
-- `CONTRIBUTING.md`
-- `docs/FOSS_STATUS.md`
-- `docs/FDROID_SUBMISSION.md`
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_16.md` (and the retained per-version notes back through 1.0.2)
-- `docs/LICENSE_REPORT_READWIDE_1_0_16.md`
-- `docs/SBOM_READWIDE_1_0_16.spdx.json`
-- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
-- `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
-- `docs/TXT_SEARCH_USAGE.md`
-- `fdroid/metadata/com.readwide.manager.yml`
-- `fastlane/metadata/android/en-US/*`
-- `fastlane/metadata/android/ko-KR/*`
+- `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `PRIVACY.md`.
+- `README.md`, `CHANGELOG.md`, `PATCHNOTES.md`, `RELEASE_BUILD.md`.
+- Current release notes, code map, source status and format-specific scope notes.
+- Vendored component licenses, `UPSTREAM.md` files and corresponding native source,
+  including libarchive's checked-in `build/cmake/` modules.
+- Packaged open-source notices under `app/src/main/assets/open_source_licenses/`.
+- The 1.0.18 license report/SBOM with current app identity and source-declared
+  dependencies. Keep older versioned reports as historical records.
+- Historical release notes and the explicitly labeled historical F-Droid mirror.
 
-## Do not upload
+Do not include keystores, signing passwords, local properties, personal documents/
+backups, private logs, IDE/cache folders or generated build trees. Intentional
+release APKs are assets, not source files. The public developer contact address
+and licensed test fixtures are intentional, not private signing material.
 
-Do not commit or attach private release materials:
+## Re-create a source ZIP only when needed
 
-- release keystores, `.jks`, `.keystore`, `.p12`
-- signing passwords or `secrets.properties`
-- local `local.properties`
-- private sample documents or personal test fixtures
-- build outputs unless they are intentional release APK/AAB assets
-- IDE/user folders such as `.idea/`, `.gradle/`, `captures/`, logs, hprof files
+The supplied ZIP is already packaged. If source changes afterward, create a
+**new** ZIP outside the repository root; never overwrite an older package.
+Both scripts exclude generated material, preserve the vendored CMake source and
+store portable `/` paths with executable modes for `gradlew` and shell scripts.
 
-## Pre-upload checks
+From the project root in PowerShell:
 
-The source ZIP must use `/` entry separators and preserve POSIX file modes. In particular, `gradlew` and shell scripts should be stored as executable (`0755`); source and documentation files should be regular non-executable files (`0644`). Do not create the public source ZIP with a Windows-only path format.
+```powershell
+$sourceZip = Join-Path (Split-Path -Parent (Get-Location).Path) ("Readwide-1.0.18-github-source-full-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".zip")
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\create_source_zip.ps1 -Output $sourceZip
+Get-FileHash -LiteralPath $sourceZip -Algorithm SHA256
+```
+
+Linux/macOS with Python:
 
 ```bash
-./gradlew clean testDebugUnitTest assembleDebug lintDebug
-./gradlew clean assembleRelease
+python3 scripts/create_source_zip.py "../Readwide-1.0.18-github-source-full-$(date +%Y%m%d-%H%M%S).zip"
 ```
 
-Check the default source package:
+Windows ZIP extraction may not retain Unix executable bits in Git. If the reviewed
+Git diff shows lost modes, stage `gradlew` and the packaged shell scripts as
+executable before committing; do not mark all source files executable.
 
-```bash
-grep -RIn "C:\\Users\|/Users/\|/home/.*Downloads\|BEGIN PRIVATE KEY" . \
-  --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle
+## Commit, tag and APK publication
 
-find . -type f \( -name "*.jks" -o -name "*.keystore" -o -name "*.p12" -o -name "*.apk" -o -name "*.aab" \)
-```
+1. Review the unpacked source diff and the known limitations. Source/package
+   checks are not APK validation.
+2. Run the maintainer checks in [RELEASE_BUILD.md](RELEASE_BUILD.md) on the exact
+   final tree. The reported build predates the latest UI/resource changes; signing, unit-test and device
+   results have not been reported and should be recorded separately.
+3. Commit the reviewed 1.0.18 source. Once validated, create `v1.0.18` at that exact
+   commit. Do not move or replace the already released `v1.0.17` tag.
+   If `v1.0.18` already exists, inspect it first; never silently retarget a
+   published tag. This handoff did not query remote tag/release state.
+4. Use the same project release key for the GitHub APK; verify signing, identity,
+   version and installation separately. Never attach an unsigned source-builder
+   APK as the public installable APK.
+5. Publish the intended public APK as `Readwide_1.0.18.apk`. Local build output
+   names may differ. Use the matching release notes and source ZIP, and record
+   the APK and source ZIP hashes separately.
 
-Select the built release artifact. An unsigned source-builder build normally uses `app-release-unsigned.apk`; a locally signed public asset normally uses `app-release.apk`:
+Do not state that all RAR/7z files work, that benchmarks passed, or that the current
+tree built successfully without evidence from that exact tree.
 
-```bash
-APK=app/build/outputs/apk/release/app-release.apk
-test -f "$APK" || APK=app/build/outputs/apk/release/app-release-unsigned.apk
-test -f "$APK"
+## F-Droid metadata boundary
 
-aapt dump xmltree "$APK" AndroidManifest.xml \
-  | grep -E "debuggable|usesCleartextTraffic|INTERNET|allowBackup"
-
-unzip -p "$APK" assets/open_source_licenses/libarchive_android_and_codecs.txt \
-  | grep -E "libarchive|bzip2|XZ Utils|LZ4|Zstandard|zlib|Mbed TLS"
-```
-
-If attaching the signed GitHub APK, verify that signed file separately:
-
-```bash
-apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk
-```
-
-Expected public baseline:
-
-- `debuggable` false / absent for release.
-- `INTERNET` absent in the default manifest.
-- `usesCleartextTraffic="false"`.
-- `allowBackup="false"`.
-- Native libarchive/codecs notices are present inside the APK.
-
-Wrapper baseline for this source tree:
-
-```text
-gradle-wrapper.jar SHA-256: 55243ef57851f12b070ad14f7f5bb8302daceeebc5bce5ece5fa6edb23e1145c
-gradle-9.4.1-bin.zip SHA-256: 2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb
-```
-
-The distribution checksum is pinned in `gradle/wrapper/gradle-wrapper.properties`.
-
-## Public wording rules
-
-Use:
-
-- "local-first reader and file browser"
-- "HWP/HWPX text-first read-only support"
-- "limited/scoped/backend-dependent archive support"
-- "RAR/CBR support remains limited"
-- "shared reader search options for TXT and document viewers"
-
-Avoid:
-
-- "complete RAR support"
-- "encrypted RAR supported"
-- "full HWP support"
-- "Hancom-compatible rendering"
-- "legacy DOC supported" unless the renderer is actually implemented
-
-## F-Droid handoff
-
-Before opening an F-Droid Data merge request:
-
-1. Tag the exact release commit as `v1.0.16` and push the tag.
-2. Start from the current fdroiddata upstream metadata. The public F-Droid catalog was verified on 2026-07-27 to publish Readwide 1.0.15; the checked-in historical mirror stops at 1.0.13 and must not be copied over upstream. Add only the 1.0.16 build block, set its `commit` field to the full 40-character commit hash that the `v1.0.16` tag points to, then update `CurrentVersion` to `1.0.16` and `CurrentVersionCode` to `10016`.
-3. Confirm release builds work without private signing environment variables.
-4. Confirm no optional local jars are present under `app/libs`.
-5. Keep broad-storage and no-network privacy rationale in the merge request.
-
-## Verification boundary for this source handoff
-
-Static source/package checks may be completed before handoff, but do not describe the source as build-, test-, or lint-verified until the release maintainer runs the commands above on the exact tagged tree. Publish the source ZIP SHA-256 next to the release asset after the final archive has been created.
+The checked-in YAML is a historical mirror through 1.0.13, **not** a ready 1.0.18
+submission. Leave historical commits intact. For any later submission, start
+from current upstream metadata, use the final tag's immutable 40-character
+commit, and follow [project-side notes](docs/FDROID_SUBMISSION.md). A read-only
+review on 2026-09-11 confirmed that the public F-Droid listing and upstream
+metadata cover 1.0.17; neither a 1.0.18 F-Droid build nor approval is established.
+No remote metadata, pipeline, merge request, tag or release was changed.

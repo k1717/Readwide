@@ -46,6 +46,679 @@ public class EggArchiveReaderTest {
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
     @Test
+    public void metadataBounds_truncatedExtraCannotPublishPartialIndex() throws Exception {
+        File archive = buildEggArchive("page.txt", new byte[] {1}, 0, false);
+        byte[] valid = Files.readAllBytes(archive.toPath());
+        byte[] malformed = valid.clone();
+        int name = boundsTestMagicOffset(malformed, MAGIC_FILENAME);
+        malformed[name + 5] = (byte) 0xff;
+        malformed[name + 6] = (byte) 0xff; // Declared name payload crosses physical EOF.
+        Files.write(archive.toPath(), malformed);
+        expectInvalidMetadata(archive);
+        Files.write(archive.toPath(), valid);
+        assertEquals("page.txt", EggArchiveReader.listEntries(archive, null).get(0).path);
+    }
+
+    @Test
+    public void metadataBounds_truncatedBlockCannotAppearAsValidListing() throws Exception {
+        File archive = buildEggArchive("page.txt", new byte[] {1}, 0, false);
+        byte[] malformed = Files.readAllBytes(archive.toPath());
+        int block = boundsTestMagicOffset(malformed, MAGIC_BLOCK);
+        for (int i = 10; i < 14; i++) malformed[block + i] = (byte) 0xff;
+        Files.write(archive.toPath(), malformed);
+        expectInvalidMetadata(archive);
+        File output = tempFolder.newFile("invalid-metadata.out");
+        Files.write(output.toPath(), new byte[] {9});
+        try {
+            EggArchiveReader.extractSingleEntry(archive, "page.txt", output, null);
+            fail("Malformed metadata must fail before touching the target");
+        } catch (IOException expected) {
+            org.junit.Assert.assertArrayEquals(new byte[] {9}, Files.readAllBytes(output.toPath()));
+        }
+    }
+
+    @Test
+    public void metadataBounds_unrepresentableFileSizeRejectedDuringListing() throws Exception {
+        File archive = buildEggArchive("page.txt", new byte[] {1}, 0, false);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        int file = boundsTestMagicOffset(bytes, MAGIC_FILE);
+        bytes[file + 15] |= (byte) 0x80;
+        Files.write(archive.toPath(), bytes);
+        expectInvalidMetadata(archive);
+    }
+
+    @Test
+    public void metadataBounds_validLegacyMissingBlockEndStillExtracts() throws Exception {
+        File archive = buildEggArchive("page.txt", new byte[] {1, 2, 3, 4, 5}, 0, false);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        int blockEnd = boundsTestMagicOffset(bytes, MAGIC_BLOCK) + 18;
+        ByteArrayOutputStream legacy = new ByteArrayOutputStream();
+        legacy.write(bytes, 0, blockEnd);
+        legacy.write(bytes, blockEnd + 4, bytes.length - blockEnd - 4);
+        Files.write(archive.toPath(), legacy.toByteArray());
+        File output = tempFolder.newFile("legacy-no-block-end.out");
+        assertTrue(EggArchiveReader.extractSingleEntry(archive, "page.txt", output, null));
+        org.junit.Assert.assertArrayEquals(new byte[] {1, 2, 3, 4, 5}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test
+    public void metadataBounds_unknownBoundedExtraStillSkipped() throws Exception {
+        File archive = buildEggArchive("page.txt", new byte[] {1}, 0, false);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        int beforeName = boundsTestMagicOffset(bytes, MAGIC_FILENAME);
+        ByteArrayOutputStream extended = new ByteArrayOutputStream();
+        extended.write(bytes, 0, beforeName);
+        writeIntLE(extended, 0x76543210);
+        extended.write(0); writeShortLE(extended, 3); extended.write(new byte[] {1, 2, 3});
+        extended.write(bytes, beforeName, bytes.length - beforeName);
+        Files.write(archive.toPath(), extended.toByteArray());
+        assertEquals("page.txt", EggArchiveReader.listEntries(archive, null).get(0).path);
+    }
+
+    @Test
+    public void metadataBounds_rangeArithmeticHandlesLongLimitsWithoutWrapping() throws Exception {
+        assertEquals(Long.MAX_VALUE, EggArchiveReader.checkedPayloadEnd(Long.MAX_VALUE - 3, 3, Long.MAX_VALUE));
+        assertEquals(10, EggArchiveReader.checkedPayloadEnd(10, 0, 10));
+        long[][] invalid = {{-1, 1, 10}, {0, -1, 10}, {0, 0, -1}, {11, 0, 10},
+                {Long.MAX_VALUE - 3, 4, Long.MAX_VALUE}};
+        for (long[] range : invalid) {
+            try {
+                EggArchiveReader.checkedPayloadEnd(range[0], range[1], range[2]);
+                fail("Invalid range accepted");
+            } catch (IOException expected) { assertTrue(expected.getMessage().contains("range")); }
+        }
+    }
+
+    private void expectInvalidMetadata(File archive) throws Exception {
+        try {
+            EggArchiveReader.indexFor(archive);
+            fail("Invalid metadata must not produce a cacheable index");
+        } catch (IOException expected) { assertTrue(expected.getMessage() != null); }
+    }
+
+    private static int boundsTestMagicOffset(byte[] bytes, int magic) {
+        for (int i = 0; i <= bytes.length - 4; i++) {
+            int value = (bytes[i] & 0xff) | ((bytes[i + 1] & 0xff) << 8)
+                    | ((bytes[i + 2] & 0xff) << 16) | ((bytes[i + 3] & 0xff) << 24);
+            if (value == magic) return i;
+        }
+        throw new AssertionError("Fixture magic not found");
+    }
+
+    @Test
+    public void splitDiscovery_mixedCaseAndPaddingExtractFromEitherPart() throws Exception {
+        byte[] payload = buildRepeatingPayload(6000);
+        writeSplitPair("renamed-split", payload);
+        File first = new File(tempFolder.getRoot(), "Comic.VOL001.EGG");
+        File second = new File(tempFolder.getRoot(), "comic.vol02.eGg");
+        assertTrue(new File(tempFolder.getRoot(), "renamed-split.vol1.egg").renameTo(first));
+        assertTrue(new File(tempFolder.getRoot(), "renamed-split.vol2.egg").renameTo(second));
+        assertEquals(first.getCanonicalFile(), EggArchiveReader.resolveFirstVolume(second).getCanonicalFile());
+        assertEquals(first.getCanonicalFile(), ArchiveSupport.normalizeExtractionQueueArchive(second).getCanonicalFile());
+        File out = tempFolder.newFile("renamed-split.out");
+        assertTrue(EggArchiveReader.extractSingleEntry(first, "data.txt", out, null));
+        org.junit.Assert.assertArrayEquals(payload, Files.readAllBytes(out.toPath()));
+        assertTrue(ArchiveSupport.extractSingleEntry(second, "data.txt", out, null));
+        org.junit.Assert.assertArrayEquals(payload, Files.readAllBytes(out.toPath()));
+    }
+
+    @Test
+    public void splitDiscovery_ambiguousNextOrdinalIsRejectedEvenWithWarmIndex() throws Exception {
+        writeSplitPair("duplicate-next", buildRepeatingPayload(6000));
+        File first = new File(tempFolder.getRoot(), "duplicate-next.vol1.egg");
+        File second = new File(tempFolder.getRoot(), "duplicate-next.vol2.egg");
+        EggArchiveReader.indexFor(first);
+        Files.copy(second.toPath(), new File(tempFolder.getRoot(), "duplicate-next.vol02.egg").toPath());
+        File out = tempFolder.newFile("ambiguous-next.out");
+        Files.write(out.toPath(), new byte[] {9});
+        try {
+            EggArchiveReader.extractSingleEntry(first, "data.txt", out, null);
+            fail("Duplicate numeric aliases must not pick an arbitrary volume");
+        } catch (IOException expected) {
+            assertTrue(expected.getMessage().contains("Ambiguous"));
+            org.junit.Assert.assertArrayEquals(new byte[] {9}, Files.readAllBytes(out.toPath()));
+        }
+    }
+
+    @Test
+    public void splitDiscovery_ambiguousFirstOrdinalIsRejected() throws Exception {
+        writeSplitPair("duplicate-first", buildRepeatingPayload(6000));
+        File first = new File(tempFolder.getRoot(), "duplicate-first.vol1.egg");
+        File second = new File(tempFolder.getRoot(), "duplicate-first.vol2.egg");
+        Files.copy(first.toPath(), new File(tempFolder.getRoot(), "duplicate-first.vol01.egg").toPath());
+        try {
+            EggArchiveReader.resolveFirstVolume(second);
+            fail("First-volume aliases must be rejected");
+        } catch (IOException expected) { assertTrue(expected.getMessage().contains("Ambiguous")); }
+        try {
+            EggArchiveReader.indexFor(first);
+            fail("Direct first-party access must reject aliases too");
+        } catch (IOException expected) { assertTrue(expected.getMessage().contains("Ambiguous")); }
+    }
+
+    @Test
+    public void splitDiscovery_missingNumberCannotSkipToLaterVolume() throws Exception {
+        writeSplitPair("number-gap", buildRepeatingPayload(6000));
+        File first = new File(tempFolder.getRoot(), "number-gap.vol1.egg");
+        assertTrue(new File(tempFolder.getRoot(), "number-gap.vol2.egg").renameTo(
+                new File(tempFolder.getRoot(), "number-gap.vol03.egg")));
+        try {
+            EggArchiveReader.indexFor(first);
+            fail("Header links do not authorize skipping a missing ordinal");
+        } catch (IOException expected) { assertTrue(expected.getMessage().contains("Missing")); }
+    }
+
+    @Test
+    public void splitDiscovery_forwardIdMustMatchNextVolumesHeader() throws Exception {
+        writeSplitPair("forward-id", buildRepeatingPayload(6000));
+        File first = new File(tempFolder.getRoot(), "forward-id.vol1.egg");
+        EggArchiveReader.indexFor(first);
+        long modified = first.lastModified();
+        byte[] bytes = Files.readAllBytes(first.toPath());
+        bytes[25] ^= 1; // First prefix's next-volume id; next volume's prev remains correct.
+        Files.write(first.toPath(), bytes);
+        assertTrue(first.setLastModified(modified));
+        try {
+            EggArchiveReader.indexFor(first);
+            fail("Both link directions must be verified even on a warm index");
+        } catch (IOException expected) { assertTrue(expected.getMessage().contains("chain mismatch")); }
+    }
+
+    @Test
+    public void splitDiscovery_replacedNextHeaderIdIsRejected() throws Exception {
+        writeSplitPair("replaced-id", buildRepeatingPayload(6000));
+        File first = new File(tempFolder.getRoot(), "replaced-id.vol1.egg");
+        File second = new File(tempFolder.getRoot(), "replaced-id.vol2.egg");
+        byte[] bytes = Files.readAllBytes(second.toPath());
+        bytes[6] ^= 1; // Header id; previous-volume id is deliberately unchanged.
+        Files.write(second.toPath(), bytes);
+        try {
+            EggArchiveReader.indexFor(first);
+            fail("The next member must have the advertised header id");
+        } catch (IOException expected) { assertTrue(expected.getMessage().contains("chain mismatch")); }
+    }
+
+    @Test
+    public void splitDiscovery_validPaddingChangeInvalidatesIndexWithoutBreakingPayload() throws Exception {
+        writeSplitPair("padding-change", buildRepeatingPayload(6000));
+        File first = new File(tempFolder.getRoot(), "padding-change.vol1.egg");
+        EggArchiveReader.Index old = EggArchiveReader.indexFor(first);
+        assertTrue(new File(tempFolder.getRoot(), "padding-change.vol2.egg").renameTo(
+                new File(tempFolder.getRoot(), "padding-change.vol0002.egg")));
+        org.junit.Assert.assertNotSame(old, EggArchiveReader.indexFor(first));
+        File out = tempFolder.newFile("padding-change.out");
+        assertTrue(EggArchiveReader.extractSingleEntry(first, "data.txt", out, null));
+        org.junit.Assert.assertArrayEquals(buildRepeatingPayload(6000), Files.readAllBytes(out.toPath()));
+    }
+
+    @Test
+    public void splitDiscovery_invalidOrOverflowingSelectedOrdinalFails() throws Exception {
+        for (String number : new String[] {"0", "9223372036854775808"}) {
+            try {
+                EggArchiveReader.resolveFirstVolume(new File(tempFolder.getRoot(), "invalid.vol" + number + ".egg"));
+                fail("Invalid ordinals must not alias volume 1");
+            } catch (IOException expected) { assertTrue(expected.getMessage().contains("Invalid")); }
+        }
+    }
+
+    @Test
+    public void splitDiscovery_leadingZeroesDoNotOverflowNumericIdentity() throws Exception {
+        writeSplitPair("leading-zero", buildRepeatingPayload(6000));
+        File first = new File(tempFolder.getRoot(), "leading-zero.vol00000000000000000000001.egg");
+        File second = new File(tempFolder.getRoot(), "leading-zero.vol00000000000000000000002.egg");
+        assertTrue(new File(tempFolder.getRoot(), "leading-zero.vol1.egg").renameTo(first));
+        assertTrue(new File(tempFolder.getRoot(), "leading-zero.vol2.egg").renameTo(second));
+        assertEquals(first.getCanonicalFile(), EggArchiveReader.resolveFirstVolume(second).getCanonicalFile());
+        File out = tempFolder.newFile("leading-zero.out");
+        assertTrue(EggArchiveReader.extractSingleEntry(first, "data.txt", out, null));
+    }
+
+    @Test
+    public void index_reusesMetadataAcrossListingProbesAndReverseExtraction() throws Exception {
+        EggArchiveReader.clearIndexes();
+        File first = buildEggArchive("first.txt", new byte[] {1}, 0, false);
+        File second = buildEggArchive("second.txt", new byte[] {2, 3}, 1, false);
+        appendIndexedEntries(first, second);
+        EggArchiveReader.Index index = EggArchiveReader.indexFor(first);
+        assertEquals(2, EggArchiveReader.listEntries(first, null).size());
+        assertFalse(EggArchiveReader.requiresPasswordForExtraction(first));
+        assertFalse(EggArchiveReader.isSolidArchive(first));
+        File out = tempFolder.newFile("index-reverse.txt");
+        assertTrue(EggArchiveReader.extractSingleEntry(first, "second.txt", out, null));
+        org.junit.Assert.assertArrayEquals(new byte[] {2, 3}, Files.readAllBytes(out.toPath()));
+        assertTrue(EggArchiveReader.extractSingleEntry(first, "first.txt", out, null));
+        org.junit.Assert.assertArrayEquals(new byte[] {1}, Files.readAllBytes(out.toPath()));
+        org.junit.Assert.assertSame(index, EggArchiveReader.indexFor(first));
+    }
+
+    @Test
+    public void index_directoryClassificationFollowsDecodedName() throws Exception {
+        File archive = buildEggArchive("folder/", new byte[0], 0, false);
+        assertTrue(EggArchiveReader.listEntries(archive, null).get(0).directory);
+        File out = new File(tempFolder.getRoot(), "not-a-file.txt");
+        assertFalse(EggArchiveReader.extractSingleEntry(archive, "folder/", out, null));
+        assertFalse(out.exists());
+    }
+
+    @Test
+    public void index_duplicateNameUsesFirstNonDirectoryEntry() throws Exception {
+        File first = buildEggArchive("same.txt", new byte[] {1}, 0, false);
+        appendIndexedEntries(first, buildEggArchive("same.txt", new byte[] {2}, 0, false));
+        File out = tempFolder.newFile("index-duplicate.txt");
+        assertTrue(EggArchiveReader.extractSingleEntry(first, "same.txt", out, null));
+        org.junit.Assert.assertArrayEquals(new byte[] {1}, Files.readAllBytes(out.toPath()));
+    }
+
+    @Test
+    public void index_rebuildsAfterFirstVolumeGrows() throws Exception {
+        File archive = buildEggArchive("first.txt", new byte[] {1}, 0, false);
+        EggArchiveReader.Index old = EggArchiveReader.indexFor(archive);
+        appendIndexedEntries(archive, buildEggArchive("second.txt", new byte[] {2}, 0, false));
+        org.junit.Assert.assertNotSame(old, EggArchiveReader.indexFor(archive));
+        assertEquals(2, EggArchiveReader.listEntries(archive, null).size());
+    }
+
+    @Test
+    public void index_laterVolumeChangesInvalidateAndContinuationReleaseWorks() throws Exception {
+        writeSplitPair("index-split", buildRepeatingPayload(6000));
+        File first = new File(tempFolder.getRoot(), "index-split.vol1.egg");
+        File second = new File(tempFolder.getRoot(), "index-split.vol2.egg");
+        EggArchiveReader.Index old = EggArchiveReader.indexFor(first);
+        assertTrue(second.setLastModified(second.lastModified() + 10000));
+        EggArchiveReader.Index changed = EggArchiveReader.indexFor(first);
+        org.junit.Assert.assertNotSame(old, changed);
+        EggArchiveReader.releaseArchiveIndex(second);
+        org.junit.Assert.assertNotSame(changed, EggArchiveReader.indexFor(first));
+        File out = tempFolder.newFile("index-split.out");
+        assertTrue(EggArchiveReader.extractSingleEntry(first, "data.txt", out, null));
+        org.junit.Assert.assertArrayEquals(buildRepeatingPayload(6000), Files.readAllBytes(out.toPath()));
+    }
+
+    @Test
+    public void index_warmCacheDoesNotBypassMissingVolume() throws Exception {
+        writeSplitPair("index-missing", buildRepeatingPayload(6000));
+        File first = new File(tempFolder.getRoot(), "index-missing.vol1.egg");
+        EggArchiveReader.indexFor(first);
+        assertTrue(new File(tempFolder.getRoot(), "index-missing.vol2.egg").delete());
+        File out = new File(tempFolder.getRoot(), "missing-index.out");
+        try {
+            EggArchiveReader.extractSingleEntry(first, "data.txt", out, null);
+            fail("Missing split volume must fail on a warm index");
+        } catch (IOException expected) { assertFalse(out.exists()); }
+    }
+
+    @Test
+    public void index_warmZipCryptoStillChecksEveryPasswordAndKeepsExistingTarget() throws Exception {
+        File archive = buildTwoBlockEncryptedStoreArchive("multi.txt", buildRepeatingPayload(4000));
+        File out = tempFolder.newFile("index-crypto.out");
+        for (int i = 0; i < 2; i++) {
+            assertTrue(EggArchiveReader.extractSingleEntry(archive, "multi.txt", out, TEST_PASSWORD.toCharArray()));
+            org.junit.Assert.assertArrayEquals(buildRepeatingPayload(4000), Files.readAllBytes(out.toPath()));
+        }
+        EggArchiveReader.Index index = EggArchiveReader.indexFor(archive);
+        for (char[] password : new char[][] {null, "wrong".toCharArray()}) {
+            try {
+                EggArchiveReader.extractSingleEntry(archive, "multi.txt", out, password);
+                fail("Successful metadata lookup is not password authorization");
+            } catch (IOException expected) {
+                org.junit.Assert.assertArrayEquals(buildRepeatingPayload(4000), Files.readAllBytes(out.toPath()));
+            }
+        }
+        org.junit.Assert.assertSame(index, EggArchiveReader.indexFor(archive));
+    }
+
+    @Test
+    public void index_warmAesUsesFreshDecryptorAndFooterVerification() throws Exception {
+        File archive = writeFixture("index-aes.egg", AES256_DEFLATE_B64);
+        File out = tempFolder.newFile("index-aes.out");
+        for (int i = 0; i < 2; i++) {
+            assertTrue(EggArchiveReader.extractSingleEntry(archive, "secret.txt", out, AES_PASSWORD.toCharArray()));
+            org.junit.Assert.assertArrayEquals(aesDeflatePayload(), Files.readAllBytes(out.toPath()));
+        }
+        try {
+            EggArchiveReader.extractSingleEntry(archive, "secret.txt", out, "wrong".toCharArray());
+            fail("Warm AES lookup must still reject the wrong password");
+        } catch (IOException expected) {
+            org.junit.Assert.assertArrayEquals(aesDeflatePayload(), Files.readAllBytes(out.toPath()));
+        }
+    }
+
+    @Test
+    public void index_warmHitStillChecksBlockCrcAndRollsBackOutput() throws Exception {
+        File archive = buildEggArchive("data.txt", new byte[] {1, 2, 3}, 0, false);
+        EggArchiveReader.Index index = EggArchiveReader.indexFor(archive);
+        long modified = archive.lastModified();
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        bytes[bytes.length - 5] ^= 1;
+        Files.write(archive.toPath(), bytes);
+        assertTrue(archive.setLastModified(modified));
+        org.junit.Assert.assertSame(index, EggArchiveReader.indexFor(archive));
+        File out = tempFolder.newFile("index-crc.out");
+        Files.write(out.toPath(), new byte[] {9});
+        try {
+            EggArchiveReader.extractSingleEntry(archive, "data.txt", out, null);
+            fail("Warm index must not bypass CRC");
+        } catch (IOException expected) {
+            org.junit.Assert.assertArrayEquals(new byte[] {9}, Files.readAllBytes(out.toPath()));
+        }
+    }
+
+    @Test
+    public void index_solidMetadataIsNotRetainedAsRandomAccessIndex() throws Exception {
+        File archive = buildSolidEggArchive(new String[] {"a.txt", "b.txt"},
+                new byte[][] {new byte[] {1}, new byte[] {2}}, 0, 1);
+        EggArchiveReader.Index first = EggArchiveReader.indexFor(archive);
+        org.junit.Assert.assertNotSame(first, EggArchiveReader.indexFor(archive));
+        File out = tempFolder.newFile("index-solid.out");
+        assertTrue(EggArchiveReader.extractSingleEntry(archive, "b.txt", out, null));
+        org.junit.Assert.assertArrayEquals(new byte[] {2}, Files.readAllBytes(out.toPath()));
+    }
+
+    @Test
+    public void index_lruEvictsOldestNotRecentlyUsedArchive() throws Exception {
+        EggArchiveReader.clearIndexes();
+        File[] archives = new File[4];
+        EggArchiveReader.Index[] indexes = new EggArchiveReader.Index[3];
+        for (int i = 0; i < 4; i++) {
+            archives[i] = buildEggArchive("page.txt", new byte[] {(byte) i}, 0, false);
+            if (i < 3) indexes[i] = EggArchiveReader.indexFor(archives[i]);
+        }
+        org.junit.Assert.assertSame(indexes[0], EggArchiveReader.indexFor(archives[0]));
+        EggArchiveReader.indexFor(archives[3]);
+        org.junit.Assert.assertSame(indexes[0], EggArchiveReader.indexFor(archives[0]));
+        org.junit.Assert.assertNotSame(indexes[1], EggArchiveReader.indexFor(archives[1]));
+    }
+
+    @Test
+    public void index_interruptedWarmLookupRejectsWithoutClearingFlag() throws Exception {
+        File archive = buildEggArchive("page.txt", new byte[] {1}, 0, false);
+        EggArchiveReader.indexFor(archive);
+        Thread.currentThread().interrupt();
+        try {
+            EggArchiveReader.indexFor(archive);
+            fail("Interrupted lookup must fail");
+        } catch (IOException expected) { assertTrue(Thread.currentThread().isInterrupted()); }
+        finally { Thread.interrupted(); }
+    }
+
+    @Test
+    public void index_blockAdmissionBudgetDoesNotRejectExtraction() throws Exception {
+        File archive = buildEggArchive("empty.txt", new byte[0], 0, false);
+        byte[] template = Files.readAllBytes(archive.toPath());
+        int blockStart = template.length - 4 - 22;
+        ByteArrayOutputStream many = new ByteArrayOutputStream();
+        many.write(template, 0, blockStart);
+        for (int i = 0; i < 40001; i++) many.write(template, blockStart, 22);
+        many.write(template, template.length - 4, 4);
+        Files.write(archive.toPath(), many.toByteArray());
+        EggArchiveReader.Index first = EggArchiveReader.indexFor(archive);
+        org.junit.Assert.assertNotSame(first, EggArchiveReader.indexFor(archive));
+        File out = tempFolder.newFile("index-many-blocks.out");
+        assertTrue(EggArchiveReader.extractSingleEntry(archive, "empty.txt", out, null));
+        assertEquals(0, out.length());
+    }
+
+    @Test
+    public void index_warmLookupRevalidatesSplitLinkEvenWithPreservedStats() throws Exception {
+        writeSplitPair("index-link", buildRepeatingPayload(6000));
+        File first = new File(tempFolder.getRoot(), "index-link.vol1.egg");
+        File second = new File(tempFolder.getRoot(), "index-link.vol2.egg");
+        EggArchiveReader.indexFor(first);
+        long modified = second.lastModified();
+        byte[] bytes = Files.readAllBytes(second.toPath());
+        bytes[21] ^= 1; // Split extra's previous-volume id, after its magic/flags/size.
+        Files.write(second.toPath(), bytes);
+        assertTrue(second.setLastModified(modified));
+        try {
+            EggArchiveReader.indexFor(first);
+            fail("A cached index must not bypass split-prefix link validation");
+        } catch (IOException expected) { assertTrue(expected.getMessage().contains("chain mismatch")); }
+    }
+
+    @Test
+    public void index_keepsNoOpenArchiveHandle() throws Exception {
+        File archive = buildEggArchive("page.txt", new byte[] {1}, 0, false);
+        EggArchiveReader.indexFor(archive);
+        File renamed = new File(tempFolder.getRoot(), "renamed-index.egg");
+        assertTrue(archive.renameTo(renamed));
+        assertEquals(1, EggArchiveReader.listEntries(renamed, null).size());
+    }
+
+    private static void appendIndexedEntries(File first, File second) throws IOException {
+        byte[] a = Files.readAllBytes(first.toPath());
+        byte[] b = Files.readAllBytes(second.toPath());
+        ByteArrayOutputStream merged = new ByteArrayOutputStream();
+        merged.write(a, 0, a.length - 4);
+        merged.write(b, 18, b.length - 18); // Skip ordinary 14-byte header and prefix END.
+        Files.write(first.toPath(), merged.toByteArray());
+    }
+
+    @Test public void solidForwardReaderReusesVerifiedBlockAndCrossesBoundaries() throws Exception {
+        byte[][] payloads = {new byte[]{1}, new byte[]{2, 3}, buildRepeatingPayload(6000)};
+        File archive = buildSolidEggArchive(new String[]{"a.jpg", "b.jpg", "c.jpg"}, payloads, 1, 2);
+        File spool = tempFolder.newFolder("forward-spool");
+        try (ArchiveSupport.ForwardArchiveReader reader = ArchiveSupport.openForwardReader(archive, null, spool)) {
+            org.junit.Assert.assertNotNull(reader);
+            assertEquals("a.jpg", reader.nextEntry().path);
+            org.junit.Assert.assertArrayEquals(payloads[0], readForwardEntry(reader));
+            File[] firstBlock = spool.listFiles();
+            assertEquals(1, firstBlock.length);
+            assertEquals("b.jpg", reader.nextEntry().path);
+            org.junit.Assert.assertArrayEquals(payloads[1], readForwardEntry(reader));
+            assertEquals(firstBlock[0], spool.listFiles()[0]);
+            assertEquals("c.jpg", reader.nextEntry().path);
+            org.junit.Assert.assertArrayEquals(payloads[2], readForwardEntry(reader));
+            org.junit.Assert.assertNull(reader.nextEntry());
+            assertEquals(0, spool.listFiles().length);
+        }
+        assertEquals(0, spool.listFiles().length);
+    }
+
+    @Test public void solidForwardReaderDrainsSkippedEntryAndDeletesSpoolOnClose() throws Exception {
+        File archive = buildSolidEggArchive(new String[]{"skip.bin", "page.jpg"},
+                new byte[][]{buildRepeatingPayload(3000), new byte[]{8, 9}}, 0, 2);
+        File spool = tempFolder.newFolder("skip-spool");
+        try (ArchiveSupport.ForwardArchiveReader reader = ArchiveSupport.openForwardReader(archive, null, spool)) {
+            assertEquals("skip.bin", reader.nextEntry().path);
+            assertEquals("page.jpg", reader.nextEntry().path);
+            org.junit.Assert.assertArrayEquals(new byte[]{8, 9}, readForwardEntry(reader));
+        }
+        assertEquals(0, spool.listFiles().length);
+    }
+
+    @Test public void solidEntryEndingInsideCorruptBlockCannotBePublished() throws Exception {
+        File archive = buildSolidEggArchive(new String[]{"first.jpg", "last.bin"},
+                new byte[][]{new byte[]{1}, new byte[]{2, 3, 4}}, 0, 1);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        bytes[bytes.length - 5] ^= 1; // Corrupt the last stored byte, not first.jpg.
+        Files.write(archive.toPath(), bytes);
+        File output = new File(tempFolder.getRoot(), "bad-first.jpg");
+        assertFalse(ArchiveSupport.extractSingleEntry(archive, "first.jpg", output, null));
+        assertFalse(output.exists());
+        File spool = tempFolder.newFolder("bad-spool");
+        try (ArchiveSupport.ForwardArchiveReader reader = ArchiveSupport.openForwardReader(archive, null, spool)) {
+            reader.nextEntry();
+            try { reader.read(new byte[1]); fail("CRC must fail before the first byte is exposed"); }
+            catch (IOException expected) { assertTrue(expected.getMessage().contains("CRC")); }
+        }
+        assertEquals(0, spool.listFiles().length);
+    }
+
+    @Test public void solidForwardSpoolHonorsSharedBudgetAndCleansFailedOutput() throws Exception {
+        File archive = buildSolidEggArchive(new String[]{"first.jpg", "last.bin"},
+                new byte[][]{new byte[]{1}, new byte[]{2, 3, 4}}, 0, 1);
+        File spool = tempFolder.newFolder("budget-spool");
+        try (ArchiveExtractionByteBudget.Scope ignored = ArchiveExtractionByteBudget.begin(2);
+             ArchiveSupport.ForwardArchiveReader reader = ArchiveSupport.openForwardReader(archive, null, spool)) {
+            reader.nextEntry();
+            try { reader.read(new byte[1]); fail("Spool must use the extraction budget"); }
+            catch (IOException expected) { assertTrue(expected.getMessage().contains("safety limit")); }
+        }
+        assertEquals(0, spool.listFiles().length);
+    }
+
+    @Test public void nonSolidEggKeepsDirectEntryRoute() throws Exception {
+        File archive = buildEggArchive("page.jpg", new byte[]{1, 2, 3}, 0, false);
+        assertFalse(ArchiveSupport.isForwardImageReadableType(archive));
+        org.junit.Assert.assertNull(ArchiveSupport.openForwardReader(archive, null,
+                tempFolder.newFolder("non-solid-spool")));
+    }
+
+    private static byte[] readForwardEntry(ArchiveSupport.ForwardArchiveReader reader) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[97];
+        int count;
+        while ((count = reader.read(buffer)) != -1) out.write(buffer, 0, count);
+        return out.toByteArray();
+    }
+
+    @Test
+    public void streamingMethodsAcceptBlockSizesAboveFormer512MiBLimit() throws Exception {
+        for (int method : new int[] {0, 1, 2, 4}) {
+            EggArchiveReader.validateBlockSizes(method, 513L * 1024 * 1024, 513L * 1024 * 1024);
+            EggArchiveReader.validateBlockSizes(method, 0xffffffffL, 0xffffffffL);
+        }
+        assertEquals(6L * 1024 * 1024 * 1024,
+                EggArchiveReader.addEntryBytes(3L * 1024 * 1024 * 1024, 3L * 1024 * 1024 * 1024));
+    }
+
+    @Test
+    public void azoRetainsItsPerBlockMemoryGuard() throws Exception {
+        long limit = 512L * 1024 * 1024;
+        EggArchiveReader.validateBlockSizes(3, limit, limit);
+        for (long[] sizes : new long[][] {{limit + 1, 1}, {1, limit + 1}}) {
+            try {
+                EggArchiveReader.validateBlockSizes(3, sizes[0], sizes[1]);
+                fail("Array-based AZO must retain its memory guard");
+            } catch (ArchiveSupport.UnsupportedArchiveFeatureException expected) {
+                assertTrue(expected.getMessage().contains("AZO"));
+            }
+        }
+    }
+
+    @Test
+    public void negativeSizesAndSolidOffsetOverflowAreRejected() throws Exception {
+        for (long[] sizes : new long[][] {{-1, 1}, {1, -1}}) {
+            try { EggArchiveReader.validateBlockSizes(0, sizes[0], sizes[1]); fail("Negative size"); }
+            catch (IOException expected) { assertTrue(expected.getMessage().contains("negative")); }
+        }
+        for (long[] sizes : new long[][] {{Long.MAX_VALUE, 1}, {-1, 1}, {1, -1}}) {
+            try { EggArchiveReader.addEntryBytes(sizes[0], sizes[1]); fail("Invalid offset"); }
+            catch (IOException expected) { assertTrue(expected.getMessage().contains("overflow")); }
+        }
+    }
+
+    @Test
+    public void storedAndDeflateBlocksMustProduceExactlyTheirDeclaredSize() throws Exception {
+        byte[] actual = "actual".getBytes(StandardCharsets.UTF_8);
+        for (int method : new int[] {0, 1}) {
+            for (int declared : new int[] {actual.length - 1, actual.length + 1}) {
+                byte[] packed = method == 0 ? actual : rawDeflate(actual);
+                File archive = buildEggArchiveWithStoredPayload(
+                        "size.txt", new byte[declared], method, packed, false);
+                File output = new File(tempFolder.getRoot(), "size-" + method + "-" + declared + ".txt");
+                try {
+                    EggArchiveReader.extractSingleEntry(archive, "size.txt", output, null);
+                    fail("Declared size mismatch must fail");
+                } catch (IOException expected) {
+                    assertTrue(expected.getMessage(), expected.getMessage().contains("declared unpacked size"));
+                    assertFalse("Failed output must be removed", output.exists());
+                }
+            }
+        }
+    }
+
+    @Test
+    public void azoZeroSizeDeclarationCannotAcceptNonemptyFramedOutput() throws Exception {
+        byte[] actual = "azo".getBytes(StandardCharsets.UTF_8);
+        File archive = buildEggArchiveWithStoredPayload(
+                "zero-azo", new byte[0], 3, buildAzoStoredStream(actual), false);
+        File output = new File(tempFolder.getRoot(), "bad-zero-azo");
+        try {
+            EggArchiveReader.extractSingleEntry(archive, "zero-azo", output, null);
+            fail("Nonempty AZO output cannot satisfy a zero-size declaration");
+        } catch (IOException expected) {
+            assertTrue(expected.getMessage().contains("declared unpacked size"));
+            assertFalse(output.exists());
+        }
+    }
+
+    @Test
+    public void nonSolidFileSizeMustMatchItsBlockSizesBeforeWriting() throws Exception {
+        File archive = buildEggArchive("size.txt", new byte[] {1, 2, 3}, 0, false);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        // Prefix is 18 bytes; FILE signature/id precede its u64 size at byte 26.
+        java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).putLong(26, 4L);
+        Files.write(archive.toPath(), bytes);
+        File output = new File(tempFolder.getRoot(), "bad-file-size.txt");
+        try {
+            EggArchiveReader.extractSingleEntry(archive, "size.txt", output, null);
+            fail("Inconsistent file metadata must fail");
+        } catch (IOException expected) {
+            assertTrue(expected.getMessage().contains("declared entry size"));
+            assertFalse(output.exists());
+        }
+    }
+
+    @Test
+    public void solidRangeRejectsOverflowBeforeWritingTarget() throws Exception {
+        byte[] bytes = buildSolidEggBytesWithStream(
+                new String[] {"first", "second", "target"},
+                new long[] {Long.MAX_VALUE, 1, 1}, new byte[] {1}, 0);
+        File archive = tempFolder.newFile("overflow.egg");
+        Files.write(archive.toPath(), bytes);
+        File output = new File(tempFolder.getRoot(), "overflow-target");
+        try {
+            EggArchiveReader.extractSingleEntry(archive, "target", output, null);
+            fail("Solid offset overflow must fail");
+        } catch (IOException expected) {
+            assertTrue(expected.getMessage().contains("overflow"));
+            assertFalse(output.exists());
+        }
+    }
+
+    @Test
+    public void largeDeflateEntryCrossesFormer512MiBLimitWhenEnabled() throws Exception {
+        org.junit.Assume.assumeTrue("Opt in to a large disk-output regression",
+                Boolean.getBoolean("readwide.largeArchiveTests"));
+        long size = 513L * 1024 * 1024;
+        byte[] chunk = new byte[64 * 1024];
+        java.util.Arrays.fill(chunk, (byte) 'E');
+        CRC32 crc = new CRC32();
+        ByteArrayOutputStream packed = new ByteArrayOutputStream();
+        Deflater compressor = new Deflater(Deflater.DEFAULT_COMPRESSION, true);
+        try (DeflaterOutputStream stream = new DeflaterOutputStream(packed, compressor)) {
+            for (long written = 0; written < size; written += chunk.length) {
+                stream.write(chunk);
+                crc.update(chunk);
+            }
+        } finally { compressor.end(); }
+
+        File archive = tempFolder.newFile("large-stream.egg");
+        try (OutputStream out = new FileOutputStream(archive)) {
+            writeIntLE(out, MAGIC_EGG); writeShortLE(out, 0x0100);
+            writeIntLE(out, 0x11111111); writeIntLE(out, 0); writeIntLE(out, MAGIC_END);
+            writeIntLE(out, MAGIC_FILE); writeIntLE(out, 0); writeLongLE(out, size);
+            byte[] name = "large.bin".getBytes(StandardCharsets.UTF_8);
+            writeIntLE(out, MAGIC_FILENAME); out.write(0); writeShortLE(out, name.length); out.write(name);
+            writeIntLE(out, MAGIC_END);
+            writeIntLE(out, MAGIC_BLOCK); out.write(1); out.write(0);
+            writeIntLE(out, (int) size); writeIntLE(out, packed.size());
+            writeIntLE(out, (int) crc.getValue()); writeIntLE(out, MAGIC_END);
+            packed.writeTo(out); writeIntLE(out, MAGIC_END);
+        }
+        File output = new File(tempFolder.getRoot(), "large-decoded.bin");
+        assertTrue(EggArchiveReader.extractSingleEntry(archive, "large.bin", output, null));
+        assertEquals(size, output.length());
+        CRC32 decodedCrc = new CRC32();
+        try (java.io.InputStream input = Files.newInputStream(output.toPath())) {
+            int count;
+            while ((count = input.read(chunk)) != -1) decodedCrc.update(chunk, 0, count);
+        }
+        assertEquals(crc.getValue(), decodedCrc.getValue());
+    }
+
+    @Test
     public void listEntries_eggStoredArchive_returnsMetadata() throws Exception {
         File archive = buildEggArchive("book/page001.txt", "stored".getBytes(StandardCharsets.UTF_8), 0, false);
 

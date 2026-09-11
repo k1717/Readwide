@@ -2,10 +2,14 @@ package com.readwide.manager;
 
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
+import android.widget.EditText;
 import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.Switch;
@@ -15,6 +19,7 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 
 import com.readwide.manager.util.EpubFontPreferenceMath;
+import com.readwide.manager.util.ArchiveViewerTimeoutPolicy;
 import com.readwide.manager.util.FontManager;
 import com.readwide.manager.util.PrefsManager;
 
@@ -40,6 +45,7 @@ final class SettingsReaderControlsController {
         setupTextZoneTuning();
         setupLargeTextPartitionMode();
         setupArchiveOpenMode();
+        setupArchiveViewerBackgroundTimeout();
         setupEpubDefaultFont();
         setupEpubBoundary();
         setupEpubPageBehavior();
@@ -211,6 +217,50 @@ final class SettingsReaderControlsController {
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });
+    }
+
+    private void setupArchiveViewerBackgroundTimeout() {
+        EditText timeoutInput = activity.findViewById(
+                R.id.input_archive_viewer_background_timeout);
+        if (timeoutInput == null) return;
+        timeoutInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        timeoutInput.setText(String.valueOf(prefs.getArchiveViewerBackgroundTimeoutMinutes()));
+        timeoutInput.setSelectAllOnFocus(true);
+        timeoutInput.addTextChangedListener(new TextWatcher() {
+            private boolean updatingText;
+            @Override public void beforeTextChanged(CharSequence text, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence text, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable text) {
+                if (updatingText || !timeoutInput.hasFocus()) return;
+                String raw = text == null ? "" : text.toString().trim();
+                if (raw.isEmpty()) return;
+                int previous = prefs.getArchiveViewerBackgroundTimeoutMinutes();
+                int minutes = ArchiveViewerTimeoutPolicy.parseMinutes(raw, previous);
+                if (minutes != previous) prefs.setArchiveViewerBackgroundTimeoutMinutes(minutes);
+                String normalized = String.valueOf(minutes);
+                if (!normalized.equals(raw)) {
+                    updatingText = true;
+                    try {
+                        timeoutInput.setText(normalized);
+                        timeoutInput.setSelection(normalized.length());
+                    } finally {
+                        updatingText = false;
+                    }
+                }
+            }
+        });
+        timeoutInput.setOnFocusChangeListener((view, hasFocus) -> {
+            // Preferences are authoritative after a reset/import; do not write old UI text back.
+            if (!hasFocus) refreshArchiveViewerBackgroundTimeout(timeoutInput);
+        });
+        timeoutInput.setOnEditorActionListener((view, actionId, event) -> {
+            timeoutInput.clearFocus();
+            return false;
+        });
+    }
+
+    private void refreshArchiveViewerBackgroundTimeout(@NonNull EditText input) {
+        input.setText(String.valueOf(prefs.getArchiveViewerBackgroundTimeoutMinutes()));
     }
 
     private void setupEpubBoundary() {

@@ -8,7 +8,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Go to percentage:"
+        android:text="@string/go_to_percentage"
         android:textSize="14sp"
         android:layout_marginBottom="4dp" />
 
@@ -16,14 +16,14 @@
         android:id="@+id/input_percent"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="e.g. 50"
+        android:hint="@string/example_50"
         android:inputType="numberDecimal"
         android:layout_marginBottom="16dp" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Or go to line number:"
+        android:text="@string/or_go_to_line_number"
         android:textSize="14sp"
         android:layout_marginBottom="4dp" />
 
@@ -31,7 +31,7 @@
         android:id="@+id/input_line"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="e.g. 1000"
+        android:hint="@string/example_1000"
         android:inputType="number" />
 
 </LinearLayout>

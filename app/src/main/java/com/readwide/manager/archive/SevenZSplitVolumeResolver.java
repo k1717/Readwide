@@ -93,10 +93,17 @@ final class SevenZSplitVolumeResolver {
         return parts;
     }
 
-    private static boolean hasLaterVolume(@NonNull File parent, @NonNull String stem, int startIndex) {
-        for (int index = startIndex; index <= 999; index++) {
-            File part = new File(parent, stem + String.format(Locale.ROOT, ".%03d", index));
-            if (part.exists() && part.isFile()) return true;
+    private static boolean hasLaterVolume(@NonNull File parent, @NonNull String stem, int startIndex)
+            throws IOException {
+        // Scan the catalog once instead of probing up to 998 nonexistent paths.
+        // Re-check the expected path to preserve the filesystem's case semantics.
+        File[] children = parent.listFiles();
+        if (children == null) throw new IOException("7z split volume directory is unavailable");
+        for (File child : children) {
+            PartName name = parsePartName(child.getName());
+            if (name == null || name.number < startIndex || !stem.equalsIgnoreCase(name.stem)) continue;
+            File expected = new File(parent, stem + String.format(Locale.ROOT, ".%03d", name.number));
+            if (expected.isFile()) return true;
         }
         return false;
     }

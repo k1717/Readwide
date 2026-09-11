@@ -4,6 +4,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import com.readwide.manager.archive.ArchiveSupport;
+import com.readwide.manager.archive.ArchiveSourceSnapshot;
 
 import org.junit.Test;
 
@@ -15,6 +16,43 @@ import java.util.HashSet;
 import java.util.Set;
 
 public class ArchiveImageSequenceLoaderTest {
+    @org.junit.Rule public org.junit.rules.TemporaryFolder volumeFolder =
+            new org.junit.rules.TemporaryFolder();
+
+    @Test
+    public void sequenceCarriesLoaderVolumeSnapshotWithoutRecapturingIt() throws Exception {
+        File first = volumeFolder.newFile("comic.part1.rar");
+        File second = volumeFolder.newFile("comic.part2.rar");
+        ArchiveSourceSnapshot saved = ArchiveSourceSnapshot.capture(first);
+        assertTrue(saved != null && saved.matches(first));
+        ArchiveImageSequenceLoader.Result result = new ArchiveImageSequenceLoader.Result(
+                new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), 0, true,
+                null, null, null, first.getAbsolutePath(), first.length(), first.lastModified(), saved);
+        java.nio.file.Files.write(second.toPath(), new byte[] {1, 2, 3});
+        ImageSequenceHandoffStore.Sequence sequence = new ImageSequenceHandoffStore.Sequence(
+                result.imagePaths, result.displayNames, result.entryPaths, null, null, null,
+                result.archivePathSnapshot, result.archiveLengthSnapshot,
+                result.archiveLastModifiedSnapshot, result.sourceSnapshot);
+        assertFalse(sequence.matchesSourceArchiveSnapshot(first.getAbsolutePath()));
+    }
+
+    @Test
+    public void rejectedVolumeHandoffStillClearsPasswordAndClosesResource() throws Exception {
+        File first = volumeFolder.newFile("comic.7z.001");
+        File second = volumeFolder.newFile("comic.7z.002");
+        RecordingCloseable resource = new RecordingCloseable();
+        ImageSequenceHandoffStore.Sequence sequence = new ImageSequenceHandoffStore.Sequence(
+                new ArrayList<>(), null, null, new char[] {'x'}, resource, null,
+                first.getAbsolutePath(), first.length(), first.lastModified(),
+                ArchiveSourceSnapshot.capture(first));
+        assertTrue(sequence.matchesSourceArchiveSnapshot(first.getAbsolutePath()));
+        java.nio.file.Files.delete(second.toPath());
+        assertFalse(sequence.matchesSourceArchiveSnapshot(first.getAbsolutePath()));
+        sequence.clearSensitiveData();
+        assertTrue(resource.closed && resource.closeCount == 1);
+        assertTrue(sequence.archivePassword[0] == '\0');
+    }
+
     @Test
     public void sequenceHandoffDefensivelyCopiesArchivePassword() {
         ArrayList<String> paths = new ArrayList<>();
@@ -183,6 +221,22 @@ public class ArchiveImageSequenceLoaderTest {
 
         assertTrue(reader.drainCalls == 1);
         assertTrue(reader.readCalls == 2);
+    }
+
+    @Test public void bufferedForwardDrainHasNoFormerTwoGiBCeiling() throws Exception {
+        final long[] remaining = {2L * 1024 * 1024 * 1024 + 1};
+        ArchiveSupport.ForwardArchiveReader reader = new ArchiveSupport.ForwardArchiveReader() {
+            @Override public ArchiveSupport.ForwardEntry nextEntry() { return null; }
+            @Override public int read(byte[] buffer) {
+                if (remaining[0] == 0) return -1;
+                int count = (int) Math.min(buffer.length, remaining[0]);
+                remaining[0] -= count;
+                return count;
+            }
+            @Override public void close() { }
+        };
+        SequentialArchiveImageReader.drainSkippedEntry(reader, new byte[64 * 1024], Long.MAX_VALUE);
+        assertTrue(remaining[0] == 0);
     }
 
     private static final class RecordingCloseable implements Closeable {

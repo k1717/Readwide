@@ -11,6 +11,16 @@ import java.util.List;
 import org.junit.Test;
 
 public class EpubCfiTest {
+    @Test
+    public void decodedFragmentPreservesLiteralPercentAndHashInAssertions() {
+        EpubCfi cfi = EpubCfi.parseDecodedFragment(
+                "epubcfi(/6/2[item%20]!/4/2[p#id]/1:0[left%20,right%2B])");
+        assertNotNull(cfi);
+        assertEquals("item%20", cfi.itemRefIdAssertion());
+        assertEquals("p#id", cfi.contentSteps().get(1).idAssertion());
+        assertEquals("left%20", cfi.textBefore());
+        assertEquals("right%2B", cfi.textAfter());
+    }
     private static final String[] GEORGIA_CFIS = {
             "package.opf#epubcfi(/6/4[ct]!/4/2[d10e42]/12[d10e85]/6[d10e93]/1:1552[Bryan,%20and])",
             "package.opf#epubcfi(/6/4[ct]!/4/2[d10e42]/18[d10e150]/4[d10e155]/1:35)",

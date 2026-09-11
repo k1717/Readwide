@@ -65,13 +65,48 @@ public class NativeBackendReleaseRulesTest {
         String notices = readProjectFile(
                 "app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt",
                 "src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt");
-        assertTrue(notices.contains("d3ee9c472173fcaf28e737f59dd34ef6cf3d1c88"));
-        assertTrue(notices.contains("9525f90ca4bd14c7b335e2f8c84a4607b0af6bdf"));
+        assertTrue(notices.contains("3a592be028c7be41847f667570bd343c0010bd9d"));
+        assertTrue(notices.contains("27cbc7827172698143e440801fc0ba39ccb4f1f5"));
+        assertTrue(notices.contains("libarchive  27cbc7827172698143e440801fc0ba39ccb4f1f5 (3.8.9)"));
+        assertTrue(notices.contains("4b73f2ec19a99ef465282fbce633e8deb33691b3"));
+        assertTrue(notices.contains("068ff080b369adfac81509f9b57b2afabaf82dc5"));
         assertTrue(notices.contains("bzip2 / libbzip2"));
         assertTrue(notices.contains("XZ Utils / liblzma"));
         assertTrue(notices.contains("Zstandard"));
         assertTrue(notices.contains("Mbed TLS / libmbedcrypto"));
         assertTrue(notices.contains("END OF TERMS AND CONDITIONS"));
+    }
+
+    @Test
+    public void nativeBackendUsesVendoredSourceModuleInsteadOfMavenAar() throws IOException {
+        String build = readProjectFile("app/build.gradle", "build.gradle");
+        assertTrue(build.contains("implementation project(':libarchiveAndroid')"));
+        assertTrue(!build.contains("me.zhanghai.android.libarchive:library:"));
+
+        String upstream = readProjectFile(
+                "third_party/libarchive-android/UPSTREAM.md",
+                "../third_party/libarchive-android/UPSTREAM.md");
+        assertTrue(upstream.contains("3a592be028c7be41847f667570bd343c0010bd9d"));
+        assertTrue(upstream.contains("27cbc7827172698143e440801fc0ba39ccb4f1f5"));
+        assertTrue(upstream.contains("libarchive 3.8.9"));
+        assertTrue(upstream.contains("No prebuilt AAR or"));
+        assertTrue(upstream.contains("native library is stored in this directory"));
+    }
+
+    @Test
+    public void nativeBackendCompilesCabAndLhaReaders() throws IOException {
+        String cmake = readProjectFile(
+                "third_party/libarchive-android/library/CMakeLists.txt",
+                "../third_party/libarchive-android/library/CMakeLists.txt");
+        assertTrue(cmake.contains("archive_read_support_format_cab.c"));
+        assertTrue(cmake.contains("archive_read_support_format_lha.c"));
+
+        String detector = readProjectFile(
+                "app/src/main/java/com/readwide/manager/archive/ArchiveTypeDetector.java",
+                "src/main/java/com/readwide/manager/archive/ArchiveTypeDetector.java");
+        assertTrue(detector.contains("name.endsWith(\".cab\")"));
+        assertTrue(detector.contains("name.endsWith(\".lha\")"));
+        assertTrue(detector.contains("name.endsWith(\".lzh\")"));
     }
 
     private static String readProguardRules() throws IOException {

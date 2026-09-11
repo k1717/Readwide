@@ -1,5 +1,106 @@
 # Changelog
 
+## Readwide 1.0.18 - 2026-09-11
+
+### Archive reader state and comic order
+
+- The numeric background-timeout field has slightly rounded corners and inset text instead of placing the number against a square edge.
+- Replaced the fixed ten-minute archive-viewer background expiry with a numeric Settings value from `0` to `10080` minutes. The default `0` disables automatic closing; a nonzero value saves the current page and closes after the selected background interval.
+- Background memory cleanup releases decoded bitmaps without discarding the current archive entry. Returning to the app reloads the retained page instead of exposing the Recent list.
+- Timeout accounting starts when the viewer stops being visible and uses elapsed time from the same device boot. Clock changes, reboots, empty input, and settings reset/import no longer restore an incorrect deadline or stale value.
+- Direct comic opening uses full internal-path natural order, keeping repeated page names within their chapters: `Part1/1.jpg`, `Part1/2.jpg`, then `Part2/1.jpg`. Opening an image inside the archive browser retains the selected folder's visible order and scope.
+
+### Archive image browsing
+
+- Reused ZIP/ZIPX routing metadata, ALZ and non-solid EGG indexes, and ordinary plain-TAR member offsets to avoid repeated scans. Metadata-cache budgets limit retention, not the size of archives that can be opened.
+- Added scoped forward reading for RAR3/RAR4 PPMd, RAR5-container archives, and plain solid EGG, retaining decoder history where supported and verifying requested output before publishing it.
+- Supported special 7z/CB7 folders reuse verified temporary output. Standard split special-forward reading accesses the volume set directly instead of creating another joined archive copy.
+- Two-page turns retain directional prefetch, while direct jumps reset it. Shared sequence snapshots and bounded, generation-aware requests avoid duplicate image warm-ups and stale completions.
+- Bulk fallback reuses extracted image files by rename where possible, and closing archive readers no longer waits on the UI thread. Large solid folders can still delay the first image.
+- RAR and standard split-7z preparation checks the resolved volume set before viewer handoff. This does not yet provide complete all-volume preview-cache invalidation.
+
+### RAR compatibility
+
+- Converted first-party RAR3/RAR4 PPMd and classic-LZ output to streaming paths. PPMd preserves rolling history and supports scoped standard E8/E8E9/Itanium/Delta/RGB/Audio filters; classic-LZ retains match and table state across admitted solid entries.
+- Added mixed LZ/PPMd decoding and a CRC/boundary-checked fallback for plain single-volume compressed solid runs with valid starting entries. PPMd-only encrypted/split support remains a separate path. Encrypted/split mixed payloads, stored-member solid runs in the new fallback, custom VM programs, and unsupported filter scheduling remain excluded.
+- Removed the RAR5 compressed decoder's former 64 MiB packed / 256 MiB unpacked per-file caps using streaming input/output, including its supported AES, split, and solid variants.
+- Removed the first-party RAR5/RAR7 64 MiB retained-history ceiling. A bounded RAM cache spills older dictionary pages into encrypted temporary storage; real long-distance matches no longer fail solely because they exceed that RAM cache. Large dictionaries can require more storage and take longer to decode.
+- Added streaming BLAKE2sp and key-dependent encrypted RAR5 CRC32/HashMAC checks. Supported split paths verify intermediate packed parts separately from final decoded-file checks, including covered AES ciphertext paths.
+- Corrected split final-size/checksum selection, continuation planning, mixed-case volume discovery, high-precision timestamps, and bounded encryption/extra-record parsing. Cancellation and failed integrity checks reject uncommitted output.
+
+### 7z, ALZ, EGG, and extraction limits
+
+- Streamed the special 7z Copy/LZMA/LZMA2/AES/BCJ2 and PPMd paths instead of buffering entire packed or decoded folders. Added bundled Deflate, Deflate64, BZip2, Delta, and six BCJ filters to supported special graphs, with property and integrity checks.
+- Corrected 7z header, packed-stream, folder, and substream CRC handling. Supported split special-forward paths share segmented input and retain whole-folder verification before publication.
+- Improved EGG numbered-volume discovery for case and zero-padding variants, rejected missing or ambiguous parts, and checked both directions of volume links. ALZ/EGG indexed extraction revalidates source identity and protects an existing target on failure.
+- Removed EGG's blanket 512 MiB checks from Store/Deflate/BZip2/LZMA streaming paths. Retained AZO's per-block memory guard and added metadata-range, decoded-length, and overflow checks; EGG LEA/encrypted-solid combinations remain unsupported.
+- Removed the fixed 128 GiB extraction ceiling and the viewer-only 2 GiB ceiling. Shared free-space accounting, the 64 MiB reserve, guarded native writes, and overflow checks remain. Decoder/model/metadata guards and the separate 2 GB inbound copy limit for files opened from other apps are unchanged.
+
+### File browser, thumbnails, and search
+
+- Thumbnail requests follow attached rows: off-screen queued work is removed, reattached rows retry, and cached PNGs use a separate bounded lookup queue instead of waiting behind cold archive/PDF cover generation.
+- Completed covers update only matching visible icons. Queue-pressure retries are coalesced, and stale results retain safe bitmap cleanup.
+- File and folder replacements are staged before overwrite, with rollback and recovery backups for failed replacement. Unsafe ancestor-folder pastes and conflicting case-only renames are rejected.
+- Document search counts match non-overlapping selectable highlights, with corrected regex line anchors, HTML comment/attribute handling, and Unicode offsets.
+- TXT highlight preparation and document recounting run off the drawing thread. Cached page counts support navigation, and large-TXT exact indexes spill to private storage above 200,000 matches with scanning fallback when storage is unavailable.
+
+### EPUB and PDF reading
+
+- EPUB resource, SMIL, and CFI references avoid double percent decoding; chapter base URLs preserve special characters in folder names.
+- EPUB media overlays follow foreground/audio-focus state, preserve pause through preparation and seeking, and ignore stale player callbacks. Cached audio uses collision-resistant identities and size/CRC checks; container/OPF parsing retains its text-memory guard.
+- PDF bookmarks retain the active viewport point and zoom, including source-page coordinates in two-page spreads. Saved activity state takes precedence over old launch bookmarks, and background bitmap cleanup retains the within-page anchor.
+- PDF search immediately clears outdated results on query changes or dismissal, coalesces pending scans, and preserves original text offsets and inferred word/line separators for highlights.
+- PDF read-aloud preserves inferred spaces and avoids guessed highlight coordinates when glyph mapping is ambiguous. Older text checkpoints resume from their saved page; valid current-format checkpoints retain their exact offset.
+
+### Localization
+
+- Refined archive help and error messages across all 22 locales, removing untranslated developer jargon and correcting outdated EGG/RAR/7z support descriptions.
+- Read-aloud help now describes the shared TXT, PDF and document feature rather than calling it TXT-only. Improved bookmark navigation hints and Korean backup, resume and voice-setting wording.
+
+### Release boundary
+
+- Version metadata is `1.0.18` / `10018`. No permission or runtime dependency changed.
+- Complete archive-format compatibility and measured speedups are not claimed. Remaining support boundaries and validation status are recorded in [current source status](docs/CURRENT_SOURCE_STATUS_1_0_18.md) and [release readiness](docs/RELEASE_READINESS_1_0_18.md).
+
+## Readwide 1.0.17 - 2026-08-14
+
+### File browser display
+
+- Added a persistent **File display** choice to the fixed upper-right overflow beside the current location title (`Readwide`, `Download`, and folders).
+- File and Recent views can switch between the existing compact list and a two-column tile grid. The grid keeps cover thumbnails, file-type icons, reading progress, selection, search paths, and existing open/long-hold behavior.
+- The two-column layout gives covers and filenames more room than the previous three-column phone layout. Switching modes preserves the visible list position instead of jumping back to the beginning.
+- The display choice is not added to per-file or long-hold action menus.
+
+### TXT and Markdown annotations
+
+- Selected TXT or Markdown text can now be saved as a note or persistent highlight without changing the original document.
+- Notes and highlights are stored in Readwide's separate app-private annotation file, follow file/folder moves made in the browser, and are included in JSON backup export/import.
+- A dedicated reader-toolbar shortcut opens **Notes & highlights** without going through More. The themed list updates immediately after edits or deletion.
+- Saving the same highlight range again is rejected, and exact duplicate highlights left by an earlier build are cleaned when annotation data is loaded.
+- The list can reopen a saved position and edit or delete its separately stored note.
+
+### EPUB layout on large screens
+
+- In landscape on Android large-screen devices (`sw600dp` or wider), ordinary EPUBs now use the existing side-by-side two-page layout instead of stretching one text pane across the tablet.
+- Image-page EPUBs keep their existing landscape spread on phones and tablets. Portrait mode and ordinary EPUB behavior on smaller phones are unchanged.
+- PDF landscape spread behavior is unchanged.
+
+### Archive reader return and localization
+
+- Switching to another app no longer closes an active archive/image reader when Android reports background memory pressure. Decoded image memory is released when requested, then the same archive page is decoded again on return.
+- ZIPX support is now explicit and tested: WinZip-AES entries using Deflate64, BZip2, LZMA, or XZ extract through the authenticated Java supplement. The Android backend is upgraded from the Maven AAR carrying libarchive 3.8.1 to source-built libarchive 3.8.9, adding encrypted ZIPX PPMd and Zstandard fallback plus upstream ZIPX streaming and archive-parser hardening. AES ZIPX using JPEG or WavPack now extracts through a separate source-built FOSS native module (XADMaster WinZip JPEG under LGPL-2.1-or-later and WavPack 5.9.0 under BSD-3-Clause), with bounded streaming, authentication-before-commit, and in-APK license texts.
+- CAB and LHA/LZH are now exposed as read-only archive types using the already-bundled libarchive decoders, including listing, image browsing, and extraction. Creation, password handling, and broad multi-volume compatibility are not claimed. libarchive 3.8.9 also tightens RAR/RAR5 seek and declared-size handling without changing Readwide's conservative RAR support boundary.
+- The independent RAR3/RAR4 classic-LZ fallback now implements standard VM-program slot selection/reset, program reuse, prior block-length reuse, usage registers, user-global-data consumption, and correct per-file filter offsets. This improves common standard E8/E8E9/Itanium/Delta/RGB/Audio filtered archives without adding Junrar or RARLAB UnRAR-license code; custom VM bytecode remains unsupported.
+- The first-party RAR5-container decoder now keeps the existing algorithm-v0 path used by RAR 5/6 and adds bounded RAR 7 algorithm-v1 handling: 80 distance codes, the extended fractional dictionary field, non-power-of-two wrapping, long distance values, and the v0-solid compatibility marker. Declared dictionaries up to the 1 TB format limit are parsed, but Android retains at most 64 MB of history and rejects a stream only when it actually needs older data. Synthetic public-grammar tests exercise the extended distance table and a slot-64 long-distance match; complete RAR 7 compatibility is not claimed.
+- Archive extraction now enforces one operation-wide runtime byte budget across dedicated Java decoders, fallback engines, and libarchive. Unknown-size entries can no longer reset the counter per file, and native libarchive output is copied in bounded blocks instead of writing unchecked directly to a file descriptor. The decoded-output ceiling is raised from 32 GB to 128 GB; the effective runtime budget is the smaller of that ceiling and the starting usable space minus the existing 64 MB reserve.
+- Refined annotation wording across translations and standardized Korean reader/theme terminology and several Indonesian file-browser labels.
+- Removed the remaining English-only PIN, reader-menu, bookmark, and font-picker text. PIN setup/change errors, bookmark metadata, font selection/import/removal, and related accessibility labels now use the complete English plus 21 localized resource sets; the former English/Korean-only font-label branch was removed.
+
+### Release boundary
+
+- No permission was added. The existing libarchive Android backend is now built from pinned vendored 3.8.9 source with Android NDK 29 instead of resolving its 3.8.1 native AAR from Maven Central.
+- Public-source ignore and ZIP filters retain libarchive's upstream `external/libarchive/build/cmake/` source modules while continuing to exclude generated build output.
+
 ## Readwide 1.0.16 - 2026-07-27
 
 ### Archive and image reading
@@ -259,7 +360,7 @@
 
 ### Archives - 7z PPMd first-party decoder; AES-encrypted PPMd now extracts
 
-- 7z archives compressed with PPMd now decode first party, closing the last unsupported 7z combination: AES-encrypted PPMd archives, which no bundled backend could handle (Commons Compress has no PPMd coder, and the bundled libarchive cannot decrypt 7z). `SevenZPpmd7Decoder` is a Java port of the public-domain Ppmd7 reference (Dmitry Shkarin's PPMd var.H, Igor Pavlov's Ppmd7 codec - both explicitly public domain, which is Apache-2.0 compatible; provenance in `THIRD_PARTY_NOTICES.md`). The model lives in one flat byte array mirroring the reference memory layout, because in PPMd the memory allocator is part of the format: the encoder and decoder must rescale, glue free blocks, and restart the model at exactly the same points. Validation followed the project's oracle discipline - a Python reference was debugged to byte-exactness first, then the Java port re-verified against the reference `7z` tool and pyppmd across orders 2-32, memory sizes 64 KiB-1 MiB, and text/repetitive/random/zero payloads, with the hard paths instrumented to confirm they ran (one fixture alone triggers 8 model restarts and 7 free-block glue passes, all byte-exact). Wired into the same gated fallback as BCJ2: only archives actually containing PPMd or BCJ2 folders are intercepted, and on any failure other than a missing password the previous libarchive path still runs, so existing behaviour cannot regress. Plain PPMd, and AES+PPMd with an encrypted header, all extract byte-identically; wrong passwords fail cleanly. Details in `docs/SEVENZ_PPMD_READER_READWIDE_1_0_11.md`.
+- 7z archives compressed with PPMd now decode first party, closing the last unsupported 7z combination: AES-encrypted PPMd archives, which no bundled backend could handle (Commons Compress has no PPMd coder, and the bundled libarchive cannot decrypt 7z). `SevenZPpmd7Decoder` is a Java port of the public-domain Ppmd7 reference (Dmitry Shkarin's PPMd var.H, Igor Pavlov's Ppmd7 codec - both explicitly public domain, which is Apache-2.0 compatible; provenance in `THIRD_PARTY_NOTICES.md`). The model lives in one flat byte array mirroring the reference memory layout, because in PPMd the memory allocator is part of the format: the encoder and decoder must rescale, glue free blocks, and restart the model at exactly the same points. Validation followed the project's oracle discipline - a Python reference was debugged to byte-exactness first, then the Java port re-verified against the reference `7z` tool and pyppmd across orders 2-32, memory sizes 64 KiB-1 MB, and text/repetitive/random/zero payloads, with the hard paths instrumented to confirm they ran (one fixture alone triggers 8 model restarts and 7 free-block glue passes, all byte-exact). Wired into the same gated fallback as BCJ2: only archives actually containing PPMd or BCJ2 folders are intercepted, and on any failure other than a missing password the previous libarchive path still runs, so existing behaviour cannot regress. Plain PPMd, and AES+PPMd with an encrypted header, all extract byte-identically; wrong passwords fail cleanly. Details in `docs/SEVENZ_PPMD_READER_READWIDE_1_0_11.md`.
 
 ### Archives - 7z BCJ2 archives now extract, including AES-encrypted ones
 

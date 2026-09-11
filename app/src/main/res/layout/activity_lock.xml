@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:gravity="center"
@@ -12,13 +13,13 @@
         android:layout_height="64dp"
         android:src="@drawable/ic_text_file"
         android:layout_marginBottom="24dp"
-        android:contentDescription="App icon" />
+        android:contentDescription="@string/app_name" />
 
     <TextView
         android:id="@+id/lock_message"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Enter PIN to unlock"
+        android:text="@string/lock_enter_pin_to_unlock"
         android:textSize="18sp"
         android:textColor="?attr/colorOnSurface"
         android:layout_marginBottom="24dp" />
@@ -37,7 +38,8 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:columnCount="3"
-        android:layout_marginBottom="16dp">
+        android:layout_marginBottom="16dp"
+        tools:ignore="HardcodedText">
 
         <Button android:id="@+id/btn_1" android:text="1" style="@style/Widget.MaterialComponents.Button.OutlinedButton" android:layout_width="72dp" android:layout_height="56dp" android:layout_margin="4dp" />
         <Button android:id="@+id/btn_2" android:text="2" style="@style/Widget.MaterialComponents.Button.OutlinedButton" android:layout_width="72dp" android:layout_height="56dp" android:layout_margin="4dp" />
@@ -48,9 +50,9 @@
         <Button android:id="@+id/btn_7" android:text="7" style="@style/Widget.MaterialComponents.Button.OutlinedButton" android:layout_width="72dp" android:layout_height="56dp" android:layout_margin="4dp" />
         <Button android:id="@+id/btn_8" android:text="8" style="@style/Widget.MaterialComponents.Button.OutlinedButton" android:layout_width="72dp" android:layout_height="56dp" android:layout_margin="4dp" />
         <Button android:id="@+id/btn_9" android:text="9" style="@style/Widget.MaterialComponents.Button.OutlinedButton" android:layout_width="72dp" android:layout_height="56dp" android:layout_margin="4dp" />
-        <Button android:id="@+id/btn_delete" android:text="⌫" style="@style/Widget.MaterialComponents.Button.OutlinedButton" android:layout_width="72dp" android:layout_height="56dp" android:layout_margin="4dp" />
+        <Button android:id="@+id/btn_delete" android:text="⌫" android:contentDescription="@string/lock_delete_digit" style="@style/Widget.MaterialComponents.Button.OutlinedButton" android:layout_width="72dp" android:layout_height="56dp" android:layout_margin="4dp" />
         <Button android:id="@+id/btn_0" android:text="0" style="@style/Widget.MaterialComponents.Button.OutlinedButton" android:layout_width="72dp" android:layout_height="56dp" android:layout_margin="4dp" />
-        <Button android:id="@+id/btn_confirm" android:text="OK" style="@style/Widget.MaterialComponents.Button.TextButton" android:layout_width="72dp" android:layout_height="56dp" android:layout_margin="4dp" />
+        <Button android:id="@+id/btn_confirm" android:text="@android:string/ok" style="@style/Widget.MaterialComponents.Button.TextButton" android:layout_width="72dp" android:layout_height="56dp" android:layout_margin="4dp" />
 
     </GridLayout>
 

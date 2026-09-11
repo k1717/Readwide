@@ -55,6 +55,39 @@ public final class FileThumbnailLoader {
 
     private FileThumbnailLoader() {}
 
+    /**
+     * Read only an already-published cover PNG. No archive/PDF decoding, folder
+     * scan, decode-slot wait, key-lock wait, directory creation or cache trim.
+     * Atomic publication makes lock-free cache reads safe; a racing eviction is
+     * simply a miss. Never delete a miss here: a writer may have just replaced it.
+     */
+    @Nullable
+    public static Bitmap decodeCachedOnly(@NonNull Context context,
+                                          @NonNull File source,
+                                          int maxSidePx) {
+        if (maxSidePx <= 0 || Thread.currentThread().isInterrupted()) return null;
+        Bitmap bitmap = null;
+        try {
+            SourceStamp stamp = SourceStamp.capture(source);
+            if (!stamp.regularFile) return null;
+            File cached = new File(new File(context.getCacheDir(), DISK_CACHE_DIRECTORY),
+                    diskCacheKey(stamp, maxSidePx) + ".png");
+            if (!cached.isFile()) return null;
+            bitmap = decodeBitmapFile(cached, maxSidePx);
+            if (bitmap == null) return null;
+            if (Thread.currentThread().isInterrupted() || !stamp.matches(source)) {
+                bitmap.recycle();
+                return null;
+            }
+            // Best-effort recency update, never needed to accept a valid cache hit.
+            try { cached.setLastModified(System.currentTimeMillis()); } catch (SecurityException ignored) { }
+            return bitmap;
+        } catch (Exception | LinkageError | OutOfMemoryError ignored) {
+            if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+            return null;
+        }
+    }
+
     @Nullable
     public static Bitmap decode(@NonNull Context context,
                                 @NonNull File file,

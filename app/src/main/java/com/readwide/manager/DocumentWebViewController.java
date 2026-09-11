@@ -11,6 +11,8 @@ import android.view.View;
 
 import androidx.annotation.NonNull;
 
+import com.readwide.manager.widget.SelectionContrastWebView;
+
 final class DocumentWebViewController {
     private final DocumentPageActivity activity;
 
@@ -68,6 +70,21 @@ final class DocumentWebViewController {
         });
         if (primary) {
             view.addJavascriptInterface(activity.new WordSelectionBridge(), "ReadwideSelectionBridge");
+            if (view instanceof SelectionContrastWebView) {
+                ((SelectionContrastWebView) view).setAnnotationActionListener(
+                        new SelectionContrastWebView.AnnotationActionListener() {
+                            @Override
+                            public boolean isAnnotationActionAvailable() {
+                                return activity.isMarkdownDocument();
+                            }
+
+                            @Override
+                            public void onAnnotationAction(boolean highlight,
+                                                           android.view.ActionMode mode) {
+                                activity.captureMarkdownSelectionForAnnotation(highlight, mode);
+                            }
+                        });
+            }
         }
 
         view.setWebViewClient(new WebViewClient() {
@@ -115,6 +132,7 @@ final class DocumentWebViewController {
                 activity.snapDocumentWebViewToPageTopIfNeeded(view);
                 activity.restoreDocumentScrollAfterThemeRefreshIfNeeded(view);
                 activity.installMarkdownSourceAnchorScript();
+                activity.applyMarkdownAnnotationHighlights();
                 activity.restoreMarkdownVisualPositionAfterLoadIfNeeded(view);
                 activity.scheduleMarkdownVisualPageModelUpdate();
                 activity.scheduleMarkdownSourceAnchorUpdate();

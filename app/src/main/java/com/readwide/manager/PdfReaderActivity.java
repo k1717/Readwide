@@ -88,6 +88,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     public static final String EXTRA_FILE_URI = ReaderActivity.EXTRA_FILE_URI;
     public static final String EXTRA_JUMP_TO_PAGE = ReaderActivity.EXTRA_JUMP_TO_POSITION;
     public static final String EXTRA_CONTENT_ANCHOR_JSON = "pdf_content_anchor_json";
+    private static final String SAVED_PDF_VIEWPORT = "readwide.pdf.viewport";
 
     // Match toolbar-triggered PDF popups to the Go to Page bottom offset.
     static final int PDF_TOOLBAR_POPUP_Y_DP = 74;
@@ -288,6 +289,9 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     String fileName;
     int pageCount = 0;
     String pendingPdfContentAnchorJson = "";
+    private int pdfAnchorRestoreGeneration;
+    private int pdfDisplayedBitmapPage = -1;
+    private int pdfDisplayedBitmapGeneration = -1;
     int currentPage = 0;
     /**
      * One-shot within-page resume anchor for read-aloud (mirrors the document
@@ -431,6 +435,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
                     @Override
                     public void onFastScrollStart() {
+                        pendingPdfContentAnchorJson = "";
                         cancelPendingContinuousNavigation();
                         if (pdfContinuousList != null) pdfContinuousList.stopScroll();
                         if (pdfContinuousAdapter != null) pdfContinuousAdapter.beginFastScroll();
@@ -669,6 +674,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     private void scrollContinuousListToCurrentPage(boolean smooth) {
         if (!verticalPageSlideMode || pdfContinuousList == null || pageCount <= 0) return;
+        pendingPdfContentAnchorJson = "";
         cancelPendingContinuousNavigation();
         final int navigationGeneration = continuousNavigationGeneration;
         final int target = clampPage(currentPage);
@@ -735,6 +741,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
         int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN && verticalPageSlideMode
+                && pdfContinuousList != null && isEventInsideView(pdfContinuousList, event)) {
+            pendingPdfContentAnchorJson = "";
+            cancelPendingContinuousNavigation();
+        }
         if (action == MotionEvent.ACTION_DOWN) {
             gestureStartedOnPdfFastScroll = verticalPageSlideMode
                     && pdfFastScrollController != null
@@ -1920,6 +1931,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     @Override
     public void onConfigurationChanged(@NonNull android.content.res.Configuration newConfig) {
+        if (filePath != null && pageCount > 0) pendingPdfContentAnchorJson = currentPdfContentAnchorJson();
         super.onConfigurationChanged(newConfig);
         updateRotationButtonIcon();
         styleControls();
@@ -2755,7 +2767,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     private void addInfoRow(LinearLayout box, String label, String value) {
         TextView row = new TextView(this);
-        row.setText(label + "\n" + (value != null ? value : ""));
+        row.setText(getString(R.string.info_label_value_format,
+                label, value != null ? value : ""));
         row.setTextColor(dialogFg());
         row.setTextSize(14f);
         row.setPadding(0, dpToPx(5), 0, dpToPx(7));
@@ -2872,7 +2885,22 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     }
 
 
-    void loadPdfFromIntent() {
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        if (filePath != null && pageCount > 0) {
+            Bundle viewport = new Bundle();
+            viewport.putString("path", getIntent().getStringExtra(EXTRA_FILE_PATH));
+            viewport.putString("uri", getIntent().getStringExtra(EXTRA_FILE_URI));
+            viewport.putInt("page", currentPage);
+            viewport.putString("anchor", currentPdfContentAnchorJson());
+            outState.putBundle(SAVED_PDF_VIEWPORT, viewport);
+        }
+        super.onSaveInstanceState(outState);
+    }
+
+    void loadPdfFromIntent() { loadPdfFromIntent(null); }
+
+    void loadPdfFromIntent(@Nullable Bundle savedInstanceState) {
         if (activityDestroyed) return;
         resetPdfDocumentScopedState();
         final int loadGeneration = ++pdfDocumentLoadGeneration;
@@ -2882,8 +2910,14 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
         String path = getIntent().getStringExtra(EXTRA_FILE_PATH);
         String uriStr = getIntent().getStringExtra(EXTRA_FILE_URI);
-        int jumpPage = getIntent().getIntExtra(EXTRA_JUMP_TO_PAGE, -1);
+        Bundle viewport = savedInstanceState != null ? savedInstanceState.getBundle(SAVED_PDF_VIEWPORT) : null;
+        boolean restoreInstance = viewport != null
+                && java.util.Objects.equals(path, viewport.getString("path"))
+                && java.util.Objects.equals(uriStr, viewport.getString("uri"));
+        final int jumpPage = restoreInstance ? viewport.getInt("page", 0)
+                : getIntent().getIntExtra(EXTRA_JUMP_TO_PAGE, -1);
         pendingPdfContentAnchorJson = getIntent().getStringExtra(EXTRA_CONTENT_ANCHOR_JSON);
+        if (restoreInstance) pendingPdfContentAnchorJson = viewport.getString("anchor");
         if (pendingPdfContentAnchorJson == null) pendingPdfContentAnchorJson = "";
         // "Continue reading aloud" resume from the main screen: arm auto-start so
         // playback begins (from the saved position) once the PDF has loaded.
@@ -2928,6 +2962,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
      * without destroying the Activity; renderer cleanup alone is not enough.
      */
     private void resetPdfDocumentScopedState() {
+        pdfAnchorRestoreGeneration++;
+        pendingPdfContentAnchorJson = "";
         // Close immediately rather than waiting for the replacement path/URI to
         // resolve. If that load fails, the old PDF must not remain visible or
         // retain its renderer behind the new error state.
@@ -3137,6 +3173,13 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             }
             return;
         }
+        pdfAnchorRestoreGeneration++;
+        if (pdfAnchorPageFromJson(pendingPdfContentAnchorJson, target) != target) {
+            pendingPdfContentAnchorJson = "";
+        }
+        if (!verticalPageSlideMode && pdfPageMatrixView != null && pendingPdfContentAnchorJson.isEmpty()) {
+            pendingPdfContentAnchorJson = makePdfAnchorJsonForPending(target, 0.5f, 0.5f, false);
+        }
         // Moving to a different page: invalidate the one-shot resume anchor once
         // we leave the page it points into, so subsequent pages speak from their
         // start. The resume path sets the anchor and calls goToPage(anchorPage);
@@ -3232,6 +3275,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private void showSinglePageBitmap(@NonNull Bitmap cached, float zoomForDisplay) {
         Bitmap old = currentBitmap;
         currentBitmap = cached;
+        pdfDisplayedBitmapPage = currentPage;
+        pdfDisplayedBitmapGeneration = renderGeneration;
         pdfSpreadBitmapLayout = null;
         renderedZoom = zoomForDisplay;
         // Stage-1 Matrix zoom: feed the Matrix view and skip the legacy ImageView
@@ -3254,6 +3299,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                     && !isBitmapInSinglePageCache(old)) {
                 old.recycle();
             }
+            restorePendingPdfContentAnchorIfNeeded();
             return;
         }
         pageImage.animate().cancel();
@@ -3852,6 +3898,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                     }
                     Bitmap old = currentBitmap;
                     currentBitmap = finalBitmap;
+                    pdfDisplayedBitmapPage = pageToRender;
+                    pdfDisplayedBitmapGeneration = generation;
                     pdfSpreadBitmapLayout = spreadToRender ? spreadLayoutHolder[0] : null;
                     renderedZoom = zoomToRender;
                     pageImage.animate().cancel();
@@ -4129,8 +4177,35 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
 
     String currentPdfContentAnchorJson() {
+        // Loading, trimming or queued restoration must not replace a precise
+        // anchor with coordinates from a blank/previous view.
+        if (pendingPdfContentAnchorJson != null && !pendingPdfContentAnchorJson.trim().isEmpty()) {
+            return pendingPdfContentAnchorJson;
+        }
         if (verticalPageSlideMode) {
             return currentContinuousPdfContentAnchorJson();
+        }
+        if (pdfPageMatrixView != null) {
+            try {
+                float[] point = pdfDisplayedBitmapPage == currentPage
+                        ? pdfPageMatrixView.captureViewportAnchor() : null;
+                int page = currentPage;
+                float x = 0.5f, y = 0.5f, relativeZoom = 1f;
+                if (point != null) {
+                    x = point[0]; y = point[1]; relativeZoom = point[2];
+                    PdfSpreadHighlightMath.Layout layout = validCurrentPdfSpreadLayout();
+                    float[] source = layout != null ? layout.unmapPoint(x, y) : null;
+                    if (source != null) { page = (int) source[0]; x = source[1]; y = source[2]; }
+                }
+                JSONObject obj = new JSONObject();
+                obj.put("kind", "PDF_PAGE_COORD_v3");
+                obj.put("mode", "single");
+                obj.put("viewportOrigin", "center");
+                obj.put("page", page);
+                obj.put("pageNumber", page + 1);
+                obj.put("xRatio", x); obj.put("yRatio", y); obj.put("zoom", relativeZoom);
+                return obj.toString();
+            } catch (Exception ignored) { return ""; }
         }
         try {
             JSONObject obj = new JSONObject();
@@ -4226,7 +4301,6 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     void restorePendingPdfContentAnchorIfNeeded() {
         if (pendingPdfContentAnchorJson == null || pendingPdfContentAnchorJson.trim().isEmpty()) return;
         final String anchor = pendingPdfContentAnchorJson;
-        pendingPdfContentAnchorJson = "";
         restorePdfContentAnchor(anchor);
     }
 
@@ -4237,8 +4311,58 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             int page = clampPage(obj.optInt("page", obj.optInt("pageNumber", currentPage + 1) - 1));
             final float xRatio = (float) Math.max(0.0d, Math.min(1.0d, obj.optDouble("xRatio", 0.0d)));
             final float yRatio = (float) Math.max(0.0d, Math.min(1.0d, obj.optDouble("yRatio", 0.0d)));
+            if (Float.isNaN(xRatio) || Float.isNaN(yRatio)) {
+                pendingPdfContentAnchorJson = "";
+                return;
+            }
             if (verticalPageSlideMode) {
-                restorePdfContinuousContentAnchor(page, xRatio, yRatio);
+                pendingPdfContentAnchorJson = anchorJson;
+                double savedZoom = obj.optDouble("zoom", 1d);
+                if ("continuous".equals(obj.optString("mode")) && !Double.isNaN(savedZoom)
+                        && !Double.isInfinite(savedZoom)) zoom = (float) Math.max(0.55d, Math.min(4.5d, savedZoom));
+                restorePdfContinuousContentAnchor(page, xRatio, yRatio, anchorJson,
+                        "center".equals(obj.optString("viewportOrigin")));
+                return;
+            }
+            if (pdfPageMatrixView != null) {
+                pendingPdfContentAnchorJson = anchorJson;
+                if (page != currentPage && page != pdfRightSpreadPageIndex()) {
+                    goToPage(page, Integer.compare(page, currentPage));
+                    return;
+                }
+                if (currentBitmap == null || currentBitmap.isRecycled()
+                        || pdfDisplayedBitmapPage != currentPage
+                        || pdfDisplayedBitmapGeneration != renderGeneration) return;
+                final int request = ++pdfAnchorRestoreGeneration;
+                final int document = pdfDocumentLoadGeneration;
+                final int render = renderGeneration;
+                final int sourcePage = page;
+                double savedZoom = obj.optDouble("zoom", 1d);
+                final float relativeZoom = Double.isNaN(savedZoom) || Double.isInfinite(savedZoom)
+                        ? 1f : (float) Math.max(1d, Math.min(100d, savedZoom));
+                final boolean center = "center".equals(obj.optString("viewportOrigin"));
+                final PdfPageView target = pdfPageMatrixView;
+                // Apply after layout and after setFitBitmap's deferred reset.
+                target.getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+                    @Override public boolean onPreDraw() {
+                        boolean stale = activityDestroyed || verticalPageSlideMode
+                                || request != pdfAnchorRestoreGeneration || document != pdfDocumentLoadGeneration
+                                || render != renderGeneration || !anchorJson.equals(pendingPdfContentAnchorJson);
+                        if (!stale && (target.getWidth() <= 0 || target.getHeight() <= 0)) return true;
+                        if (target.getViewTreeObserver().isAlive()) target.getViewTreeObserver().removeOnPreDrawListener(this);
+                        if (stale) return true;
+                        float x = xRatio, y = yRatio;
+                        PdfSpreadHighlightMath.Layout layout = validCurrentPdfSpreadLayout();
+                        if (layout != null) {
+                            float[] mapped = layout.map(sourcePage, x, y, x, y);
+                            if (mapped == null) return true;
+                            x = mapped[0]; y = mapped[1];
+                        } else if (sourcePage != currentPage || hasVisiblePdfRightSpreadPage()) return true;
+                        if (target.restoreViewportAnchor(x, y, relativeZoom, center)) pendingPdfContentAnchorJson = "";
+                        return true;
+                    }
+                });
+                target.invalidate();
                 return;
             }
             if (pageImage == null) {
@@ -4250,8 +4374,12 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 goToPage(page, Integer.compare(page, currentPage));
                 return;
             }
+            pendingPdfContentAnchorJson = anchorJson;
+            final int request = ++pdfAnchorRestoreGeneration;
+            final int document = pdfDocumentLoadGeneration;
             pageImage.post(() -> {
-                if (pageImage == null) return;
+                if (pageImage == null || activityDestroyed || request != pdfAnchorRestoreGeneration
+                        || document != pdfDocumentLoadGeneration || !anchorJson.equals(pendingPdfContentAnchorJson)) return;
                 if (pdfHScroll != null) {
                     int maxX = 0;
                     if (pdfHScroll.getChildCount() > 0) maxX = Math.max(0, pdfHScroll.getChildAt(0).getWidth() - pdfHScroll.getWidth());
@@ -4264,17 +4392,19 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                     int targetY = Math.max(0, Math.min(maxY, Math.round(pageImage.getHeight() * yRatio)));
                     pdfVScroll.scrollTo(pdfVScroll.getScrollX(), targetY);
                 }
+                pendingPdfContentAnchorJson = "";
             });
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) { pendingPdfContentAnchorJson = ""; }
     }
 
-    private void restorePdfContinuousContentAnchor(int page, float xRatio, float yRatio) {
+    private void restorePdfContinuousContentAnchor(int page, float xRatio, float yRatio,
+                                                  String anchorJson, boolean center) {
         if (pageCount <= 0) return;
         final int targetPage = clampPage(page);
         currentPage = targetPage;
         updatePageStatus();
         if (!ensureContinuousPagesConfigured() || pdfContinuousList == null) {
-            pendingPdfContentAnchorJson = makePdfAnchorJsonForPending(targetPage, xRatio, yRatio, true);
+            pendingPdfContentAnchorJson = anchorJson;
             return;
         }
         final float clampedX = Math.max(0f, Math.min(1f, xRatio));
@@ -4288,7 +4418,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             int pageHeight = pdfContinuousAdapter != null
                     ? Math.max(1, pdfContinuousAdapter.getRenderedHeightForPage(targetPage))
                     : Math.max(1, pdfContinuousList.getHeight());
-            int offsetY = Math.round(pageHeight * clampedY);
+            int offsetY = Math.round(pageHeight * clampedY
+                    - (center ? pdfContinuousList.getHeight() * 0.5f : 0f));
             RecyclerView.LayoutManager manager = pdfContinuousList.getLayoutManager();
             if (manager instanceof LinearLayoutManager) {
                 ((LinearLayoutManager) manager).scrollToPositionWithOffset(targetPage, -offsetY);
@@ -4299,10 +4430,13 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 if (!isCurrentContinuousNavigation(navigationGeneration)) return;
                 if (pdfContinuousAdapter != null) {
                     int pageWidth = Math.max(1, pdfContinuousAdapter.getRenderedWidthForPage(targetPage));
-                    pdfContinuousAdapter.setPageHorizontalPanOffset(targetPage, Math.round(pageWidth * clampedX));
+                    int pan = Math.round(pageWidth * clampedX
+                            - (center ? pdfContinuousList.getWidth() * 0.5f : 0f));
+                    pdfContinuousAdapter.setPageHorizontalPanOffset(targetPage, Math.max(0, pan));
                 }
                 suppressContinuousScrollSync = false;
                 currentPage = targetPage;
+                if (anchorJson.equals(pendingPdfContentAnchorJson)) pendingPdfContentAnchorJson = "";
                 updatePageStatus();
                 prefetchContinuousPagesAround(targetPage);
             });
@@ -4312,13 +4446,15 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private String makePdfAnchorJsonForPending(int page, float xRatio, float yRatio, boolean continuous) {
         try {
             JSONObject obj = new JSONObject();
-            obj.put("kind", "PDF_PAGE_COORD_v2");
+            boolean matrixAnchor = !continuous && pdfPageMatrixView != null;
+            obj.put("kind", matrixAnchor ? "PDF_PAGE_COORD_v3" : "PDF_PAGE_COORD_v2");
+            if (matrixAnchor) obj.put("viewportOrigin", "center");
             obj.put("mode", continuous ? "continuous" : "single");
             obj.put("page", clampPage(page));
             obj.put("pageNumber", clampPage(page) + 1);
             obj.put("xRatio", Math.max(0f, Math.min(1f, xRatio)));
             obj.put("yRatio", Math.max(0f, Math.min(1f, yRatio)));
-            obj.put("zoom", zoom);
+            obj.put("zoom", matrixAnchor ? 1f : zoom);
             return obj.toString();
         } catch (Exception ignored) {
             return "";
@@ -4336,8 +4472,13 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         state.setTotalPages(pageCount);
         state.setFileLength(fileSizeBytes(filePath));
         state.setContentAnchorJson(anchor);
-        state.setEncoding(anchor != null && !anchor.isEmpty() ? "PDF_PAGE_COORD_v2" : "PDF_PAGE");
+        state.setEncoding(pdfContentAnchorKind(anchor));
         bookmarkManager.saveReadingState(state);
+    }
+
+    String pdfContentAnchorKind(String anchor) {
+        try { return new JSONObject(anchor).optString("kind", "PDF_PAGE"); }
+        catch (Exception ignored) { return "PDF_PAGE"; }
     }
 
     private long fileSizeBytes(String path) {
@@ -4367,6 +4508,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private void trimPdfBitmapsForBackground(boolean force) {
         if (activityDestroyed || backgroundPdfBitmapsReleased || pdfRenderer == null) return;
         if (!force && !isFinishing() && !isChangingConfigurations() && hasWindowFocus()) return;
+        pendingPdfContentAnchorJson = currentPdfContentAnchorJson();
         saveReadingState();
         if (pdfContinuousList != null) pdfContinuousList.stopScroll();
         releaseSinglePageBitmap();
@@ -4601,6 +4743,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     }
 
     @Override
+    public int ttsTextFormatVersion() {
+        return PdfTtsTextSource.TEXT_FORMAT_VERSION;
+    }
+
+    @Override
     public void ttsHostPageBy(int direction) {
         if (pageCount <= 0 || direction == 0) return;
         int target = Math.max(0, Math.min(pageCount - 1, currentPage + direction));
@@ -4625,8 +4772,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     @Override
     public void ttsJumpToAbsoluteCharPosition(int charPosition, int displayPage, int totalPages) {
-        // The char position is authoritative; the saved display page is a hint.
-        ttsJumpToAbsoluteCharPosition(charPosition);
+        if (pdfTtsTextSource == null) return;
+        // Legacy checkpoints predate inferred spaces; use their saved page, not shifted offsets.
+        int formatVersion = prefs != null ? prefs.getTtsLastTextFormatVersion() : 0;
+        ttsJumpToAbsoluteCharPosition(
+                pdfTtsTextSource.resolveSavedPosition(charPosition, displayPage, formatVersion));
     }
 
     @Override

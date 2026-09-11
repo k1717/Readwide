@@ -20,9 +20,8 @@ final class Rar3FirstPartyArchiveExtractor {
     private Rar3FirstPartyArchiveExtractor() {}
 
     /**
-     * Product fallback gate: only verified non-solid classic-LZ entries are allowed here.
-     * Solid sequencing helpers below remain available for diagnostics/probes, but are not
-     * exposed as live fallback support.
+     * Native remains primary. The extended plain, single-volume fallback requires known CRCs,
+     * a non-solid primer and explicit file boundaries. Stored-member solid runs stay excluded.
      */
     static boolean tryExtractArchiveLimitedFallback(@NonNull List<RarArchiveReader.RarEntry> entries,
                                                     @NonNull File targetDir,
@@ -30,16 +29,87 @@ final class Rar3FirstPartyArchiveExtractor {
                                                     @Nullable FileOperationProgress progress,
                                                     @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
         if (password != null && password.length > 0) return false;
-        if (!isArchiveLimitedFallbackAllowed(entries)) return false;
-        return tryExtractArchive(entries, targetDir, password, progress, entryProgress);
+        if (isArchiveLimitedFallbackAllowed(entries)) {
+            return tryExtractArchive(entries, targetDir, password, progress, entryProgress);
+        }
+        if (!isCheckedArchiveAllowed(entries)) return false;
+        Rar3SolidState state = new Rar3SolidState();
+        for (RarArchiveReader.RarEntry entry : entries) {
+            if (entry == null || entry.directory) continue;
+            if (!entry.solid) state.reset();
+            if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+            if (entryProgress != null) entryProgress.onFile(entry.path);
+            File out = RarArchiveReader.resolveOutput(targetDir, entry.path);
+            if (out == null) throw new IOException("Invalid RAR output path");
+            extractChecked(entry, state, out, progress);
+        }
+        return true;
     }
 
     static boolean tryExtractSingleEntryLimitedFallback(@NonNull RarArchiveReader.RarEntry target,
                                                        @NonNull List<RarArchiveReader.RarEntry> entries,
                                                        @NonNull File outFile,
                                                        @Nullable FileOperationProgress progress) throws IOException {
-        if (!isLimitedNonSolidClassicLzFallbackCandidate(target)) return false;
-        return tryExtractSingleEntry(target, entries, outFile, progress);
+        if (isLimitedNonSolidClassicLzFallbackCandidate(target)) {
+            return tryExtractSingleEntry(target, entries, outFile, progress);
+        }
+        List<RarArchiveReader.RarEntry> sequence = checkedSequence(entries, target);
+        if (sequence == null) return false;
+        Rar3SolidState state = new Rar3SolidState();
+        for (RarArchiveReader.RarEntry entry : sequence) {
+            extractChecked(entry, state, entry == target ? outFile : null, progress);
+        }
+        return true;
+    }
+
+    private static boolean isCheckedCandidate(RarArchiveReader.RarEntry entry) {
+        return entry != null && entry.rarVersion == 4 && isFirstPartyCompressedCandidate(entry)
+                && entry.sourceArchive != null && entry.dataCrc >= 0
+                && entry.unpackedSize >= 0 && entry.packedSize > 0;
+    }
+
+    private static boolean independentStart(RarArchiveReader.RarEntry entry) {
+        if (!isCheckedCandidate(entry) || entry.solid) return false;
+        Rar3PpmdBlockProbe.Result probe = Rar3PpmdBlockProbe.probe(entry);
+        return probe.isClassicLz() || (probe.isPpmd() && (probe.rawFlags & 0x2000) != 0);
+    }
+
+    private static boolean isCheckedArchiveAllowed(List<RarArchiveReader.RarEntry> entries) {
+        boolean primed = false;
+        for (RarArchiveReader.RarEntry entry : entries) {
+            if (entry == null || entry.directory) continue;
+            if (!isCheckedCandidate(entry)) return false;
+            if (!entry.solid) { if (!independentStart(entry)) return false; primed = true; }
+            else if (!primed) return false;
+        }
+        return primed;
+    }
+
+    /** Never infer a missing primer or probe table-less Huffman data as a mode header. */
+    private static List<RarArchiveReader.RarEntry> checkedSequence(
+            List<RarArchiveReader.RarEntry> entries, RarArchiveReader.RarEntry target) {
+        int index = entries.indexOf(target);
+        if (index < 0 || !isCheckedCandidate(target)) return null;
+        java.util.LinkedList<RarArchiveReader.RarEntry> sequence = new java.util.LinkedList<>();
+        for (int i = index; i >= 0; i--) {
+            RarArchiveReader.RarEntry entry = entries.get(i);
+            if (entry == null || entry.directory) continue;
+            if (!isCheckedCandidate(entry)) return null;
+            sequence.addFirst(entry);
+            if (!entry.solid) return independentStart(entry) ? sequence : null;
+        }
+        return null;
+    }
+
+    private static void extractChecked(RarArchiveReader.RarEntry entry, Rar3SolidState state,
+            File out, FileOperationProgress progress) throws IOException {
+        Rar3UnpackContext context = solidSequenceContext(entry, state);
+        context.requireFileBoundary();
+        if (out == null) { Rar3Unpacker.unpackSolidPrimerToDiscard(context, progress); return; }
+        try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(out)) {
+            Rar3Unpacker.unpack(context, out, progress);
+            guard.commit();
+        }
     }
 
     static boolean tryExtractArchive(@NonNull List<RarArchiveReader.RarEntry> entries,
@@ -136,10 +206,9 @@ final class Rar3FirstPartyArchiveExtractor {
     }
 
     static boolean isLimitedNonSolidClassicLzFallbackCandidate(@NonNull RarArchiveReader.RarEntry entry) {
-        if (!isFirstPartyCompressedCandidate(entry) || entry.solid) return false;
-        // RAR3/RAR4 methods 0x31..0x35 cover both classic-LZ and PPMd. The live
-        // Java fallback is only the verified classic-LZ subset; PPMd must stay
-        // libarchive-owned until the statistical model is implemented and CRC-verified.
+        if (!isCheckedCandidate(entry) || entry.solid) return false;
+        // Preserve the existing size-terminated non-solid route. The extended route
+        // below accepts PPMd starts/solid sequences only with explicit file boundaries.
         Rar3PpmdBlockProbe.Result probe = Rar3PpmdBlockProbe.probe(entry);
         return probe.isClassicLz();
     }

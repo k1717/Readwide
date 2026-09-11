@@ -10,6 +10,52 @@ import java.util.ArrayList;
 import java.util.Arrays;
 
 public class ImageSequenceStateTest {
+    @Test public void snapshotIsReusedWithinOneGeneration() {
+        ImageSequenceState.SnapshotCache cache = new ImageSequenceState.SnapshotCache();
+        ArrayList<String> paths = new ArrayList<>(Arrays.asList("a", "b"));
+        ArrayList<String> entries = new ArrayList<>(Arrays.asList("1.jpg", "2.jpg"));
+        ImageSequenceState.Snapshot first = cache.capture(1, paths, entries);
+        org.junit.Assert.assertSame(first, cache.capture(1, paths, entries));
+        assertEquals(1, first.generation);
+    }
+
+    @Test public void snapshotCopiesAreImmutableAndDetachedFromLiveLists() {
+        ImageSequenceState.SnapshotCache cache = new ImageSequenceState.SnapshotCache();
+        ArrayList<String> paths = new ArrayList<>(Arrays.asList("a", "b"));
+        ArrayList<String> entries = new ArrayList<>(Arrays.asList("1.jpg", "2.jpg"));
+        ImageSequenceState.Snapshot first = cache.capture(1, paths, entries);
+        paths.set(0, "renamed");
+        entries.clear();
+        assertEquals(Arrays.asList("a", "b"), first.paths);
+        assertEquals(Arrays.asList("1.jpg", "2.jpg"), first.entryPaths);
+        try { first.paths.set(0, "wrong"); org.junit.Assert.fail("Mutable snapshot"); }
+        catch (UnsupportedOperationException expected) { }
+        try { first.entryPaths.clear(); org.junit.Assert.fail("Mutable snapshot"); }
+        catch (UnsupportedOperationException expected) { }
+    }
+
+    @Test public void newGenerationCapturesRenameDeleteWithoutChangingOldWorkerView() {
+        ImageSequenceState.SnapshotCache cache = new ImageSequenceState.SnapshotCache();
+        ArrayList<String> paths = new ArrayList<>(Arrays.asList("a", "b"));
+        ArrayList<String> entries = new ArrayList<>(Arrays.asList("1.jpg", "2.jpg"));
+        ImageSequenceState.Snapshot old = cache.capture(1, paths, entries);
+        paths.set(0, "renamed"); paths.remove(1); entries.remove(1);
+        ImageSequenceState.Snapshot current = cache.capture(2, paths, entries);
+        org.junit.Assert.assertNotSame(old, current);
+        assertEquals(Arrays.asList("renamed"), current.paths);
+        assertEquals(Arrays.asList("1.jpg"), current.entryPaths);
+        assertEquals(Arrays.asList("a", "b"), old.paths);
+    }
+
+    @Test public void explicitClearReleasesCachedSnapshotAndAllowsRebuild() {
+        ImageSequenceState.SnapshotCache cache = new ImageSequenceState.SnapshotCache();
+        ImageSequenceState.Snapshot old = cache.capture(1, Arrays.asList("a"), Arrays.asList(""));
+        cache.clear();
+        ImageSequenceState.Snapshot current = cache.capture(1, Arrays.asList("b"), Arrays.asList(""));
+        org.junit.Assert.assertNotSame(old, current);
+        assertEquals(Arrays.asList("b"), current.paths);
+    }
+
     @Test
     public void normalizeMetadataLists_addsMissingAndTrimsExtraMetadata() {
         ArrayList<String> paths = new ArrayList<>(Arrays.asList("C:\\img\\001.jpg", "C:\\img\\002.png"));

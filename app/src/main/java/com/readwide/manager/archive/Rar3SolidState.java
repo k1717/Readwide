@@ -5,7 +5,7 @@ import androidx.annotation.NonNull;
 import java.util.Arrays;
 
 /**
- * Mutable cross-entry state for the unfinished first-party RAR3/RAR4 solid decoder path.
+ * Mutable cross-entry state for scoped first-party RAR3/RAR4 solid decoding.
  *
  * <p>Normal compressed RAR is still libarchive-primary. This state holder only gives the
  * Java decoder a controlled place to keep the LZ dictionary, old Huffman table lengths, and
@@ -15,12 +15,40 @@ import java.util.Arrays;
 final class Rar3SolidState {
     private static final int DEFAULT_WINDOW_SIZE = 4 * 1024 * 1024;
 
-    @NonNull private final byte[] window = new byte[DEFAULT_WINDOW_SIZE];
+    @NonNull private byte[] window = new byte[DEFAULT_WINDOW_SIZE];
+    private int retained;
+    private final Rar3MixedPpmdState mixedPpmd = new Rar3MixedPpmdState();
     @NonNull private final int[] oldTableLengths = new int[Rar3HuffmanTables.TABLE_SIZE];
     @NonNull private final Rar3UnpackState unpackState = new Rar3UnpackState();
     @NonNull private final Rar3PpmdState ppmdState = new Rar3PpmdState();
+    @NonNull private final Rar3VmFilter.ProgramState vmFilterState =
+            new Rar3VmFilter.ProgramState();
     private int writePosition;
     private boolean initialized;
+    private boolean reuseClassicTables;
+    private boolean invalid;
+
+    boolean reuseClassicTables() { return reuseClassicTables; }
+
+    void setReuseClassicTables(boolean reuse) { reuseClassicTables = reuse; }
+
+    void ensureUsable() throws java.io.IOException {
+        if (invalid) throw new java.io.IOException("RAR3 solid state requires reset after failed entry");
+    }
+
+    void invalidate() {
+        reuseClassicTables = false;
+        mixedPpmd.reset();
+        invalid = true;
+    }
+
+    Rar3MixedPpmdState mixedPpmd() { return mixedPpmd; }
+    int retained() { return retained; }
+    void saveWindow(RarLzWindow decoded) {
+        window = decoded.bytes();
+        retained = decoded.retained();
+        updateWritePosition(decoded.position());
+    }
 
     int windowSize() {
         return window.length;
@@ -59,12 +87,22 @@ final class Rar3SolidState {
         return ppmdState;
     }
 
+    @NonNull
+    Rar3VmFilter.ProgramState vmFilterState() {
+        return vmFilterState;
+    }
+
     void reset() {
         Arrays.fill(window, (byte) 0);
         Arrays.fill(oldTableLengths, 0);
         unpackState.resetNonSolid();
         ppmdState.resetNonSolid();
+        vmFilterState.reset();
+        mixedPpmd.reset();
+        retained = 0;
         writePosition = 0;
         initialized = false;
+        reuseClassicTables = false;
+        invalid = false;
     }
 }

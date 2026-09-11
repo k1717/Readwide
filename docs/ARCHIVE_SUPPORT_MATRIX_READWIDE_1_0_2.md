@@ -1,10 +1,10 @@
 # Archive support matrix for Readwide 1.0.2
 
-> **Historical baseline:** This file preserves the original 1.0.2 matrix and its support-label model; it is not the current 1.0.16 compatibility claim. Since 1.0.2, Zstandard/LZ4, split and encrypted ALZ/EGG cases, first-party encrypted PPMd/BCJ2 7z paths, and scoped RAR5 header-encryption support were added. In particular, the earlier “RAR5 header encryption unsupported everywhere” finding was later closed by the first-party path documented in `docs/RAR5_HEADER_ENCRYPTION_READWIDE_1_0_11.md`. Use `README.md`, the 1.0.16 release notes, and the format-specific revalidation documents for current scope.
+> **Historical baseline:** This file preserves the original 1.0.2 matrix and its support-label model; it is not the current 1.0.18 compatibility claim. Since 1.0.2, Zstandard/LZ4, split and encrypted ALZ/EGG cases, first-party encrypted PPMd/BCJ2 7z paths, and scoped RAR5 header-encryption support were added. In particular, the earlier “RAR5 header encryption unsupported everywhere” finding was later closed by the first-party path documented in `docs/RAR5_HEADER_ENCRYPTION_READWIDE_1_0_11.md`. Use `README.md`, the 1.0.18 release notes, and the format-specific revalidation documents for current scope.
 
-- Stream extraction safety: unknown-size decoded streams, including single-file compressed payloads and 7z entry extraction loops, now enforce the existing extraction safety limit while bytes are written.
+- Stream extraction safety: the historical fixed-size guards are superseded in 1.0.18 by an operation-wide budget based on usable storage minus a 64 MiB reserve, without the former 128 GiB ceiling. Unknown-size output and native libarchive writes share the same accounting; decoder memory/format limits remain separate.
 
-This historical matrix is not the current wording source for archive support claims. For Readwide 1.0.16, use `README.md`, current release notes, and the RAR/7z revalidation notes for user-facing claims; the tables below remain a 1.0.2 baseline for terminology and conservative support-label definitions.
+This historical matrix is not the current wording source for archive support claims. For Readwide 1.0.18, use `../README.md` and `CURRENT_SOURCE_STATUS_1_0_18.md`; the tables below remain a 1.0.2 baseline for terminology and conservative support-label definitions.
 
 ## Support labels
 

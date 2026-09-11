@@ -12,8 +12,8 @@ package com.readwide.manager.util;
  * file-extraction window deepens ahead of them (and keeps one page behind
  * for the occasional step back), so the stream converts reading pauses into
  * cache instead of idling. The bitmap-decode window stays at the nearest
- * neighbors regardless - decoded bitmaps cost real memory, extracted files
- * do not.</p>
+ * neighbors regardless - decoded bitmaps cost heap memory, while extracted files
+ * consume temporary storage.</p>
  */
 public final class ImagePrefetchMath {
     /** File-extraction look-ahead depth once a paging direction is sustained. */
@@ -33,9 +33,17 @@ public final class ImagePrefetchMath {
      * streak (the changed direction itself starts a new streak of one).
      */
     public static int updateStreak(int previousStreak, int indexDelta) {
-        if (indexDelta == 1) return previousStreak >= 0 ? previousStreak + 1 : 1;
-        if (indexDelta == -1) return previousStreak <= 0 ? previousStreak - 1 : -1;
+        if (indexDelta == 1) return previousStreak >= 0
+                ? Math.min(previousStreak, Integer.MAX_VALUE - 1) + 1 : 1;
+        if (indexDelta == -1) return previousStreak <= 0
+                ? Math.max(previousStreak, Integer.MIN_VALUE + 1) - 1 : -1;
         return 0; // slider jumps and multi-page moves reset the streak
+    }
+
+    /** Explicit adjacent-page intent distinguishes spread turns from slider jumps. */
+    public static int updateNavigationStreak(int previousStreak, int direction, int indexDelta) {
+        if ((direction != 1 && direction != -1) || Integer.signum(indexDelta) != direction) return 0;
+        return updateStreak(previousStreak, direction);
     }
 
     /** Returns -1, 0 or +1: the sustained direction implied by the streak. */

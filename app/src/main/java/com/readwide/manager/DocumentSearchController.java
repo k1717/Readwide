@@ -30,6 +30,97 @@ import java.util.Locale;
 final class DocumentSearchController {
     private static final String CURRENT_SEARCH_ID = "rw-document-search-current";
     private final DocumentPageActivity activity;
+    private java.util.concurrent.ThreadPoolExecutor countWorker;
+    private java.util.concurrent.Future<?> countTask;
+    private int countGeneration;
+    private String countsQuery = "", countsOptions = "";
+    private Object countsFirstPage;
+    private int countsPageSize = -1;
+    private DocumentSearchCounts countsIndex;
+    private Runnable afterCount;
+    private boolean afterCountIsNavigation;
+    private SearchMatcher countedMatcher;
+
+    private Object firstPageIdentity() { return activity.pages.isEmpty() ? null : activity.pages.get(0); }
+
+    private boolean countsMatch(String query) {
+        return query.equals(countsQuery) && currentSearchOptions().signature().equals(countsOptions)
+                && countsFirstPage == firstPageIdentity() && countsPageSize == documentSearchPageCount();
+    }
+
+    /** UI-thread request; all HTML decoding and matching happens on the worker. */
+    private boolean ensureCounts(String query, Runnable ready) {
+        return ensureCounts(query, ready, false);
+    }
+
+    private boolean ensureCounts(String query, Runnable ready, boolean navigation) {
+        if (activity.activityDestroyed) return false;
+        if (countsMatch(query) && countsIndex != null) return true;
+        if (!countsMatch(query) || navigation || !afterCountIsNavigation) {
+            afterCount = ready; afterCountIsNavigation = navigation;
+        }
+        if (countsMatch(query) && countTask != null) return false; // includes queued UI completion
+        if (countTask != null) countTask.cancel(true);
+        final int generation = ++countGeneration;
+        final int load = activity.loadGeneration;
+        final SearchOptions options = currentSearchOptions();
+        countsQuery = query; countsOptions = options.signature();
+        countsFirstPage = firstPageIdentity(); countsPageSize = documentSearchPageCount();
+        final Object firstPage = countsFirstPage;
+        final String[] html = new String[countsPageSize];
+        for (int i = 0; i < html.length; i++) html[i] = documentSearchPageHtml(i);
+        countsIndex = null;
+        if (countWorker == null) countWorker = new java.util.concurrent.ThreadPoolExecutor(
+                1, 1, 10, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<>(1),
+                new java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy());
+        countWorker.allowCoreThreadTimeOut(true);
+        countTask = countWorker.submit(() -> {
+            try {
+            SearchMatcher matcher = SearchMatcher.compile(query, options);
+            int[] counts = new int[html.length];
+
+            for (int i = 0; i < html.length; i++) {
+                if (Thread.currentThread().isInterrupted()) return;
+                counts[i] = matcher == null ? 0 : countHtmlTextSegmentMatches(html[i], matcher);
+
+            }
+            if (Thread.currentThread().isInterrupted()) return;
+            final DocumentSearchCounts completed = new DocumentSearchCounts(counts);
+            activity.runOnUiThread(() -> {
+                if (activity.activityDestroyed || generation != countGeneration || load != activity.loadGeneration
+                        || firstPage != firstPageIdentity() || !countsMatch(query)) return;
+                countTask = null;
+                countsIndex = completed; countedMatcher = matcher;
+                Runnable callback = afterCount; afterCount = null;
+                afterCountIsNavigation = false;
+                if (callback != null) callback.run();
+            });
+            } catch (RuntimeException | StackOverflowError failure) {
+                activity.runOnUiThread(() -> {
+                    if (activity.activityDestroyed || generation != countGeneration) return;
+                    countTask = null; afterCount = null; afterCountIsNavigation = false; countsPageSize = -1;
+                    if (activity.documentSearchStatusView != null) activity.documentSearchStatusView.setText(
+                            getString(R.string.error_prefix) + failure.getClass().getSimpleName());
+                });
+            }
+        });
+        return false;
+    }
+
+    void close() {
+        invalidateCounts();
+        if (countWorker != null) countWorker.shutdownNow();
+        countWorker = null;
+    }
+
+    private void invalidateCounts() {
+        ++countGeneration;
+        if (countTask != null) countTask.cancel(true);
+        countTask = null; afterCount = null;
+        afterCountIsNavigation = false; countedMatcher = null;
+        countsIndex = null; countsFirstPage = null; countsPageSize = -1;
+    }
 
     DocumentSearchController(@NonNull DocumentPageActivity activity) {
         this.activity = activity;
@@ -93,8 +184,12 @@ final class DocumentSearchController {
         input.setText(rememberedQuery);
         if (!rememberedQuery.isEmpty()) {
             input.setSelection(input.getText().length());
-            activity.activeDocumentSearchTotal = countDocumentMatches(rememberedQuery);
-            updateDocumentSearchStatus(matchStatus);
+            final String initialQuery = rememberedQuery;
+            Runnable showInitialCount = () -> {
+                activity.activeDocumentSearchTotal = countDocumentMatches(initialQuery);
+                matchStatus.setText(String.format(Locale.getDefault(), "0 / %d", activity.activeDocumentSearchTotal));
+            };
+            if (ensureCounts(initialQuery, showInitialCount)) showInitialCount.run();
         }
         box.addView(input, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -131,12 +226,30 @@ final class DocumentSearchController {
                 matchStatus.setText("0 / 0");
                 return;
             }
-            int total = countDocumentMatches(q);
-            activity.activeDocumentSearchTotal = total;
-            int ordinal = activeGlobalOrdinal();
-            if (!q.equals(activity.activeDocumentSearchQuery)) ordinal = 0;
-            matchStatus.setText(String.format(Locale.getDefault(), "%d / %d", Math.max(0, ordinal), Math.max(0, total)));
+            Runnable showCount = () -> {
+                int total = countDocumentMatches(q);
+                activity.activeDocumentSearchTotal = total;
+                int ordinal = q.equals(activity.activeDocumentSearchQuery) ? activeGlobalOrdinal() : 0;
+                matchStatus.setText(String.format(Locale.getDefault(), "%d / %d", Math.max(0, ordinal), Math.max(0, total)));
+            };
+            if (ensureCounts(q, showCount)) showCount.run();
+            else matchStatus.setText("…");
         };
+
+        final Runnable debouncedRecount = () -> {
+            if (input == activity.documentSearchInputView && activity.documentSearchDialog != null
+                    && activity.documentSearchDialog.isShowing()) recount.run();
+        };
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
+            @Override public void afterTextChanged(android.text.Editable value) {
+                input.removeCallbacks(debouncedRecount);
+                invalidateCounts();
+                matchStatus.setText(value.toString().trim().isEmpty() ? "0 / 0" : "…");
+                input.postDelayed(debouncedRecount, 180L);
+            }
+        });
 
         caseBox.setOnCheckedChangeListener((v, checked) -> {
             if (activity.prefs != null) activity.prefs.setReaderSearchCaseSensitive(checked);
@@ -232,6 +345,7 @@ final class DocumentSearchController {
         });
 
         dialog.setOnDismissListener(d -> {
+            input.removeCallbacks(debouncedRecount);
             if (activity.prefs != null) {
                 activity.prefs.setLastReaderSearchQuery(input.getText() != null ? input.getText().toString() : "");
             }
@@ -322,7 +436,11 @@ final class DocumentSearchController {
             return;
         }
 
-        SearchMatcher matcher = SearchMatcher.compile(query, currentSearchOptions());
+        if (!ensureCounts(query, () -> performDocumentSearchMove(query, forward, matchStatus, targetOccurrence), true)) {
+            if (matchStatus != null) matchStatus.setText("…");
+            return;
+        }
+        SearchMatcher matcher = countedMatcher;
         if (matcher == null) {
             activity.activeDocumentSearchQuery = query;
             activity.activeDocumentSearchPage = -1;
@@ -441,24 +559,21 @@ final class DocumentSearchController {
             return new DocumentSearchTarget(current, forward ? 1 : currentPageCount, currentPageCount);
         }
 
-        for (int step = 1; step <= count; step++) {
-            int page = forward
-                    ? (current + step) % count
-                    : (current - step + count) % count;
-            int pageCount = countDocumentMatchesOnPage(query, matcher, page);
-            if (pageCount > 0) return new DocumentSearchTarget(page, forward ? 1 : pageCount, pageCount);
-        }
-        return null;
+        if (!countsMatch(query) || countsIndex == null || countsIndex.total() == 0) return null;
+        long total = countsIndex.before(count);
+        long occurrence = forward ? countsIndex.before(current + 1) + 1 : countsIndex.before(current);
+        if (occurrence > total) occurrence = 1;
+        if (occurrence <= 0) occurrence = total;
+        int page = countsIndex.pageForOccurrence(occurrence);
+        return page < 0 ? null : new DocumentSearchTarget(page,
+                (int) (occurrence - countsIndex.before(page)), countsIndex.onPage(page));
     }
 
     private DocumentSearchTarget findDocumentSearchTargetByGlobalOrdinal(String query, SearchMatcher matcher, int occurrence) {
-        int remaining = Math.max(1, occurrence);
-        for (int i = 0; i < documentSearchPageCount(); i++) {
-            int count = countDocumentMatchesOnPage(query, matcher, i);
-            if (remaining <= count) return new DocumentSearchTarget(i, remaining, count);
-            remaining -= count;
-        }
-        return null;
+        if (!countsMatch(query) || countsIndex == null) return null;
+        int page = countsIndex.pageForOccurrence(occurrence);
+        return page < 0 ? null : new DocumentSearchTarget(page,
+                (int) (occurrence - countsIndex.before(page)), countsIndex.onPage(page));
     }
 
     void applyDocumentSearchHighlightAfterPageLoad() {
@@ -518,7 +633,7 @@ final class DocumentSearchController {
         return out;
     }
 
-    private String highlightHtmlTextSegments(String html, SearchMatcher matcher, int selectedOrdinal) {
+    static String highlightHtmlTextSegments(String html, SearchMatcher matcher, int selectedOrdinal) {
         if (html == null || html.isEmpty() || matcher == null) return html;
         StringBuilder out = new StringBuilder(html.length() + 128);
         int[] ordinal = new int[]{0};
@@ -526,7 +641,14 @@ final class DocumentSearchController {
         while (i < html.length()) {
             char ch = html.charAt(i);
             if (ch == '<') {
-                int tagEnd = html.indexOf('>', i + 1);
+                if (html.startsWith("<!--", i)) {
+                    int close = html.indexOf("-->", i + 4);
+                    int commentEnd = close < 0 ? html.length() : close + 3;
+                    out.append(html, i, commentEnd);
+                    i = commentEnd;
+                    continue;
+                }
+                int tagEnd = findHtmlTagEnd(html, i);
                 if (tagEnd < 0) {
                     out.append(html.substring(i));
                     break;
@@ -575,7 +697,7 @@ final class DocumentSearchController {
         return out.toString();
     }
 
-    private void appendHighlightedTextSegment(String html, int start, int end, SearchMatcher matcher,
+    private static void appendHighlightedTextSegment(String html, int start, int end, SearchMatcher matcher,
                                               int selectedOrdinal, int[] ordinal, StringBuilder out) {
         TextSegment segment = decodeHtmlTextSegment(html, start, end);
         // CharSequence.isEmpty() is a platform API only from API 35. length()
@@ -584,24 +706,10 @@ final class DocumentSearchController {
             out.append(html, start, end);
             return;
         }
-        List<SearchMatcher.Match> matches = new ArrayList<>();
-        matcher.forEachMatch(segment.text.toString(), (s, e) -> {
-            if (s >= 0 && e > s && s < segment.rawStartByChar.size()) {
-                matches.add(new SearchMatcher.Match(s, e));
-            }
-            return true;
-        });
-        if (matches.isEmpty()) {
-            out.append(html, start, end);
-            return;
-        }
-        int rawCursor = start;
-        for (SearchMatcher.Match m : matches) {
-            int rawStart = segment.rawStartForChar(m.start);
-            int rawEnd = segment.rawEndForMatchEnd(m.end, end);
-            if (rawStart < rawCursor || rawEnd <= rawStart || rawStart < start || rawEnd > end) continue;
+        int[] rawCursor = {start};
+        forEachRenderableMatch(segment, start, end, matcher, (rawStart, rawEnd) -> {
             ordinal[0] += 1;
-            out.append(html, rawCursor, rawStart);
+            out.append(html, rawCursor[0], rawStart);
             boolean selected = ordinal[0] == selectedOrdinal;
             out.append("<span class=\"rw-document-search-hit");
             if (selected) out.append(" rw-document-search-current");
@@ -612,12 +720,28 @@ final class DocumentSearchController {
                     : " style=\"background-color:#ffeb3b!important;color:#111!important;border-radius:2px;padding:0 1px;\">");
             out.append(html, rawStart, rawEnd);
             out.append("</span>");
-            rawCursor = rawEnd;
-        }
-        out.append(html, rawCursor, end);
+            rawCursor[0] = rawEnd;
+            return true;
+        });
+        out.append(html, rawCursor[0], end);
     }
 
-    private TextSegment decodeHtmlTextSegment(String html, int start, int end) {
+    // HTML spans cannot overlap. Count and markup must accept the exact same
+    // raw ranges, including entities that map more than one UTF-16 unit.
+    private static void forEachRenderableMatch(TextSegment segment, int start, int end,
+                                               SearchMatcher matcher, SearchMatcher.MatchConsumer consumer) {
+        int[] cursor = {start};
+        matcher.forEachMatch(segment.text.toString(), (s, e) -> {
+            if (s < 0 || e <= s || e > segment.rawStartByChar.size()) return true;
+            int rawStart = segment.rawStartForChar(s);
+            int rawEnd = segment.rawEndForMatchEnd(e, end);
+            if (rawStart < cursor[0] || rawEnd <= rawStart || rawEnd > end) return true;
+            cursor[0] = rawEnd;
+            return consumer.accept(rawStart, rawEnd);
+        });
+    }
+
+    private static TextSegment decodeHtmlTextSegment(String html, int start, int end) {
         TextSegment out = new TextSegment();
         int i = start;
         while (i < end) {
@@ -645,7 +769,7 @@ final class DocumentSearchController {
         return out;
     }
 
-    private String decodeHtmlEntity(String entity) {
+    private static String decodeHtmlEntity(String entity) {
         if (entity == null || entity.isEmpty()) return null;
         switch (entity) {
             case "amp": return "&";
@@ -670,33 +794,29 @@ final class DocumentSearchController {
     }
 
     private int countDocumentMatches(String query) {
-        SearchMatcher matcher = SearchMatcher.compile(query, currentSearchOptions());
-        return matcher != null ? countDocumentMatches(query, matcher) : 0;
+        return countsMatch(query) && countsIndex != null ? countsIndex.total() : 0;
     }
 
-    private int countDocumentMatches(String query, SearchMatcher matcher) {
-        if (query == null || query.trim().isEmpty() || matcher == null) return 0;
-        int total = 0;
-        for (int i = 0; i < documentSearchPageCount(); i++) {
-            total += countDocumentMatchesOnPage(query, matcher, i);
-        }
-        return total;
-    }
+    private int countDocumentMatches(String query, SearchMatcher matcher) { return countDocumentMatches(query); }
 
     private int countDocumentMatchesOnPage(String query, SearchMatcher matcher, int pageIndex) {
-        if (pageIndex < 0 || pageIndex >= documentSearchPageCount()
-                || query == null || query.trim().isEmpty() || matcher == null) return 0;
-        return countHtmlTextSegmentMatches(documentSearchPageHtml(pageIndex), matcher);
+        return countsMatch(query) && countsIndex != null ? countsIndex.onPage(pageIndex) : 0;
     }
 
-    private int countHtmlTextSegmentMatches(String html, SearchMatcher matcher) {
+    static int countHtmlTextSegmentMatches(String html, SearchMatcher matcher) {
         if (html == null || html.isEmpty() || matcher == null) return 0;
         int total = 0;
         int i = 0;
         while (i < html.length()) {
+            if (Thread.currentThread().isInterrupted()) return 0;
             char ch = html.charAt(i);
             if (ch == '<') {
-                int tagEnd = html.indexOf('>', i + 1);
+                if (html.startsWith("<!--", i)) {
+                    int close = html.indexOf("-->", i + 4);
+                    i = close < 0 ? html.length() : close + 3;
+                    continue;
+                }
+                int tagEnd = findHtmlTagEnd(html, i);
                 if (tagEnd < 0) break;
                 String tag = html.substring(i, Math.min(tagEnd + 1, html.length())).toLowerCase(Locale.ROOT);
                 if (startsRawTextElement(tag, "head")) {
@@ -723,7 +843,12 @@ final class DocumentSearchController {
                 int nextTag = html.indexOf('<', i);
                 if (nextTag < 0) nextTag = html.length();
                 TextSegment segment = decodeHtmlTextSegment(html, i, nextTag);
-                total += matcher.count(segment.text.toString());
+                int[] count = {0};
+                forEachRenderableMatch(segment, i, nextTag, matcher, (s, e) -> {
+                    if (count[0] < Integer.MAX_VALUE) count[0]++;
+                    return true;
+                });
+                total = (int) Math.min(Integer.MAX_VALUE, (long) total + count[0]);
                 i = nextTag;
             }
         }
@@ -731,13 +856,8 @@ final class DocumentSearchController {
     }
 
     private int countDocumentMatchesBeforePage(String query, int pageIndex) {
-        SearchMatcher matcher = SearchMatcher.compile(query, currentSearchOptions());
-        if (matcher == null) return 0;
-        int total = 0;
-        for (int i = 0; i < Math.min(pageIndex, documentSearchPageCount()); i++) {
-            total += countDocumentMatchesOnPage(query, matcher, i);
-        }
-        return total;
+        return countsMatch(query) && countsIndex != null
+                ? (int) Math.min(Integer.MAX_VALUE, countsIndex.before(pageIndex)) : 0;
     }
 
     void updateDocumentSearchStatus(TextView matchStatus) {
@@ -747,6 +867,9 @@ final class DocumentSearchController {
             return;
         }
         if (activity.activeDocumentSearchTotal <= 0) {
+            if (!ensureCounts(activity.activeDocumentSearchQuery, () -> updateDocumentSearchStatus(matchStatus))) {
+                matchStatus.setText("…"); return;
+            }
             activity.activeDocumentSearchTotal = countDocumentMatches(activity.activeDocumentSearchQuery);
         }
         int globalOrdinal = activeGlobalOrdinal();
@@ -756,10 +879,12 @@ final class DocumentSearchController {
     private int activeGlobalOrdinal() {
         int pageOrdinal = Math.max(0, activity.activeDocumentSearchOrdinal);
         if (pageOrdinal <= 0 || activity.activeDocumentSearchPage < 0) return 0;
-        return countDocumentMatchesBeforePage(activity.activeDocumentSearchQuery, activity.activeDocumentSearchPage) + pageOrdinal;
+        return (int) Math.min(Integer.MAX_VALUE, (long) countDocumentMatchesBeforePage(
+                activity.activeDocumentSearchQuery, activity.activeDocumentSearchPage) + pageOrdinal);
     }
 
     void clearDocumentSearchState(boolean clearWebView) {
+        invalidateCounts();
         String previousQuery = activity.activeDocumentSearchQuery;
         int previousPage = activity.activeDocumentSearchPage;
         activity.activeDocumentSearchQuery = "";
@@ -851,7 +976,20 @@ final class DocumentSearchController {
                 && activity.activeDocumentSearchOrdinal > 0;
     }
 
-    private boolean startsRawTextElement(String lowerTag, String element) {
+    private static int findHtmlTagEnd(String html, int start) {
+        char quote = 0;
+        for (int i = start + 1; i < html.length(); i++) {
+            char c = html.charAt(i);
+            if (quote != 0) {
+                if (c == quote) quote = 0;
+            } else if (c == '\'' || c == '"') {
+                quote = c;
+            } else if (c == '>') return i;
+        }
+        return -1;
+    }
+
+    private static boolean startsRawTextElement(String lowerTag, String element) {
         return lowerTag != null
                 && lowerTag.startsWith("<" + element)
                 && (lowerTag.length() <= element.length() + 1
@@ -859,9 +997,14 @@ final class DocumentSearchController {
                 || lowerTag.charAt(element.length() + 1) == '>');
     }
 
-    private int indexOfIgnoreCase(String src, String needle, int from) {
+    private static int indexOfIgnoreCase(String src, String needle, int from) {
         if (src == null || needle == null) return -1;
-        return src.toLowerCase(Locale.ROOT).indexOf(needle.toLowerCase(Locale.ROOT), Math.max(0, from));
+        // Lowercasing the entire input can change its UTF-16 length (e.g. İ),
+        // invalidating raw HTML offsets. Compare without allocating a copy.
+        for (int i = Math.max(0, from); i <= src.length() - needle.length(); i++) {
+            if (src.regionMatches(true, i, needle, 0, needle.length())) return i;
+        }
+        return -1;
     }
 
     private int parseSearchOccurrenceTarget(EditText occurrenceInput) {

@@ -6,21 +6,22 @@ import androidx.annotation.Nullable;
 import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.File;
-import java.io.FileOutputStream;
+import java.io.BufferedInputStream;
 import java.io.IOException;
-import java.io.RandomAccessFile;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.CRC32;
 
 /**
- * Extracts RAR5 (algorithm version 5.0) compressed entries with the
+ * Extracts compressed entries from the RAR5 container (RAR 5/6 algorithm
+ * version 0 and RAR 7 algorithm version 1) with the
  * first-party {@link Rar5CompressedDecoder}.
  *
  * <p>Solid semantics: a solid entry's window depends on every compressed
  * entry since the start of its solid run, so those predecessors are decoded
- * first (outputs discarded, window carried). Every primer entry must pass
- * its own CRC check before the target is attempted. Stored entries do not
+ * first (outputs discarded, window carried). Every available plain or key-dependent primer CRC
+ * is checked before the target is attempted. Stored entries do not
  * touch the window and are skipped in chains.</p>
  *
  * <p>Failure policy: {@code tryExtract*} methods return {@code false} only
@@ -31,12 +32,131 @@ import java.util.zip.CRC32;
 final class Rar5CompressedArchiveExtractor {
     private Rar5CompressedArchiveExtractor() {}
 
-    /** Per-entry packed/unpacked guards for in-memory decoding. */
-    private static final long MAX_PACKED_BYTES = 64L * 1024 * 1024;
-    private static final long MAX_UNPACKED_BYTES = 256L * 1024 * 1024;
+    /** Keeps solid history across pages; only a completed, checked entry is exposed. */
+    @Nullable
+    static ArchiveSupport.ForwardArchiveReader openForwardReader(File archive, char[] password,
+            File spoolDirectory, boolean nativeAvailable) throws IOException {
+        if (RarArchiveLocator.detectRarVersion(archive) != 5) return null;
+        List<RarArchiveReader.RarEntry> entries = RarArchiveReader.readEntries(archive, password);
+        boolean needsFirstParty = !nativeAvailable || (password != null && password.length > 0);
+        for (RarArchiveReader.RarEntry entry : entries) {
+            if (entry.directory || entry.splitBefore) continue;
+            if (entry.rarVersion != 5 || (entry.method != 0 && !isEligibleCompressed(entry))) return null;
+            needsFirstParty |= entry.encrypted() || (entry.rar5CompressionInfo & 0x3f) == 1;
+        }
+        return needsFirstParty ? new ForwardReader(entries, password, spoolDirectory) : null;
+    }
+
+    private static final class ForwardReader implements ArchiveSupport.ForwardArchiveReader {
+        private final List<RarArchiveReader.RarEntry> entries;
+        private final char[] password;
+        private final File directory;
+        private Rar5CompressedDecoder decoder = new Rar5CompressedDecoder();
+        private int index;
+        private RarArchiveReader.RarEntry current;
+        private File spool;
+        private InputStream input;
+        private boolean decoded;
+        private boolean closed;
+        private boolean failed;
+
+        ForwardReader(List<RarArchiveReader.RarEntry> entries, char[] password, File directory) {
+            this.entries = entries;
+            this.password = password == null ? null : password.clone();
+            this.directory = directory;
+        }
+
+        private void checkpoint() throws IOException {
+            if (closed || failed) throw new IOException("RAR forward reader is closed or failed");
+            if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+        }
+
+        @Override public ArchiveSupport.ForwardEntry nextEntry() throws IOException {
+            checkpoint();
+            drainCurrentEntry(Long.MAX_VALUE);
+            clearSpool();
+            current = null;
+            decoded = false;
+            while (index < entries.size()) {
+                RarArchiveReader.RarEntry entry = entries.get(index++);
+                if (entry.splitBefore) continue;
+                current = entry;
+                return new ArchiveSupport.ForwardEntry(entry.path, entry.directory, !entry.directory);
+            }
+            return null;
+        }
+
+        private void decode(boolean retain) throws IOException {
+            checkpoint();
+            if (current == null || current.directory || decoded) return;
+            try {
+                if (retain || current.method == 0) {
+                    if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create RAR spool directory");
+                    spool = File.createTempFile("rar5_verified_entry_", ".spool", directory);
+                    if (current.method == 0) {
+                        RarArchiveReader.extractStoredEntry(current, spool, password, entries, null);
+                    } else {
+                        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(spool)) {
+                            decodeOne(decoder, current, entries, password, out, null);
+                        }
+                    }
+                    if (retain) input = new BufferedInputStream(new java.io.FileInputStream(spool));
+                    else clearSpool();
+                } else {
+                    // Non-image predecessors still prime the solid window and verify their CRC.
+                    decodeOne(decoder, current, entries, password, DISCARD, null);
+                }
+                decoded = true;
+            } catch (IOException | RuntimeException | Error failure) {
+                failed = true; // Never reuse partially advanced solid history.
+                try { decoder.close(); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+                try { clearSpool(); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+                if (failure instanceof IOException) throw (IOException) failure;
+                if (failure instanceof Error) throw (Error) failure;
+                throw new IOException("RAR5 forward decode failed", failure);
+            }
+        }
+
+        @Override public int read(byte[] buffer) throws IOException {
+            checkpoint();
+            if (buffer.length == 0) return 0;
+            decode(true);
+            return input == null ? -1 : input.read(buffer);
+        }
+
+        @Override public boolean drainCurrentEntry(long maximum) throws IOException {
+            checkpoint();
+            if (current != null && !current.directory && !decoded
+                    && (current.unpackedSize < 0 || current.unpackedSize > maximum)) {
+                throw new IOException("RAR entry exceeds requested drain bound");
+            }
+            decode(false);
+            clearSpool();
+            return true;
+        }
+
+        private void clearSpool() throws IOException {
+            try { if (input != null) input.close(); }
+            finally {
+                input = null;
+                if (spool != null) { spool.delete(); spool = null; }
+            }
+        }
+
+        @Override public void close() throws IOException {
+            if (closed) return;
+            closed = true;
+            if (password != null) java.util.Arrays.fill(password, '\0');
+            try { decoder.close(); }
+            finally {
+                decoder = null;
+                clearSpool();
+            }
+        }
+    }
 
     /**
-     * @return true if the entry was extracted (CRC-verified) to outFile;
+     * @return true if extracted to outFile (available plain or key-dependent CRC verified);
      *         false if this extractor does not apply to the entry
      * @throws IOException on decode failure, CRC mismatch, or cancellation
      */
@@ -50,27 +170,23 @@ final class Rar5CompressedArchiveExtractor {
             return false;
         }
 
-        Rar5CompressedDecoder decoder = new Rar5CompressedDecoder();
-        try {
+        try (Rar5CompressedDecoder decoder = new Rar5CompressedDecoder()) {
             for (int i = 0; i < chain.size(); i++) {
                 RarArchiveReader.RarEntry entry = chain.get(i);
                 boolean isTarget = i == chain.size() - 1;
                 if (progress != null && !progress.checkpoint()) {
                     throw new IOException("RAR extraction cancelled");
                 }
-                byte[] data = decodeOne(decoder, entry, allEntries, password);
-                if (progress != null) {
-                    progress.addDoneBytes(entry.unpackedSize > 0 ? entry.unpackedSize : 0);
-                }
                 if (isTarget) {
                     try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
-                        try (FileOutputStream out = new FileOutputStream(outFile)) {
-                            out.write(data);
+                        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
+                            decodeOne(decoder, entry, allEntries, password, out, progress);
                         }
-                        verifyCrcIfPlaintext(entry, outFile);
                         guard.commit();
                     }
                     return true;
+                } else {
+                    decodeOne(decoder, entry, allEntries, password, DISCARD, progress);
                 }
             }
         } catch (Rar5CompressedDecoder.Rar5DataException e) {
@@ -83,11 +199,11 @@ final class Rar5CompressedArchiveExtractor {
 
     /**
      * Extracts a whole archive whose compressed members are all first-party
-     * decodable RAR5 v5.0 entries (stored members are delegated to the
+     * decodable RAR5-container entries (stored members are delegated to the
      * stored path). One shared decoder pass keeps solid window state
      * without re-priming per entry.
      *
-     * @return true if every entry was extracted (each CRC-verified);
+     * @return true if every entry was extracted (available plain or key-dependent CRCs verified);
      *         false if this extractor does not apply to the archive
      */
     static boolean tryExtractArchive(@NonNull List<RarArchiveReader.RarEntry> entries,
@@ -115,9 +231,8 @@ final class Rar5CompressedArchiveExtractor {
             return false;
         }
 
-        Rar5CompressedDecoder decoder = new Rar5CompressedDecoder();
         boolean sawEntry = false;
-        try {
+        try (Rar5CompressedDecoder decoder = new Rar5CompressedDecoder()) {
             for (RarArchiveReader.RarEntry entry : entries) {
                 if (entry == null || entry.splitBefore) {
                     continue;
@@ -146,16 +261,11 @@ final class Rar5CompressedArchiveExtractor {
                     RarArchiveReader.extractStoredEntry(entry, out, password, entries, progress);
                     continue;
                 }
-                byte[] data = decodeOne(decoder, entry, entries, password);
                 try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(out)) {
-                    try (FileOutputStream fos = new FileOutputStream(out)) {
-                        fos.write(data);
+                    try (OutputStream fos = ArchiveSupport.openExtractionOutputStream(out)) {
+                        decodeOne(decoder, entry, entries, password, fos, progress);
                     }
-                    verifyCrcIfPlaintext(entry, out);
                     guard.commit();
-                }
-                if (progress != null) {
-                    progress.addDoneBytes(entry.unpackedSize > 0 ? entry.unpackedSize : 0);
                 }
             }
         } catch (Rar5CompressedDecoder.Rar5DataException e) {
@@ -165,36 +275,51 @@ final class Rar5CompressedArchiveExtractor {
         return sawEntry;
     }
 
-    /** Decodes one compressed entry and enforces its CRC before returning. */
-    @NonNull
-    private static byte[] decodeOne(@NonNull Rar5CompressedDecoder decoder,
+    private static final OutputStream DISCARD = new OutputStream() {
+        @Override public void write(int value) {}
+        @Override public void write(byte[] data, int offset, int length) {}
+    };
+
+    /** Streams one logical file; the caller commits its guarded output only after CRC success. */
+    private static void decodeOne(@NonNull Rar5CompressedDecoder decoder,
                                     @NonNull RarArchiveReader.RarEntry entry,
                                     @NonNull List<RarArchiveReader.RarEntry> allEntries,
-                                    @Nullable char[] password) throws IOException {
-        byte[] packed = readPackedPayload(entry, allEntries, password);
-        byte[] data = decoder.decodeEntry(packed, entry.unpackedSize, entry.rar5CompressionInfo);
-        if (entry.dataCrc >= 0 && hasPlaintextCrc(entry)) {
-            CRC32 crc = new CRC32();
-            crc.update(data);
-            if (crc.getValue() != (entry.dataCrc & 0xFFFFFFFFL)) {
+                                    @Nullable char[] password,
+                                    @NonNull OutputStream destination,
+                                    @Nullable FileOperationProgress progress) throws IOException {
+        try (PackedPayload packed = openPackedPayload(entry, allEntries, password, progress)) {
+            RarStoredPayloadIO.requireSupportedDataCheck(packed.checksumEntry);
+            long unpackedSize = packed.checksumEntry.unpackedSize;
+            if (unpackedSize < 0L) {
                 throw new RarArchiveReader.UnsupportedRarFeatureException(
-                        "RAR5 entry failed CRC verification: " + entry.path);
+                        "RAR5 unpacked payload is outside supported bounds");
+            }
+            RarStoredPayloadIO.DataCheck dataCheck = new RarStoredPayloadIO.DataCheck(packed.checksumEntry);
+            OutputStream checked = new OutputStream() {
+                @Override public void write(int value) throws IOException {
+                    write(new byte[] {(byte) value}, 0, 1);
+                }
+                @Override public void write(byte[] bytes, int offset, int length) throws IOException {
+                    if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+                    if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+                    destination.write(bytes, offset, length);
+                    dataCheck.update(bytes, offset, length);
+                    if (progress != null) progress.addDoneBytes(length);
+                }
+            };
+            decoder.decodeEntry(packed.input, unpackedSize, entry.rar5CompressionInfo, checked);
+            // Consume padding and force cipher finalization / physical truncation checks.
+            byte[] tail = new byte[64 * 1024];
+            while (packed.input.read(tail) != -1) {
+                if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+            }
+            // Intermediate split CRCs cover packed segments. Only the final part
+            // carries the unpacked-file CRC; verify before any output is committed.
+            if (!dataCheck.matches(packed.secrets)) {
+                throw new RarArchiveReader.UnsupportedRarFeatureException(
+                        "RAR5 entry failed checksum verification: " + entry.path);
             }
         }
-        return data;
-    }
-
-    private static void verifyCrcIfPlaintext(@NonNull RarArchiveReader.RarEntry entry,
-                                             @NonNull File outFile) throws IOException {
-        if (hasPlaintextCrc(entry)) {
-            RarStoredPayloadIO.verifyCrc(entry, outFile);
-        }
-    }
-
-    private static boolean hasPlaintextCrc(@NonNull RarArchiveReader.RarEntry entry) {
-        return !(entry.rarVersion >= 5
-                && entry.encryption != null
-                && entry.encryption.check.length > 0);
     }
 
     /**
@@ -206,7 +331,7 @@ final class Rar5CompressedArchiveExtractor {
     private static List<RarArchiveReader.RarEntry> buildSolidChain(
             @NonNull RarArchiveReader.RarEntry target,
             @NonNull List<RarArchiveReader.RarEntry> allEntries) {
-        if (target.rarVersion != 5 || target.directory || target.method == 0) {
+        if (target.rarVersion != 5 || target.directory || target.method == 0 || target.splitBefore) {
             return null;
         }
         if (!isEligibleCompressed(target)) {
@@ -222,7 +347,7 @@ final class Rar5CompressedArchiveExtractor {
         int startIndex = -1;
         for (int i = targetIndex; i >= 0; i--) {
             RarArchiveReader.RarEntry entry = allEntries.get(i);
-            if (entry == null || entry.directory || entry.method == 0) {
+            if (entry == null || entry.directory || entry.method == 0 || entry.splitBefore) {
                 continue; // stored entries do not touch the window
             }
             if (!entry.solid) {
@@ -237,7 +362,7 @@ final class Rar5CompressedArchiveExtractor {
         List<RarArchiveReader.RarEntry> chain = new ArrayList<>();
         for (int i = startIndex; i <= targetIndex; i++) {
             RarArchiveReader.RarEntry entry = allEntries.get(i);
-            if (entry == null || entry.directory || entry.method == 0) {
+            if (entry == null || entry.directory || entry.method == 0 || entry.splitBefore) {
                 continue;
             }
             if (!isEligibleCompressed(entry)) {
@@ -269,16 +394,32 @@ final class Rar5CompressedArchiveExtractor {
             return false;
         }
         long info = entry.rar5CompressionInfo;
-        if (info < 0 || (info & 0x3F) != 0) {
-            return false; // unknown header or non-5.0 algorithm version
-        }
-        if (entry.packedSize < 1 || entry.packedSize > MAX_PACKED_BYTES) {
+        if (!isSupportedCompressionInfo(info)) {
             return false;
         }
-        if (entry.unpackedSize < 0 || entry.unpackedSize > MAX_UNPACKED_BYTES) {
+        if (entry.packedSize < 1) {
+            return false;
+        }
+        if (entry.unpackedSize < 0) {
             return false;
         }
         return entry.sourceArchive != null;
+    }
+
+    static boolean isSupportedCompressionInfo(long info) {
+        if (info < 0) {
+            return false;
+        }
+        int algorithmVersion = (int) (info & 0x3F);
+        if (algorithmVersion != 0 && algorithmVersion != 1) {
+            return false;
+        }
+        try {
+            Rar5CompressedDecoder.declaredWindowSize(info);
+        } catch (Rar5CompressedDecoder.Rar5DataException invalidHeader) {
+            return false;
+        }
+        return true;
     }
 
     private static int indexOfEntry(@NonNull RarArchiveReader.RarEntry target,
@@ -292,122 +433,67 @@ final class Rar5CompressedArchiveExtractor {
     }
 
     /**
-     * Returns the packed (compressed) bytes for an entry, decrypting them when
-     * the entry is RAR5 AES-256 encrypted and stitching multi-volume split
-     * payloads together. For non-encrypted single-volume entries this is a
-     * plain seek+read; for everything else the volume chain is assembled and
-     * (when encrypted) AES-CBC decrypted into the compressed byte stream that
-     * the decompressor consumes.
-     */
-    /**
-     * Walks back to the first part of a split entry's volume chain. The first
-     * part is the entry sharing the same path that is not a split
-     * continuation ({@code splitBefore == false}).
+     * Opens a bounded stream across the entry's volume segments, optionally
+     * AES-CBC decrypted. Packed payloads are never assembled into byte arrays.
      */
     @NonNull
-    private static RarArchiveReader.RarEntry resolveSplitHead(
-            @NonNull RarArchiveReader.RarEntry entry,
-            @NonNull List<RarArchiveReader.RarEntry> allEntries) {
-        if (!entry.splitBefore) {
-            return entry;
-        }
-        int index = allEntries.indexOf(entry);
-        for (int i = index; i >= 0; i--) {
-            RarArchiveReader.RarEntry candidate = allEntries.get(i);
-            if (candidate == null || candidate.directory) continue;
-            if (candidate.path.equals(entry.path) && !candidate.splitBefore) {
-                return candidate;
-            }
-        }
-        return entry; // fall back; fromFirstEntry will validate completeness
-    }
-
-    @NonNull
-    private static byte[] readPackedPayload(@NonNull RarArchiveReader.RarEntry entry,
+    private static PackedPayload openPackedPayload(@NonNull RarArchiveReader.RarEntry entry,
                                             @NonNull List<RarArchiveReader.RarEntry> allEntries,
-                                            @Nullable char[] password)
+                                            @Nullable char[] password,
+                                            @Nullable FileOperationProgress progress)
             throws IOException {
         if (entry.sourceArchive == null) {
             throw new IOException("RAR5 entry source volume is missing");
         }
 
         boolean split = entry.splitBefore || entry.splitAfter;
-        if (!entry.encrypted() && !split) {
-            byte[] packed = new byte[(int) entry.packedSize];
-            try (RandomAccessFile raf = new RandomAccessFile(entry.sourceArchive, "r")) {
-                raf.seek(entry.dataOffset);
-                raf.readFully(packed);
-            }
-            return packed;
-        }
-
         // Assemble the (possibly multi-volume) packed byte segments.
         List<RarCryptoStreams.EncryptedSegment> segments;
         long packedTotal;
         RarArchiveReader.RarEntry cryptoEntry = entry;
+        RarArchiveReader.RarEntry checksumEntry = entry;
         if (split) {
             Rar5CompressedSplitPayload splitPayload = buildCompressedSplitPayload(
-                    resolveSplitHead(entry, allEntries), allEntries);
+                    entry, allEntries);
             segments = splitPayload.segments;
             packedTotal = splitPayload.packedTotal;
             cryptoEntry = splitPayload.first;
+            checksumEntry = splitPayload.last;
         } else {
             segments = java.util.Collections.singletonList(
                     new RarCryptoStreams.EncryptedSegment(
                             entry.sourceArchive, entry.dataOffset, entry.packedSize));
             packedTotal = entry.packedSize;
         }
-        if (packedTotal < 0 || packedTotal > MAX_PACKED_BYTES) {
+        if (packedTotal < 0) {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
                     "RAR5 packed payload is outside supported bounds");
         }
 
-        java.io.ByteArrayOutputStream packedOut =
-                new java.io.ByteArrayOutputStream((int) packedTotal);
-
-        if (cryptoEntry.encrypted()) {
-            RarArchiveReader.EncryptionInfo enc = cryptoEntry.encryption;
-            if (enc == null || !enc.isRar5Aes256()) {
-                throw new RarArchiveReader.UnsupportedRarFeatureException(
-                        "RAR5 entry encryption is not AES-256");
-            }
-            if (password == null || password.length == 0) {
-                throw new ArchiveSupport.PasswordRequiredException();
-            }
-            Rar5Crypto.Secrets secrets =
-                    Rar5Crypto.deriveSecrets(password, enc.kdfCount, enc.salt);
-            if (!Rar5Crypto.passwordMatches(secrets, enc.check)) {
-                throw new ArchiveSupport.PasswordRequiredException();
-            }
-            javax.crypto.Cipher cipher = Rar5Crypto.createAesCbcDecryptCipher(secrets, enc.iv);
-            // For compressed entries the plaintext length equals the encrypted
-            // (block-aligned) length; the decompressor decides how much of it
-            // to consume, so we keep the full decrypted compressed stream.
-            RarCryptoStreams.decryptSegmentsToStream(
-                    segments,
-                    cipher,
-                    packedOut,
-                    -1L,
-                    "RAR5 AES decrypt failed",
-                    null,
-                    false);
-        } else {
-            for (RarCryptoStreams.EncryptedSegment segment : segments) {
-                try (RandomAccessFile raf = new RandomAccessFile(segment.archive, "r")) {
-                    raf.seek(segment.offset);
-                    long remaining = segment.encryptedSize;
-                    byte[] buffer = new byte[8192];
-                    while (remaining > 0) {
-                        int n = raf.read(buffer, 0,
-                                (int) Math.min(buffer.length, remaining));
-                        if (n < 0) throw new IOException("RAR5 split payload truncated");
-                        packedOut.write(buffer, 0, n);
-                        remaining -= n;
-                    }
-                }
-            }
+        if (!cryptoEntry.encrypted()) {
+            return new PackedPayload(new BufferedInputStream(
+                    new RarPackedInputStream(segments, progress), 64 * 1024), checksumEntry, null);
         }
-        return packedOut.toByteArray();
+        if ((packedTotal % 16L) != 0) {
+            throw new IOException("RAR5 encrypted payload is not AES block aligned");
+        }
+        RarArchiveReader.EncryptionInfo enc = cryptoEntry.encryption;
+        if (enc == null || !enc.isRar5Aes256()) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException(
+                    "RAR5 entry encryption is not AES-256");
+        }
+        if (password == null || password.length == 0) {
+            throw new ArchiveSupport.PasswordRequiredException();
+        }
+        Rar5Crypto.Secrets secrets =
+                Rar5Crypto.deriveSecrets(password, enc.kdfCount, enc.salt);
+        if (!Rar5Crypto.passwordMatches(secrets, enc.check)) {
+            throw new ArchiveSupport.PasswordRequiredException();
+        }
+        javax.crypto.Cipher cipher = Rar5Crypto.createAesCbcDecryptCipher(secrets, enc.iv);
+        InputStream raw = new BufferedInputStream(new RarPackedInputStream(segments, progress, secrets), 64 * 1024);
+        return new PackedPayload(new BufferedInputStream(
+                new javax.crypto.CipherInputStream(raw, cipher), 64 * 1024), checksumEntry, secrets);
     }
 
     @NonNull
@@ -437,6 +523,7 @@ final class Rar5CompressedArchiveExtractor {
         }
         return new Rar5CompressedSplitPayload(
                 first,
+                RarVolumeChain.last(chain),
                 RarVolumeChain.payloadSegments(chain),
                 packedTotal);
     }
@@ -499,15 +586,32 @@ final class Rar5CompressedArchiveExtractor {
 
     private static final class Rar5CompressedSplitPayload {
         final RarArchiveReader.RarEntry first;
+        final RarArchiveReader.RarEntry last;
         final List<RarCryptoStreams.EncryptedSegment> segments;
         final long packedTotal;
 
         Rar5CompressedSplitPayload(@NonNull RarArchiveReader.RarEntry first,
+                                   @NonNull RarArchiveReader.RarEntry last,
                                    @NonNull List<RarCryptoStreams.EncryptedSegment> segments,
                                    long packedTotal) {
             this.first = first;
+            this.last = last;
             this.segments = segments;
             this.packedTotal = packedTotal;
         }
+    }
+
+    private static final class PackedPayload implements java.io.Closeable {
+        final InputStream input;
+        final RarArchiveReader.RarEntry checksumEntry;
+        final Rar5Crypto.Secrets secrets;
+
+        PackedPayload(InputStream input, RarArchiveReader.RarEntry checksumEntry, Rar5Crypto.Secrets secrets) {
+            this.input = input;
+            this.checksumEntry = checksumEntry;
+            this.secrets = secrets;
+        }
+
+        @Override public void close() throws IOException { input.close(); }
     }
 }

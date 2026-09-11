@@ -8,6 +8,35 @@ import org.junit.Test;
 /** Tests for the direction-aware prefetch planning in {@link ImagePrefetchMath}. */
 public class ImagePrefetchMathTest {
 
+    @Test public void spreadTurnsBuildDirectionRegardlessOfEntryStride() {
+        int streak = ImagePrefetchMath.updateNavigationStreak(0, 1, 2);
+        assertEquals(1, streak);
+        streak = ImagePrefetchMath.updateNavigationStreak(streak, 1, 1);
+        assertEquals(1, ImagePrefetchMath.sustainedDirection(streak));
+        assertEquals(3, ImagePrefetchMath.updateNavigationStreak(streak, 1, 2));
+    }
+
+    @Test public void backwardSpreadsAndReversalUseNavigationIntent() {
+        int streak = ImagePrefetchMath.updateNavigationStreak(2, -1, -2);
+        assertEquals(-1, streak);
+        streak = ImagePrefetchMath.updateNavigationStreak(streak, -1, -2);
+        assertEquals(-1, ImagePrefetchMath.sustainedDirection(streak));
+        assertEquals(1, ImagePrefetchMath.updateNavigationStreak(streak, 1, 2));
+    }
+
+    @Test public void directJumpsAndInvalidIntentResetStreakEvenOnePageAway() {
+        assertEquals(0, ImagePrefetchMath.updateNavigationStreak(5, 0, 1));
+        assertEquals(0, ImagePrefetchMath.updateNavigationStreak(5, 0, 2));
+        assertEquals(0, ImagePrefetchMath.updateNavigationStreak(5, 1, -2));
+        assertEquals(0, ImagePrefetchMath.updateNavigationStreak(5, 1, 0));
+        assertEquals(0, ImagePrefetchMath.updateNavigationStreak(5, 2, 2));
+    }
+
+    @Test public void longStreaksSaturateInsteadOfReversingAtIntegerOverflow() {
+        assertEquals(Integer.MAX_VALUE, ImagePrefetchMath.updateStreak(Integer.MAX_VALUE, 1));
+        assertEquals(Integer.MIN_VALUE, ImagePrefetchMath.updateStreak(Integer.MIN_VALUE, -1));
+    }
+
     @Test
     public void streakBuildsPerDirectionAndResetsOnJumpsAndReversals() {
         int streak = 0;

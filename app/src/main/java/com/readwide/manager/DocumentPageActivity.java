@@ -1,5 +1,7 @@
 package com.readwide.manager;
 
+import com.readwide.manager.util.UriPathCodec;
+
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
@@ -49,13 +51,14 @@ import androidx.core.widget.TextViewCompat;
 
 import com.readwide.manager.adapter.BookmarkFolderAdapter;
 import com.readwide.manager.model.Bookmark;
+import com.readwide.manager.model.DocumentAnnotation;
 import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.model.Theme;
 import com.readwide.manager.util.DocumentAnchorMath;
-import com.readwide.manager.util.UriPathCodec;
 import com.readwide.manager.util.EpubBindingRewriter;
 import com.readwide.manager.util.EpubSpreadSlotMath;
 import com.readwide.manager.util.BookmarkManager;
+import com.readwide.manager.util.DocumentAnnotationManager;
 import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.FontManager;
 import com.readwide.manager.util.HwpTextExtractor;
@@ -68,6 +71,7 @@ import com.readwide.manager.document.render.FixedHtmlRenderer;
 import com.readwide.manager.document.render.RenderedDocument;
 import com.readwide.manager.document.render.RenderedPage;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import org.w3c.dom.Document;
@@ -206,6 +210,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
     final List<Page> pages = new ArrayList<>();
     BookmarkManager bookmarkManager;
+    private DocumentAnnotationManager annotationManager;
     PrefsManager prefs;
     private ZipFile resourceZip;
     DocumentArchiveUtils.EpubPackageResources epubPackageResources =
@@ -310,6 +315,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     private DocumentPageDisplayController documentPageDisplayController;
     private ProportionalFastScrollController documentFastScrollController;
     private EpubMediaOverlayController epubMediaOverlayController;
+    private boolean epubPlaybackForeground;
+
+    boolean isEpubPlaybackForeground() { return epubPlaybackForeground; }
 
     static class Page {
         final String title;
@@ -472,6 +480,8 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     @Override
     protected void onResume() {
         super.onResume();
+        epubPlaybackForeground = true;
+        if (epubMediaOverlayController != null) epubMediaOverlayController.onForeground();
         // If read-aloud is running (or paused) in this viewer, coming back to
         // the foreground reclaims the remote-command bridge, mirroring the text
         // reader's register-on-resume so notification buttons keep landing here.
@@ -486,6 +496,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     @Override
     protected void onPause() {
+        epubPlaybackForeground = false;
         if (epubMediaOverlayController != null) {
             epubMediaOverlayController.pauseForBackground();
         }
@@ -712,7 +723,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         updateLoadingIndicatorTheme();
         TextView[] buttons = {prevButton, nextButton, searchButton, pageButton, bookmarkButton,
                 findViewById(R.id.btn_screen_rotation), findViewById(R.id.btn_document_settings),
-                findViewById(R.id.btn_document_tts), moreButton};
+                findViewById(R.id.btn_document_tts), findViewById(R.id.btn_annotations), moreButton};
         for (TextView b : buttons) {
             if (b == null) continue;
             b.setTextColor(readerFg);
@@ -722,6 +733,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     @Override
     protected void onDestroy() {
+        if (cachedDocumentSearchController != null) cachedDocumentSearchController.close();
         ViewerRegistry.unregister(this);
         if (prefs != null) {
             prefs.getPrefs().unregisterOnSharedPreferenceChangeListener(epubBoundaryPreferenceListener);
@@ -1134,64 +1146,16 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     /** Extracts one already-validated local SMIL audio target on the document worker. */
     File extractEpubMediaOverlayAudio(@NonNull String rawPath) throws IOException {
-        if (resourceZip == null) throw new IOException("EPUB archive is unavailable");
-        String path = normalizeZipPath(UriPathCodec.decodePercentEscapes(rawPath));
-        ZipEntry entry = resourceZip.getEntry(path);
-        if (entry == null || entry.isDirectory()) {
-            throw new IOException("EPUB media-overlay audio is missing");
-        }
-        long declaredSize = entry.getSize();
-        if (declaredSize > MAX_EPUB_MEDIA_OVERLAY_AUDIO_BYTES) {
-            throw new IOException("EPUB media-overlay audio exceeds size limit");
-        }
-
-        File dir = new File(getCacheDir(), "epub_media_overlay");
-        if (!dir.exists() && !dir.mkdirs()) {
-            throw new IOException("Unable to create EPUB media cache");
-        }
-        String lower = path.toLowerCase(Locale.ROOT);
-        int dot = lower.lastIndexOf('.');
-        String extension = dot >= 0 && lower.length() - dot <= 6
-                ? lower.substring(dot) : ".bin";
+        ZipFile zip = resourceZip;
+        if (zip == null) throw new IOException("EPUB archive is unavailable");
+        // EpubSmilParser already resolved and decoded this ZIP entry name.
+        String path = normalizeZipPath(rawPath);
         String publicationKey = filePath != null ? filePath : "epub";
         if (localFile != null) {
             publicationKey += "|" + localFile.length() + "|" + localFile.lastModified();
         }
-        String key = Integer.toHexString(publicationKey.hashCode())
-                + "_" + Integer.toHexString(path.hashCode());
-        File output = new File(dir, key + extension);
-        if (output.isFile() && (declaredSize < 0L || output.length() == declaredSize)) {
-            return output;
-        }
-        File temporary = new File(dir, key + ".partial");
-        long total = 0L;
-        try (InputStream input = resourceZip.getInputStream(entry);
-             FileOutputStream out = new FileOutputStream(temporary, false)) {
-            byte[] buffer = new byte[32 * 1024];
-            int read;
-            while ((read = input.read(buffer)) != -1) {
-                total += read;
-                if (total > MAX_EPUB_MEDIA_OVERLAY_AUDIO_BYTES) {
-                    throw new IOException("EPUB media-overlay audio exceeds size limit");
-                }
-                out.write(buffer, 0, read);
-            }
-        } catch (IOException e) {
-            //noinspection ResultOfMethodCallIgnored
-            temporary.delete();
-            throw e;
-        }
-        if (output.exists() && !output.delete()) {
-            //noinspection ResultOfMethodCallIgnored
-            temporary.delete();
-            throw new IOException("Unable to replace EPUB media cache");
-        }
-        if (!temporary.renameTo(output)) {
-            //noinspection ResultOfMethodCallIgnored
-            temporary.delete();
-            throw new IOException("Unable to finalize EPUB media cache");
-        }
-        return output;
+        return EpubMediaCache.extract(zip, path, new File(getCacheDir(), "epub_media_overlay"),
+                publicationKey, MAX_EPUB_MEDIA_OVERLAY_AUDIO_BYTES);
     }
 
     @Override
@@ -1227,6 +1191,11 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         if (searchButton != null) searchButton.setOnClickListener(v -> showDocumentSearchDialog());
         if (pageButton != null) pageButton.setOnClickListener(v -> showGoToPageDialog());
         bookmarkButton.setOnClickListener(v -> showBookmarksDialog());
+        View annotationButton = findViewById(R.id.btn_annotations);
+        if (annotationButton != null) {
+            annotationButton.setVisibility(isMarkdownDocument() ? View.VISIBLE : View.GONE);
+            annotationButton.setOnClickListener(v -> showDocumentAnnotationsDialog());
+        }
         View rotationButton = findViewById(R.id.btn_screen_rotation);
         if (rotationButton != null) {
             rotationButton.setOnClickListener(v ->
@@ -1743,6 +1712,12 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 showDocumentTtsDialog();
             }));
         }
+        if (isMarkdownDocument()) {
+            box.addView(makeDialogActionRow(getString(R.string.annotations_title), () -> {
+                if (dialogRef[0] != null) dialogRef[0].dismiss();
+                showDocumentAnnotationsDialog();
+            }));
+        }
         if ("EPUB".equals(docType)) {
             box.addView(makeDialogActionRow(getString(R.string.increase_font), () -> {
                 if (dialogRef[0] != null) dialogRef[0].dismiss();
@@ -2085,7 +2060,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     private void refreshCurrentEpubTextSize() {
         if ("EPUB".equals(docType) && currentEpubPageKeepsOriginalLayout()) {
-            ShortToast.show(this, localizedText("This EPUB keeps its original page layout.", "이 EPUB은 원본 페이지 배치를 유지합니다."));
+            ShortToast.show(this, R.string.epub_original_layout_kept);
             return;
         }
         applyDocumentTextZoom();
@@ -2146,14 +2121,12 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                     "application/octet-stream"
             });
         } catch (Exception e) {
-            ShortToast.show(this, localizedText(
-                    "Could not open the file picker.",
-                    "파일 선택기를 열 수 없습니다."));
+            ShortToast.show(this, R.string.file_picker_open_failed);
         }
     }
 
     private void importDocumentFontFromUri(Uri uri) {
-        ShortToast.show(this, localizedText("Importing font\u2026", "글꼴 가져오는 중\u2026"));
+        ShortToast.show(this, R.string.font_importing);
         submitDocumentTask(() -> {
             String imported;
             try {
@@ -2166,11 +2139,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 if (activityDestroyed) return;
                 if (result != null && !result.trim().isEmpty()) {
                     documentFontController().applyImportedDocumentFont(result);
-                    ShortToast.show(this, localizedText("Font added", "글꼴을 추가했습니다"));
+                    ShortToast.show(this, R.string.font_added);
                 } else {
-                    ShortToast.show(this, localizedText(
-                            "Could not import the font file.",
-                            "글꼴 파일을 가져오지 못했습니다."));
+                    ShortToast.show(this, R.string.font_import_failed);
                 }
             });
         });
@@ -2184,14 +2155,13 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         return documentFontController().interceptSelectedDocumentFont();
     }
 
-    private String localizedText(String english, String korean) {
-        return "ko".equalsIgnoreCase(Locale.getDefault().getLanguage()) ? korean : english;
-    }
-
 
     private DocumentSearchController documentSearchController() {
-        return new DocumentSearchController(this);
+        if (cachedDocumentSearchController == null) cachedDocumentSearchController = new DocumentSearchController(this);
+        return cachedDocumentSearchController;
     }
+
+    private DocumentSearchController cachedDocumentSearchController;
 
     private void showDocumentSearchDialog() {
         documentSearchController().showDocumentSearchDialog();
@@ -2269,7 +2239,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
         TextView hint = new TextView(this);
         hint.setText(isMarkdownDocument()
-                ? localizedText("Rendered page based on the current layout.", "현재 표시 레이아웃 기준 페이지입니다.")
+                ? getString(R.string.rendered_page_current_layout)
                 : getString(R.string.exact_page_number));
         hint.setTextColor(blendColors(dialogBg(), dialogFg(), 0.78f));
         hint.setTextSize(13f);
@@ -3804,6 +3774,158 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 value -> updateMarkdownSourceAnchorFromWebView());
     }
 
+    private DocumentAnnotationManager annotations() {
+        if (annotationManager == null) {
+            annotationManager = DocumentAnnotationManager.getInstance(this);
+        }
+        return annotationManager;
+    }
+
+    private DocumentAnnotationDialogController annotationDialogs() {
+        return new DocumentAnnotationDialogController(
+                this,
+                annotations(),
+                filePath,
+                readerBg,
+                readerFg,
+                new DocumentAnnotationDialogController.Navigator() {
+                    @Override
+                    public void open(@NonNull DocumentAnnotation annotation) {
+                        scrollMarkdownToSourceOffset(
+                                annotation.getStartPosition(), true, markdownVisualCurrentPage);
+                    }
+
+                    @Override
+                    public void annotationsChanged() {
+                        applyMarkdownAnnotationHighlights();
+                    }
+                });
+    }
+
+    private void showDocumentAnnotationsDialog() {
+        if (!isMarkdownDocument()) return;
+        annotationDialogs().showList();
+    }
+
+    void captureMarkdownSelectionForAnnotation(boolean highlight,
+                                               @Nullable android.view.ActionMode actionMode) {
+        if (!isMarkdownDocument() || webView == null) {
+            if (actionMode != null) actionMode.finish();
+            return;
+        }
+        evaluateMarkdownAnchorJavascript(
+                "(function(){try{var s=window.getSelection();"
+                        + "if(!s||s.rangeCount<1||s.isCollapsed)return {text:'',offset:0};"
+                        + "var r=s.getRangeAt(0),n=r.startContainer;"
+                        + "if(n&&n.nodeType===3)n=n.parentElement;"
+                        + "while(n&&n!==document.documentElement&&!n.hasAttribute('data-rw-src-offset'))n=n.parentElement;"
+                        + "return {text:s.toString(),offset:n?parseInt(n.getAttribute('data-rw-src-offset')||'0',10)||0:0};"
+                        + "}catch(e){return {text:'',offset:0};}})()",
+                value -> {
+                    try {
+                        JSONObject selection = value != null ? new JSONObject(value) : null;
+                        String selectedText = selection != null
+                                ? selection.optString("text", "") : "";
+                        int blockOffset = selection != null
+                                ? selection.optInt("offset", lastMarkdownSourceOffset)
+                                : lastMarkdownSourceOffset;
+                        if (selectedText.trim().isEmpty()) {
+                            ShortToast.show(this, R.string.annotation_selection_required);
+                            return;
+                        }
+                        int start = resolveMarkdownSelectionSourceOffset(blockOffset, selectedText);
+                        int end = Math.min(markdownSourceText.length(),
+                                Math.max(start, start + selectedText.length()));
+                        DocumentAnnotation annotation = new DocumentAnnotation();
+                        annotation.setFilePath(filePath);
+                        annotation.setFileName(fileName);
+                        annotation.setDocumentType("MARKDOWN");
+                        annotation.setType(highlight
+                                ? DocumentAnnotation.TYPE_HIGHLIGHT
+                                : DocumentAnnotation.TYPE_NOTE);
+                        annotation.setStartPosition(start);
+                        annotation.setEndPosition(end);
+                        annotation.setLineNumber(markdownSourceLineForOffset(start));
+                        annotation.setSelectedText(selectedText);
+                        annotation.setAnchorTextBefore(markdownAnchorTextAround(start, true));
+                        annotation.setAnchorTextAfter(markdownAnchorTextAround(start, false));
+                        if (highlight) {
+                            boolean added = annotations().add(annotation);
+                            if (added) applyMarkdownAnnotationHighlights();
+                            ShortToast.show(this, added
+                                    ? R.string.annotation_saved : R.string.annotation_already_saved);
+                        } else {
+                            annotationDialogs().showNoteEditor(annotation, true);
+                        }
+                    } catch (Exception ignored) {
+                        ShortToast.show(this, R.string.annotation_selection_required);
+                    } finally {
+                        if (actionMode != null) actionMode.finish();
+                    }
+                });
+    }
+
+    private int resolveMarkdownSelectionSourceOffset(int blockOffset, String selectedText) {
+        int safeBlock = clampMarkdownSourceOffset(blockOffset);
+        if (markdownSourceText == null || markdownSourceText.isEmpty()) return safeBlock;
+        String exact = selectedText != null ? selectedText : "";
+        int found = !exact.isEmpty() ? markdownSourceText.indexOf(exact, safeBlock) : -1;
+        if (found >= 0) return found;
+        String trimmed = exact.trim();
+        if (!trimmed.equals(exact) && !trimmed.isEmpty()) {
+            found = markdownSourceText.indexOf(trimmed, safeBlock);
+            if (found >= 0) return found;
+        }
+        String firstLine = trimmed;
+        int newline = firstLine.indexOf('\n');
+        if (newline >= 0) firstLine = firstLine.substring(0, newline).trim();
+        if (firstLine.length() > 80) firstLine = firstLine.substring(0, 80);
+        if (!firstLine.isEmpty()) {
+            found = markdownSourceText.indexOf(firstLine, safeBlock);
+            if (found >= 0) return found;
+        }
+        return safeBlock;
+    }
+
+    void applyMarkdownAnnotationHighlights() {
+        if (!isMarkdownDocument() || webView == null || filePath == null) return;
+        JSONArray array = new JSONArray();
+        for (DocumentAnnotation annotation : annotations().getForFile(filePath)) {
+            if (!annotation.isHighlight() || annotation.getSelectedText().trim().isEmpty()) continue;
+            try {
+                JSONObject item = new JSONObject();
+                item.put("id", annotation.getId());
+                item.put("offset", annotation.getStartPosition());
+                item.put("text", annotation.getSelectedText());
+                array.put(item);
+            } catch (Exception ignored) {
+            }
+        }
+        String script =
+                "(function(anns){try{"
+                        + "var old=document.querySelectorAll('mark[data-rw-annotation]');"
+                        + "for(var o=0;o<old.length;o++){var m=old[o],p=m.parentNode;"
+                        + "while(m.firstChild)p.insertBefore(m.firstChild,m);p.removeChild(m);p.normalize();}"
+                        + "var blocks=Array.prototype.slice.call(document.querySelectorAll('[data-rw-src-offset]'));"
+                        + "function blockFor(off){var b=blocks.length?blocks[0]:document.body;"
+                        + "for(var i=0;i<blocks.length;i++){var x=parseInt(blocks[i].getAttribute('data-rw-src-offset')||'0',10)||0;"
+                        + "if(x<=off)b=blocks[i];else break;}return b;}"
+                        + "function add(a){var b=blockFor(parseInt(a.offset||0,10)||0),q=String(a.text||'');"
+                        + "if(!b||!q)return;var w=document.createTreeWalker(b,NodeFilter.SHOW_TEXT,null),ns=[],all='',n;"
+                        + "while((n=w.nextNode())){ns.push({n:n,s:all.length,e:all.length+n.nodeValue.length});all+=n.nodeValue;}"
+                        + "var at=all.indexOf(q);if(at<0){q=q.trim();at=all.indexOf(q);}if(at<0||!q)return;"
+                        + "var z=at+q.length,sn=null,en=null,so=0,eo=0;"
+                        + "for(var j=0;j<ns.length;j++){var x=ns[j];if(!sn&&at>=x.s&&at<=x.e){sn=x.n;so=at-x.s;}"
+                        + "if(z>=x.s&&z<=x.e){en=x.n;eo=z-x.s;break;}}if(!sn||!en)return;"
+                        + "var r=document.createRange();r.setStart(sn,so);r.setEnd(en,eo);"
+                        + "var mark=document.createElement('mark');mark.setAttribute('data-rw-annotation',String(a.id||''));"
+                        + "mark.style.backgroundColor='rgba(255,193,7,.48)';mark.style.color='inherit';"
+                        + "mark.appendChild(r.extractContents());r.insertNode(mark);}"
+                        + "for(var i=0;i<anns.length;i++)add(anns[i]);return true;"
+                        + "}catch(e){return false;}})(" + array.toString() + ")";
+        evaluateMarkdownAnchorJavascript(script, null);
+    }
+
     void evaluateMarkdownAnchorJavascript(String js, android.webkit.ValueCallback<String> callback) {
         if (webView == null || js == null || js.isEmpty()) {
             if (callback != null) callback.onReceiveValue(null);
@@ -3874,11 +3996,15 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     boolean isLandscapeTwoPageDocumentMode() {
-        return "EPUB".equals(docType)
-                && epubImagePageLike
-                && pages.size() > 1
-                && getResources().getConfiguration().orientation
-                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+        if (!"EPUB".equals(docType)) return false;
+        android.content.res.Configuration configuration =
+                getResources().getConfiguration();
+        return com.readwide.manager.util.SpreadMath.shouldUseEpubSpread(
+                configuration.orientation
+                        == android.content.res.Configuration.ORIENTATION_LANDSCAPE,
+                pages.size(),
+                epubImagePageLike,
+                configuration.smallestScreenWidthDp);
     }
 
     int documentRightSpreadPageIndex() {
@@ -3977,7 +4103,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         String baseUrl = "https://" + localDocumentHost + "/";
         if ("EPUB".equals(docType) && p.sourcePath != null) {
             String parent = parentPath(p.sourcePath);
-            baseUrl = "https://" + localDocumentHost + EPUB_PREFIX + parent;
+            baseUrl = "https://" + localDocumentHost + EPUB_PREFIX + UriPathCodec.encodePath(parent);
             if (!baseUrl.endsWith("/")) baseUrl += "/";
         }
         return baseUrl;
@@ -4078,7 +4204,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     private String epubReadingSystemJavascript() {
         return "(function(){try{if(!navigator.epubReadingSystem){"
                 + "Object.defineProperty(navigator,'epubReadingSystem',{value:{"
-                + "name:'Readwide',version:'1.0.16',layoutStyle:'paginated',"
+                + "name:'Readwide',version:'1.0.18',layoutStyle:'paginated',"
                 + "hasFeature:function(f){return ['dom-manipulation','layout-changes',"
                 + "'mouse-events','spine-scripting','touch-events'].indexOf(String(f))>=0;}"
                 + "},configurable:false});}}catch(e){}})();";
@@ -4992,7 +5118,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             EpubSmilParser.Timeline timeline = null;
             if (item.hasMediaOverlay()) {
                 try {
-                    EpubSmilParser.Timeline parsed = EpubSmilParser.parse(
+                    EpubSmilParser.Timeline parsed = EpubSmilParser.parseResolvedPath(
                             resourceZip, item.mediaOverlayPath);
                     if (parsed != null && !parsed.isEmpty()) timeline = parsed;
                 } catch (IOException ignored) {
@@ -5005,7 +5131,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         epubImagePageLike = DocumentArchiveUtils.detectEpubImagePageLike(
                 rawHtmlPages, epubFixedLayoutLike);
         for (int i = 0; i < rawHtmlPages.size(); i++) {
-            String html = rawHtmlPages.get(i);
+            String html = rawHtmlPages.set(i, null); // release each raw copy as its prepared page is stored
             String title = titles.get(i);
             String path = paths.get(i);
             boolean pageFixedLayout = fixedLayoutPages.get(i);
@@ -5325,7 +5451,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             return blockedDocumentResource(404, "Not Found");
         }
 
-        zipPath = UriPathCodec.decodePercentEscapes(zipPath);
+        // Uri.getPath() already percent-decodes once; ZIP names may contain literal % escapes.
         if (hasArchiveParentTraversal(zipPath)) {
             return blockedDocumentResource(403, "Forbidden");
         }
@@ -5444,7 +5570,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         if (path == null || !path.startsWith(EPUB_PREFIX)) return true;
 
         String zipPath = path.substring(EPUB_PREFIX.length());
-        zipPath = UriPathCodec.decodePercentEscapes(zipPath);
+        // Uri.getPath() already percent-decodes once; ZIP names may contain literal % escapes.
         zipPath = normalizeZipPath(zipPath);
         String fragment = uri.getFragment();
         if (fragment != null && fragment.trim().startsWith("epubcfi(")) {
@@ -5543,7 +5669,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
     private boolean handleEpubCfiNavigation(@NonNull WebView sourceView,
                                             @NonNull String rawCfi) {
-        EpubCfi cfi = EpubCfi.parse(rawCfi);
+        EpubCfi cfi = EpubCfi.parseDecodedFragment(rawCfi);
         if (cfi == null) return true; // scoped unsupported forms stay inside the book
         int targetPage = findEpubPageForCfi(cfi);
         if (targetPage < 0) return true;

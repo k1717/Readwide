@@ -32,6 +32,7 @@ The app may store local data needed for reading and file-browser behavior:
 - user-added folder shortcuts;
 - reading positions;
 - bookmarks and bookmark labels;
+- TXT/Markdown notes, selected excerpts, highlight ranges, and source-position anchors stored separately from the original document;
 - reader, toolbar, sort, search, and view settings;
 - theme settings and custom reading themes;
 - optional imported fonts;
@@ -61,6 +62,20 @@ Opening a file inside an archive may temporarily extract that selected entry int
 
 The archive image viewer also offers an explicit **Save** action for the current image page. The user chooses either the public Downloads collection or a destination through Android's document picker. Readwide copies the already extracted original image bytes locally without recompression or upload; the resulting saved image is ordinary user-visible data and is no longer disposable app cache.
 
+### Decoder history and verified preview spools
+
+Large RAR5/RAR7 decoding can spill older dictionary pages into a temporary file
+using AES-GCM and a randomly generated in-memory session key. The key is not
+stored in that history file. Normal decoder cleanup attempts to remove the file
+and clear its owned key buffer; abnormal process termination or deletion failure
+can leave temporary data. Cleanup is not a secure-erasure guarantee.
+
+This protection applies to that **history file**, not all archive data. Verified
+folder/entry spools and extracted preview images may contain plaintext in local
+cache even when the original archive is password-protected. They are not uploaded
+by Readwide. Explicitly exported images and extracted files are ordinary local
+files at the destination chosen by the user.
+
 ## Opening or sharing files with other apps
 
 Some file types that Readwide does not render internally, such as video and audio files, may be handed to another app through Android's normal open-with / viewer intent flow. Sharing also uses Android's normal user-triggered share flow.
@@ -81,7 +96,7 @@ The separate **Edit Actual TXT File** action is user-triggered and can write cha
 
 ## Bookmark/settings export and import
 
-Backup/export uses JSON. The exported JSON can include file paths, file names, reading positions, bookmark labels, excerpts, app settings, layout settings, display rules, and custom reading themes. Treat exported backup files as user data. Backup import accepts JSON files up to 256 MB, which is generous for large reading-history and bookmark exports; oversized input is rejected rather than partially imported.
+Backup/export uses JSON. The exported JSON can include file paths, file names, reading positions, bookmark labels, annotation notes/highlight excerpts and positions, app settings, layout settings, display rules, and custom reading themes. Treat exported backup files as user data. Backup import accepts JSON files up to 256 MB, which is generous for large reading-history and bookmark exports; oversized input is rejected rather than partially imported.
 
 Imported reader font files are stored only in app-private storage (see "Data stored locally") and are not included in the JSON backup. The backup may record the selected font name, but not the font file itself or the imported-font list, so an imported font must be re-imported after reinstalling the app or switching distribution channels.
 

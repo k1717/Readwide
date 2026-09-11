@@ -11,6 +11,40 @@ import java.nio.charset.StandardCharsets;
 
 public class Rar3PpmdBlockDecoderTest {
     @Test
+    public void decode_otherEscapeCodesEmitLiteralWithCustomEscape() throws Exception {
+        Rar3PpmdState ppm = new Rar3PpmdState();
+        ppm.setEscapeChar(0xfd);
+        for (int control : new int[] {1, 6, 127, 255}) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            Rar3PpmdBlockDecoder.decodeUntilControlOrLimit(symbols(0xfd, control),
+                    new RarLzWindow(64, out), new Rar3UnpackState(), ppm, 1);
+            assertArrayEquals(new byte[] {(byte) 0xfd}, out.toByteArray());
+        }
+    }
+
+    @Test
+    public void decode_ppmdMatchesDoNotReplaceSavedClassicLzMatches() throws Exception {
+        for (int control : new int[] {4, 5}) {
+            Rar3UnpackState lz = new Rar3UnpackState();
+            for (int distance = 1; distance <= 4; distance++) lz.rememberNewDistanceMatch(distance, 9);
+            lz.rememberLowDistance(7);
+            lz.startLowDistanceRepeat(15);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            int[] encoded = control == 4 ? new int[] {'A', 'B', 2, 4, 0, 0, 0, 0}
+                    : new int[] {'A', 'B', 2, 5, 0};
+            int limit = control == 4 ? 34 : 6;
+            Rar3PpmdBlockDecoder.decodeUntilControlOrLimit(symbols(encoded),
+                    new RarLzWindow(64, out), lz, new Rar3PpmdState(), limit);
+            assertEquals(limit, out.size());
+            for (int i = 0; i < 4; i++) assertEquals(4 - i, lz.oldDistance(i));
+            assertEquals(4, lz.lastDistance());
+            assertEquals(9, lz.lastLength());
+            assertEquals(7, lz.previousLowDistance());
+            assertEquals(15, lz.lowDistanceRepeatCount());
+        }
+    }
+
+    @Test
     public void decode_writesLiteralAndEndsPpmdBlock() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         RarLzWindow window = new RarLzWindow(32, out);

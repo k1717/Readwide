@@ -31,6 +31,8 @@ import java.util.Map;
  */
 final class PdfTtsTextSource implements TtsTextSource {
 
+    static final int TEXT_FORMAT_VERSION = 1; // PDFBox inferred word separators retained.
+
     private final PdfReaderActivity activity;
     private final String fullText;
     /** Start offset of each page in {@link #fullText}; length = pageCount + 1. */
@@ -101,6 +103,15 @@ final class PdfTtsTextSource implements TtsTextSource {
     /** False for scanned/image-only PDFs with no extractable text. */
     boolean hasAnyText() {
         return hasAnyText;
+    }
+
+    /** Old/unknown extraction offsets cannot safely index a differently spaced buffer. */
+    int resolveSavedPosition(int charPosition, int savedPageNumber, int savedFormatVersion) {
+        if (pageCount() <= 0) return 0;
+        if (savedFormatVersion == TEXT_FORMAT_VERSION
+                && charPosition >= 0 && charPosition < fullText.length()) return charPosition;
+        int page = Math.min(pageCount() - 1, Math.max(1, savedPageNumber) - 1);
+        return pageStartOffsets[page];
     }
 
     private int pageCount() {

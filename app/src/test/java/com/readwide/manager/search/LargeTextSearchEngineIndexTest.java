@@ -104,9 +104,59 @@ public class LargeTextSearchEngineIndexTest {
         builder.add(3, 1);
 
         assertTrue(builder.overflowed());
-        LargeTextMatchIndex index = builder.build(file, "x", "Cwrn", false, "rules");
-        assertEquals(0, index.size());
-        assertFalse(index.nearest(0, true).found());
+        try {
+            builder.build(file, "x", "Cwrn", false, "rules");
+            org.junit.Assert.fail("Partial indexes must not be published");
+        } catch (java.io.IOException expected) { }
+    }
+
+    @Test public void spilledIndexPreservesOrdinalsWrapAndDeletesCacheOnClose() throws Exception {
+        File file = textFile("source");
+        File cache = temporaryFolder.newFolder();
+        try (LargeTextMatchIndex.Builder builder = new LargeTextMatchIndex.Builder(2, cache)) {
+            for (int i = 0; i < 9; i++) builder.add(i * 3, i + 1);
+            assertFalse(builder.overflowed());
+            try (LargeTextMatchIndex index = builder.build(file, "x", "options", false, "rules")) {
+                assertEquals(9, index.size());
+                assertEquals(15, index.occurrence(6).charPosition);
+                assertEquals(6, index.occurrence(6).lineNumber);
+                assertEquals(0, index.nearest(25, true).charPosition);
+                assertEquals(3, index.nearest(4, false).charPosition);
+                assertEquals(1, cache.list().length);
+            }
+        }
+        assertEquals(0, cache.list().length);
+    }
+
+    @Test public void abandonedSpillRemovesPartialFile() throws Exception {
+        File cache = temporaryFolder.newFolder();
+        try (LargeTextMatchIndex.Builder builder = new LargeTextMatchIndex.Builder(1, cache)) {
+            builder.add(1, 1); builder.add(2, 1);
+            assertEquals(1, cache.list().length);
+        }
+        assertEquals(0, cache.list().length);
+    }
+
+    @Test public void unavailableDiskCacheDeclinesIndexWithoutPublishingPrefix() throws Exception {
+        File notDirectory = temporaryFolder.newFile();
+        try (LargeTextMatchIndex.Builder builder = new LargeTextMatchIndex.Builder(1, notDirectory)) {
+            builder.add(1, 1); builder.add(2, 1);
+            assertTrue(builder.overflowed());
+        }
+    }
+
+    @Test public void moreThanTwoHundredThousandMatchesStillUseExactIndex() throws Exception {
+        char[] data = new char[200_005];
+        java.util.Arrays.fill(data, 'x');
+        File file = textFile(new String(data));
+        AtomicInteger opens = new AtomicInteger();
+        LargeTextSearchEngine engine = engine(opens, new AtomicReference<>("rules"));
+        try {
+            assertEquals(data.length, engine.countMatches(file, "x", SearchOptions.literal(), false, null));
+            assertEquals(200_004, engine.search(file, "x", 0, true, 200_005,
+                    SearchOptions.literal(), false, null).charPosition);
+            assertEquals(1, opens.get());
+        } finally { engine.close(); }
     }
 
     private File textFile(String text) throws Exception {

@@ -42,6 +42,10 @@ final class Rar3Crypto {
         try {
             MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
             for (int round = 0; round < RAR3_KDF_ROUNDS; round++) {
+                if ((round & 1023) == 0 && Thread.currentThread().isInterrupted()) {
+                    java.util.Arrays.fill(passwordBytes, (byte) 0);
+                    throw new IOException("RAR password derivation cancelled");
+                }
                 sha1.update(passwordBytes, 0, usedPasswordBytes);
                 sha1.update(salt);
                 packetCounter[0] = (byte) round;

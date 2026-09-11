@@ -55,7 +55,6 @@ public final class ArchiveSupport {
     private ArchiveSupport() {}
 
 
-    private static final long MAX_EXTRACTION_TOTAL_BYTES = 32L * 1024L * 1024L * 1024L;
     private static final long MIN_EXTRACTION_FREE_MARGIN_BYTES = 64L * 1024L * 1024L;
     private static final int ZIP_RAW_NAME_CACHE_MAX_ENTRIES = 8;
     private static final Map<String, List<ZipRawName>> ZIP_RAW_NAME_CACHE = new LinkedHashMap<String, List<ZipRawName>>(
@@ -87,6 +86,7 @@ public final class ArchiveSupport {
         TAR_LZ4,
         SEVEN_Z,
         RAR,
+        LIBARCHIVE,
         ALZ,
         EGG,
         SINGLE_GZ,
@@ -266,6 +266,8 @@ public final class ArchiveSupport {
                     return requiresSevenZPasswordForExtraction(prepared.file);
                 case RAR:
                     return RarArchiveReader.requiresPasswordForExtraction(prepared.file);
+                case LIBARCHIVE:
+                    return false;
                 case ALZ:
                     return AlzipArchiveReader.requiresPasswordForExtraction(prepared.file);
                 case EGG:
@@ -304,6 +306,8 @@ public final class ArchiveSupport {
                     return listSevenZEntriesWithFallback(prepared.file, prepared.type, password);
                 case RAR:
                     return RarArchiveReader.listEntries(prepared.file, password);
+                case LIBARCHIVE:
+                    return LibarchiveArchiveReader.listEntries(prepared.file, password);
                 case ALZ:
                     return AlzipArchiveReader.listEntries(prepared.file, password);
                 case EGG:
@@ -731,6 +735,13 @@ public final class ArchiveSupport {
 
     @NonNull
     private static List<EntryInfo> listTarEntries(@NonNull File archive, @NonNull Type type) throws IOException {
+        if (type == Type.TAR) {
+            try { return withSyntheticDirectories(TarEntryIndex.get(archive).listing); }
+            catch (IOException | RuntimeException unsupportedIndex) {
+                if (Thread.currentThread().isInterrupted()) throw new IOException("TAR listing cancelled", unsupportedIndex);
+                // Preserve stream/native compatibility when the random-access parser cannot index it.
+            }
+        }
         List<EntryInfo> result = new ArrayList<>();
         try (InputStream fileIn = new BufferedInputStream(new FileInputStream(archive));
              InputStream payloadIn = wrapTarPayloadInputStream(fileIn, type);
@@ -866,16 +877,19 @@ public final class ArchiveSupport {
             workDir = tempDir;
         }
 
-        try {
+        long runtimeBudgetBytes = runtimeExtractionBudgetBytes(parent);
+        if (runtimeBudgetBytes <= 0L) {
+            return ExtractionResult.failed(ExtractionFailure.FAILED, "Not enough free space for extraction");
+        }
+
+        try (ArchiveExtractionByteBudget.Scope ignored =
+                     ArchiveExtractionByteBudget.begin(runtimeBudgetBytes)) {
             List<EntryInfo> extractionEntries = listEntries(archive, password);
             long estimatedPayloadBytes = estimatePayloadBytesFromEntries(extractionEntries);
-            if (estimatedPayloadBytes > MAX_EXTRACTION_TOTAL_BYTES) {
-                return ExtractionResult.failed(ExtractionFailure.UNSUPPORTED_FEATURE,
-                        "Archive expands beyond the extraction safety limit");
-            }
             if (estimatedPayloadBytes > 0L) {
                 if (progress != null) progress.setTotalBytes(estimatedPayloadBytes);
-                if (!hasUsableSpaceForExtraction(parent, estimatedPayloadBytes)) {
+                if (estimatedPayloadBytes > runtimeBudgetBytes
+                        || !hasUsableSpaceForExtraction(parent, estimatedPayloadBytes)) {
                     return ExtractionResult.failed(ExtractionFailure.FAILED, "Not enough free space for extraction");
                 }
             }
@@ -960,8 +974,8 @@ public final class ArchiveSupport {
     public static boolean isForwardImageReadableType(@Nullable Type type) {
         if (type == null) return false;
         switch (type) {
+            case EGG: // File-level eligibility below narrows this to solid EGG.
             case SEVEN_Z:
-            case TAR:
             case TAR_GZ:
             case TAR_BZ2:
             case TAR_XZ:
@@ -969,6 +983,7 @@ public final class ArchiveSupport {
             case TAR_Z:
             case TAR_ZST:
             case TAR_LZ4:
+            case LIBARCHIVE:
                 return true;
             default:
                 return false;
@@ -977,6 +992,9 @@ public final class ArchiveSupport {
 
     public static boolean isForwardImageReadableType(@NonNull File archive) {
         Type type = getSupportedArchiveType(archive);
+        if (type == Type.EGG) return EggArchiveReader.isSolidArchive(archive);
+        // A numeric split TAR still benefits from one prepared, concatenated session.
+        if (type == Type.TAR) return isNumericSplitArchive(archive);
         if (type == Type.RAR) {
             return isRarForwardImageReadable(archive);
         }
@@ -984,17 +1002,10 @@ public final class ArchiveSupport {
     }
 
     private static boolean isRarForwardImageReadable(@NonNull File archive) {
-        // RAR has no streaming Java engine of its own, but its libarchive backend is a strictly
-        // forward, single-pass reader - the access pattern the sequential reader is built for.
-        // Route RAR through the forward reader only when that backend is present and the file is a
-        // RAR version libarchive reads (4 or 5). Everything else, and any entry libarchive cannot
-        // decode at run time, falls back to the existing whole-archive path.
-        if (!LibarchiveNativeBridge.isRarFormatAvailable()) {
-            return false;
-        }
+        // RAR5 and scoped RAR3/RAR4 PPMd also have first-party adapters.
         try {
             int version = RarArchiveLocator.detectRarVersion(archive);
-            return version == 4 || version == 5;
+            return version == 5 || version == 4;
         } catch (IOException | SecurityException e) {
             return false;
         }
@@ -1003,10 +1014,30 @@ public final class ArchiveSupport {
     @Nullable
     public static ForwardArchiveReader openForwardReader(@NonNull File archive,
                                                          @Nullable char[] password) throws IOException {
+        return openForwardReader(archive, password, null);
+    }
+
+    @Nullable
+    public static ForwardArchiveReader openForwardReader(@NonNull File archive,
+                                                         @Nullable char[] password,
+                                                         @Nullable File spoolDirectory) throws IOException {
         PreparedArchive prepared = prepareArchiveForRead(archive);
         try {
             switch (prepared.type) {
+                case EGG: {
+                    if (spoolDirectory == null) { prepared.close(); return null; }
+                    ForwardArchiveReader delegate = EggArchiveReader.openSolidForwardReader(
+                            prepared.file, spoolDirectory);
+                    if (delegate == null) { prepared.close(); return null; }
+                    return ownForwardReader(delegate, prepared);
+                }
                 case SEVEN_Z:
+                    if (spoolDirectory != null && ((password != null && password.length > 0)
+                            || !LibarchiveNativeBridge.isAvailable())) {
+                        ForwardArchiveReader special = SevenZBcj2ArchiveReader.openSpecialForwardReader(
+                                prepared.file, password, spoolDirectory);
+                        if (special != null) return ownForwardReader(special, prepared);
+                    }
                     if (shouldOpenSevenZForwardWithLibarchive(prepared.file, password)) {
                         String[] archivePaths = sevenZForwardArchivePaths(prepared.file);
                         LibarchiveNativeBridge.ForwardStream stream =
@@ -1052,6 +1083,20 @@ public final class ArchiveSupport {
                     }
                 }
                 case RAR: {
+                    if (spoolDirectory != null) {
+                        ForwardArchiveReader firstParty = Rar5CompressedArchiveExtractor.openForwardReader(
+                                prepared.file, password, spoolDirectory, LibarchiveNativeBridge.isRarFormatAvailable());
+                        if (firstParty != null) return ownForwardReader(firstParty, prepared);
+                        ForwardArchiveReader ppmd = null;
+                        try {
+                            ppmd = Rar3PpmdSolidArchiveExtractor.openForwardReader(prepared.file, password,
+                                    spoolDirectory, LibarchiveNativeBridge.isRarFormatAvailable());
+                        } catch (IOException unsupportedPpmdHeader) {
+                            if (Thread.currentThread().isInterrupted()) throw unsupportedPpmdHeader;
+                            // Broader native/decryption paths remain available for ineligible headers.
+                        }
+                        if (ppmd != null) return ownForwardReader(ppmd, prepared);
+                    }
                     // libarchive reads RAR forward-only; resolve the volume chain (one file for a
                     // single-volume archive) and hand the ordered paths to the streaming bridge.
                     // libarchive's own volume input handles concatenation and embedded SFX offsets.
@@ -1062,8 +1107,13 @@ public final class ArchiveSupport {
                     }
                     LibarchiveNativeBridge.ForwardStream stream =
                             LibarchiveNativeBridge.openForwardStream(paths, password);
-                    prepared.close();
-                    return new LibarchiveForwardReader(stream);
+                    return new LibarchiveForwardReader(stream, prepared);
+                }
+                case LIBARCHIVE: {
+                    LibarchiveNativeBridge.ForwardStream stream =
+                            LibarchiveNativeBridge.openForwardStream(
+                                    new String[]{prepared.file.getAbsolutePath()}, password);
+                    return new LibarchiveForwardReader(stream, prepared);
                 }
                 default:
                     prepared.close();
@@ -1076,8 +1126,22 @@ public final class ArchiveSupport {
         }
     }
 
+    private static ForwardArchiveReader ownForwardReader(ForwardArchiveReader delegate, PreparedArchive prepared) {
+        return new ForwardArchiveReader() {
+            @Override public ForwardEntry nextEntry() throws IOException { return delegate.nextEntry(); }
+            @Override public int read(byte[] buffer) throws IOException { return delegate.read(buffer); }
+            @Override public boolean drainCurrentEntry(long maximum) throws IOException {
+                return delegate.drainCurrentEntry(maximum);
+            }
+            @Override public boolean skipsUnreadEntryOnAdvance() { return delegate.skipsUnreadEntryOnAdvance(); }
+            @Override public void close() throws IOException {
+                try { delegate.close(); } finally { prepared.close(); }
+            }
+        };
+    }
+
     private static boolean shouldOpenSevenZForwardWithLibarchive(@NonNull File archive,
-                                                                  @Nullable char[] password) {
+                                                                  @Nullable char[] password) throws IOException {
         boolean hasPassword = password != null && password.length > 0;
         boolean splitArchive = SevenZSplitVolumeResolver.isSevenZSplitPart(archive);
         if (!LibarchiveNativeBridge.isAvailable() || hasPassword) {
@@ -1214,6 +1278,9 @@ public final class ArchiveSupport {
                                                               @NonNull String entryPath,
                                                               @NonNull File outFile,
                                                               @Nullable char[] password) {
+        if (Thread.currentThread().isInterrupted()) {
+            return ExtractionResult.failed(ExtractionFailure.FAILED, "Archive extraction interrupted");
+        }
         String normalized = sanitizeEntryPathForList(entryPath);
         if (normalized == null || normalized.endsWith("/")) {
             return ExtractionResult.failed(ExtractionFailure.FAILED, null);
@@ -1227,7 +1294,14 @@ public final class ArchiveSupport {
             return ExtractionResult.failed(ExtractionFailure.FAILED, null);
         }
 
-        try (PreparedArchive prepared = prepareArchiveForRead(archive)) {
+        long runtimeBudgetBytes = runtimeExtractionBudgetBytes(parent);
+        if (runtimeBudgetBytes <= 0L) {
+            return ExtractionResult.failed(ExtractionFailure.FAILED, "Not enough free space for extraction");
+        }
+
+        try (ArchiveExtractionByteBudget.Scope ignored =
+                     ArchiveExtractionByteBudget.begin(runtimeBudgetBytes);
+             PreparedArchive prepared = prepareArchiveForRead(archive)) {
             boolean ok;
             switch (prepared.type) {
                 case ZIP:
@@ -1238,6 +1312,10 @@ public final class ArchiveSupport {
                     break;
                 case RAR:
                     ok = extractSingleRarEntry(prepared.file, normalized, outFile, password);
+                    break;
+                case LIBARCHIVE:
+                    ok = LibarchiveArchiveReader.extractSingleEntry(
+                            prepared.file, normalized, outFile, password, null);
                     break;
                 case ALZ:
                     ok = AlzipArchiveReader.extractSingleEntry(prepared.file, normalized, outFile, password);
@@ -1340,6 +1418,9 @@ public final class ArchiveSupport {
                     return extractSevenZIntoDirectoryWithFallback(prepared.file, prepared.type, targetDir, password, progress, entryProgress);
                 case RAR:
                     return extractRarIntoDirectory(prepared.file, targetDir, password, progress, entryProgress);
+                case LIBARCHIVE:
+                    return LibarchiveArchiveReader.extractArchiveIntoDirectory(
+                            prepared.file, targetDir, password, progress, entryProgress);
                 case ALZ:
                     return AlzipArchiveReader.extractArchiveIntoDirectory(prepared.file, targetDir, password, progress, entryProgress);
                 case EGG:
@@ -1374,6 +1455,14 @@ public final class ArchiveSupport {
                                                                @Nullable char[] password,
                                                                @Nullable FileOperationProgress progress,
                                                                @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
+        if (ZipxAesArchiveReader.canExtractArchive(archive)) {
+            return ZipxAesArchiveReader.extractArchiveIntoDirectory(
+                    archive, targetDir, password, progress, entryProgress);
+        }
+        if (ZipxAesArchiveReader.hasUnsupportedAesMethod(archive)) {
+            throw new UnsupportedArchiveFeatureException(
+                    "ZIPX AES compression method is unsupported");
+        }
         try {
             return extractZipIntoDirectory(archive, targetDir, password, progress, entryProgress);
         } catch (PasswordRequiredException e) {
@@ -1448,6 +1537,16 @@ public final class ArchiveSupport {
                                                              @NonNull String entryPath,
                                                              @NonNull File outFile,
                                                              @Nullable char[] password) throws IOException {
+        // Ordinary ZIPs already have a cached Zip4j index. Do not open and
+        // reparse them with Commons Compress merely to rule out AES ZIPX.
+        // The supplement defers index-parser failures to Zip4j, but actual
+        // extraction/authentication failures must remain final (outside the
+        // generic backend-fallback catch below).
+        if (needsZipxAesProbe(archive)) {
+            Boolean zipxAes = ZipxAesArchiveReader.tryExtractSingleEntry(
+                    archive, entryPath, outFile, password);
+            if (zipxAes != null) return zipxAes;
+        }
         try {
             return extractSingleZipEntry(archive, entryPath, outFile, password);
         } catch (PasswordRequiredException e) {
@@ -1468,6 +1567,24 @@ public final class ArchiveSupport {
             if (fallback != null) return fallback;
             throw new IOException(e);
         }
+    }
+
+    static boolean needsZipxAesProbe(@NonNull File archive) {
+        if (ZipxAesArchiveReader.hasCachedIndex(archive)) return true;
+        try {
+            return getZipIndex(archive).encrypted;
+        } catch (IOException | RuntimeException e) {
+            // Zip4j may not understand this container; retain supplemental routing.
+            return true;
+        }
+    }
+
+    /** Run off the UI thread; in-flight index leases remain valid until release. */
+    public static void releaseViewerArchiveIndex(@NonNull File archive) {
+        ZipxAesArchiveReader.releaseArchiveIndex(archive);
+        TarEntryIndex.release(archive);
+        AlzipArchiveReader.releaseArchiveIndex(archive);
+        EggArchiveReader.releaseArchiveIndex(archive);
     }
 
     private static boolean extractSingleSevenZEntryWithFallback(@NonNull File archive,
@@ -1502,6 +1619,8 @@ public final class ArchiveSupport {
                                                              @NonNull File outFile) throws IOException {
         try {
             return extractSingleTarEntry(archive, entryPath, outFile, type);
+        } catch (TarEntryIndex.ExtractionException e) {
+            throw e;
         } catch (IOException e) {
             Boolean fallback = tryExtractSingleEntryWithLibarchiveAfterDedicatedFailure(
                     archive, type, entryPath, outFile, null, null);
@@ -1520,7 +1639,7 @@ public final class ArchiveSupport {
      * Commons Compress cannot decode: BCJ2 ("Multi input/output stream coders
      * are not yet supported") or PPMd (no coder). Returns {@code null} when
      * the archive uses neither, or when the first-party read fails for a
-     * reason other than a missing password, so the caller still falls through
+     * reason other than a missing password or CRC mismatch, so the caller still falls through
      * to the libarchive path that previously served unencrypted PPMd/BCJ2.
      * AES-encrypted BCJ2/PPMd archives have no other path, since libarchive
      * cannot decrypt 7z at all.
@@ -1534,7 +1653,7 @@ public final class ArchiveSupport {
         if (!SevenZBcj2ArchiveReader.archiveUsesSpecialCoder(archive, password)) return null;
         try {
             return SevenZBcj2ArchiveReader.extractArchiveIntoDirectory(archive, targetDir, password, progress, entryProgress);
-        } catch (PasswordRequiredException e) {
+        } catch (PasswordRequiredException | SevenZBcj2ArchiveReader.IntegrityException e) {
             throw e;
         } catch (IOException | RuntimeException e) {
             return null;
@@ -1549,7 +1668,7 @@ public final class ArchiveSupport {
         if (!SevenZBcj2ArchiveReader.archiveUsesSpecialCoder(archive, password)) return null;
         try {
             return SevenZBcj2ArchiveReader.extractSingleEntry(archive, entryPath, outFile, password);
-        } catch (PasswordRequiredException e) {
+        } catch (PasswordRequiredException | SevenZBcj2ArchiveReader.IntegrityException e) {
             throw e;
         } catch (IOException | RuntimeException e) {
             return null;
@@ -1657,6 +1776,7 @@ public final class ArchiveSupport {
             case TAR_Z:
             case TAR_ZST:
             case TAR_LZ4:
+            case LIBARCHIVE:
                 return true;
             default:
                 return false;
@@ -1907,19 +2027,12 @@ public final class ArchiveSupport {
     }
 
     @NonNull
-    private static File resolveFirstAlzipPart(@NonNull File selectedPart, @NonNull Type type) {
+    private static File resolveFirstAlzipPart(@NonNull File selectedPart, @NonNull Type type) throws IOException {
+        if (type == Type.EGG) return EggArchiveReader.resolveFirstVolume(selectedPart);
         File parent = selectedPart.getParentFile();
         if (parent == null) return selectedPart;
         String name = selectedPart.getName();
         String lower = name.toLowerCase(Locale.ROOT);
-        if (type == Type.EGG) {
-            Matcher eggPart = ArchiveTypeDetector.EGG_VOLUME_PART.matcher(lower);
-            if (eggPart.matches()) {
-                String prefix = name.substring(0, lower.lastIndexOf(".vol"));
-                File first = new File(parent, prefix + ".vol1.egg");
-                return first.exists() && first.isFile() ? first : selectedPart;
-            }
-        }
         if (type == Type.ALZ) {
             Matcher alzPart = ArchiveTypeDetector.ALZ_VOLUME_PART.matcher(lower);
             if (alzPart.matches()) {
@@ -2043,7 +2156,7 @@ public final class ArchiveSupport {
             if (!outParent.exists() && !outParent.mkdirs()) return false;
             byte[] buffer = new byte[1024 * 64];
             long decodedBytes = 0L;
-            try (OutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+            try (OutputStream out = openExtractionOutputStream(outFile)) {
                 int read;
                 while ((read = stream.read(buffer)) != -1) {
                     if (progress != null && !progress.checkpoint()) return false;
@@ -2363,6 +2476,20 @@ public final class ArchiveSupport {
                                                  @NonNull String entryPath,
                                                  @NonNull File outFile,
                                                  @NonNull Type type) throws IOException {
+        if (type == Type.TAR) {
+            // Only indexing failures may defer to the old scanner. Once copying starts,
+            // cancellation, storage failure and a changing/truncated archive remain failures.
+            TarEntryIndex.Index index = null;
+            try { index = TarEntryIndex.get(archive); }
+            catch (IOException | RuntimeException unsupportedIndex) {
+                if (Thread.currentThread().isInterrupted()) throw new TarEntryIndex.ExtractionException(
+                        new IOException("TAR extraction cancelled", unsupportedIndex));
+            }
+            if (index != null) {
+                Boolean extracted = TarEntryIndex.extract(index, archive, entryPath, outFile);
+                if (extracted != null) return extracted;
+            }
+        }
         try (InputStream fileIn = new BufferedInputStream(new FileInputStream(archive));
              InputStream payloadIn = wrapTarPayloadInputStream(fileIn, type);
              TarArchiveInputStream tar = new TarArchiveInputStream(payloadIn)) {
@@ -2371,7 +2498,7 @@ public final class ArchiveSupport {
                 if (!tar.canReadEntryData(entry)) return false;
                 if (entry instanceof TarArchiveEntry) {
                     TarArchiveEntry tarEntry = (TarArchiveEntry) entry;
-                    if (tarEntry.isSymbolicLink() || tarEntry.isLink()) return false;
+                    if (tarEntry.isSymbolicLink() || tarEntry.isLink()) continue;
                 }
                 if (entry.isDirectory()) continue;
                 String path = sanitizeEntryPathForList(entry.getName());
@@ -2408,7 +2535,7 @@ public final class ArchiveSupport {
                 if (outParent == null) return false;
                 if (!outParent.exists() && !outParent.mkdirs()) return false;
                 long decodedBytes = 0L;
-                try (OutputStream outStream = new BufferedOutputStream(new FileOutputStream(out))) {
+                try (OutputStream outStream = openExtractionOutputStream(out)) {
                     if (entry.hasStream()) {
                         int read;
                         while ((read = sevenZ.read(buffer)) > 0) {
@@ -2440,7 +2567,7 @@ public final class ArchiveSupport {
                     continue;
                 }
                 long decodedBytes = 0L;
-                try (OutputStream outStream = new BufferedOutputStream(new FileOutputStream(outFile))) {
+                try (OutputStream outStream = openExtractionOutputStream(outFile)) {
                     if (entry.hasStream()) {
                         int read;
                         while ((read = sevenZ.read(buffer)) > 0) {
@@ -2579,26 +2706,26 @@ public final class ArchiveSupport {
     }
 
     @Nullable
-    private static File resolveArchiveEntryOutput(@NonNull File targetDir, String rawEntryName) {
+    static File resolveArchiveEntryOutput(@NonNull File targetDir, String rawEntryName) {
         String entryName = sanitizeEntryPathForList(rawEntryName);
         if (entryName == null) return null;
         File out = new File(targetDir, entryName);
         return isSameOrDescendant(targetDir, out) ? out : null;
     }
 
-    private static boolean writeArchiveEntryStream(@NonNull InputStream in, @NonNull File out) throws IOException {
+    static boolean writeArchiveEntryStream(@NonNull InputStream in, @NonNull File out) throws IOException {
         return writeArchiveEntryStream(in, out, null);
     }
 
-    private static boolean writeArchiveEntryStream(@NonNull InputStream in,
-                                                   @NonNull File out,
-                                                   @Nullable FileOperationProgress progress) throws IOException {
+    static boolean writeArchiveEntryStream(@NonNull InputStream in,
+                                           @NonNull File out,
+                                           @Nullable FileOperationProgress progress) throws IOException {
         File outParent = out.getParentFile();
         if (outParent == null) return false;
         if (!outParent.exists() && !outParent.mkdirs()) return false;
         byte[] buffer = new byte[1024 * 64];
         long decodedBytes = 0L;
-        try (OutputStream outStream = new BufferedOutputStream(new FileOutputStream(out))) {
+        try (OutputStream outStream = openExtractionOutputStream(out)) {
             int read;
             while ((read = in.read(buffer)) != -1) {
                 if (progress != null && !progress.checkpoint()) return false;
@@ -2611,13 +2738,21 @@ public final class ArchiveSupport {
         }
     }
 
-    private static long checkedAddDecodedStreamBytes(long current, int justRead) throws IOException {
+    static long checkedAddDecodedStreamBytes(long current, int justRead) throws IOException {
         if (justRead <= 0) return current;
-        if (current > MAX_EXTRACTION_TOTAL_BYTES - justRead) {
+        if (current < 0L || current > Long.MAX_VALUE - justRead) {
             throw new UnsupportedArchiveFeatureException(
-                    "Decoded archive stream exceeds the extraction safety limit");
+                    "Decoded archive stream byte count overflow");
         }
         return current + justRead;
+    }
+
+    @NonNull
+    public static OutputStream openExtractionOutputStream(@NonNull File out) throws IOException {
+        File parent = out.getAbsoluteFile().getParentFile();
+        long standaloneBudget = parent != null ? runtimeExtractionBudgetBytes(parent) : Long.MAX_VALUE;
+        return new BufferedOutputStream(
+                ArchiveExtractionByteBudget.openOutputStream(out, standaloneBudget));
     }
 
     private static long sumZipPayloadBytes(@NonNull List<FileHeader> headers) {
@@ -2632,7 +2767,7 @@ public final class ArchiveSupport {
     }
 
     @Nullable
-    private static String sanitizeEntryPathForList(String rawEntryName) {
+    static String sanitizeEntryPathForList(String rawEntryName) {
         if (rawEntryName == null) return null;
         String entryName = rawEntryName.trim().replace('\\', '/');
         while (entryName.startsWith("./")) entryName = entryName.substring(2);
@@ -2724,6 +2859,23 @@ public final class ArchiveSupport {
         if (usable <= 0L) return true;
         long required = addMeasuredBytes(expectedBytes, MIN_EXTRACTION_FREE_MARGIN_BYTES);
         return required != Long.MAX_VALUE && usable >= required;
+    }
+
+    static long runtimeExtractionBudgetBytes(@NonNull File parentDir) {
+        long usable;
+        try {
+            usable = parentDir.getUsableSpace();
+        } catch (SecurityException ignored) {
+            return Long.MAX_VALUE;
+        }
+        return runtimeExtractionBudgetForUsableSpace(usable);
+    }
+
+    /** No policy size ceiling: use measurable free space, or long accounting if unavailable. */
+    static long runtimeExtractionBudgetForUsableSpace(long usable) {
+        if (usable <= 0L) return Long.MAX_VALUE;
+        if (usable <= MIN_EXTRACTION_FREE_MARGIN_BYTES) return 0L;
+        return usable - MIN_EXTRACTION_FREE_MARGIN_BYTES;
     }
 
     private static boolean replaceExistingDirectoryWithTemp(@NonNull File destinationDir,

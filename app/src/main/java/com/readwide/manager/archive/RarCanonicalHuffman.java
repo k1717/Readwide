@@ -10,6 +10,7 @@ final class RarCanonicalHuffman {
     private final int[] symbolsByCode;
     private final int[] firstCodeByLength;
     private final int[] firstSymbolIndexByLength;
+    private final int[] symbolCountByLength;
     private final int maxLength;
 
     private RarCanonicalHuffman(int[] symbolsByCode,
@@ -20,6 +21,15 @@ final class RarCanonicalHuffman {
         this.firstCodeByLength = firstCodeByLength;
         this.firstSymbolIndexByLength = firstSymbolIndexByLength;
         this.maxLength = maxLength;
+        this.symbolCountByLength = new int[MAX_BITS + 1];
+        int nextIndex = symbolsByCode.length;
+        for (int length = MAX_BITS; length > 0; length--) {
+            int first = firstSymbolIndexByLength[length];
+            if (first >= 0) {
+                symbolCountByLength[length] = nextIndex - first;
+                nextIndex = first;
+            }
+        }
     }
 
     private static int[] newFilled(int size, int value) {
@@ -99,18 +109,11 @@ final class RarCanonicalHuffman {
             if (firstCode < 0) continue;
             int index = code - firstCode;
             int firstIndex = firstSymbolIndexByLength[length];
-            int nextFirstIndex = nextFirstIndex(length);
-            if (index >= 0 && firstIndex + index < nextFirstIndex) {
+            if (index >= 0 && index < symbolCountByLength[length]) {
                 return symbolsByCode[firstIndex + index];
             }
         }
         throw new IOException("Invalid RAR Huffman code");
     }
 
-    private int nextFirstIndex(int length) {
-        for (int i = length + 1; i < firstSymbolIndexByLength.length; i++) {
-            if (firstSymbolIndexByLength[i] >= 0) return firstSymbolIndexByLength[i];
-        }
-        return symbolsByCode.length;
-    }
 }

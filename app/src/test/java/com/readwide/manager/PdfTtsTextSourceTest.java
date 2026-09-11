@@ -18,6 +18,39 @@ import java.util.Map;
  */
 public class PdfTtsTextSourceTest {
 
+    @Test
+    public void inferredWhitespaceSurvivesResidentBufferAndPageBoundaries() {
+        PdfTtsTextSource src = PdfTtsTextSource.build(null, pages("cat dog\n", "bird\n"), 2);
+        assertEquals("cat dog\n\nbird\n\n", src.getTextContent());
+        assertEquals(0, src.pageIndexForChar(8));
+        assertEquals(1, src.pageIndexForChar(9));
+    }
+
+    @Test
+    public void legacyAndUnknownResumeFormatsUseSavedPageStart() {
+        PdfTtsTextSource src = PdfTtsTextSource.build(null, pages("cat dog", "bird song"), 2);
+        assertEquals(8, src.resolveSavedPosition(2, 2, 0));
+        assertEquals(8, src.resolveSavedPosition(2, 2, 99));
+        assertEquals(0, src.resolveSavedPosition(12, 1, 0));
+    }
+
+    @Test
+    public void currentResumeFormatPreservesValidExactOffset() {
+        PdfTtsTextSource src = PdfTtsTextSource.build(null, pages("cat dog", "bird song"), 2);
+        assertEquals(10, src.resolveSavedPosition(10, 1, PdfTtsTextSource.TEXT_FORMAT_VERSION));
+        assertEquals(0, src.resolveSavedPosition(0, 2, PdfTtsTextSource.TEXT_FORMAT_VERSION));
+    }
+
+    @Test
+    public void invalidResumeCoordinatesFallBackToClampedPage() {
+        PdfTtsTextSource src = PdfTtsTextSource.build(null, pages("cat dog", "bird song"), 2);
+        assertEquals(8, src.resolveSavedPosition(Integer.MAX_VALUE, 2, PdfTtsTextSource.TEXT_FORMAT_VERSION));
+        assertEquals(0, src.resolveSavedPosition(-1, Integer.MIN_VALUE, 0));
+        assertEquals(8, src.resolveSavedPosition(-1, Integer.MAX_VALUE, 0));
+        PdfTtsTextSource empty = PdfTtsTextSource.build(null, pages(), 0);
+        assertEquals(0, empty.resolveSavedPosition(999, 999, 0));
+    }
+
     private static Map<Integer, String> pages(String... text) {
         Map<Integer, String> m = new HashMap<>();
         for (int i = 0; i < text.length; i++) {

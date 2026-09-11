@@ -148,8 +148,10 @@ final class SettingsCollapsibleSectionController {
             v.setVisibility(expanded ? View.VISIBLE : View.GONE);
         }
         if (header instanceof TextView) {
-            ((TextView) header).setText(
-                    (expanded ? MARKER_EXPANDED : MARKER_COLLAPSED) + baseTitle);
+            ((TextView) header).setText(activity.getString(
+                    R.string.section_marker_title_format,
+                    expanded ? MARKER_EXPANDED : MARKER_COLLAPSED,
+                    baseTitle));
         }
         if ("theme".equals(key)) {
             applyCustomThemeSectionVisibility(content, expanded);

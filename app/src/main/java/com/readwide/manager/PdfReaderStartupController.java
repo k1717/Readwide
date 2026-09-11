@@ -65,7 +65,7 @@ final class PdfReaderStartupController {
         lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
         activity.getWindow().setAttributes(lp);
 
-        activity.loadPdfFromIntent();
+        activity.loadPdfFromIntent(savedInstanceState);
     }
 
     void onNewIntent(@NonNull android.content.Intent intent) {

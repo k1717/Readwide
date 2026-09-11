@@ -23,7 +23,7 @@ public class RarSplitStoredExtractorTest {
         byte[] expected = new byte[] {'h', 'e', 'l', 'l', 'o'};
         File part1 = writeFile("part1.rar", new byte[] {'h', 'e'});
         File part2 = writeFile("part2.rar", new byte[] {'l', 'l', 'o'});
-        RarArchiveReader.RarEntry first = entry(2, false, true, crc(expected));
+        RarArchiveReader.RarEntry first = entry(2, false, true, crc(new byte[] {'h', 'e'}));
         RarArchiveReader.RarEntry last = entry(3, true, false, crc(expected));
         first.sourceArchive = part1;
         last.sourceArchive = part2;
@@ -39,7 +39,7 @@ public class RarSplitStoredExtractorTest {
     public void extractPlainStoredSplitDeletesPartialOutputOnCrcFailure() throws Exception {
         File part1 = writeFile("bad1.rar", new byte[] {'b', 'a'});
         File part2 = writeFile("bad2.rar", new byte[] {'d'});
-        RarArchiveReader.RarEntry first = entry(2, false, true, 0x12345678L);
+        RarArchiveReader.RarEntry first = entry(2, false, true, crc(new byte[] {'b', 'a'}));
         RarArchiveReader.RarEntry last = entry(1, true, false, 0x12345678L);
         first.sourceArchive = part1;
         last.sourceArchive = part2;

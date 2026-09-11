@@ -55,6 +55,8 @@ public class PrefsManager {
     public static final int SORT_SIZE_LARGE = 4;
     public static final int SORT_SIZE_SMALL = 5;
     public static final int SORT_TYPE = 6;
+    public static final int FILE_DISPLAY_LIST = 0;
+    public static final int FILE_DISPLAY_TILES = 1;
     public static final int LANGUAGE_SYSTEM = -1;
     public static final int LANGUAGE_ENGLISH = 0;
     public static final int LANGUAGE_KOREAN = 1;
@@ -99,6 +101,9 @@ public class PrefsManager {
     public static final int LARGE_TEXT_PARTITION_BUFFER_LINES_HIGH_BUFFER = 600;
     public static final int ARCHIVE_OPEN_MODE_NORMAL = 0;
     public static final int ARCHIVE_OPEN_MODE_COMIC = 1;
+    public static final int ARCHIVE_VIEWER_BACKGROUND_TIMEOUT_OFF = 0;
+    public static final int ARCHIVE_VIEWER_BACKGROUND_TIMEOUT_MAX_MINUTES =
+            ArchiveViewerTimeoutPolicy.MAX_MINUTES;
     public static final int IMAGE_SLIDER_DIRECTION_LTR = 0;
     public static final int IMAGE_SLIDER_DIRECTION_RTL = 1;
 
@@ -379,6 +384,7 @@ public class PrefsManager {
                 "active_theme_id",
                 "large_text_partition_mode",
                 "archive_open_mode",
+                "archive_viewer_background_timeout_minutes",
                 "main_custom_bg",
                 "main_custom_panel",
                 "main_custom_bar",
@@ -989,9 +995,15 @@ public class PrefsManager {
     }
 
     public void setTtsLastPlaybackState(String filePath, int charPosition, int pageNumber, boolean continuous, int sleepTimerMinutes) {
+        setTtsLastPlaybackState(filePath, charPosition, pageNumber, continuous, sleepTimerMinutes, 0);
+    }
+
+    public void setTtsLastPlaybackState(String filePath, int charPosition, int pageNumber,
+                                        boolean continuous, int sleepTimerMinutes, int textFormatVersion) {
         prefs.edit()
                 .putString("tts_last_file_path", filePath == null ? "" : filePath)
                 .putInt("tts_last_char_position", Math.max(0, charPosition))
+                .putInt("tts_last_text_format_version", Math.max(0, textFormatVersion))
                 .putInt("tts_last_page_number", Math.max(1, pageNumber))
                 .putBoolean("tts_last_continuous", continuous)
                 .putInt("tts_last_sleep_timer_min", Math.max(0, sleepTimerMinutes))
@@ -1006,6 +1018,10 @@ public class PrefsManager {
 
     public int getTtsLastCharPosition() {
         return Math.max(0, prefs.getInt("tts_last_char_position", 0));
+    }
+
+    public int getTtsLastTextFormatVersion() {
+        return Math.max(0, prefs.getInt("tts_last_text_format_version", 0));
     }
 
     public int getTtsLastPageNumber() {
@@ -1028,6 +1044,7 @@ public class PrefsManager {
         prefs.edit()
                 .remove("tts_last_file_path")
                 .remove("tts_last_char_position")
+                .remove("tts_last_text_format_version")
                 .remove("tts_last_page_number")
                 .remove("tts_last_continuous")
                 .remove("tts_last_sleep_timer_min")
@@ -1112,6 +1129,23 @@ public class PrefsManager {
 
     public boolean shouldOpenGenericArchivesAsComics() {
         return getArchiveOpenMode() == ARCHIVE_OPEN_MODE_COMIC;
+    }
+
+    public int getArchiveViewerBackgroundTimeoutMinutes() {
+        try {
+            return ArchiveViewerTimeoutPolicy.normalizeMinutes(prefs.getInt(
+                    "archive_viewer_background_timeout_minutes",
+                    ARCHIVE_VIEWER_BACKGROUND_TIMEOUT_OFF));
+        } catch (ClassCastException ignored) {
+            // A hand-edited JSON backup can import this key with the wrong type.
+            return ARCHIVE_VIEWER_BACKGROUND_TIMEOUT_OFF;
+        }
+    }
+
+    public void setArchiveViewerBackgroundTimeoutMinutes(int minutes) {
+        prefs.edit().putInt(
+                "archive_viewer_background_timeout_minutes",
+                ArchiveViewerTimeoutPolicy.normalizeMinutes(minutes)).apply();
     }
 
     public String getLastDirectory() { return prefs.getString("last_directory", null); }
@@ -1543,6 +1577,15 @@ public class PrefsManager {
     }
     public void setFileThumbnailsEnabled(boolean enabled) {
         prefs.edit().putBoolean("file_thumbnails_enabled", enabled).apply();
+    }
+    public int getFileDisplayMode() {
+        int mode = prefs.getInt("file_display_mode", FILE_DISPLAY_LIST);
+        return mode == FILE_DISPLAY_TILES ? FILE_DISPLAY_TILES : FILE_DISPLAY_LIST;
+    }
+    public void setFileDisplayMode(int mode) {
+        prefs.edit().putInt(
+                "file_display_mode",
+                mode == FILE_DISPLAY_TILES ? FILE_DISPLAY_TILES : FILE_DISPLAY_LIST).apply();
     }
     public String getArchiveLastImageEntryPath(String archivePath) {
         if (archivePath == null || archivePath.trim().isEmpty()) return "";

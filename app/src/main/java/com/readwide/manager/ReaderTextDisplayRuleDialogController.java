@@ -374,8 +374,10 @@ final class ReaderTextDisplayRuleDialogController {
                 row.setBackground(rowBg);
 
                 TextView name = new TextView(activity);
-                name.setText((rule.enabled ? "✓ " : "○ ")
-                        + safeRulePreview(rule.findText) + " → " + safeRulePreview(rule.replacementText));
+                name.setText(getString(R.string.text_rule_preview_format,
+                        rule.enabled ? "✓" : "○",
+                        safeRulePreview(rule.findText),
+                        safeRulePreview(rule.replacementText)));
                 name.setTextColor(fg);
                 name.setTextSize(14f);
                 name.setTypeface(Typeface.DEFAULT_BOLD);
@@ -395,7 +397,7 @@ final class ReaderTextDisplayRuleDialogController {
                         ? getString(R.string.txt_display_rule_regex_mode)
                         : getString(R.string.txt_display_rule_plain_mode);
                 TextView meta = new TextView(activity);
-                meta.setText(scope + " · " + caseMode + " · " + mode);
+                meta.setText(getString(R.string.metadata_triplet_format, scope, caseMode, mode));
                 meta.setTextColor(sub);
                 meta.setTextSize(11f);
                 meta.setSingleLine(true);

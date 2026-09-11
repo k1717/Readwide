@@ -1,6 +1,7 @@
 package com.readwide.manager.widget;
 
 import com.readwide.manager.UiColorUtils;
+import com.readwide.manager.R;
 
 import android.content.Context;
 import android.graphics.Color;
@@ -30,9 +31,18 @@ import java.util.Locale;
  * MainActivity's light/dark theme.
  */
 public class SelectionContrastWebView extends WebView {
+    private static final int ACTION_ADD_NOTE = 0x524E0001;
+    private static final int ACTION_ADD_HIGHLIGHT = 0x524E0002;
+
+    public interface AnnotationActionListener {
+        boolean isAnnotationActionAvailable();
+        void onAnnotationAction(boolean highlight, ActionMode mode);
+    }
+
     private int toolbarBackground = Color.rgb(250, 250, 250);
     private int toolbarForeground = Color.BLACK;
     private int toolbarBorder = Color.rgb(218, 218, 218);
+    private AnnotationActionListener annotationActionListener;
 
     public SelectionContrastWebView(Context context) {
         super(context);
@@ -50,6 +60,10 @@ public class SelectionContrastWebView extends WebView {
         this.toolbarBackground = background;
         this.toolbarForeground = foreground;
         this.toolbarBorder = isDark(background) ? Color.rgb(72, 72, 72) : Color.rgb(220, 220, 220);
+    }
+
+    public void setAnnotationActionListener(AnnotationActionListener listener) {
+        this.annotationActionListener = listener;
     }
 
     @Override
@@ -81,6 +95,7 @@ public class SelectionContrastWebView extends WebView {
                 @Override
                 public boolean onCreateActionMode(ActionMode mode, Menu menu) {
                     boolean ok = callback2.onCreateActionMode(mode, menu);
+                    addAnnotationActions(menu);
                     styleActionMode(mode, menu);
                     return ok;
                 }
@@ -88,12 +103,14 @@ public class SelectionContrastWebView extends WebView {
                 @Override
                 public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
                     boolean result = callback2.onPrepareActionMode(mode, menu);
+                    addAnnotationActions(menu);
                     styleActionMode(mode, menu);
                     return result;
                 }
 
                 @Override
                 public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+                    if (handleAnnotationAction(mode, item)) return true;
                     return callback2.onActionItemClicked(mode, item);
                 }
 
@@ -113,6 +130,7 @@ public class SelectionContrastWebView extends WebView {
             @Override
             public boolean onCreateActionMode(ActionMode mode, Menu menu) {
                 boolean ok = callback.onCreateActionMode(mode, menu);
+                addAnnotationActions(menu);
                 styleActionMode(mode, menu);
                 return ok;
             }
@@ -120,12 +138,14 @@ public class SelectionContrastWebView extends WebView {
             @Override
             public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
                 boolean result = callback.onPrepareActionMode(mode, menu);
+                addAnnotationActions(menu);
                 styleActionMode(mode, menu);
                 return result;
             }
 
             @Override
             public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+                if (handleAnnotationAction(mode, item)) return true;
                 return callback.onActionItemClicked(mode, item);
             }
 
@@ -134,6 +154,29 @@ public class SelectionContrastWebView extends WebView {
                 callback.onDestroyActionMode(mode);
             }
         };
+    }
+
+    private void addAnnotationActions(Menu menu) {
+        AnnotationActionListener listener = annotationActionListener;
+        if (menu == null || listener == null || !listener.isAnnotationActionAvailable()) return;
+        if (menu.findItem(ACTION_ADD_NOTE) == null) {
+            menu.add(Menu.NONE, ACTION_ADD_NOTE, 100, R.string.annotation_note)
+                    .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+        }
+        if (menu.findItem(ACTION_ADD_HIGHLIGHT) == null) {
+            menu.add(Menu.NONE, ACTION_ADD_HIGHLIGHT, 101, R.string.annotation_highlight)
+                    .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+        }
+    }
+
+    private boolean handleAnnotationAction(ActionMode mode, MenuItem item) {
+        if (item == null) return false;
+        int id = item.getItemId();
+        if (id != ACTION_ADD_NOTE && id != ACTION_ADD_HIGHLIGHT) return false;
+        AnnotationActionListener listener = annotationActionListener;
+        if (listener == null || !listener.isAnnotationActionAvailable()) return false;
+        listener.onAnnotationAction(id == ACTION_ADD_HIGHLIGHT, mode);
+        return true;
     }
 
     private void styleActionMode(ActionMode mode, Menu menu) {

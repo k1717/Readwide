@@ -5,11 +5,9 @@ import androidx.annotation.Nullable;
 
 import com.readwide.manager.util.FileOperationProgress;
 
-import java.io.BufferedOutputStream;
 import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
@@ -26,7 +24,7 @@ final class RarStoredPayloadIO {
                                      long size,
                                      @NonNull File outFile,
                                      @Nullable FileOperationProgress progress) throws IOException {
-        try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             copyToStream(raf, size, out, progress);
             out.flush();
         }
@@ -35,13 +33,13 @@ final class RarStoredPayloadIO {
     static void copySegmentsToFile(@NonNull List<RarCryptoStreams.EncryptedSegment> segments,
                                    @NonNull File outFile,
                                    @Nullable FileOperationProgress progress) throws IOException {
-        try (BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
-            for (RarCryptoStreams.EncryptedSegment segment : segments) {
-                if (segment == null) continue;
-                try (RandomAccessFile raf = new RandomAccessFile(segment.archive, "r")) {
-                    raf.seek(segment.offset);
-                    copyToStream(raf, segment.encryptedSize, out, progress);
-                }
+        try (RarPackedInputStream in = new RarPackedInputStream(segments, progress);
+             OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
+            byte[] buffer = new byte[BUFFER_SIZE];
+            int count;
+            while ((count = in.read(buffer)) != -1) {
+                out.write(buffer, 0, count);
+                if (progress != null) progress.addDoneBytes(count);
             }
             out.flush();
         }
@@ -67,24 +65,85 @@ final class RarStoredPayloadIO {
 
     static void verifyCrc(@NonNull RarArchiveReader.RarEntry entry,
                           @NonNull File outFile) throws IOException {
-        if (entry.dataCrc < 0) return;
-        if (entry.rarVersion >= 5
-                && entry.encryption != null
-                && entry.encryption.check.length > 0) {
-            return;
-        }
-        CRC32 crc32 = new CRC32();
+        verifyCrc(entry, outFile, null);
+    }
+
+    static void verifyCrc(@NonNull RarArchiveReader.RarEntry entry,
+                          @NonNull File outFile, @Nullable Rar5Crypto.Secrets secrets) throws IOException {
+        requireSupportedDataCheck(entry);
+        if (entry.dataCrc < 0 && entry.blake2sp == null) return;
+        DataCheck check = new DataCheck(entry);
         byte[] buffer = new byte[BUFFER_SIZE];
         try (FileInputStream in = new FileInputStream(outFile)) {
             int read;
             while ((read = in.read(buffer)) != -1) {
-                crc32.update(buffer, 0, read);
+                if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+                check.update(buffer, 0, read);
             }
         }
-        if ((crc32.getValue() & 0xffffffffL) != entry.dataCrc) {
+        if (!check.matches(secrets)) {
             try { outFile.delete(); } catch (SecurityException ignored) {}
             if (entry.encrypted()) throw new ArchiveSupport.PasswordRequiredException();
-            throw new IOException("RAR entry CRC mismatch");
+            throw new IOException("RAR entry checksum mismatch");
+        }
+    }
+
+    static boolean crcMatches(@NonNull RarArchiveReader.RarEntry entry, long plainCrc,
+                               @Nullable Rar5Crypto.Secrets secrets) throws IOException {
+        requireSupportedDataCheck(entry);
+        if (entry.dataCrc < 0) return true;
+        long actual = plainCrc & 0xffffffffL;
+        if (!hasPlaintextCrc(entry)) {
+            if (secrets == null) throw new IOException("RAR5 checksum key is required");
+            actual = Rar5Crypto.tweakCrc32(actual, secrets);
+        }
+        return actual == (entry.dataCrc & 0xffffffffL);
+    }
+
+    static boolean hasPlaintextCrc(@NonNull RarArchiveReader.RarEntry entry) {
+        // Password-check data (flag 1) and key-dependent data checksums (flag 2)
+        // are independent RAR5 fields. A password check must not bypass a plain CRC.
+        return !(entry.rarVersion >= 5 && entry.encryption != null
+                && (entry.encryption.flags & 0x0002L) != 0L);
+    }
+
+    static void requireSupportedDataCheck(@NonNull RarArchiveReader.RarEntry entry) throws IOException {
+        if (entry.blake2sp != null && entry.blake2sp.length != 32) {
+            throw new IOException("Invalid RAR5 BLAKE2sp checksum size");
+        }
+        if (!hasPlaintextCrc(entry) && entry.dataCrc < 0 && entry.blake2sp == null
+                && entry.encryption.check.length != 12) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException(
+                    "RAR5 encrypted entry has neither a supported checksum nor password-check data");
+        }
+    }
+
+    /** Checks every declared supported checksum; a good CRC cannot mask a bad hash. */
+    static final class DataCheck {
+        private final RarArchiveReader.RarEntry entry;
+        private final CRC32 crc = new CRC32();
+        private final RarBlake2sp blake;
+
+        DataCheck(RarArchiveReader.RarEntry entry) throws IOException {
+            requireSupportedDataCheck(entry);
+            this.entry = entry;
+            blake = entry.blake2sp == null ? null : new RarBlake2sp();
+        }
+
+        void update(byte[] bytes, int offset, int length) {
+            if (entry.dataCrc >= 0) crc.update(bytes, offset, length);
+            if (blake != null) blake.update(bytes, offset, length);
+        }
+
+        boolean matches(@Nullable Rar5Crypto.Secrets secrets) throws IOException {
+            if (!crcMatches(entry, crc.getValue(), secrets)) return false;
+            if (blake == null) return true;
+            byte[] actual = blake.digest();
+            if (!hasPlaintextCrc(entry)) {
+                if (secrets == null) throw new IOException("RAR5 checksum key is required");
+                actual = Rar5Crypto.tweakBlake2sp(actual, secrets);
+            }
+            return java.security.MessageDigest.isEqual(actual, entry.blake2sp);
         }
     }
 }

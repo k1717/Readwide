@@ -20,6 +20,43 @@ public class Rar3FirstPartyArchiveExtractorTest {
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
+    @Test public void checkedSolidFallbackDecodesTablelessTarget() throws Exception {
+        byte[] first = syntheticPayload(block(new int[]{'A','B',256}, "00011000"));
+        byte[] second = new byte[]{0x60}; // B, EOF, reuse tables: 01 10 00.
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        entries.add(entry("first.txt", writeArchive("checked-first.payload", first), first, 2, crc("AB"), false));
+        entries.add(entry("second.txt", writeArchive("checked-second.payload", second), second, 1, crc("B"), true));
+        File directory = tempFolder.newFolder();
+        assertTrue(Rar3FirstPartyArchiveExtractor.tryExtractArchiveLimitedFallback(entries, directory, null, null, null));
+        assertArrayEquals(new byte[]{'A','B'}, Files.readAllBytes(new File(directory,"first.txt").toPath()));
+        File single = tempFolder.newFile();
+        assertTrue(Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entries.get(1), entries, single, null));
+        assertArrayEquals(new byte[]{'B'}, Files.readAllBytes(single.toPath()));
+    }
+
+    @Test public void checkedSolidFallbackNeverPublishesTargetAfterPrimerCrcFailure() throws Exception {
+        byte[] first = syntheticPayload(block(new int[]{'A','B',256}, "00011000"));
+        byte[] second = new byte[]{0x60};
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        entries.add(entry("first.txt", writeArchive("bad-primer.payload", first), first, 2, crc("XX"), false));
+        entries.add(entry("second.txt", writeArchive("bad-target.payload", second), second, 1, crc("B"), true));
+        File target = tempFolder.newFile(); Files.write(target.toPath(), new byte[]{42});
+        try {
+            Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entries.get(1), entries, target, null);
+            throw new AssertionError("Bad primer CRC");
+        } catch (java.io.IOException expected) { assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath())); }
+    }
+
+    @Test public void checkedSolidFallbackRejectsMissingCrcBeforeOutput() throws Exception {
+        byte[] first = syntheticPayload(block(new int[]{'A',256}, "000100"));
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        entries.add(entry("first.txt", writeArchive("unknown-crc.payload", first), first, 1, -1, false));
+        entries.add(entry("second.txt", writeArchive("unknown-target.payload", first), first, 1, crc("A"), true));
+        File target = tempFolder.newFile(); Files.write(target.toPath(), new byte[]{42});
+        assertFalse(Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entries.get(1), entries, target, null));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+    }
+
     @Test
     public void tryExtractArchive_decodesSyntheticNonSolidAndSolidSequence() throws Exception {
         byte[] firstPacked = syntheticPayload(block(new int[] {'A', Rar3SymbolDecoder.SYMBOL_END_BLOCK}, "0001"));

@@ -293,8 +293,9 @@ final class ReaderActivityStartupController {
                 }
                 activity.tapNavigation().handleSingleTap(x, y);
             }
-            @Override public void onTextLongPress(String selectedText, int charPosition, float x, float y) {
-                activity.showTxtSelectedTextActionDialog(selectedText, charPosition);
+            @Override public void onTextLongPress(String selectedText, int startPosition,
+                                                  int endPosition, float x, float y) {
+                activity.showTxtSelectedTextActionDialog(selectedText, startPosition, endPosition);
             }
             @Override public void onReaderScrollChanged() {
                 activity.onScrollChanged();

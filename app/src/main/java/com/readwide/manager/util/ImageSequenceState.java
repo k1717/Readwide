@@ -4,10 +4,39 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public final class ImageSequenceState {
     private ImageSequenceState() {}
+
+    /** Immutable index mapping shared by workers; excludes passwords and live reader state. */
+    public static final class Snapshot {
+        public final int generation;
+        public final List<String> paths;
+        public final List<String> entryPaths;
+
+        private Snapshot(int generation, List<String> paths, List<String> entryPaths) {
+            this.generation = generation;
+            this.paths = Collections.unmodifiableList(new ArrayList<>(paths));
+            this.entryPaths = Collections.unmodifiableList(new ArrayList<>(entryPaths));
+        }
+    }
+
+    /** Owner-thread cache. Every index/path mutation must invalidate or advance generation. */
+    public static final class SnapshotCache {
+        private Snapshot current;
+
+        public Snapshot capture(int generation, List<String> paths, List<String> entryPaths) {
+            if (current == null || current.generation != generation) {
+                current = new Snapshot(generation, paths, entryPaths);
+            }
+            return current;
+        }
+
+        public void clear() { current = null; }
+    }
 
     public static void normalizeMetadataLists(@NonNull List<String> imagePaths,
                                               @NonNull List<String> displayNames,

@@ -178,7 +178,7 @@ final class DocumentArchiveUtils {
             if (containerEntry != null) {
                 Document containerDoc;
                 try (InputStream is = zip.getInputStream(containerEntry)) {
-                    containerDoc = secureDocumentBuilder().parse(is);
+                    containerDoc = parseEpubMetadata(is);
                 }
                 NodeList rootFiles = containerDoc.getElementsByTagName("rootfile");
                 if (rootFiles.getLength() == 0) rootFiles = containerDoc.getElementsByTagNameNS("*", "rootfile");
@@ -192,7 +192,7 @@ final class DocumentArchiveUtils {
                         if (opfEntry != null) {
                             Document opfDoc;
                             try (InputStream is = zip.getInputStream(opfEntry)) {
-                                opfDoc = secureDocumentBuilder().parse(is);
+                                opfDoc = parseEpubMetadata(is);
                             }
                             String packageLayout = epubPackageLayout(opfDoc);
                             if ("pre-paginated".equals(packageLayout)) return true;
@@ -347,7 +347,7 @@ final class DocumentArchiveUtils {
 
             Document containerDoc;
             try (InputStream is = zip.getInputStream(containerEntry)) {
-                containerDoc = secureDocumentBuilder().parse(is);
+                containerDoc = parseEpubMetadata(is);
             }
 
             NodeList rootFiles = containerDoc.getElementsByTagName("rootfile");
@@ -365,7 +365,7 @@ final class DocumentArchiveUtils {
 
             Document opfDoc;
             try (InputStream is = zip.getInputStream(opfEntry)) {
-                opfDoc = secureDocumentBuilder().parse(is);
+                opfDoc = parseEpubMetadata(is);
             }
 
             String basePath = parentPath(opfPath);
@@ -455,7 +455,7 @@ final class DocumentArchiveUtils {
             if (containerEntry == null) return null;
             Document containerDoc;
             try (InputStream is = zip.getInputStream(containerEntry)) {
-                containerDoc = secureDocumentBuilder().parse(is);
+                containerDoc = parseEpubMetadata(is);
             }
             NodeList rootFiles = containerDoc.getElementsByTagName("rootfile");
             if (rootFiles.getLength() == 0) {
@@ -469,7 +469,7 @@ final class DocumentArchiveUtils {
 
             Document opfDoc;
             try (InputStream is = zip.getInputStream(opfEntry)) {
-                opfDoc = secureDocumentBuilder().parse(is);
+                opfDoc = parseEpubMetadata(is);
             }
             String basePath = parentPath(opfPath);
             Map<String, EpubManifestItem> manifest = new LinkedHashMap<>();
@@ -561,7 +561,7 @@ final class DocumentArchiveUtils {
             if (containerEntry == null) return result;
             Document containerDoc;
             try (InputStream is = zip.getInputStream(containerEntry)) {
-                containerDoc = secureDocumentBuilder().parse(is);
+                containerDoc = parseEpubMetadata(is);
             }
             NodeList rootFiles = containerDoc.getElementsByTagName("rootfile");
             if (rootFiles.getLength() == 0) {
@@ -575,7 +575,7 @@ final class DocumentArchiveUtils {
             result.packagePath = opfPath;
             Document opfDoc;
             try (InputStream is = zip.getInputStream(opfEntry)) {
-                opfDoc = secureDocumentBuilder().parse(is);
+                opfDoc = parseEpubMetadata(is);
             }
             String basePath = parentPath(opfPath);
             Map<String, EpubManifestItem> manifest = new LinkedHashMap<>();
@@ -757,6 +757,7 @@ final class DocumentArchiveUtils {
     private static final long MAX_DOCUMENT_TEXT_ENTRY_BYTES = 32L * 1024L * 1024L;
 
     static String readZipEntryString(ZipFile zip, ZipEntry entry) throws IOException {
+        if (entry.getSize() > MAX_DOCUMENT_TEXT_ENTRY_BYTES) throw new IOException("Document text entry exceeds size limit");
         try (InputStream is = zip.getInputStream(entry)) {
             byte[] data = readAllBytesWithLimit(is, MAX_DOCUMENT_TEXT_ENTRY_BYTES);
             return DocumentTextDecoder.decode(data);
@@ -764,15 +765,14 @@ final class DocumentArchiveUtils {
     }
 
     static byte[] readAllBytesWithLimit(InputStream is, long maxBytes) throws IOException {
+        if (maxBytes < 0) throw new IOException("Invalid document text size limit");
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         byte[] buf = new byte[8192];
         int n;
         long total = 0L;
         while ((n = is.read(buf)) != -1) {
+            if (n > maxBytes - total) throw new IOException("Document text entry exceeds size limit");
             total += n;
-            if (total > maxBytes) {
-                throw new IOException("Document text entry exceeds size limit");
-            }
             out.write(buf, 0, n);
         }
         return out.toByteArray();
@@ -796,6 +796,15 @@ final class DocumentArchiveUtils {
             remaining -= n;
         }
         return out.toByteArray();
+    }
+
+    static Document parseEpubMetadata(InputStream input) throws Exception {
+        return parseEpubMetadata(input, MAX_DOCUMENT_TEXT_ENTRY_BYTES);
+    }
+
+    static Document parseEpubMetadata(InputStream input, long maxBytes) throws Exception {
+        byte[] xml = readAllBytesWithLimit(input, maxBytes);
+        return secureDocumentBuilder().parse(new java.io.ByteArrayInputStream(xml));
     }
 
     static DocumentBuilder secureDocumentBuilder() throws Exception {

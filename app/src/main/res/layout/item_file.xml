@@ -28,7 +28,7 @@
                 android:layout_width="28dp"
                 android:layout_height="28dp"
                 android:layout_gravity="center"
-                android:contentDescription="file icon"
+                android:contentDescription="@null"
                 android:src="@drawable/ic_text_file" />
 
             <TextView
@@ -37,7 +37,7 @@
                 android:layout_height="18dp"
                 android:layout_gravity="end|bottom"
                 android:gravity="center"
-                android:text="✓"
+                android:text="@string/ui_symbol_selected"
                 android:textSize="12sp"
                 android:textStyle="bold"
                 android:visibility="gone" />

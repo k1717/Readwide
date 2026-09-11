@@ -17,7 +17,7 @@
     <string name="bookmark">Bookmark</string>
     <string name="bottom_page">Page</string>
     <string name="bookmark_hints_show">Hints</string>
-    <string name="bookmark_folder_hint">Tap file folder: expand/shrink\nLong-press folder: delete that bookmark folder\nTap bookmark: move\nLong-press bookmark: edit memo</string>
+    <string name="bookmark_folder_hint">Tap a file group: expand/collapse\nLong-press a file group: delete its bookmarks\nTap a bookmark: go to the saved position\nLong-press a bookmark: edit its note</string>
     <string name="bookmark_label">Bookmark label</string>
     <string name="bookmark_saved">Bookmark saved</string>
     <string name="bookmark_updated">Bookmark updated</string>
@@ -77,7 +77,7 @@
     <string name="delete_bookmark_folder">Delete Bookmark Folder</string>
     <string name="delete_bookmark_folder_message">Delete all %1$d bookmarks in this folder?</string>
     <string name="delete_bookmark_folder_note">Only the saved bookmarks will be removed. The document file will not be deleted.</string>
-    <string name="delete_failed">Delete failed</string>
+    <string name="delete_failed">Deletion failed</string>
     <string name="delete_file_confirm_detail">This removes the item from storage. This cannot be undone.</string>
     <string name="delete_file_confirm">Delete “%1$s”?</string>
     <string name="delete_this_bookmark">Delete this bookmark?</string>
@@ -113,9 +113,9 @@
     <string name="archive_extracting">Extracting…</string>
     <string name="archive_extracted">Extracted</string>
     <string name="archive_failure_detail_title">Archive failure detail</string>
-    <string name="archive_failure_detail_message">The short toast is intentionally brief. Use this detail text to check the libarchive/native failure reason.</string>
+    <string name="archive_failure_detail_message">See the technical details below for the extraction error.</string>
     <string name="archive_failure_detail_copied">Failure detail copied</string>
-    <string name="archive_extract_failed">Extract failed</string>
+    <string name="archive_extract_failed">Extraction failed</string>
     <string name="archive_extract_unsupported_feature">This archive uses a feature that is not supported yet</string>
     <string name="archive_extract_unsupported_rar">This RAR uses compression, solid mode, encryption, or another unsupported RAR feature</string>
     <string name="archive_extract_unsupported_alz">This ALZ variant is not supported yet</string>
@@ -124,21 +124,21 @@
     <string name="archive_corrupt_or_incomplete">Archive is damaged, incomplete, or failed checksum verification</string>
     <string name="archive_extract_unsupported_zip">This ZIP/ZIPX uses an unsupported compression/encryption combination</string>
     <string name="archive_extract_unsupported_7z">This 7z/CB7 uses an unsupported method, split chain, solid block, or encryption combination</string>
-    <string name="archive_support_boundary_title">Archive support boundary</string>
-    <string name="archive_support_boundary_rar">RAR support is limited. Readwide can list many RAR files, open stored entries, and try compressed RAR through the bundled libarchive backend, but solid, split, encrypted, header-encrypted, RAR5 compressed, PPMd/VM-filtered, and unusual SFX variants are not guaranteed.</string>
-    <string name="archive_support_boundary_zip">ZIP/CBZ support is broad for normal and encrypted ZIP through Zip4j. Some ZIPX combinations, especially encryption plus special compression methods such as XZ, BZip2, ZSTD, or Deflate64, may not be extractable by the current backend routing.</string>
-    <string name="archive_support_boundary_7z">7z/CB7 support depends on Apache Commons Compress. Normal, password, and standard split chains are attempted, but unsupported method chains, damaged/missing volumes, and some solid archive single-entry reads may fail or be slow.</string>
+    <string name="archive_support_boundary_title">Archive support limits</string>
+    <string name="archive_support_boundary_rar">RAR support is limited and depends on the compression, encryption and volume layout. Custom VM programs and encrypted or split mixed LZ/PPMd streams remain unsupported.</string>
+    <string name="archive_support_boundary_zip">ZIP/CBZ/ZIPX supports normal Store/Deflate and encrypted ZIP through Zip4j. WinZip-AES ZIPX also supports Deflate64, BZip2, LZMA, and XZ, plus PPMd and Zstandard through libarchive 3.8.9. AES ZIPX using JPEG or WavPack is supported by the bundled FOSS native codec module.</string>
+    <string name="archive_support_boundary_7z">7z/CB7 supports common compression methods and selected PPMd/BCJ2 combinations, including supported encrypted and split archives. Some method combinations remain unsupported, and solid archives may open slowly.</string>
     <string name="archive_support_boundary_alz">ALZ support covers Store, Deflate, BZip2, and covered ZipCrypto-style entries. Broader split, encrypted, descriptor-heavy, or unusual ESTsoft variants remain best-effort.</string>
-    <string name="archive_support_boundary_egg">EGG support covers Store, Deflate, BZip2, AZO, and LZMA blocks in non-solid, non-split, non-encrypted archives. Encrypted, split, and solid EGG archives are not supported.</string>
+    <string name="archive_support_boundary_egg">EGG supports Store, Deflate, BZip2, AZO and LZMA, split archives, unencrypted solid archives, and supported non-solid ZipCrypto/AES entries. LEA encryption and encrypted solid archives remain unsupported.</string>
     <string name="archive_support_boundary_generic">This archive uses a feature outside the current supported extraction boundary.</string>
     <string name="archive_support_boundary_bad_password">The password was rejected, or the archive uses an encryption variant that this build cannot verify/extract.</string>
-    <string name="archive_support_boundary_corrupt">The archive may be incomplete or damaged, or the decoded data failed a checksum/CRC check.</string>
-    <string name="archive_support_boundary_detail_prefix">Backend detail:</string>
+    <string name="archive_support_boundary_corrupt">The archive may be incomplete or damaged, or its contents failed an integrity check (checksum/CRC).</string>
+    <string name="archive_support_boundary_detail_prefix">Technical details:</string>
     <string name="archive_extract_conflict_title">Extraction folder already exists</string>
     <string name="archive_extract_conflict_message">An item named %1$s already exists in this folder.</string>
     <string name="extracted_folder_fallback">Extracted</string>
     <string name="folder_info">Folder Info</string>
-    <string name="cancel_archive_extract">Cancel extract</string>
+    <string name="cancel_archive_extract">Cancel extraction</string>
     <string name="archive_extract_select_destination">Open the destination folder, then tap the pending-action icon at the top.</string>
     <string name="archive_extract_cancelled">Archive extraction cancelled</string>
     <string name="archive_extract_confirm_title">Extract here?</string>
@@ -168,7 +168,10 @@
     <string name="archive_open_mode">Archive open mode</string>
     <string name="archive_open_mode_normal">Normal mode</string>
     <string name="archive_open_mode_comic">Comic mode</string>
-    <string name="archive_open_mode_description">Normal mode opens archive contents first. Comic mode opens image-based archives directly like CBZ/CBR, while Archive preview in the long-press menu still opens the internal archive list.</string>
+    <string name="archive_open_mode_description">Normal mode opens the file list inside an archive. Comic mode opens image archives directly in the image viewer, as with CBZ/CBR files. Archive preview in the long-press menu always opens the file list.</string>
+    <string name="archive_viewer_background_timeout">Close archive viewer after background time (minutes)</string>
+    <string name="archive_viewer_background_timeout_hint">0–10080 minutes</string>
+    <string name="archive_viewer_background_timeout_description">Close the archive image viewer after the specified time in the background. Enter 0 to disable automatic closing. Maximum: 10080 minutes (7 days).</string>
     <string name="confirm_move_here_title">Move here?</string>
     <string name="confirm_move_here_message">Move %1$s into %2$s?</string>
     <string name="confirm_copy_here_title">Copy here?</string>
@@ -321,7 +324,7 @@
     <string name="reading_theme">Reading Theme</string>
     <string name="recently_read">Recently Read</string>
     <string name="rename">Rename</string>
-    <string name="rename_failed">Rename failed</string>
+    <string name="rename_failed">Could not rename the item</string>
     <string name="renamed">Renamed</string>
     <string name="replace">Replace</string>
     <string name="save">Save</string>
@@ -604,7 +607,7 @@ Rules: %2$d enabled rules</string>
     <string name="tts_android_settings">Android TTS settings</string>
     <string name="tts_add_voice_model">Add/download voice models</string>
     <string name="tts_settings_unavailable">Could not open Android TTS settings.</string>
-    <string name="tts_description">Reads the current TXT page with the Android text-to-speech engine. Continuous mode turns pages after each spoken page.</string>
+    <string name="tts_description">Reads the current page aloud using Android text-to-speech. Continuous reading moves to the next page automatically.</string>
     <string name="tts_initializing">Starting text to speech...</string>
     <string name="tts_started">Reading current page</string>
     <string name="tts_continuous_started">Continuous TTS started</string>
@@ -632,7 +635,7 @@ Rules: %2$d enabled rules</string>
     <string name="tts_engine_unavailable">Text-to-speech engine is unavailable</string>
     <string name="tts_language_unavailable">%1$s voice is not available in the current TTS engine.</string>
     <string name="tts_notification_channel">Text to speech</string>
-    <string name="tts_notification_channel_description">Controls TXT text-to-speech playback.</string>
+    <string name="tts_notification_channel_description">Controls read-aloud playback.</string>
     <string name="tts_notification_running">Text to speech is running</string>
     <string name="tts_notification_page">Page %1$d / %2$d</string>
     <string name="tts_action_previous">Previous</string>
@@ -640,7 +643,7 @@ Rules: %2$d enabled rules</string>
     <string name="tts_action_pause">Pause</string>
     <string name="tts_action_resume">Resume</string>
     <string name="tts_resume_from_page">Resume from page %1$d</string>
-    <string name="tts_action_remote_unavailable">Open the TXT reader to control TTS.</string>
+    <string name="tts_action_remote_unavailable">Open the reader to control read-aloud playback.</string>
     <string name="settings_reset">Reset settings</string>
     <string name="settings_reset_confirm_title">Reset settings</string>
     <string name="settings_reset_confirm_message">Reset reader and app settings to defaults? Bookmarks, reading positions, recent files, folder shortcuts, TXT display rules, custom themes, and PIN lock will be kept.</string>
@@ -717,7 +720,7 @@ Rules: %2$d enabled rules</string>
     <string name="delete_selected_files_confirm">Delete %1$d selected item(s)? This removes them from storage and cannot be undone.</string>
     <string name="delete_selected_includes_folders_warning">%1$d of these are folders — all of their contents will be deleted too.</string>
     <string name="selected_files_deleted">Deleted %1$d item(s)</string>
-    <string name="selected_files_delete_failed">Delete failed</string>
+    <string name="selected_files_delete_failed">Deletion failed</string>
     <string name="settings_section_button_order">Button / icon order</string>
     <string name="button_order_main_filters_title">Main filter button order</string>
     <string name="button_order_txt_reader_title">TXT viewer icon order</string>
@@ -759,4 +762,71 @@ Rules: %2$d enabled rules</string>
     <string name="image_tap_paging_off">Touch page zones: Off</string>
     <string name="image_slider_direction_rtl">Image flow: right to left</string>
     <string name="epub_force_reader_theme_colors">EPUB: use reading theme colors</string>
+    <string name="file_display_mode">File display</string>
+    <string name="file_display_list">List</string>
+    <string name="file_display_tiles">Tiles</string>
+    <string name="file_display_mode_list">Display style: List</string>
+    <string name="file_display_mode_tiles">Display style: Tiles</string>
+    <string name="annotations_title">Notes &amp; highlights</string>
+    <string name="annotation_note">Note</string>
+    <string name="annotation_highlight">Highlight</string>
+    <string name="annotation_add_note">Add note</string>
+    <string name="annotation_edit_note">Edit note</string>
+    <string name="annotation_note_hint">Write a note about the selected text</string>
+    <string name="annotation_note_required">Enter a note</string>
+    <string name="annotation_saved">Annotation saved</string>
+    <string name="annotation_already_saved">This highlight is already saved</string>
+    <string name="annotation_deleted">Annotation deleted</string>
+    <string name="annotation_empty">No notes or highlights for this file.</string>
+    <string name="annotation_list_hint">Tap to open. Long-press to edit or delete.</string>
+    <string name="annotation_delete_title">Delete annotation?</string>
+    <string name="annotation_delete_message">This removes the separately saved note or highlight. The original document is not changed.</string>
+    <string name="annotation_selection_required">Select some text first</string>
+    <string name="annotation_line">Line %1$d</string>
+    <string name="no_bookmarks_yet">No bookmarks yet</string>
+    <string name="bookmark_memo_format">Memo: %1$s</string>
+    <string name="bookmark_file_memo_format">%1$s • Memo: %2$s</string>
+    <string name="bookmark_current_file_format">Current file • %1$s</string>
+    <string name="bookmark_count_format">Bookmarks: %1$d</string>
+    <string name="bookmark_position_format">Position %1$d</string>
+    <string name="bookmark_metadata_format">%1$s • %2$s</string>
+    <string name="lock_enter_new_pin">Enter a new PIN</string>
+    <string name="lock_enter_current_pin">Enter your current PIN</string>
+    <string name="lock_enter_pin_to_unlock">Enter your PIN to unlock</string>
+    <string name="lock_pin_minimum_digits">PIN must contain at least 4 digits</string>
+    <string name="lock_wrong_pin_retry">Incorrect PIN. Try again.</string>
+    <string name="lock_confirm_pin">Confirm your PIN</string>
+    <string name="lock_pin_set_success">PIN set</string>
+    <string name="lock_pin_mismatch_restart">PINs did not match. Start again.</string>
+    <string name="lock_wrong_current_pin">Incorrect current PIN</string>
+    <string name="lock_confirm_new_pin">Confirm your new PIN</string>
+    <string name="lock_pin_changed">PIN changed</string>
+    <string name="lock_pin_mismatch_enter_new">PINs did not match. Enter a new PIN.</string>
+    <string name="lock_delete_digit">Delete last digit</string>
+    <string name="font_picker_hint">Choose a .ttf/.otf font file or select a readable font found on this device.</string>
+    <string name="font_add_file">Add font file (.ttf/.otf)</string>
+    <string name="font_no_system_found">No readable system fonts found.</string>
+    <string name="font_remove_title">Remove font</string>
+    <string name="font_remove_confirm">%1$s\n\nRemove this user-added font from Readwide?\nSystem fonts and document files are not affected.</string>
+    <string name="font_removed">Font removed</string>
+    <string name="font_remove_failed">This font cannot be removed from inside the app.</string>
+    <string name="file_picker_open_failed">Could not open the file picker.</string>
+    <string name="font_importing">Importing font…</string>
+    <string name="font_added">Font added</string>
+    <string name="font_import_failed">Could not import the font file.</string>
+    <string name="epub_original_layout_kept">This EPUB keeps its original page layout.</string>
+    <string name="rendered_page_current_layout">Rendered page based on the current layout.</string>
+    <string name="ui_symbol_close" translatable="false">×</string>
+    <string name="ui_page_status_initial" translatable="false">1 / 1</string>
+    <string name="ui_rgb_red" translatable="false">R</string>
+    <string name="ui_rgb_green" translatable="false">G</string>
+    <string name="ui_rgb_blue" translatable="false">B</string>
+    <string name="ui_symbol_expand" translatable="false">▸</string>
+    <string name="ui_symbol_selected" translatable="false">✓</string>
+    <string name="dialog_header_body_format" translatable="false">%1$s\n\n%2$s</string>
+    <string name="dialog_header_two_body_format" translatable="false">%1$s\n\n%2$s\n%3$s</string>
+    <string name="info_label_value_format" translatable="false">%1$s\n%2$s</string>
+    <string name="text_rule_preview_format" translatable="false">%1$s %2$s → %3$s</string>
+    <string name="metadata_triplet_format" translatable="false">%1$s · %2$s · %3$s</string>
+    <string name="section_marker_title_format" translatable="false">%1$s%2$s</string>
 </resources>

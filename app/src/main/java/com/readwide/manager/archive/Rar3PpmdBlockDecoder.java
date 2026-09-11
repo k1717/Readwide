@@ -36,9 +36,6 @@ final class Rar3PpmdBlockDecoder {
                 case 0:
                     return new Rar3PpmdDecodeResult(
                             Rar3PpmdDecodeResult.END_BLOCK, window.written(), symbols);
-                case 1:
-                    window.writeLiteral(ppmdState.escapeChar());
-                    break;
                 case 2:
                     return new Rar3PpmdDecodeResult(
                             Rar3PpmdDecodeResult.END_FILE, window.written(), symbols);
@@ -51,8 +48,9 @@ final class Rar3PpmdBlockDecoder {
                     symbols += executePpmdRleMatch(source, window, state, unpackedLimit);
                     break;
                 default:
-                    throw new RarArchiveReader.UnsupportedRarFeatureException(
-                            "RAR3/RAR4 PPMd control symbol is invalid: " + control);
+                    // Other escape codes encode the escape byte itself, including 1.
+                    window.writeLiteral(ppmdState.escapeChar());
+                    break;
             }
         }
         return new Rar3PpmdDecodeResult(
@@ -71,7 +69,7 @@ final class Rar3PpmdBlockDecoder {
         int actualDistance = distance + 2;
         int actualLength = clampLength(length, window, unpackedLimit);
         window.copyMatch(actualDistance, actualLength);
-        state.rememberNewDistanceMatch(actualDistance, actualLength);
+        // PPMd escape matches affect raw history, not classic-LZ saved match slots.
         return 4;
     }
 
@@ -82,7 +80,6 @@ final class Rar3PpmdBlockDecoder {
         int length = safeDecode(source) + 4;
         int actualLength = clampLength(length, window, unpackedLimit);
         window.copyMatch(1, actualLength);
-        state.rememberNewDistanceMatch(1, actualLength);
         return 1;
     }
 

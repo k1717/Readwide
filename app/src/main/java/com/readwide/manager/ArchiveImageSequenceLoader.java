@@ -6,6 +6,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.readwide.manager.archive.ArchiveSupport;
+import com.readwide.manager.archive.ArchiveSourceSnapshot;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -31,6 +32,7 @@ final class ArchiveImageSequenceLoader {
         final boolean selectedReady;
         @Nullable final ArchiveSupport.ExtractionResult extractionResult;
         @NonNull private final Set<String> verifiedSensitivePaths;
+        @Nullable final ArchiveSourceSnapshot sourceSnapshot;
         @Nullable final String archivePathSnapshot;
         final long archiveLengthSnapshot;
         final long archiveLastModifiedSnapshot;
@@ -81,6 +83,24 @@ final class ArchiveImageSequenceLoader {
                @Nullable String archivePathSnapshot,
                long archiveLengthSnapshot,
                long archiveLastModifiedSnapshot) {
+            this(imagePaths, displayNames, entryPaths, selectedIndex, selectedReady,
+                    extractionResult, preparedReader, verifiedSensitivePaths,
+                    archivePathSnapshot, archiveLengthSnapshot, archiveLastModifiedSnapshot, null);
+        }
+
+        Result(@NonNull ArrayList<String> imagePaths,
+               @NonNull ArrayList<String> displayNames,
+               @NonNull ArrayList<String> entryPaths,
+               int selectedIndex,
+               boolean selectedReady,
+               @Nullable ArchiveSupport.ExtractionResult extractionResult,
+               @Nullable SequentialArchiveImageReader preparedReader,
+               @Nullable Set<String> verifiedSensitivePaths,
+               @Nullable String archivePathSnapshot,
+               long archiveLengthSnapshot,
+               long archiveLastModifiedSnapshot,
+               @Nullable ArchiveSourceSnapshot sourceSnapshot) {
+            this.sourceSnapshot = sourceSnapshot;
             this.imagePaths = imagePaths;
             this.displayNames = displayNames;
             this.entryPaths = entryPaths;
@@ -147,6 +167,7 @@ final class ArchiveImageSequenceLoader {
         String archivePathSnapshot = archiveFile.getAbsolutePath();
         long archiveLengthSnapshot = archiveFile.length();
         long archiveLastModifiedSnapshot = archiveFile.lastModified();
+        ArchiveSourceSnapshot sourceSnapshot = ArchiveSourceSnapshot.capture(archiveFile);
         boolean sensitiveCache = PasswordChars.hasPassword(password);
         Set<String> verifiedSensitivePaths = new HashSet<>();
         ArrayList<String> imagePaths = new ArrayList<>();
@@ -246,7 +267,8 @@ final class ArchiveImageSequenceLoader {
                 archiveFile,
                 archivePathSnapshot,
                 archiveLengthSnapshot,
-                archiveLastModifiedSnapshot)) {
+                archiveLastModifiedSnapshot)
+                || (sourceSnapshot != null && !sourceSnapshot.matches(archiveFile))) {
             if (preparedReader != null) preparedReader.close();
             return new Result(
                     imagePaths,
@@ -262,7 +284,7 @@ final class ArchiveImageSequenceLoader {
         }
         return new Result(imagePaths, displayNames, entryPaths, openIndex, selectedReady,
                 selectedResult, preparedReader, verifiedSensitivePaths,
-                archivePathSnapshot, archiveLengthSnapshot, archiveLastModifiedSnapshot);
+                archivePathSnapshot, archiveLengthSnapshot, archiveLastModifiedSnapshot, sourceSnapshot);
     }
 
     @NonNull
@@ -303,6 +325,7 @@ final class ArchiveImageSequenceLoader {
         String archivePathSnapshot = archiveFile.getAbsolutePath();
         long archiveLengthSnapshot = archiveFile.length();
         long archiveLastModifiedSnapshot = archiveFile.lastModified();
+        ArchiveSourceSnapshot sourceSnapshot = ArchiveSourceSnapshot.capture(archiveFile);
         boolean sensitiveCache = PasswordChars.hasPassword(password);
         Set<String> verifiedSensitivePaths = new HashSet<>();
         ArrayList<String> imagePaths = new ArrayList<>();
@@ -344,7 +367,8 @@ final class ArchiveImageSequenceLoader {
                 archiveFile,
                 archivePathSnapshot,
                 archiveLengthSnapshot,
-                archiveLastModifiedSnapshot)) {
+                archiveLastModifiedSnapshot)
+                || (sourceSnapshot != null && !sourceSnapshot.matches(archiveFile))) {
             return new Result(
                     imagePaths,
                     displayNames,
@@ -360,6 +384,6 @@ final class ArchiveImageSequenceLoader {
         return new Result(imagePaths, displayNames, entryPaths,
                 extractedSelectedIndex, selectedExtracted, selectedResult,
                 null, verifiedSensitivePaths,
-                archivePathSnapshot, archiveLengthSnapshot, archiveLastModifiedSnapshot);
+                archivePathSnapshot, archiveLengthSnapshot, archiveLastModifiedSnapshot, sourceSnapshot);
     }
 }

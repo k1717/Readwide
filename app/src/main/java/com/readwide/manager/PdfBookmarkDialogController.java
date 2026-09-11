@@ -55,7 +55,7 @@ private void addBookmarkForCurrentPage(Runnable afterSave) {
             b.setExcerpt(pageLabel(anchorPage));
             b.setEndPosition(anchorPage);
             b.setContentAnchorJson(anchorJson);
-            b.setPageLayoutSignature("PDF_PAGE_COORD_v2");
+            b.setPageLayoutSignature(activity.pdfContentAnchorKind(anchorJson));
             activity.bookmarkManager.updateBookmark(b);
             ShortToast.show(activity, activity.getString(R.string.bookmark_updated));
             if (afterSave != null) afterSave.run();
@@ -68,7 +68,7 @@ private void addBookmarkForCurrentPage(Runnable afterSave) {
     bookmark.setTotalPages(activity.pageCount);
     bookmark.setEndPosition(anchorPage);
     bookmark.setContentAnchorJson(anchorJson);
-    bookmark.setPageLayoutSignature("PDF_PAGE_COORD_v2");
+    bookmark.setPageLayoutSignature(activity.pdfContentAnchorKind(anchorJson));
     activity.bookmarkManager.addBookmark(bookmark);
     ShortToast.show(activity, activity.getString(R.string.bookmark_saved));
     if (afterSave != null) afterSave.run();
@@ -85,6 +85,9 @@ private boolean pdfBookmarkMatchesCurrentSpot(@NonNull Bookmark bookmark, String
     try {
         org.json.JSONObject oldObj = new org.json.JSONObject(oldAnchorJson);
         org.json.JSONObject newObj = new org.json.JSONObject(currentAnchorJson);
+        // Center anchors and legacy top-left anchors are different coordinate systems.
+        if (!oldObj.optString("viewportOrigin", "top-left").equals(
+                newObj.optString("viewportOrigin", "top-left"))) return false;
         int oldPage = oldObj.optInt("page", bookmark.getCharPosition());
         int newPage = newObj.optInt("page", activity.currentPage);
         if (oldPage != newPage) return false;
@@ -395,7 +398,8 @@ private void showBookmarkDeleteConfirm(@NonNull Bookmark bookmark, @NonNull Runn
     box.addView(activity.makeDialogTitle(activity.getString(R.string.delete_bookmark)));
 
     TextView message = new TextView(activity);
-    message.setText(bookmark.getFileName() + "\n\n" + bookmark.getDisplayText());
+    message.setText(activity.getString(R.string.dialog_header_body_format,
+            bookmark.getFileName(), bookmark.getDisplayText()));
     message.setTextColor(activity.dialogSub());
     message.setTextSize(14f);
     message.setLineSpacing(0f, 1.15f);
@@ -420,9 +424,10 @@ private void showBookmarkFolderDeleteConfirm(String folderFilePath, String folde
 
     TextView message = new TextView(activity);
     String displayName = folderName != null && !folderName.trim().isEmpty() ? folderName.trim() : activity.getString(R.string.bookmark);
-    message.setText(displayName + "\n\n"
-            + activity.getString(R.string.delete_bookmark_folder_message, bookmarkCount)
-            + "\n" + activity.getString(R.string.delete_bookmark_folder_note));
+    message.setText(activity.getString(R.string.dialog_header_two_body_format,
+            displayName,
+            activity.getString(R.string.delete_bookmark_folder_message, bookmarkCount),
+            activity.getString(R.string.delete_bookmark_folder_note)));
     message.setTextColor(activity.dialogSub());
     message.setTextSize(14f);
     message.setLineSpacing(0f, 1.15f);

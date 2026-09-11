@@ -36,6 +36,56 @@ final class SevenZAesDecoder {
                          @androidx.annotation.Nullable byte[] properties,
                          @NonNull char[] password,
                          long unpackSize) throws IOException {
+        Cipher cipher = createDecryptCipher(properties, password);
+        try {
+            byte[] plain = cipher.doFinal(cipherText);
+            if (unpackSize >= 0 && unpackSize < plain.length) {
+                return Arrays.copyOf(plain, (int) unpackSize);
+            }
+            return plain;
+        } catch (GeneralSecurityException e) {
+            throw new IOException("7z AES decryption failed", e);
+        }
+    }
+
+    /** Decrypts sequentially and validates final CBC padding length without buffering the file. */
+    static java.io.InputStream decodeStream(java.io.InputStream input,
+                                            byte[] properties, char[] password,
+                                            long unpackSize) throws IOException {
+        if (unpackSize < 0) throw new IOException("Invalid 7z AES unpacked size");
+        javax.crypto.CipherInputStream decrypted = new javax.crypto.CipherInputStream(
+                input, createDecryptCipher(properties, password));
+        return new java.io.InputStream() {
+            long remaining = unpackSize;
+            boolean finished;
+            final byte[] single = new byte[1];
+            @Override public int read() throws IOException {
+                return read(single, 0, 1) < 0 ? -1 : single[0] & 0xff;
+            }
+            @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+                if (bytes == null) throw new NullPointerException("bytes");
+                if ((offset | length) < 0 || length > bytes.length - offset) throw new IndexOutOfBoundsException();
+                if (length == 0) return 0;
+                if (remaining == 0) { finish(); return -1; }
+                int count = decrypted.read(bytes, offset, (int) Math.min(remaining, length));
+                if (count < 0) throw new java.io.EOFException("Truncated 7z AES output");
+                remaining -= count;
+                if (remaining == 0) finish();
+                return count;
+            }
+            private void finish() throws IOException {
+                if (finished) return;
+                int padding = 0;
+                while (decrypted.read() != -1) {
+                    if (++padding > 15) throw new IOException("7z AES output exceeds its declared size");
+                }
+                finished = true;
+            }
+            @Override public void close() throws IOException { decrypted.close(); }
+        };
+    }
+
+    private static Cipher createDecryptCipher(byte[] properties, char[] password) throws IOException {
         if (properties == null || properties.length < 2) {
             throw new IOException("7z AES properties missing");
         }
@@ -52,20 +102,17 @@ final class SevenZAesDecoder {
         System.arraycopy(properties, 2 + saltSize, iv, 0, ivSize);
 
         byte[] passwordBytes = utf16LeBytes(password);
-        byte[] keyBytes = deriveKey(passwordBytes, salt, numCyclesPower);
+        byte[] keyBytes = null;
         try {
+            keyBytes = deriveKey(passwordBytes, salt, numCyclesPower);
             Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(keyBytes, "AES"), new IvParameterSpec(iv));
-            int blocks = cipherText.length / 16;
-            byte[] plain = cipher.doFinal(cipherText, 0, blocks * 16);
-            Arrays.fill(keyBytes, (byte) 0);
-            Arrays.fill(passwordBytes, (byte) 0);
-            if (unpackSize >= 0 && unpackSize < plain.length) {
-                return Arrays.copyOf(plain, (int) unpackSize);
-            }
-            return plain;
+            return cipher;
         } catch (GeneralSecurityException e) {
             throw new IOException("7z AES decryption failed: " + e.getMessage());
+        } finally {
+            if (keyBytes != null) Arrays.fill(keyBytes, (byte) 0);
+            Arrays.fill(passwordBytes, (byte) 0);
         }
     }
 

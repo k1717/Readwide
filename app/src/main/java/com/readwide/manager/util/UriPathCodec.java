@@ -3,7 +3,7 @@ package com.readwide.manager.util;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 
-/** URI-path percent decoding without HTML-form '+' to space conversion. */
+/** URI-path encoding/decoding without HTML-form '+' to space conversion. */
 public final class UriPathCodec {
     private UriPathCodec() {}
 
@@ -17,6 +17,18 @@ public final class UriPathCodec {
         } catch (Exception ignored) {
             return value;
         }
+    }
+
+    /** Encodes a decoded archive path, preserving directory separators, including a trailing slash. */
+    public static String encodePath(String value) {
+        if (value == null || value.isEmpty()) return "";
+        String[] segments = value.split("/", -1);
+        StringBuilder out = new StringBuilder(value.length() + 16);
+        for (int i = 0; i < segments.length; i++) {
+            if (i > 0) out.append('/');
+            out.append(encodePathSegment(segments[i]));
+        }
+        return out.toString();
     }
 
     /** Percent-encodes one URI path segment without form-style space/plus rules. */

@@ -1,5 +1,7 @@
 # RAR status for Readwide 1.0.2
 
+> Historical 1.0.2 snapshot. For current scope and verification boundaries, see [current 1.0.18 source status](CURRENT_SOURCE_STATUS_1_0_18.md). The original findings below are retained as history.
+
 This is the consolidated RAR status note for Readwide 1.0.2. It replaces internal RAR decoder development notes with a release-facing compatibility boundary.
 
 ## Final support position

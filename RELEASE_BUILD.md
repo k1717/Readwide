@@ -1,16 +1,24 @@
 # Public release build checklist
 
-This file is the practical build and verification checklist for Readwide 1.0.16.
+This file is the practical build and verification checklist for Readwide 1.0.18.
+
+These are maintainer instructions, not a report that this snapshot passed them.
+See [current source status](docs/CURRENT_SOURCE_STATUS_1_0_18.md) for the recorded
+maintainer-reported successful earlier 1.0.18 build. The later timeout-field and
+translation changes have not been rebuilt. Build logs, artifact identity and test
+results have not been independently inspected. The final
+[release handoff checklist](docs/RELEASE_READINESS_1_0_18.md) records pending device
+and archive-format checks; do not infer that this documentation executed them.
 
 ## Version metadata
 
 ```text
 applicationId com.readwide.manager
-versionCode 10016
-versionName 1.0.16
+versionCode 10018
+versionName 1.0.18
 ```
 
-The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.16 keeps that key, so it installs in place over 1.0.15, 1.0.14, 1.0.13, 1.0.12, 1.0.11, 1.0.10, 1.0.9, 1.0.8, 1.0.7, and 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.16, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
+The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.18 keeps that key, so it installs in place over 1.0.17 through 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.18, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
 
 ## Keystore policy
 
@@ -57,12 +65,17 @@ Keep these files with source and binary release materials:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_16.md`
-- `docs/SBOM_READWIDE_1_0_16.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_18.md` (unchanged dependency baseline)
+- `docs/SBOM_READWIDE_1_0_18.spdx.json` (unchanged dependency baseline)
 
 The source-controlled native notice file at `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt` must also remain in the APK.
 
 ## APK verification
+
+The intended public asset is `Readwide_1.0.18.apk`; local output filenames are
+unrestricted. Rename/copy only the final verified **signed** APK for publication.
+A source ZIP or an older successful build does not validate that APK.
+
 
 ```bash
 APK=app/build/outputs/apk/release/app-release.apk
@@ -111,7 +124,7 @@ Expected result:
 
 ## Source ZIP portability
 
-The public source ZIP must use `/` path separators and preserve POSIX modes. Store `gradlew` and `*.sh` as executable (`0755`) and ordinary source/document files as `0644`. After creating the archive, run a full CRC read and compare its normalized file list with the filtered source tree; exclude `.gradle/`, every `build/` directory, IDE state, local properties, signing material, and compiled artifacts.
+The public source ZIP must use `/` path separators and preserve POSIX modes. Store `gradlew` and `*.sh` as executable (`0755`) and ordinary source/document files as `0644`. Create it with `python3 scripts/create_source_zip.py <output.zip>` or, on Windows without Python, `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create_source_zip.ps1 <output.zip>`. Both scripts perform a full CRC read and compare the normalized file list with the filtered source tree. They exclude generated `.gradle/` and `build/` trees, IDE state, local properties, signing material, and compiled artifacts, while retaining libarchive's checked-in `external/libarchive/build/cmake/` source modules.
 
 Gradle 9.4.1 integrity baseline:
 
@@ -126,8 +139,8 @@ The distribution hash is pinned with `distributionSha256Sum` in `gradle/wrapper/
 
 Before opening an F-Droid Data merge request:
 
-1. Publish a final Git tag, e.g. `v1.0.16`.
-2. Start from current fdroiddata upstream. The public F-Droid catalog was verified on 2026-07-27 to publish 1.0.15; the checked-in historical mirror stops at 1.0.13 and must not replace upstream metadata. Add only the version actually submitted and pin it to the final tag's full 40-character commit hash.
+1. Publish a final Git tag, e.g. `v1.0.18`.
+2. Start from current fdroiddata upstream. The checked-in historical mirror stops at 1.0.13 and must not replace upstream metadata. Add only the version actually submitted and pin it to the final tag's full 40-character commit hash.
 3. Keep the verified official Gradle 9.4.1 wrapper; F-Droid checks known wrapper hashes, so no `rm` rule is needed.
 4. Confirm a no-private-keystore `assembleRelease` build works.
 5. Keep RAR and HWP/HWPX support wording conservative.
@@ -142,6 +155,7 @@ Run representative files through these paths before publishing:
 - OOXML Word document open, bookmark paths, and document search highlight/reveal.
 - HWP/HWPX text-first open, encrypted-HWP failure, archive-internal HWP/HWPX open, and document search highlight/reveal.
 - PDF single-page and vertical-continuous modes, zoom/pan, bookmarks, slider, and toolbar hidden/visible state in portrait/landscape. Verify that Android status/navigation bars remain, app chrome leaves no blank reserve, and no PDF rerender flash occurs.
+- Browser and Recent list/tile switching from the fixed upper-right overflow, including thumbnails off/on, rotation, position retention, search paths, selection, and long-hold actions.
 - ZIP/CBZ, 7z/CB7, RAR/CBR, TAR-family, ALZ, and EGG fixture coverage according to `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`.
 - Android 3-button navigation and gesture navigation safe areas across TXT, WebView documents, PDF, and image viewer.
 - Copy/move/delete/extract/compress queues with pause/resume/cancel/background behavior.

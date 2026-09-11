@@ -1053,7 +1053,8 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                         verifiedPathsForHandoff,
                         result.archivePathSnapshot,
                         result.archiveLengthSnapshot,
-                        result.archiveLastModifiedSnapshot);
+                        result.archiveLastModifiedSnapshot,
+                        result.sourceSnapshot);
             }
 
             @Override

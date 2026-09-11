@@ -6,7 +6,6 @@ import androidx.annotation.Nullable;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -124,12 +123,16 @@ final class RarVolumeNameResolver {
         File parent = selected.getParentFile();
         if (parent == null) return single(selected);
 
+        // Reuse one directory snapshot; only matched volume names enter the sorted map.
+        File[] siblings = parent.listFiles();
+        if (siblings == null) siblings = new File[0];
+
         String name = selected.getName();
         Matcher newStyle = NEW_STYLE_PART.matcher(name);
         if (newStyle.matches()) {
             String prefix = newStyle.group(1);
             int selectedIndex = parseNonNegativeInt(newStyle.group(2));
-            Chain chain = collectNewStyle(parent, prefix);
+            Chain chain = collectNewStyle(siblings, prefix);
             if (!chain.volumes.isEmpty()) {
                 return new Result(
                         Style.NEW_STYLE_PART,
@@ -161,7 +164,7 @@ final class RarVolumeNameResolver {
         if (oldStyle.matches()) {
             String prefix = oldStyle.group(1);
             int selectedIndex = parseNonNegativeInt(oldStyle.group(2));
-            Chain chain = collectOldStyle(parent, prefix);
+            Chain chain = collectOldStyle(siblings, prefix, selected);
             if (!chain.volumes.isEmpty()) {
                 return new Result(
                         Style.OLD_STYLE_RAR_PLUS_RNN,
@@ -191,7 +194,17 @@ final class RarVolumeNameResolver {
 
         if (name.toLowerCase(Locale.ROOT).endsWith(".rar")) {
             String prefix = name.substring(0, name.length() - 4);
-            Chain newStyleChain = collectNewStyle(parent, prefix);
+            Chain oldStyleChain = collectOldStyle(siblings, prefix, selected);
+            if (oldStyleChain.volumes.size() > 1) {
+                return new Result(
+                        Style.BASE_RAR_WITH_OLD_STYLE_COMPANIONS,
+                        selected, oldStyleChain.volumes.get(0), oldStyleChain.volumes, 0,
+                        oldStyleChain.nextMissingIndex, oldStyleChain.maxSeenIndex, false, prefix);
+            }
+            // book.rar and book.part1.rar can be different archives. Never redirect
+            // an existing user-selected base archive merely because part files coexist.
+            if (selected.isFile()) return single(selected);
+            Chain newStyleChain = collectNewStyle(siblings, prefix);
             if (newStyleChain.volumes.size() > 1) {
                 return new Result(
                         Style.BASE_RAR_WITH_NEW_STYLE_COMPANIONS,
@@ -201,19 +214,6 @@ final class RarVolumeNameResolver {
                         0,
                         newStyleChain.nextMissingIndex,
                         newStyleChain.maxSeenIndex,
-                        false,
-                        prefix);
-            }
-            Chain oldStyleChain = collectOldStyle(parent, prefix);
-            if (oldStyleChain.volumes.size() > 1) {
-                return new Result(
-                        Style.BASE_RAR_WITH_OLD_STYLE_COMPANIONS,
-                        selected,
-                        oldStyleChain.volumes.get(0),
-                        oldStyleChain.volumes,
-                        0,
-                        oldStyleChain.nextMissingIndex,
-                        oldStyleChain.maxSeenIndex,
                         false,
                         prefix);
             }
@@ -238,16 +238,15 @@ final class RarVolumeNameResolver {
     }
 
     @NonNull
-    private static Chain collectNewStyle(@NonNull File parent, @NonNull String prefix) {
+    private static Chain collectNewStyle(@NonNull File[] files, @NonNull String prefix) {
         Pattern pattern = Pattern.compile(
                 "^" + Pattern.quote(prefix) + "\\.part(\\d{1,6})\\.rar$",
                 Pattern.CASE_INSENSITIVE);
         Map<Integer, File> byIndex = new TreeMap<>();
-        File[] files = sortedFiles(parent);
         for (File file : files) {
-            if (file == null || !file.isFile()) continue;
+            if (file == null) continue;
             Matcher matcher = pattern.matcher(file.getName());
-            if (!matcher.matches()) continue;
+            if (!matcher.matches() || !file.isFile()) continue;
             int index = parseNonNegativeInt(matcher.group(1));
             if (index <= 0) continue;
             putDeterministic(byIndex, index, file);
@@ -256,23 +255,32 @@ final class RarVolumeNameResolver {
     }
 
     @NonNull
-    private static Chain collectOldStyle(@NonNull File parent, @NonNull String prefix) {
-        File first = new File(parent, prefix + ".rar");
-        if (!first.isFile()) return new Chain(new ArrayList<File>(), -1, -1);
-
+    private static Chain collectOldStyle(@NonNull File[] files, @NonNull String prefix,
+                                         @NonNull File selected) {
+        File first = null;
+        String baseName = prefix + ".rar";
         Pattern pattern = Pattern.compile(
                 "^" + Pattern.quote(prefix) + "\\.r(\\d{2,3})$",
                 Pattern.CASE_INSENSITIVE);
         Map<Integer, File> byIndex = new TreeMap<>();
-        File[] files = sortedFiles(parent);
         for (File file : files) {
-            if (file == null || !file.isFile()) continue;
+            if (file == null) continue;
+            if (file.getName().equalsIgnoreCase(baseName) && file.isFile()) {
+                // Preserve the chosen base file if case-distinct archives coexist.
+                if (first == null || file.equals(selected)
+                        || (!first.equals(selected) && compareNames(file, first) < 0)) {
+                    first = file;
+                }
+                continue;
+            }
             Matcher matcher = pattern.matcher(file.getName());
-            if (!matcher.matches()) continue;
+            if (!matcher.matches() || !file.isFile()) continue;
             int index = parseNonNegativeInt(matcher.group(1));
             if (index < 0) continue;
             putDeterministic(byIndex, index, file);
         }
+
+        if (first == null) return new Chain(new ArrayList<File>(), -1, -1);
 
         Chain continuations = contiguous(byIndex, 0);
         List<File> result = new ArrayList<>();
@@ -302,27 +310,14 @@ final class RarVolumeNameResolver {
                                          int index,
                                          @NonNull File file) {
         File existing = byIndex.get(index);
-        if (existing == null || file.getName().compareToIgnoreCase(existing.getName()) < 0) {
+        if (existing == null || compareNames(file, existing) < 0) {
             byIndex.put(index, file);
         }
     }
 
-    @NonNull
-    private static File[] sortedFiles(@NonNull File parent) {
-        File[] files = parent.listFiles();
-        if (files == null) return new File[0];
-        List<File> list = new ArrayList<>();
-        Collections.addAll(list, files);
-        Collections.sort(list, new Comparator<File>() {
-            @Override
-            public int compare(File a, File b) {
-                if (a == b) return 0;
-                if (a == null) return -1;
-                if (b == null) return 1;
-                return a.getName().compareToIgnoreCase(b.getName());
-            }
-        });
-        return list.toArray(new File[0]);
+    private static int compareNames(@NonNull File a, @NonNull File b) {
+        int insensitive = a.getName().compareToIgnoreCase(b.getName());
+        return insensitive != 0 ? insensitive : a.getName().compareTo(b.getName());
     }
 
     private static int parseNonNegativeInt(@Nullable String value) {

@@ -9,6 +9,21 @@ import org.junit.Test;
 public class SpreadMathTest {
 
     @Test
+    public void epubTextSpreadRequiresLandscapeLargeScreen() {
+        assertTrue(SpreadMath.shouldUseEpubSpread(true, 7, false, 600));
+        assertTrue(SpreadMath.shouldUseEpubSpread(true, 7, false, 720));
+        assertFalse(SpreadMath.shouldUseEpubSpread(true, 7, false, 599));
+        assertFalse(SpreadMath.shouldUseEpubSpread(false, 7, false, 720));
+    }
+
+    @Test
+    public void epubImageSpreadStillWorksOnLandscapePhones() {
+        assertTrue(SpreadMath.shouldUseEpubSpread(true, 2, true, 360));
+        assertFalse(SpreadMath.shouldUseEpubSpread(false, 2, true, 720));
+        assertFalse(SpreadMath.shouldUseEpubSpread(true, 1, true, 720));
+    }
+
+    @Test
     public void rightIndexAndVisibleEndHandleOddLastPage() {
         assertEquals(1, SpreadMath.rightIndex(0, 5, true));
         assertEquals(1, SpreadMath.visibleEndIndex(0, 5, true));

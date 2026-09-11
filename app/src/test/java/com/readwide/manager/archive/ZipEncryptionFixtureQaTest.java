@@ -61,6 +61,14 @@ public class ZipEncryptionFixtureQaTest {
     }
 
     @Test
+    public void aes256ZipxRenameBehavesIdentically() throws Exception {
+        File zip = buildEncryptedZip("aeszipx.zip", EncryptionMethod.AES);
+        File zipx = temp.newFile("renamed.zipx");
+        Files.copy(zip.toPath(), zipx.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        runMatrix(zipx, "zipx-deflate");
+    }
+
+    @Test
     public void plainZipDoesNotRequirePassword() throws Exception {
         ensurePayloads();
         File plain = new File(temp.newFolder("pl"), "plain.zip");

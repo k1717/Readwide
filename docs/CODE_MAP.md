@@ -3,7 +3,7 @@
 A connection map of the codebase for future maintenance: which screen owns
 which controllers, where the shared seams are, and where each subsystem's
 logic actually lives. Relationships listed here were verified against the
-1.0.16 sources (creation sites, interface implementations, call sites); areas
+1.0.18 sources (creation sites, interface implementations, call sites); areas
 not yet explored in depth are described at the package level and marked as
 such rather than guessed at.
 
@@ -26,22 +26,38 @@ such rather than guessed at.
   than relying on device-only coverage.
 - **Pure Java.** No Kotlin anywhere; keep it that way.
 
+## Archive and reader integration
+
+- **Mixed RAR3/RAR4:** `Rar3FirstPartyArchiveExtractor` gates plain single-volume compressed solid runs using CRCs and file boundaries. `Rar3Unpacker` connects `Rar3ClassicLzEngine.decodeMixed`, `Rar3MixedPpmdState`, shared `RarBitInput`/`RarLzWindow`, and `Rar3PpmdFilterOutput` for streamed output. `Rar3UnpackContext` owns match/table/model continuation and failure invalidation.
+- **Separate PPMd route:** `Rar3PpmdPayload` supplies bounded plain/AES/split input to scoped single/bulk/forward extraction. `Rar3PpmdSolidArchiveExtractor.ForwardReader` retains the decoder and verified entry spools. This route does not dispatch mixed LZ; the plain mixed fallback above is separate.
+- **RAR5/RAR7:** `Rar5CompressedDecoder` uses `Rar5HistoryStore` for bounded RAM and encrypted disk-backed history. `Rar5CompressedArchiveExtractor` owns decoder/spool cleanup and retained solid state. `RarBlake2sp`, `RarStoredPayloadIO.DataCheck`, `Rar5Crypto` and `RarPackedInputStream` separate final output integrity from packed-part checks.
+- **Special 7z:** `SevenZBcj2ArchiveReader` composes streaming coders, `SevenZPpmd7Decoder.decodeStream` and `SevenZAdditionalCoders`. Its forward reader owns verified folder spools; standard split sets use `SevenZSplitVolumeResolver` and one `SplitVolumeInput` with independent bounded coder views.
+- **ZIP/ZIPX, ALZ and EGG:** `ArchiveSupport` reuses routing metadata; `ZipxAesArchiveReader` owns leased indexes. Nested ALZ and non-solid EGG indexes retain metadata, not decrypted payloads or decoder sessions. `ArchiveSupport.releaseViewerArchiveIndex` retires them. EGG's separate `SolidForwardReader` owns verified block spools.
+- **Volume input and discovery:** `SplitVolumeInput` owns checked physical/logical ranges, binary-search lookup, bounded-view cursors and failure retirement. `EggArchiveReader.VolumeFiles` resolves numeric siblings and `checkedPayloadEnd` validates metadata ranges. `TarEntryIndex` provides direct ordinary plain-TAR offsets; sparse/split/compressed cases retain their established paths.
+- **Viewer handoff:** `ArchiveImageSequenceLoader` captures `ArchiveSourceSnapshot`, passed by the opening controllers through `ImageSequenceHandoffStore.Sequence` and checked on consumption. `SequentialArchiveImageReader` checks source identity before reuse. These metadata checks do not replace complete all-volume disk-cache invalidation.
+- **Image scheduling:** `ImageReaderActivity` uses `ImagePrefetchMath` navigation intent, `ImageSequenceState.SnapshotCache` and `ImagePrefetchRequests` ownership tickets. Ordinary warm-ups are bounded/deduplicated; high-quality companions retain separate ownership. Reader close is dispatched off the UI thread.
+- **Thumbnails:** `FileAdapter` attachment/recycling uses `VisibleThumbnailBindings`; `FileThumbnailLoader.decodeCachedOnly` serves PNG cache hits through a separate queue. Completion targets matching visible icons, with normal validated source decoding on cache misses.
+- **File operations/search:** `FileClipboardController` plans safe pastes and `FileSystemOps` owns staging/commit/rollback. `DocumentSearchController` shares non-overlapping count/highlight ranges; `DocumentSearchCounts` and `LargeTextMatchIndex` support cached navigation. `SearchMatcher` retains documented input-boundary semantics.
+- **PDF search/read-aloud:** `PdfSearchController` and `PdfTextSearchEngine` own query lifecycle and original glyph maps. `PdfSearchText` supplies original-offset matching and null separator geometry; `PdfGlyphText` checks spoken-text alignment. `ReaderTtsController` persists `TtsHost.ttsTextFormatVersion` via `PrefsManager`, and `PdfTtsTextSource` resolves legacy/new checkpoints.
+
+For exact exclusions and validation status, see [current source status](CURRENT_SOURCE_STATUS_1_0_18.md). Detailed implementation history is in [archive performance notes](ARCHIVE_VIEWER_PERFORMANCE_1_0_18.md); this map describes current connections rather than past batches.
+
 ## Top-level layout
 
 ```
-com.readwide.manager            166 classes - activities, per-screen controllers,
+com.readwide.manager            172 classes - activities, per-screen controllers,
                                 readers' front ends, TTS core
-├── archive/                    138 classes - archive detection, browsing,
+├── archive/                    149 classes - archive detection, browsing,
 │                               extraction, split-volume handling, password
 │                               routing, and format-specific readers. This
 │                               package mixes first-party parsers/decoders
 │                               with bundled-library backends; creation
 │                               support is limited. [package-level summary]
-├── util/                        63 classes - shared helpers and pure math
+├── util/                        67 classes - shared helpers and pure math
 ├── document/render              15 classes - HTML/document rendering pipeline
 │                               (FixedHtmlRenderer, RenderedDocument, blocks,
 │                               styles) [package-level summary]
-├── model/                       13 classes - persisted/value types (Bookmark, ...)
+├── model/                       14 classes - persisted/value types (Bookmark, DocumentAnnotation, ...)
 ├── view/                         6 classes - custom views (CustomReaderView, ...)
 ├── adapter/                      6 classes - list/grid adapters
 ├── document/doc                  4 classes - legacy .doc (Word 97-2003) reader
@@ -55,9 +71,9 @@ com.readwide.manager            166 classes - activities, per-screen controllers
 └── ui/                           1 class
 ```
 
-The tree above covers all 425 classes under `com.readwide.manager`. One
+The tree above covers all 447 Java source files under `com.readwide.manager`. One
 additional main-source compatibility shim lives outside that package at
-`javax/xml/bind/DatatypeConverter.java`, for 426 main Java files in total.
+`javax/xml/bind/DatatypeConverter.java`, for 448 main Java files in total.
 
 ## Activities (screens)
 
@@ -116,32 +132,46 @@ keeps provider directory queries and archive-to-local-cache copies on separate
 executors, with independent busy state and stale-result guards, so a long copy
 cannot serialize ordinary folder navigation behind it.
 
-The toolbar overflow remains fixed beside the `Readwide` title on the Recent
-home screen and switches roles only while multi-select is active.
-`MainHomeDialogController` owns the adaptive Home/folder preference menu;
+The toolbar overflow remains fixed beside the current title (`Readwide`,
+`Download`, or the active folder) and switches roles only while multi-select
+is active. `MainHomeDialogController` owns the adaptive Home/folder preference
+menu, including the persisted list/tile display choice;
 `MainSelectionActionDropdownController` measures the selection count and
 available localized actions and lets rows wrap at the screen edge rather than
 clipping them.
 
-`FileAdapter` also owns the optional lightweight list-thumbnail path. It
-uses one persisted toggle for the main and Recent lists and presents square
-40dp list previews in 42dp containers; the OFF-state icon keeps the same 42dp
-horizontal slot so the text column remains stable. Its two-worker request queue
-is bounded, generation-cancelled on dataset replacement, and uses expiring
-failure records capped per visible generation plus short-lived directory memory
-entries.
+`MainActivityStartupController` applies the display preference to both browser
+and Recent lists, swaps `LinearLayoutManager`/`GridLayoutManager`, preserves the
+visible adapter position, and keeps tile mode at two columns across
+configuration changes. `FileAdapter` owns stable list/tile view types:
+`item_file.xml` retains the compact 40dp preview in a fixed 42dp horizontal
+slot, while `item_file_tile.xml` uses a 96dp cover area and reuses the same
+selection, progress, path, open, and long-hold binding path. The optional
+thumbnail toggle remains shared by the browser and Recent views. Its bounded
+two-worker source queue is paired with a separate two-worker cache-lookup queue.
+Attached-holder demand removes unused pending work; generation changes invalidate
+requests and retry attached rows. Failure records and directory memory TTL remain.
 `FileThumbnailLoader` supplies loose/folder images, ZIP/CBZ, RAR/CBR,
-7z/CB7, ALZ, EGG, and TAR/CBT-family first-image covers, PDF page 1, and
+7z/CB7, ALZ, EGG, CAB, LHA/LZH, and TAR/CBT-family first-image covers, PDF page 1, and
 raster EPUB package covers. It checks a source-fingerprinted, bounded
 app-private PNG disk cache before decoding; source snapshots prevent a changing
 file from being committed under stale metadata, disk replacement is atomic,
 and a global two-slot gate bounds cache-miss work across both
 adapters. `FileAdapter` deduplicates requests per list generation, makes stale
 queued work exit before expensive format decoding, posts completion through an
-adapter-owned main handler, and rebinds the current row when an asynchronous
-result arrives. Folder/archive selection is ordered and
+adapter-owned main handler, and updates only subscribed visible icons without
+scanning the dataset or rebinding rows. Cache-only PNG lookup bypasses the heavy
+queue, semaphore and source lock; folder discovery remains on the normal path. Folder/archive selection is ordered and
 bounded but can fall through past a corrupt or device-unsupported first image.
-It does not switch RecyclerView layout managers.
+Layout-specific thumbnail keys prevent a list-sized memory result from being
+reused as a low-resolution tile cover.
+
+`MainArchiveImageOpenController` delegates whole-archive comic-page collection
+to `ArchiveEntryListController.collectImageSequence()`. Direct comic opening and
+whole-archive auto-opening therefore use full internal-path natural ordering:
+folder components are compared before repeated page basenames. If the user
+navigates into an archive folder and opens an image there, the sequence remains
+scoped to that folder and follows its visible browser order.
 
 Provider URI copies are coordinated by `FileUtils` with an interruptible fair
 lock. This preserves serialized atomic `opened_files` prune/commit semantics
@@ -149,7 +179,7 @@ without trapping a cancelled SAF worker behind another long provider copy.
 
 ## ReaderActivity (TXT reader)
 
-The most finely decomposed screen: 36 `Reader*` controllers. Groups:
+The most finely decomposed screen: 41 `Reader*` controllers. Groups:
 
 - **Lifecycle/shell:** `ReaderLifecycleController` (owns onDestroy teardown),
   `ReaderActivityStartupController`, `ReaderShellController`,
@@ -183,6 +213,12 @@ The most finely decomposed screen: 36 `Reader*` controllers. Groups:
 - **TTS:** `ReaderTtsController` (shared core, see TTS section). Text and
   highlight live in `view/CustomReaderView` (`setTtsHighlightRange`, fully
   bounds-clamped).
+- **Notes/highlights:** TXT selection endpoints are converted to absolute
+  document offsets by `ReaderActivity`; `DocumentAnnotationManager` persists
+  them outside the source file and `CustomReaderView` projects persistent
+  highlight ranges into the currently loaded large-TXT partition. The reader
+  toolbar exposes the shared annotation list directly; exact duplicate
+  highlight ranges are rejected and older duplicates are collapsed on load.
 
 Rendering is the custom-drawn `view/CustomReaderView` (not a WebView).
 
@@ -223,10 +259,21 @@ DocumentPageActivity  (implements TtsHost)
                                         page load; DocumentTtsHighlightMath
 ```
 
-Two-page EPUB spread: gate `isLandscapeTwoPageDocumentMode()` = EPUB &&
-`epubImagePageLike` && pages>1 && landscape. `DocumentArchiveUtils` delegates
-image-page classification to pure `EpubImagePageClassifier`; fixed-layout
-metadata alone is not enough. `DocumentTextDecoder` decodes spine/metadata text
+Markdown annotation actions are added by `widget/SelectionContrastWebView`.
+`DocumentPageActivity` resolves the selected rendered block through the
+renderer-owned `data-rw-src-offset`, stores the quote/source range in
+`DocumentAnnotationManager`, and reapplies saved highlight markup after the
+primary WebView page finishes loading. `DocumentAnnotationDialogController`
+is shared with TXT for adaptive themed, scrollable list/open/edit/delete UI and
+refreshes a visible list immediately after mutation.
+
+Two-page EPUB spread: `isLandscapeTwoPageDocumentMode()` delegates to
+`SpreadMath.shouldUseEpubSpread()`. A landscape image-page EPUB spreads on any
+device; ordinary EPUBs also spread on Android large screens (`sw600dp` or
+wider). Portrait and compact-phone text EPUBs stay single-pane.
+`DocumentArchiveUtils` delegates image-page classification to pure
+`EpubImagePageClassifier`; fixed-layout metadata alone is not enough.
+`DocumentTextDecoder` decodes spine/metadata text
 and `EpubViewportParser` supplies order-independent fixed-layout dimensions.
 Typed `DocumentArchiveUtils.EpubSpineItem` values also retain direct image
 spine entries, fallback chains, itemref/spine identity, package-wide layout,
@@ -265,6 +312,14 @@ the WebView's inline axis without discarding their right-to-left columns.
 
 ## PdfReaderActivity (PDF)
 
+Viewport persistence uses Matrix-based `PDF_PAGE_COORD_v3` center anchors for
+single/spread views and legacy-compatible continuous anchors. `PdfPageView`
+captures/restores the Matrix; `PdfSpreadHighlightMath.Layout.unmapPoint` recovers
+the source page from composite coordinates. Saved-instance state takes precedence
+over launch bookmark extras for the same target. Background trimming retains its
+anchor until cached/fresh render restoration completes. See
+`PDF_RESTORE_FIXES_READWIDE_1_0_18.md` for the static-only validation boundary.
+
 ```
 PdfReaderActivity  (implements TtsHost)
 ├── PdfReaderStartupController      startup; posts applyPdfViewportBarInsets
@@ -272,7 +327,8 @@ PdfReaderActivity  (implements TtsHost)
 ├── PdfSearchController             async find; Host interface seam
 │                                   (goToPage/currentPage/pageView/runOnUi/
 │                                   right-page identity + per-page mapping)
-│      └── PdfTextSearchEngine     -> util/PdfGlyphBoxMath (shared glyph box)
+│      └── PdfTextSearchEngine     -> PdfSearchText (query/offset/separator logic)
+│                                -> util/PdfGlyphBoxMath (shared glyph box)
 ├── PdfBookmarkDialogController
 ├── view: PdfPageView               bitmap + matrix zoom/pan + highlight layers
 │                                   (search layer and TTS layer are separate)
@@ -316,15 +372,21 @@ ImageReaderActivity
 ├── image/ArchiveImageSpreadDrawable  allocation-free two-bitmap surface
 ├── util/ArchiveImageSpreadMath       tall-page gate + mixed-screen navigation
 ├── util/ArchiveImageSpreadNavigator  actual mixed-screen history/reversal
+├── util/ArchiveViewerTimeoutPolicy   numeric input + monotonic/same-boot deadlines
 ├── util/ImageExportName              safe original-byte export names
 ├── util/ImageSequenceState        sequence bookkeeping (applyRename matches
 │                                  the exact pre-rename path)
-├── SequentialArchiveImageReader      one handed-off forward RAR/7z/TAR stream
+├── SequentialArchiveImageReader      handed-off RAR/7z/TAR/solid-EGG forward reader
 └── lifecycle: 5 executors + LruCache (min(128MB, heap/5), recycle-on-evict),
     with two-worker lightweight neighbor decode. Archive pages upgrade to a
     denser preview profile when current, and a visible spread companion uses
-    that same profile; explicit zoom uses the detail tier. All workers shut
-    down in onDestroy.
+    that same profile; explicit zoom uses the detail tier. A stopped viewer
+    answers background memory pressure by invalidating decode generations and
+    releasing bitmap surfaces/cache while retaining the current archive index;
+    onStart reloads that same page. The archive-only background timeout is a
+    numeric Settings preference (0..10080 minutes; default 0 disables expiry).
+    onStop starts the elapsed-time interval; saved intervals require a matching
+    boot count before use after recreation. All workers shut down in onDestroy.
 ```
 
 ## Shared TTS core (cross-viewer subsystem)
@@ -359,6 +421,13 @@ line start -> `indexOfCollapsed` -> `snapToNaturalStart`).
 
 ## Document/PDF pure helpers at the root package
 
+Search uses activity-owned `DocumentSearchController` plus pure
+`DocumentSearchCounts` (per-page counts/prefix sums). TXT drawing consumes spans
+from a bounded worker using `SearchMatcher.PreparedText`; large-TXT indexes use
+primitive arrays up to 200,000 matches and fixed-width disk records thereafter.
+See `SEARCH_ALGORITHM_IMPROVEMENTS_1_0_18.md` for ownership, cleanup and remaining
+regex/cancellation limits.
+
 | Class | Role |
 |---|---|
 | `EpubImagePageClassifier` | distributed-spine book classification plus a stricter page-local near-image-only decision for fixed-layout scroll policy; excludes cover-only, mixed/text-heavy, and false CSS/object signals |
@@ -366,13 +435,15 @@ line start -> `indexOfCollapsed` -> `snapToNaturalStart`).
 | `EpubCssCompatibility` | safe standard/WebKit aliases for legacy EPUB vertical-writing, text-combine, and text-emphasis declarations |
 | `EpubCfi` / `EpubCfiJavascript` | bounded point-CFI parsing plus injection-safe DOM target resolution; range/temporal/spatial forms are rejected |
 | `EpubSmilParser` / `EpubMediaOverlayJavascript` | bounded parsing of explicitly linked local SMIL cues plus safe DOM active-fragment markup |
+| `EpubPlaybackGate` | foreground, granted-focus and transient-loss resume policy used by `EpubMediaOverlayController` |
+| `EpubMediaCache` | worker-thread audio extraction with framed SHA-256 keys, unique temporary files, and size/CRC validation |
 | `DocumentTextDecoder` | UTF BOM/sniff/declaration-aware EPUB HTML/XML decoding |
 | `DocumentContentAnchorJavascript` | DOM capture/restore helpers for rendered-document anchors; atomically installs/captures on normally script-disabled EPUB pages, pairs a viewport caret with its stable sentence element for `vertical-rl`, optionally scans that same physical column from its first fully visible glyph for an explicit bookmark's presentation text, detects namespaced semantics without fragile CSS escaping, retains native WebView position fallbacks, and preserves the horizontal v1 path |
 | `util/DocumentAnchorMath` | pure policy for accepting new matched-caret vertical anchors, recognizing earlier stored v2 anchors during restore, and choosing column-start/focus/sentence bookmark presentation text without changing restore identity |
 | `PdfPageRenderPlan` | shared fit/display/allocation plan for visible, prefetch, and continuous PDF page renders |
 | `PdfRenderSize` | overflow-safe bitmap pixel/dimension cap used by PDF render plans and patches |
 
-## util/ highlights (63 classes; the load-bearing ones)
+## util/ highlights (67 classes; the load-bearing ones)
 
 | Class | Role |
 |---|---|
@@ -383,11 +454,12 @@ line start -> `indexOfCollapsed` -> `snapToNaturalStart`).
 | `EpubFontPreferenceMath` | dedicated EPUB font default and one-time legacy preference migration rules |
 | `LargeTextPartitionReader.ForwardCursor` | shared forward-read cursor for large-TXT start-line partition reads; `LargeTextForwardCursorEquivalenceTest` enforces full-scan field equivalence and no-skip/no-duplication body tiling |
 | `PdfGlyphBoxMath` | single source of the PDF glyph highlight box (search + TTS) |
-| `PdfSpreadHighlightMath` | maps one source page's normalized search/TTS rectangles into the exact post-cap two-page composite geometry |
+| `PdfSpreadHighlightMath` | maps source-page rectangles/anchor points into post-cap composite geometry and inversely resolves viewport points to the nearest source-page rectangle |
 | `TapZoneMath` | tap-zone action resolution for all tap paging |
-| `UriPathCodec` | percent-decodes archive/document URI paths while preserving literal `+`, and encodes synthetic image-page path segments without form semantics; shared by EPUB manifest parsing, WebView resource/navigation routing, extraction, and display-name normalization |
+| `UriPathCodec` | percent-decodes raw archive/document references while preserving literal `+`, and encodes synthetic image-page segments and EPUB base-URL directory paths; Android-decoded WebView paths are not decoded again |
 | `EpubBindingRewriter` | converts validated OPF custom objects to `allow-scripts`-only local handler frames, sanitizes active content from a binding-only non-scripted parent, and resolves only the actual binding-payload XML URI attributes without exposing filesystem paths |
 | `ReaderRestoreTargetMath` | pure target matching for TXT restore intents; prevents stale background restore from reopening a previous file after an in-place file switch |
+| `DocumentAnnotationManager` | crash-safe app-private `annotations.json` CRUD, exact-highlight deduplication, file/folder move rebinding, and backup array import/export; it never writes the annotated TXT/Markdown source |
 | `TtsAnchorTextMath` | whitespace-insensitive anchor search + natural-start snapping for read-aloud |
 | `FileSystemOps` | case-only rename two-hop (`renameInPlace`) |
 | `FileUtils` | shared file/text helpers incl. `htmlToPlainText` (strips head/title - TTS buffer depends on this) |
@@ -404,16 +476,38 @@ listing when hunting.
 These have not been mapped class-by-class in this document; treat the notes
 as orientation, and read the package before changing it:
 
-- **`archive/` (138 classes):** archive support lives here: ZIP/CBZ,
-  RAR/CBR/RAR5 including scoped encrypted/header-encrypted paths, 7z/CB7
+- **`archive/` (149 Java files):** archive support lives here: ZIP/CBZ/ZIPX,
+  RAR/CBR/RAR5 including scoped encrypted/header-encrypted paths, CAB and
+  LHA/LZH through the generic native route, 7z/CB7
   including scoped PPMd/LZMA paths, EGG, ALZ, tar and single-compressor
   streams including zstd/lz4, split volumes, password routing, and
-  archive-wide filename charset detection. Some paths are first-party; others
+  archive-wide filename charset detection. `ZipxAesArchiveReader` supplements
+  Zip4j for authenticated WinZip-AES Deflate64/BZip2/LZMA/XZ entries; PPMd and
+  Zstandard route to the source-built libarchive 3.8.9 backend, while JPEG and
+  WavPack route to the source-built `zipxCodecsAndroid` module. The
+  first-party `Rar5CompressedDecoder` covers RAR5-container algorithm v0
+  (RAR 5/6) and algorithm-v1 (RAR 7) with 80 distance codes and paged
+  history through `Rar5HistoryStore` (bounded RAM, encrypted temporary spill). `RarPackedInputStream` supplies bounded
+  volume-spanning plain/AES input; RAR5 block decoding and filtered output
+  now stream without whole-file packed/unpacked arrays or their former
+  64 MiB/256 MiB per-file caps. `EggArchiveReader` limits whole-block arrays
+  only for AZO, not its streaming codecs. `SevenZBcj2ArchiveReader` resolves
+  Copy/LZMA/LZMA2/AES/BCJ2 chains as pull streams and writes sequential
+  folder slices and streaming PPMd, retaining model/metadata guards.
+  `SevenZBcj2Decoder` retains probability state and a pending address,
+  while `SevenZAesDecoder` finalizes CBC streams without whole-file arrays.
+  `ArchiveSupport` derives shared
+  output budgets from available space; the fixed 128 GiB ceiling is removed.
+  Some paths are first-party; others
   route through bundled-library backends such as libarchive-android and
   Apache Commons Compress. Creation support is limited and should not be
   implied for every archive format. Unsupported variants should surface
   explicit errors. A standalone `readwide-rar` library extraction exists as a
   separate repo.
+- **`third_party/libarchive-android/`:** pinned source-only Android JNI backend.
+  It contains the exact libarchive 3.8.9, bzip2, XZ, LZ4, Zstandard, and Mbed TLS
+  sources used by `:libarchiveAndroid`; upstream test assets and all prebuilt
+  AAR/`.so` files are excluded. `UPSTREAM.md` records immutable revisions.
 - **`document/render` (15):** the HTML rendering pipeline used by the
   document viewer (`FixedHtmlRenderer`, `RenderedDocument`, block/style
   types).
@@ -421,6 +515,17 @@ as orientation, and read the package before changing it:
 - **`adapter/`, `widget/`, `ui/`:** small UI support classes.
 
 ## Where to make common changes
+
+RAR extraction uses `RarVolumeNameResolver` for a single directory snapshot
+and case-aware volume discovery, `RarVolumeChain` for forward-only split-part
+traversal, and `Rar5CompressedArchiveExtractor` for logical-file solid preparation
+and final-part CRC/size selection. `RarArchiveReader` bounds each RAR5 extra
+record independently; `RarStoredPayloadIO` verifies plain CRCs and delegates
+key-dependent CRC transforms to `Rar5Crypto`, reusing decryption secrets.
+`Rar3PpmdSolidArchiveExtractor` feeds bounded streams to
+`Rar3PpmdSolidStreamDecoder`; its rolling history replaces cumulative output
+arrays, and `RarPpmdVarHDecoder` accepts streamed range-coded input.
+See `RAR3_PPMD_AND_RAR5_CHECKSUMS_1_0_18.md` for exact limits.
 
 - **Paging/spread behavior:** `util/SpreadMath` for index math; the mode gates
   (`isLandscapeTwoPageDocumentMode`, `isPdfTwoPageSpreadMode`) stay in their
@@ -433,5 +538,9 @@ as orientation, and read the package before changing it:
   `DocumentPageDisplayController.showPage`.
 - **File operations:** `util/FileSystemOps` (browser dialogs and the image
   viewer both route renames through it - keep it that way).
+- **Browser list/tile display:** the persisted policy is in
+  `PrefsManager`; the fixed top-right entry and radio dialog are in
+  `MainHomeDialogController`; layout-manager switching belongs to
+  `MainActivityStartupController`; row/tile binding stays in `FileAdapter`.
 - **Anything with index/geometry/string math:** put it in a `*Math` class and
   add or extend a JVM harness case where practical.

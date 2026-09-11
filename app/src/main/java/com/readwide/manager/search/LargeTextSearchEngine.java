@@ -27,6 +27,7 @@ import java.util.List;
  * search logic.</p>
  */
 public final class LargeTextSearchEngine {
+    // RAM threshold, not a match-count ceiling: larger exact indexes spill to cache.
     private static final int MAX_INDEXED_MATCHES = 200_000;
 
     public interface ReaderOpener {
@@ -55,10 +56,14 @@ public final class LargeTextSearchEngine {
     private final ReaderOpener readerOpener;
     private final LineTransformFactory lineTransformFactory;
     @Nullable private volatile LargeTextMatchIndex cachedMatchIndex;
+    private final File indexDirectory;
+    private volatile boolean closed;
+    private final java.util.concurrent.atomic.AtomicLong indexGeneration = new java.util.concurrent.atomic.AtomicLong();
 
     public LargeTextSearchEngine(@NonNull Context context,
                                  @NonNull ReaderOpener readerOpener) {
         this.appContext = context.getApplicationContext();
+        this.indexDirectory = new File(this.appContext.getCacheDir(), "readwide-search-index");
         this.readerOpener = readerOpener;
         this.lineTransformFactory = file -> {
             List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
@@ -84,6 +89,7 @@ public final class LargeTextSearchEngine {
     LargeTextSearchEngine(@NonNull ReaderOpener readerOpener,
                           @NonNull LineTransformFactory lineTransformFactory) {
         this.appContext = null;
+        this.indexDirectory = new File(System.getProperty("java.io.tmpdir"), "readwide-search-index");
         this.readerOpener = readerOpener;
         this.lineTransformFactory = lineTransformFactory;
     }
@@ -124,7 +130,10 @@ public final class LargeTextSearchEngine {
         LineTransform lineTransform = lineTransformFactory.create(file);
         LargeTextMatchIndex cached = getCachedIndex(
                 file, query, options, collapseBlankLines, lineTransform.signature());
-        if (cached != null) return cached.nearest(startPosition, forward);
+        if (cached != null) {
+            try { return cached.nearest(startPosition, forward); }
+            catch (IOException unavailable) { discardIndex(cached); }
+        }
 
         int start = Math.max(0, startPosition);
         int ordinal = 0;
@@ -149,7 +158,7 @@ public final class LargeTextSearchEngine {
             String lineText;
             long scanned = 0L;
             while ((lineText = reader.readLine()) != null) {
-                if (cancel != null && (++scanned & 0x3FFL) == 0L && cancel.isCancelled()) {
+                if (closed || Thread.currentThread().isInterrupted() || (cancel != null && cancel.isCancelled())) {
                     return new LargeTextSearchResult(-1, 1, 0, 0);
                 }
                 String normalized = lineTransform.apply(lineText);
@@ -229,48 +238,52 @@ public final class LargeTextSearchEngine {
         LineTransform lineTransform = lineTransformFactory.create(file);
         long initialLength = file.length();
         long initialLastModified = file.lastModified();
-        LargeTextMatchIndex.Builder indexBuilder = new LargeTextMatchIndex.Builder(MAX_INDEXED_MATCHES);
-        int[] total = new int[]{0};
-        long charCount = 0L;
-        int line = 1;
-        TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
+        final long generation = indexGeneration.incrementAndGet();
+        try (LargeTextMatchIndex.Builder indexBuilder = new LargeTextMatchIndex.Builder(MAX_INDEXED_MATCHES, indexDirectory)) {
+            int[] total = new int[]{0};
+            long charCount = 0L;
+            int line = 1;
+            TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
 
-        try (BufferedReader reader = readerOpener.open(file)) {
-            String lineText;
-            long scanned = 0L;
-            while ((lineText = reader.readLine()) != null) {
-                if (cancel != null && (++scanned & 0x3FFL) == 0L && cancel.isCancelled()) {
-                    return -1;
+            try (BufferedReader reader = readerOpener.open(file)) {
+                String lineText;
+                long scanned = 0L;
+                while ((lineText = reader.readLine()) != null) {
+                    if (closed || Thread.currentThread().isInterrupted() || (cancel != null && cancel.isCancelled())) {
+                        return -1;
+                    }
+                    String normalized = lineTransform.apply(lineText);
+                    String emitted = collapseFilter.accept(normalized);
+                    if (emitted == null) continue;
+                    normalized = emitted;
+
+                    final long lineBaseChar = charCount;
+                    final int currentLine = line;
+                    matcher.forEachMatch(normalized, (start, end) -> {
+                        if (total[0] < Integer.MAX_VALUE) total[0]++;
+                        indexBuilder.add(clampToInt(lineBaseChar + start), currentLine);
+                        return true;
+                    });
+                    charCount += normalized.length() + 1L;
+                    line++;
                 }
-                String normalized = lineTransform.apply(lineText);
-                String emitted = collapseFilter.accept(normalized);
-                if (emitted == null) continue;
-                normalized = emitted;
-
-                final long lineBaseChar = charCount;
-                final int currentLine = line;
-                matcher.forEachMatch(normalized, (start, end) -> {
-                    if (total[0] < Integer.MAX_VALUE) total[0]++;
-                    indexBuilder.add(clampToInt(lineBaseChar + start), currentLine);
-                    return true;
-                });
-                charCount += normalized.length() + 1L;
-                line++;
             }
-        }
 
-        if (cancel != null && cancel.isCancelled()) return -1;
-        if (!indexBuilder.overflowed()
-                && initialLength == file.length()
-                && initialLastModified == file.lastModified()) {
-            cachedMatchIndex = indexBuilder.build(
-                    file,
-                    query,
-                    options.signature(),
-                    collapseBlankLines,
-                    lineTransform.signature());
+            if (closed || Thread.currentThread().isInterrupted() || (cancel != null && cancel.isCancelled())) return -1;
+            if (!indexBuilder.overflowed()
+                    && initialLength == file.length()
+                    && initialLastModified == file.lastModified()) {
+                try {
+                    installIndex(indexBuilder.build(
+                        file,
+                        query,
+                        options.signature(),
+                        collapseBlankLines,
+                        lineTransform.signature()), generation);
+                } catch (IOException unavailable) { /* Exact count remains valid; navigation can scan. */ }
+            }
+            return total[0];
         }
-        return total[0];
     }
 
     public LargeTextSearchResult search(@NonNull File file,
@@ -306,9 +319,10 @@ public final class LargeTextSearchEngine {
         LargeTextMatchIndex cached = getCachedIndex(
                 file, query, options, collapseBlankLines, lineTransform.signature());
         if (cached != null) {
-            return targetOccurrence > 0
+            try { return targetOccurrence > 0
                     ? cached.occurrence(targetOccurrence)
-                    : cached.nearest(startPosition, forward);
+                    : cached.nearest(startPosition, forward); }
+            catch (IOException unavailable) { discardIndex(cached); }
         }
 
         int start = Math.max(0, startPosition);
@@ -334,7 +348,7 @@ public final class LargeTextSearchEngine {
             String lineText;
             long scanned = 0L;
             while ((lineText = reader.readLine()) != null) {
-                if (cancel != null && (++scanned & 0x3FFL) == 0L && cancel.isCancelled()) {
+                if (closed || Thread.currentThread().isInterrupted() || (cancel != null && cancel.isCancelled())) {
                     return new LargeTextSearchResult(-1, 1, 0, 0);
                 }
                 String normalized = lineTransform.apply(lineText);
@@ -397,6 +411,24 @@ public final class LargeTextSearchEngine {
         }
 
         return new LargeTextSearchResult(selectedChar, selectedLine, selectedOrdinal, total);
+    }
+
+    private synchronized void installIndex(LargeTextMatchIndex index, long generation) {
+        if (closed || generation != indexGeneration.get()) { index.close(); return; }
+        LargeTextMatchIndex old = cachedMatchIndex;
+        cachedMatchIndex = index;
+        if (old != null) old.close();
+    }
+
+    private synchronized void discardIndex(LargeTextMatchIndex index) {
+        if (cachedMatchIndex == index) cachedMatchIndex = null;
+        index.close();
+    }
+
+    public synchronized void close() {
+        closed = true; indexGeneration.incrementAndGet();
+        if (cachedMatchIndex != null) cachedMatchIndex.close();
+        cachedMatchIndex = null;
     }
 
     @Nullable

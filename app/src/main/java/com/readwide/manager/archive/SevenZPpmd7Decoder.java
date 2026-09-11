@@ -4,6 +4,9 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.ByteArrayInputStream;
+import java.io.EOFException;
 
 /**
  * Decoder for the 7z PPMd coder (id {@code 03 04 01}): PPMd var.H ("Ppmd7")
@@ -90,12 +93,14 @@ final class SevenZPpmd7Decoder {
     private final int[] binSumm = new int[128 * 64];
 
     // ---- range decoder ----
-    private final byte[] input;
-    private int inPos;
+    private final InputStream input;
+    private final byte[] charMask = new byte[256];
+    private final int[] maskedStates = new int[256];
+    private final int[] escapeFrequency = new int[1];
     private long code;
     private long range;
 
-    private SevenZPpmd7Decoder(int order, int memSize, @NonNull byte[] input) throws IOException {
+    private SevenZPpmd7Decoder(int order, int memSize, @NonNull InputStream input) throws IOException {
         this.maxOrder = order;
         this.size = memSize;
         this.alignOffset = 4 - (memSize & 3);
@@ -112,6 +117,27 @@ final class SevenZPpmd7Decoder {
      */
     @NonNull
     static byte[] decode(@NonNull byte[] data, @Nullable byte[] properties, long unpackSize) throws IOException {
+        if (unpackSize < 0 || unpackSize > Integer.MAX_VALUE - 8) {
+            throw new IOException("7z PPMd byte-array output size out of range");
+        }
+        try (InputStream decoded = decodeStream(new ByteArrayInputStream(data), properties, unpackSize)) {
+            byte[] out = new byte[(int) unpackSize];
+            int offset = 0;
+            while (offset < out.length) {
+                int count = decoded.read(out, offset, out.length - offset);
+                if (count < 0) throw new EOFException("7z PPMd output ended early");
+                offset += count;
+            }
+            return out;
+        }
+    }
+
+    /** Owns the bounded packed input after successful creation; model allocation is lazy. */
+    @NonNull
+    static InputStream decodeStream(@NonNull InputStream packed, @Nullable byte[] properties,
+                                    long unpackSize) throws IOException {
+        if (packed == null) throw new NullPointerException("packed");
+        if (unpackSize < 0) throw new IOException("7z PPMd output size out of range");
         if (properties == null || properties.length < 5) {
             throw new IOException("7z PPMd properties missing");
         }
@@ -125,19 +151,74 @@ final class SevenZPpmd7Decoder {
             throw new ArchiveSupport.UnsupportedArchiveFeatureException(
                     "7z PPMd memory size unsupported: " + mem);
         }
-        if (unpackSize < 0 || unpackSize > Integer.MAX_VALUE - 8) {
-            throw new IOException("7z PPMd output size out of range");
+        return new DecodedStream(packed, order, (int) mem, unpackSize);
+    }
+
+    private static final class DecodedStream extends InputStream {
+        private final InputStream packed;
+        private final int order, memory;
+        private final byte[] one = new byte[1];
+        private long remaining, position;
+        private SevenZPpmd7Decoder decoder;
+        private IOException failure;
+        private boolean closed;
+
+        DecodedStream(InputStream packed, int order, int memory, long size) {
+            this.packed = packed; this.order = order; this.memory = memory; remaining = size;
         }
-        SevenZPpmd7Decoder decoder = new SevenZPpmd7Decoder(order, (int) mem, data);
-        byte[] out = new byte[(int) unpackSize];
-        for (int i = 0; i < out.length; i++) {
-            int sym = decoder.decodeSymbol();
-            if (sym < 0) {
-                throw new IOException("7z PPMd stream error at byte " + i);
+
+        @Override public int read() throws IOException {
+            return read(one, 0, 1) < 0 ? -1 : one[0] & 255;
+        }
+
+        @Override public int read(byte[] data, int offset, int length) throws IOException {
+            if (data == null) throw new NullPointerException("data");
+            if ((offset | length) < 0 || length > data.length - offset) throw new IndexOutOfBoundsException();
+            if (failure != null) throw failure;
+            if (closed) throw new IOException("7z PPMd stream is closed");
+            if (length == 0) return 0;
+            try {
+                checkCancelled();
+                if (remaining == 0) return -1;
+                if (decoder == null) decoder = new SevenZPpmd7Decoder(order, memory, packed);
+                int count = (int) Math.min(remaining, length);
+                for (int i = 0; i < count; i++) {
+                    if ((i & 1023) == 0) checkCancelled();
+                    int symbol = decoder.decodeSymbol();
+                    if (symbol < 0) throw new IOException("7z PPMd stream error at byte " + position);
+                    data[offset + i] = (byte) symbol;
+                    position++;
+                    remaining--;
+                }
+                if (remaining == 0) decoder = null;
+                return count;
+            } catch (IOException error) {
+                retire(error);
+                throw error;
+            } catch (RuntimeException error) {
+                IOException wrapped = new IOException("Invalid 7z PPMd model state", error);
+                retire(wrapped);
+                throw wrapped;
+            } catch (Error error) {
+                retire(new IOException("7z PPMd decoder aborted", error));
+                throw error;
             }
-            out[i] = (byte) sym;
         }
-        return out;
+
+        private void retire(IOException error) {
+            failure = error;
+            try { close(); } catch (IOException closeError) { error.addSuppressed(closeError); }
+        }
+
+        @Override public void close() throws IOException {
+            decoder = null;
+            one[0] = 0;
+            if (!closed) { closed = true; packed.close(); }
+        }
+    }
+
+    private static void checkCancelled() throws IOException {
+        if (Thread.currentThread().isInterrupted()) throw new IOException("7z PPMd extraction cancelled");
     }
 
     // ---- tables ----
@@ -830,10 +911,11 @@ final class SevenZPpmd7Decoder {
     }
 
     // ---- range decoder (7z Ppmd7z variant) ----
-    private int inByte() {
-        int b = inPos < input.length ? input[inPos] & 0xff : 0;
-        inPos++;
-        return b;
+    private int inByte() throws IOException {
+        checkCancelled();
+        int value = input.read();
+        if (value < 0) throw new EOFException("Truncated 7z PPMd range stream");
+        return value;
     }
 
     private void rangeInit() throws IOException {
@@ -845,9 +927,10 @@ final class SevenZPpmd7Decoder {
         for (int i = 0; i < 4; i++) {
             code = ((code << 8) | inByte()) & 0xFFFFFFFFL;
         }
+        if (code == 0xFFFFFFFFL) throw new IOException("7z PPMd range coder state invalid");
     }
 
-    private void rangeNormalize() {
+    private void rangeNormalize() throws IOException {
         if (range < K_TOP) {
             code = ((code << 8) | inByte()) & 0xFFFFFFFFL;
             range = (range << 8) & 0xFFFFFFFFL;
@@ -858,18 +941,19 @@ final class SevenZPpmd7Decoder {
         }
     }
 
-    private int rangeThreshold(int total) {
+    private int rangeThreshold(int total) throws IOException {
+        if (total <= 0 || range < total) throw new IOException("Invalid 7z PPMd frequency range");
         range = range / total;
         return (int) (code / range);
     }
 
-    private void rangeDecode(int start, int size) {
+    private void rangeDecode(int start, int size) throws IOException {
         code = (code - start * range) & 0xFFFFFFFFL;
         range = (range * size) & 0xFFFFFFFFL;
         rangeNormalize();
     }
 
-    private int rangeDecodeBit(int size0) {
+    private int rangeDecodeBit(int size0) throws IOException {
         long newBound = (range >>> 14) * size0;
         int bit;
         if (code < newBound) {
@@ -885,8 +969,7 @@ final class SevenZPpmd7Decoder {
     }
 
     // ---- symbol decode ----
-    private int decodeSymbol() {
-        byte[] charMask = new byte[256];
+    private int decodeSymbol() throws IOException {
         int c = minContext;
         if (numStats(c) != 1) {
             int s = stats(c);
@@ -947,8 +1030,8 @@ final class SevenZPpmd7Decoder {
         }
 
         // Masked-symbol loop.
-        int[] ps = new int[256];
-        int[] escHolder = new int[1];
+        int[] ps = maskedStates;
+        int[] escHolder = escapeFrequency;
         while (true) {
             int numMasked = numStats(minContext);
             do {

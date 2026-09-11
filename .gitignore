@@ -3,6 +3,11 @@
 build/
 app/build/
 */build/
+# libarchive uses this upstream "build" directory for checked-in CMake source
+# modules and config.h.in. It is source input, not generated build output.
+!third_party/libarchive-android/library/src/main/jni/external/libarchive/build/
+!third_party/libarchive-android/library/src/main/jni/external/libarchive/build/cmake/
+!third_party/libarchive-android/library/src/main/jni/external/libarchive/build/cmake/**
 .cxx/
 .externalNativeBuild/
 .kotlin/

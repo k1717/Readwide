@@ -537,6 +537,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
             drawerToggle.onConfigurationChanged(newConfig);
             installToolbarMenuButton(findViewById(R.id.toolbar));
         }
+        startup().refreshFileDisplayLayoutForConfiguration();
     }
 
 
@@ -558,6 +559,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
             if (recentAdapter != null) {
                 recentAdapter.setShowThumbnails(prefs.getFileThumbnailsEnabled());
             }
+            startup().applyFileDisplayMode(prefs.getFileDisplayMode());
         }
         if (mainSearchFilterController != null) {
             mainSearchFilterController.applySavedFileTypeOrder();
@@ -775,6 +777,10 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
                 recyclerView.scrollToPosition(0);
             }
         });
+    }
+
+    void applyFileDisplayMode(int mode) {
+        startup().applyFileDisplayMode(mode);
     }
 
     void resetRecentRecyclerBeforeReload() {

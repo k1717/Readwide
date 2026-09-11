@@ -14,7 +14,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -68,8 +67,9 @@ final class ArchiveImageEntryCache {
                     return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, null);
                 }
 
-                boolean likelyUnsupportedRarSolidPpmd = isLikelyUnsupportedRar3PpmdSolidImage(archiveFile, entryPath);
+                boolean bulkAttempted = false;
                 if (shouldPreferWholeArchiveImageCache(archiveFile, entryPath)) {
+                    bulkAttempted = true;
                     ArchiveSupport.ExtractionResult bulkResult = ensureReadyByWholeArchiveExtraction(
                             archiveFile,
                             entryPath,
@@ -81,16 +81,8 @@ final class ArchiveImageEntryCache {
                             || bulkResult.failure == ArchiveSupport.ExtractionFailure.BAD_PASSWORD) {
                         return bulkResult;
                     }
-                    if (likelyUnsupportedRarSolidPpmd) {
-                        return unsupportedRarSolidPpmd(entryPath, bulkResult);
-                    }
-                    // Fall through to the older single-entry path for non-solid or backend-specific
-                    // RAR cases where archive-wide extraction is unavailable but a single member can
-                    // still be extracted.
-                }
-
-                if (likelyUnsupportedRarSolidPpmd) {
-                    return unsupportedRarSolidPpmd(entryPath, null);
+                    // Try the actual single-entry engines, including scoped solid PPMd.
+                    // A codec-header guess must not override their capability/CRC decisions.
                 }
 
                 tmpFile = File.createTempFile("archive_image_", ".extracting", parent);
@@ -104,13 +96,13 @@ final class ArchiveImageEntryCache {
                 }
                 if (!result.success) {
                     deleteQuietly(tmpFile);
-                    ArchiveSupport.ExtractionResult fallback = tryEnsureReadyByWholeArchiveExtraction(
+                    ArchiveSupport.ExtractionResult fallback = bulkAttempted ? null : tryEnsureReadyByWholeArchiveExtraction(
                             archiveFile, entryPath, outFile, password, sensitiveCache, verifiedSensitivePaths, result);
                     return fallback != null ? fallback : result;
                 }
                 if (!isUsableFile(tmpFile) || !looksLikeExpectedImage(entryPath, tmpFile)) {
                     deleteQuietly(tmpFile);
-                    ArchiveSupport.ExtractionResult fallback = tryEnsureReadyByWholeArchiveExtraction(
+                    ArchiveSupport.ExtractionResult fallback = bulkAttempted ? null : tryEnsureReadyByWholeArchiveExtraction(
                             archiveFile, entryPath, outFile, password, sensitiveCache, verifiedSensitivePaths,
                             ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED,
                                     "Extracted archive image did not decode as the expected image type"));
@@ -134,195 +126,6 @@ final class ArchiveImageEntryCache {
     }
 
 
-    @NonNull
-    private static ArchiveSupport.ExtractionResult unsupportedRarSolidPpmd(
-            @NonNull String entryPath,
-            @Nullable ArchiveSupport.ExtractionResult backendResult) {
-        String detail = "RAR3/RAR4 solid PPMd image entry is not supported by the current "
-                + "first-party decoder. The bundled libarchive backend was tried first"
-                + (backendResult != null && backendResult.detail != null && backendResult.detail.trim().length() > 0
-                ? ", but did not produce a valid image cache for " + entryPath + ": " + backendResult.detail.trim()
-                : ", but did not produce a valid image cache for " + entryPath)
-                + ". A full RAR3 PPMd solid decoder is required for this CBR case.";
-        return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, detail);
-    }
-
-    private static boolean isLikelyUnsupportedRar3PpmdSolidImage(@NonNull File archiveFile,
-                                                                 @NonNull String entryPath) {
-        if (ArchiveSupport.getSupportedArchiveType(archiveFile) != ArchiveSupport.Type.RAR) return false;
-        if (!FileUtils.isImageFile(entryPath)) return false;
-        Rar4EntryProbe probe = probeRar4Entry(archiveFile, entryPath);
-        return probe != null && probe.found && probe.solid && probe.ppmd;
-    }
-
-    @Nullable
-    private static Rar4EntryProbe probeRar4Entry(@NonNull File archiveFile, @NonNull String targetPath) {
-        String wanted = normalizeRarProbePath(targetPath);
-        if (wanted.length() == 0) return null;
-        try (RandomAccessFile raf = new RandomAccessFile(archiveFile, "r")) {
-            long signature = findRar4Signature(raf);
-            if (signature < 0L) return null;
-            raf.seek(signature + 7L);
-            while (raf.getFilePointer() + 7L <= raf.length()) {
-                long headerStart = raf.getFilePointer();
-                readUInt16LE(raf);
-                int type = raf.readUnsignedByte();
-                int flags = readUInt16LE(raf);
-                int headerSize = readUInt16LE(raf);
-                if (headerSize < 7 || headerStart + headerSize > raf.length()) return null;
-                byte[] header = new byte[headerSize - 7];
-                raf.readFully(header);
-                long dataSize = 0L;
-                if (type == 0x74) {
-                    ParsedRar4File parsed = parseRar4FileHeader(header, flags, headerStart + headerSize);
-                    if (parsed == null) return null;
-                    dataSize = parsed.packedSize;
-                    if (wanted.equals(normalizeRarProbePath(parsed.path))) {
-                        boolean ppmd = false;
-                        if (parsed.packedSize >= 2L && parsed.dataOffset + 2L <= raf.length()) {
-                            long old = raf.getFilePointer();
-                            raf.seek(parsed.dataOffset);
-                            int first = raf.readUnsignedByte();
-                            int second = raf.readUnsignedByte();
-                            raf.seek(old);
-                            int blockFlags = (first << 8) | second;
-                            ppmd = (blockFlags & 0x8000) != 0;
-                        }
-                        return new Rar4EntryProbe(true, parsed.solid, parsed.method, ppmd);
-                    }
-                } else if ((flags & 0x8000) != 0 && header.length >= 4) {
-                    dataSize = uint32LE(header, 0);
-                }
-                long next = headerStart + headerSize + dataSize;
-                if (next <= headerStart || next > raf.length()) return null;
-                raf.seek(next);
-                if (type == 0x7b) break;
-            }
-        } catch (IOException | SecurityException ignored) {
-            return null;
-        }
-        return null;
-    }
-
-    @Nullable
-    private static ParsedRar4File parseRar4FileHeader(@NonNull byte[] header, int flags, long dataOffset) {
-        try {
-            int pos = 0;
-            long packSize = uint32LE(header, pos); pos += 4;
-            pos += 4; // unpacked size
-            pos += 1; // host OS
-            pos += 4; // data CRC
-            pos += 4; // DOS time
-            pos += 1; // unp ver
-            int method = header[pos++] & 0xff;
-            int nameSize = uint16LE(header, pos); pos += 2;
-            pos += 4; // attributes
-            if ((flags & 0x0100) != 0) {
-                long highPack = uint32LE(header, pos); pos += 4;
-                pos += 4; // high unpacked
-                packSize |= highPack << 32;
-            }
-            if (nameSize < 0 || pos + nameSize > header.length) return null;
-            byte[] rawName = new byte[nameSize];
-            System.arraycopy(header, pos, rawName, 0, nameSize);
-            String path = decodeRar4ProbeName(rawName);
-            if (path.length() == 0) return null;
-            boolean solid = (flags & 0x0010) != 0;
-            int normalizedMethod = method == 0x30 ? 0 : method;
-            return new ParsedRar4File(path, packSize, dataOffset, normalizedMethod, solid);
-        } catch (RuntimeException ignored) {
-            return null;
-        }
-    }
-
-    @NonNull
-    private static String decodeRar4ProbeName(@NonNull byte[] rawName) {
-        int zero = -1;
-        for (int i = 0; i < rawName.length; i++) {
-            if (rawName[i] == 0) { zero = i; break; }
-        }
-        int len = zero >= 0 ? zero : rawName.length;
-        try {
-            return new String(rawName, 0, len, "UTF-8").replace('\\', '/').trim();
-        } catch (Exception ignored) {
-            return new String(rawName, 0, len).replace('\\', '/').trim();
-        }
-    }
-
-    @NonNull
-    private static String normalizeRarProbePath(@Nullable String value) {
-        if (value == null) return "";
-        String path = value.replace('\\', '/').trim();
-        while (path.startsWith("/")) path = path.substring(1);
-        while (path.startsWith("./")) path = path.substring(2);
-        while (path.contains("//")) path = path.replace("//", "/");
-        return path.toLowerCase(Locale.ROOT);
-    }
-
-    private static long findRar4Signature(@NonNull RandomAccessFile raf) throws IOException {
-        final byte[] sig = new byte[] {0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00};
-        long max = Math.min(raf.length(), 1024L * 1024L);
-        int match = 0;
-        raf.seek(0L);
-        for (long pos = 0; pos < max; pos++) {
-            int b = raf.read();
-            if (b < 0) break;
-            if ((byte) b == sig[match]) {
-                match++;
-                if (match == sig.length) return pos - sig.length + 1L;
-            } else {
-                match = ((byte) b == sig[0]) ? 1 : 0;
-            }
-        }
-        return -1L;
-    }
-
-    private static int readUInt16LE(@NonNull RandomAccessFile raf) throws IOException {
-        int b0 = raf.readUnsignedByte();
-        int b1 = raf.readUnsignedByte();
-        return b0 | (b1 << 8);
-    }
-
-    private static int uint16LE(@NonNull byte[] data, int offset) {
-        return (data[offset] & 0xff) | ((data[offset + 1] & 0xff) << 8);
-    }
-
-    private static long uint32LE(@NonNull byte[] data, int offset) {
-        return ((long) data[offset] & 0xffL)
-                | (((long) data[offset + 1] & 0xffL) << 8)
-                | (((long) data[offset + 2] & 0xffL) << 16)
-                | (((long) data[offset + 3] & 0xffL) << 24);
-    }
-
-    private static final class Rar4EntryProbe {
-        final boolean found;
-        final boolean solid;
-        final int method;
-        final boolean ppmd;
-
-        Rar4EntryProbe(boolean found, boolean solid, int method, boolean ppmd) {
-            this.found = found;
-            this.solid = solid;
-            this.method = method;
-            this.ppmd = ppmd;
-        }
-    }
-
-    private static final class ParsedRar4File {
-        @NonNull final String path;
-        final long packedSize;
-        final long dataOffset;
-        final int method;
-        final boolean solid;
-
-        ParsedRar4File(@NonNull String path, long packedSize, long dataOffset, int method, boolean solid) {
-            this.path = path;
-            this.packedSize = packedSize;
-            this.dataOffset = dataOffset;
-            this.method = method;
-            this.solid = solid;
-        }
-    }
 
     @Nullable
     private static ArchiveSupport.ExtractionResult tryEnsureReadyByWholeArchiveExtraction(
@@ -436,6 +239,10 @@ final class ArchiveImageEntryCache {
         File parent = target.getParentFile();
         if (parent == null) return false;
         if (!parent.exists() && !parent.mkdirs()) return false;
+        // Bulk extraction and preview files normally share a filesystem. The
+        // validated extraction is disposable: consume it by rename instead of
+        // writing every image a second time. Keep guarded copy as a fallback.
+        if (replaceReadyFile(source, target)) return true;
         File tmp = File.createTempFile("archive_image_ready_", ".tmp", parent);
         try {
             copyFile(source, tmp);
@@ -449,7 +256,7 @@ final class ArchiveImageEntryCache {
     private static void copyFile(@NonNull File source, @NonNull File target) throws IOException {
         byte[] buffer = new byte[64 * 1024];
         try (InputStream in = new FileInputStream(source);
-             OutputStream out = new FileOutputStream(target, false)) {
+             OutputStream out = ArchiveSupport.openExtractionOutputStream(target)) {
             int read;
             while ((read = in.read(buffer)) != -1) {
                 out.write(buffer, 0, read);
@@ -537,19 +344,19 @@ final class ArchiveImageEntryCache {
         return true;
     }
 
-    // RAR, 7z and the TAR family have no cheap random per-entry access: extracting a
+    // RAR, 7z and compressed TAR have no cheap random per-entry access: extracting a
     // single entry re-reads the archive from the start up to that entry, and for the
     // solid (RAR/7z) and compressed-TAR streams it must re-decompress everything before
     // it. That makes per-page image extraction O(n) per page and O(n^2) for a full
     // read-through, which stalls paging and leaves the previous image on screen. For
     // these formats every image is extracted once into the preview cache so later page
-    // turns are cache hits. ZIP, ALZ and EGG seek directly to each entry and are excluded.
+    // turns are cache hits. Plain TAR now uses a metadata-only offset index, like the
+    // direct-entry paths for ZIP/ALZ/non-solid EGG, and does not eagerly cache every image.
     private static boolean isSequentialEntryArchiveType(@Nullable ArchiveSupport.Type type) {
         if (type == null) return false;
         switch (type) {
             case RAR:
             case SEVEN_Z:
-            case TAR:
             case TAR_GZ:
             case TAR_BZ2:
             case TAR_XZ:
@@ -557,6 +364,7 @@ final class ArchiveImageEntryCache {
             case TAR_Z:
             case TAR_ZST:
             case TAR_LZ4:
+            case LIBARCHIVE:
                 return true;
             default:
                 return false;

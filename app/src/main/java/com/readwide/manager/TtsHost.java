@@ -79,6 +79,9 @@ interface TtsHost {
      */
     int ttsCurrentCharPosition();
 
+    /** Version of saved text offsets, scoped to this host's extraction format. */
+    default int ttsTextFormatVersion() { return 0; }
+
     /** Turn the page by the given signed direction, as read-aloud navigation. */
     void ttsHostPageBy(int direction);
 

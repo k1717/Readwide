@@ -49,121 +49,126 @@ final class SevenZBcj2Decoder {
     static byte[] decode(@NonNull byte[] main, @NonNull byte[] call, @NonNull byte[] jump,
                          @NonNull byte[] rc, long outSize) throws IOException {
         if (outSize < 0 || outSize > Integer.MAX_VALUE - 8) {
-            throw new IOException("BCJ2 output size out of range");
+            throw new IOException("BCJ2 byte-array output size out of range");
         }
-        byte[] out = new byte[(int) outSize];
-        int outPos = 0;
-        int mainPos = 0;
-        int callPos = 0;
-        int jumpPos = 0;
-
-        int[] probs = new int[NUM_PROBS];
-        for (int i = 0; i < NUM_PROBS; i++) probs[i] = BIT_MODEL_TOTAL >> 1;
-
-        // Range-decoder init: first byte is ignored, then 4 bytes form code.
-        int rcPos = 1;
-        long code = 0;
-        long range = 0xFFFFFFFFL;
-        for (int i = 0; i < 4; i++) {
-            code = ((code << 8) | rcByte(rc, rcPos++)) & 0xFFFFFFFFL;
+        try (InputStream decoded = decodeStream(new ByteArrayInputStream(main),
+                new ByteArrayInputStream(call), new ByteArrayInputStream(jump),
+                new ByteArrayInputStream(rc), outSize)) {
+            byte[] result = new byte[(int) outSize];
+            int offset = 0;
+            while (offset < result.length) {
+                int count = decoded.read(result, offset, result.length - offset);
+                if (count < 0) throw new EOFException("Truncated BCJ2 output");
+                offset += count;
+            }
+            return result;
         }
-
-        int prev = 0;
-        while (outPos < out.length) {
-            int b = main[mainPos++] & 0xff;
-            out[outPos++] = (byte) b;
-
-            boolean isBranch = (b & 0xFE) == 0xE8 || (prev == 0x0F && (b & 0xF0) == 0x80);
-            if (!isBranch) {
-                prev = b;
-                continue;
-            }
-
-            int probIndex;
-            if (b == 0xE8) {
-                probIndex = 2 + prev;
-            } else if (b == 0xE9) {
-                probIndex = 1;
-            } else {
-                probIndex = 0;
-            }
-
-            // Inlined range-decoder bit.
-            int v = probs[probIndex];
-            long bound = (range >>> MODEL_TOTAL_BITS) * v;
-            int bit;
-            if ((code & 0xFFFFFFFFL) < bound) {
-                range = bound;
-                probs[probIndex] = v + ((BIT_MODEL_TOTAL - v) >>> MOVE_BITS);
-                bit = 0;
-            } else {
-                range -= bound;
-                code = (code - bound) & 0xFFFFFFFFL;
-                probs[probIndex] = v - (v >>> MOVE_BITS);
-                bit = 1;
-            }
-            if ((range & 0xFFFFFFFFL) < TOP_VALUE) {
-                range = (range << 8) & 0xFFFFFFFFL;
-                code = ((code << 8) | rcByte(rc, rcPos++)) & 0xFFFFFFFFL;
-            }
-
-            if (bit == 0) {
-                prev = b;
-                continue;
-            }
-
-            long dest;
-            if (b == 0xE8) {
-                if (callPos + 4 > call.length) throw new EOFException("BCJ2 call stream exhausted");
-                dest = readBigEndian(call, callPos);
-                callPos += 4;
-            } else {
-                if (jumpPos + 4 > jump.length) throw new EOFException("BCJ2 jump stream exhausted");
-                dest = readBigEndian(jump, jumpPos);
-                jumpPos += 4;
-            }
-            if (outPos + 4 > out.length) throw new IOException("BCJ2 stream corrupted: address past end");
-            long rel = (dest - (outPos + 4)) & 0xFFFFFFFFL;
-            out[outPos++] = (byte) (rel & 0xff);
-            out[outPos++] = (byte) ((rel >>> 8) & 0xff);
-            out[outPos++] = (byte) ((rel >>> 16) & 0xff);
-            out[outPos++] = (byte) ((rel >>> 24) & 0xff);
-            prev = (int) ((rel >>> 24) & 0xff);
-        }
-        return out;
     }
 
-    /**
-     * Streams-in-memory convenience wrapper: fully reads each input stream and
-     * decodes. BCJ2's converted addresses are absolute, so the whole main
-     * stream must be available; buffering all four inputs is inherent.
-     */
+    /** Pull decoder: only probability state and one pending four-byte address are retained. */
     @NonNull
     static InputStream decodeStream(@NonNull InputStream main, @NonNull InputStream call,
                                     @NonNull InputStream jump, @NonNull InputStream rc,
                                     long outSize) throws IOException {
-        return new ByteArrayInputStream(decode(readAll(main), readAll(call), readAll(jump), readAll(rc), outSize));
+        return new DecoderStream(main, call, jump, rc, outSize);
     }
 
-    private static int rcByte(@NonNull byte[] rc, int pos) {
-        return pos < rc.length ? rc[pos] & 0xff : 0;
-    }
+    private static final class DecoderStream extends InputStream {
+        private final InputStream main, call, jump, rc;
+        private final long size;
+        private final int[] probs = new int[NUM_PROBS];
+        private long position;
+        private long code;
+        private long range = 0xffffffffL;
+        private long pendingAddress;
+        private int pendingBytes;
+        private int previous;
+        private boolean initialized;
+        private boolean closed;
 
-    private static long readBigEndian(@NonNull byte[] data, int pos) {
-        return ((long) (data[pos] & 0xff) << 24)
-                | ((data[pos + 1] & 0xff) << 16)
-                | ((data[pos + 2] & 0xff) << 8)
-                | (data[pos + 3] & 0xff);
-    }
-
-    @NonNull
-    private static byte[] readAll(@NonNull InputStream in) throws IOException {
-        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int read;
-        while ((read = in.read(buffer)) != -1) {
-            bos.write(buffer, 0, read);
+        DecoderStream(InputStream main, InputStream call, InputStream jump, InputStream rc,
+                      long size) throws IOException {
+            if (size < 0) throw new IOException("Invalid BCJ2 output size");
+            this.main = main; this.call = call; this.jump = jump; this.rc = rc;
+            this.size = size;
+            java.util.Arrays.fill(probs, BIT_MODEL_TOTAL >> 1);
         }
-        return bos.toByteArray();
+
+        @Override public int read() throws IOException {
+            if (closed) throw new IOException("BCJ2 stream closed");
+            if (!initialized) {
+                if (requiredByte(rc, "control") != 0) throw new IOException("Invalid BCJ2 range header");
+                for (int i = 0; i < 4; i++) code = ((code << 8) | requiredByte(rc, "control")) & 0xffffffffL;
+                initialized = true;
+            }
+            if (position == size) return -1;
+            if (pendingBytes > 0) {
+                int value = (int) pendingAddress & 0xff;
+                pendingAddress >>>= 8;
+                pendingBytes--;
+                position++;
+                if (pendingBytes == 0) previous = value;
+                return value;
+            }
+            int value = requiredByte(main, "main");
+            position++;
+            boolean branch = (value & 0xfe) == 0xe8 || (previous == 0x0f && (value & 0xf0) == 0x80);
+            if (!branch) { previous = value; return value; }
+            int index = value == 0xe8 ? 2 + previous : value == 0xe9 ? 1 : 0;
+            int probability = probs[index];
+            long bound = (range >>> MODEL_TOTAL_BITS) * probability;
+            boolean converted = code >= bound;
+            if (!converted) {
+                range = bound;
+                probs[index] = probability + ((BIT_MODEL_TOTAL - probability) >>> MOVE_BITS);
+            } else {
+                range -= bound;
+                code = (code - bound) & 0xffffffffL;
+                probs[index] = probability - (probability >>> MOVE_BITS);
+            }
+            if (range < TOP_VALUE) {
+                range = (range << 8) & 0xffffffffL;
+                code = ((code << 8) | requiredByte(rc, "control")) & 0xffffffffL;
+            }
+            if (!converted) { previous = value; return value; }
+            if (size - position < 4) throw new IOException("BCJ2 address extends past output");
+            InputStream addresses = value == 0xe8 ? call : jump;
+            long target = 0;
+            for (int i = 0; i < 4; i++) target = (target << 8) | requiredByte(addresses, "address");
+            pendingAddress = (target - ((position + 4) & 0xffffffffL)) & 0xffffffffL;
+            pendingBytes = 4;
+            return value;
+        }
+
+        @Override public int read(byte[] data, int offset, int length) throws IOException {
+            if (data == null) throw new NullPointerException("data");
+            if ((offset | length) < 0 || length > data.length - offset) throw new IndexOutOfBoundsException();
+            if (closed) throw new IOException("BCJ2 stream closed");
+            if (length == 0) return 0;
+            int count = 0;
+            while (count < length) {
+                int value = read();
+                if (value < 0) break;
+                data[offset + count++] = (byte) value;
+            }
+            return count == 0 ? -1 : count;
+        }
+
+        @Override public void close() throws IOException {
+            if (closed) return;
+            closed = true;
+            IOException failure = null;
+            for (InputStream stream : new InputStream[] {main, call, jump, rc}) {
+                try { stream.close(); }
+                catch (IOException e) { if (failure == null) failure = e; else failure.addSuppressed(e); }
+            }
+            if (failure != null) throw failure;
+        }
+    }
+
+    private static int requiredByte(InputStream input, String name) throws IOException {
+        int value = input.read();
+        if (value < 0) throw new EOFException("BCJ2 " + name + " stream exhausted");
+        return value;
     }
 }

@@ -58,6 +58,7 @@ final class RarArchiveReader {
     private static final long FILE_FLAG_UNKNOWN_UNPACKED_SIZE = 0x0008L;
 
     private static final int EXTRA_FILE_ENCRYPTION = 0x01;
+    private static final int EXTRA_FILE_HASH = 0x02;
     private static final int EXTRA_FILE_TIME = 0x03;
     private static final int RAR5_ENCRYPTION_VERSION_AES256 = 0;
     private static final int RAR5_ENCRYPTION_CHECK_VALUE = 0x0001;
@@ -379,7 +380,7 @@ final class RarArchiveReader {
                 if (Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entry, entries, outFile, null)) {
                     return true;
                 }
-                if (Rar3PpmdSolidArchiveExtractor.tryExtractSolidPpmdEntry(entry, entries, outFile, null)) {
+                if (Rar3PpmdSolidArchiveExtractor.tryExtractSolidPpmdEntry(entry, entries, outFile, password, null)) {
                     return true;
                 }
                 if (libarchiveFailure != null || !RarLibarchiveFallback.isAvailable()) {
@@ -407,7 +408,7 @@ final class RarArchiveReader {
     }
 
     @NonNull
-    private static List<RarEntry> readEntries(@NonNull File archive,
+    static List<RarEntry> readEntries(@NonNull File archive,
                                               @Nullable char[] password) throws IOException {
         List<File> volumes = RarArchiveLocator.collectReadableVolumes(archive);
         List<RarEntry> result = new ArrayList<>();
@@ -831,7 +832,7 @@ final class RarArchiveReader {
                 extra.encryption,
                 dataCrc,
                 timeMillis,
-                compressionInfo);
+                compressionInfo, extra.blake2sp);
     }
 
     @NonNull
@@ -849,11 +850,23 @@ final class RarArchiveReader {
             if (recordSize < 0 || recordSize > cursor.remaining()) throw new IOException("Invalid RAR extra record");
             int recordEnd = checkedInt((long) cursor.position() + recordSize);
             if (recordEnd > cursor.limit()) throw new IOException("Invalid RAR extra record range");
-            long recordType = cursor.readVInt();
+            // A malformed short record must not borrow fields from the next record.
+            ByteCursor record = new ByteCursor(headerData, cursor.position(), recordEnd);
+            long recordType = record.readVInt();
             if (recordType == EXTRA_FILE_ENCRYPTION) {
-                info.encryption = parseFileEncryptionRecord(cursor, recordEnd);
+                info.encryption = parseFileEncryptionRecord(record);
+            } else if (recordType == EXTRA_FILE_HASH) {
+                long hashType = record.readVInt();
+                if (hashType == 0) {
+                    if (info.blake2sp != null || record.remaining() != 32) {
+                        throw new IOException("Invalid or duplicate RAR5 BLAKE2sp record");
+                    }
+                    info.blake2sp = record.readBytes(32);
+                } else {
+                    throw new UnsupportedRarFeatureException("Unsupported RAR5 file hash type");
+                }
             } else if (recordType == EXTRA_FILE_TIME) {
-                info.timeMillis = parseFileTimeRecord(cursor, recordEnd);
+                info.timeMillis = parseFileTimeRecord(record);
             }
             cursor.setPosition(recordEnd);
             if (cursor.position() <= recordStart) throw new IOException("Invalid RAR extra cursor");
@@ -862,32 +875,43 @@ final class RarArchiveReader {
     }
 
     @NonNull
-    private static EncryptionInfo parseFileEncryptionRecord(@NonNull ByteCursor cursor,
-                                                            int recordEnd) throws IOException {
+    private static EncryptionInfo parseFileEncryptionRecord(@NonNull ByteCursor cursor) throws IOException {
         long version = cursor.readVInt();
         long flags = cursor.readVInt();
         int kdfCount = cursor.readUnsignedByte();
         byte[] salt = cursor.readBytes(16);
         byte[] iv = cursor.readBytes(16);
-        byte[] check = ((flags & RAR5_ENCRYPTION_CHECK_VALUE) != 0 && cursor.position() + 12 <= recordEnd)
+        byte[] check = ((flags & RAR5_ENCRYPTION_CHECK_VALUE) != 0)
                 ? cursor.readBytes(12)
                 : new byte[0];
         return new EncryptionInfo(version, flags, kdfCount, salt, iv, check);
     }
 
-    private static long parseFileTimeRecord(@NonNull ByteCursor cursor, int recordEnd) throws IOException {
-        if (cursor.position() >= recordEnd) return 0L;
+    private static long parseFileTimeRecord(@NonNull ByteCursor cursor) throws IOException {
         long flags = cursor.readVInt();
         boolean unix = (flags & 0x0001L) != 0;
         boolean hasMtime = (flags & 0x0002L) != 0;
         boolean nanos = (flags & 0x0010L) != 0;
-        if (!hasMtime) return 0L;
-        if (unix) {
-            long value = nanos ? readInt64LE(cursor) : readUInt32LE(cursor);
-            return nanos ? value / 1_000_000L : value * 1000L;
+        boolean hasCtime = (flags & 0x0004L) != 0;
+        boolean hasAtime = (flags & 0x0008L) != 0;
+        long mtime = 0L;
+        if (hasMtime) mtime = unix ? readUInt32LE(cursor) * 1000L
+                : windowsFileTimeToMillis(readInt64LE(cursor));
+        if (hasCtime) { if (unix) readUInt32LE(cursor); else readInt64LE(cursor); }
+        if (hasAtime) { if (unix) readUInt32LE(cursor); else readInt64LE(cursor); }
+        // Unix fractional fields follow ALL whole-second timestamps, in m/c/a order.
+        if (unix && nanos) {
+            if (hasMtime) mtime += readTimeNanoseconds(cursor) / 1_000_000L;
+            if (hasCtime) readTimeNanoseconds(cursor);
+            if (hasAtime) readTimeNanoseconds(cursor);
         }
-        long fileTime = readInt64LE(cursor);
-        return windowsFileTimeToMillis(fileTime);
+        return mtime;
+    }
+
+    private static long readTimeNanoseconds(@NonNull ByteCursor cursor) throws IOException {
+        long nanos = readUInt32LE(cursor);
+        if (nanos >= 1_000_000_000L) throw new IOException("Invalid RAR timestamp fraction");
+        return nanos;
     }
 
     static void extractStoredEntry(@NonNull RarEntry entry,
@@ -917,7 +941,7 @@ final class RarArchiveReader {
             if (Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entry, allEntries, outFile, progress)) {
                 return;
             }
-            if (Rar3PpmdSolidArchiveExtractor.tryExtractSolidPpmdEntry(entry, allEntries, outFile, progress)) {
+            if (Rar3PpmdSolidArchiveExtractor.tryExtractSolidPpmdEntry(entry, allEntries, outFile, password, progress)) {
                 return;
             }
             throw RarFeatureClassifier.libarchivePrimaryRarFailure(entry, null);
@@ -951,10 +975,11 @@ final class RarArchiveReader {
         }
 
         try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
+            Rar5Crypto.Secrets checksumSecrets = null;
             if (entry.encrypted()) {
                 try (RandomAccessFile raf = openEntrySource(entry)) {
                     raf.seek(entry.dataOffset);
-                    extractEncryptedStoredEntry(raf, entry, outFile, password, progress);
+                    checksumSecrets = extractEncryptedStoredEntry(raf, entry, outFile, password, progress);
                 }
             } else {
                 try (RandomAccessFile raf = openEntrySource(entry)) {
@@ -962,7 +987,7 @@ final class RarArchiveReader {
                     extractPlainStoredEntry(raf, entry, outFile, progress);
                 }
             }
-            RarStoredPayloadIO.verifyCrc(entry, outFile);
+            RarStoredPayloadIO.verifyCrc(entry, outFile, checksumSecrets);
             guard.commit();
         }
     }
@@ -1271,7 +1296,8 @@ final class RarArchiveReader {
         RarStoredPayloadIO.copyPlainEntryToFile(raf, entry.packedSize, outFile, progress);
     }
 
-    private static void extractEncryptedStoredEntry(@NonNull RandomAccessFile raf,
+    @Nullable
+    private static Rar5Crypto.Secrets extractEncryptedStoredEntry(@NonNull RandomAccessFile raf,
                                                     @NonNull RarEntry entry,
                                                     @NonNull File outFile,
                                                     @Nullable char[] password,
@@ -1290,7 +1316,7 @@ final class RarArchiveReader {
                         "RAR3/RAR4 encrypted compressed, solid, or split payloads are not supported yet");
             }
             extractRar4EncryptedStoredPayload(raf, entry, outFile, password, encryption, progress);
-            return;
+            return null;
         }
 
         if (encryption.isRar5Aes256()) {
@@ -1309,7 +1335,7 @@ final class RarArchiveReader {
                     "RAR5 AES decrypt failed",
                     progress,
                     true);
-            return;
+            return secrets;
         }
         throw new UnsupportedRarFeatureException("Encrypted RAR file data is not supported yet");
     }
@@ -1679,6 +1705,7 @@ final class RarArchiveReader {
         final long timeMillis;
         /** Raw RAR5 compression-info vint (algo version, solid, method, dict bits); -1 when unknown. */
         final long rar5CompressionInfo;
+        @Nullable final byte[] blake2sp;
         @Nullable File sourceArchive;
 
         RarEntry(@NonNull String path,
@@ -1712,6 +1739,15 @@ final class RarArchiveReader {
                  long dataCrc,
                  long timeMillis,
                  long rar5CompressionInfo) {
+            this(path, directory, unpackedSize, packedSize, dataOffset, rarVersion, method,
+                    solid, splitBefore, splitAfter, encryption, dataCrc, timeMillis,
+                    rar5CompressionInfo, null);
+        }
+
+        RarEntry(@NonNull String path, boolean directory, long unpackedSize, long packedSize,
+                 long dataOffset, int rarVersion, int method, boolean solid, boolean splitBefore,
+                 boolean splitAfter, @Nullable EncryptionInfo encryption, long dataCrc,
+                 long timeMillis, long rar5CompressionInfo, @Nullable byte[] blake2sp) {
             this.path = directory && !path.endsWith("/") ? path + "/" : path;
             this.directory = directory;
             this.unpackedSize = unpackedSize;
@@ -1726,6 +1762,7 @@ final class RarArchiveReader {
             this.dataCrc = dataCrc;
             this.timeMillis = timeMillis;
             this.rar5CompressionInfo = rar5CompressionInfo;
+            this.blake2sp = blake2sp == null ? null : blake2sp.clone();
         }
 
         boolean encrypted() {
@@ -1735,6 +1772,7 @@ final class RarArchiveReader {
 
     private static final class ExtraInfo {
         @Nullable EncryptionInfo encryption;
+        @Nullable byte[] blake2sp;
         long timeMillis;
     }
 

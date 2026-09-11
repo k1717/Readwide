@@ -44,6 +44,19 @@ public class RarVolumeChainTest {
         assertEquals(new File("first.r00"), segments.get(1).archive);
     }
 
+    @Test(expected = java.io.IOException.class, timeout = 1000)
+    public void repeatedContinuationFailsInsteadOfLoopingForever() throws Exception {
+        RarArchiveReader.RarEntry first = entry("file.bin", false, true, null);
+        RarArchiveReader.RarEntry middle = entry("file.bin", true, true, null);
+        RarVolumeChain.build(first, Arrays.asList(first, middle, middle));
+    }
+
+    @Test(expected = java.io.IOException.class)
+    public void splitHeadMustBelongToTheEntryList() throws Exception {
+        RarVolumeChain.build(entry("file.bin", false, true, null),
+                Arrays.asList(entry("file.bin", true, false, null)));
+    }
+
     @Test
     public void sameEncryption_requiresMatchingRar4Salt() {
         RarArchiveReader.EncryptionInfo a =

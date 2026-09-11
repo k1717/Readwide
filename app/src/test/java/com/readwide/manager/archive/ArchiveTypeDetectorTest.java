@@ -16,6 +16,9 @@ public class ArchiveTypeDetectorTest {
         assertEquals(ArchiveSupport.Type.SEVEN_Z, ArchiveTypeDetector.fromFileName("book.cb7.001"));
         assertEquals(ArchiveSupport.Type.TAR_XZ, ArchiveTypeDetector.fromFileName("backup.tar.xz"));
         assertEquals(ArchiveSupport.Type.EGG, ArchiveTypeDetector.fromFileName("comic.vol2.egg"));
+        assertEquals(ArchiveSupport.Type.LIBARCHIVE, ArchiveTypeDetector.fromFileName("installer.cab"));
+        assertEquals(ArchiveSupport.Type.LIBARCHIVE, ArchiveTypeDetector.fromFileName("legacy.lha"));
+        assertEquals(ArchiveSupport.Type.LIBARCHIVE, ArchiveTypeDetector.fromFileName("legacy.lzh"));
     }
 
     @Test
@@ -23,6 +26,7 @@ public class ArchiveTypeDetectorTest {
         assertEquals("book", ArchiveTypeDetector.outputBaseName(new File("book.part1.rar"), "fallback"));
         assertEquals("book", ArchiveTypeDetector.outputBaseName(new File("book.7z.001"), "fallback"));
         assertEquals("backup", ArchiveTypeDetector.outputBaseName(new File("backup.tar.gz"), "fallback"));
+        assertEquals("installer", ArchiveTypeDetector.outputBaseName(new File("installer.cab"), "fallback"));
         assertEquals("plain", ArchiveTypeDetector.outputBaseName(new File("plain"), "fallback"));
     }
 

@@ -208,7 +208,7 @@ public final class FileClipboardController {
 
     public boolean canOverwrite(@NonNull File target) {
         PendingItem item = getActiveItem();
-        return item != null && !FileSystemOps.sameCanonicalFile(item.source, target);
+        return item != null && FileSystemOps.canTransfer(item.source, target, true);
     }
 
     @NonNull
@@ -241,6 +241,10 @@ public final class FileClipboardController {
         }
 
         File destination = new File(destinationDir, source.getName());
+        if (!FileSystemOps.sameCanonicalFile(source, destination)
+                && FileSystemOps.isSameOrDescendant(destination, source)) {
+            return new PastePlan(PasteStatus.DIRECTORY_INTO_SELF, source, destinationDir, destination);
+        }
         if (destination.exists()) {
             return new PastePlan(PasteStatus.CONFLICT, source, destinationDir, destination);
         }

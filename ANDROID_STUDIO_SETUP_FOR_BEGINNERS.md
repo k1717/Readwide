@@ -19,6 +19,8 @@ The project uses:
 - compileSdk 35
 - targetSdk 35
 - minSdk 24
+- Android NDK 29.0.14206865 and CMake 3.22.1 for the source-built native modules
+- Gradle 9.4.1 / Android Gradle Plugin 9.2.0 from the checked-in configuration; Java source compatibility 17
 
 If Android Studio says SDK Platform 35 is missing, click the install/fix link.
 
@@ -63,7 +65,7 @@ After the app installs:
 11. Open an EPUB and verify Settings > EPUB layout changes apply after returning to the viewer.
 12. In Markdown, EPUB, HWP/HWPX, and Word-family viewers, test document search previous/next, nth-result jump, highlight visibility, and bottom-dialog reveal near the end of the document.
 13. Change the reader theme from Settings while an EPUB is open and confirm the page refreshes to the new theme.
-13. Export and import a backup if you need to verify bookmarks/settings backup behavior.
+14. Export and import a backup if you need to verify bookmarks/settings backup behavior.
 
 ## 6. Current notes
 
@@ -87,7 +89,9 @@ Copy the exact first red error line and send it back. Common first failures are:
 Do not randomly change files before capturing the first error.
 
 
-## 2.2.6 quick manual QA
+## Historical 2.2.6 manual QA
+
+These checks describe that release, not the current format/size boundaries. Use the [1.0.18 release checklist](docs/RELEASE_READINESS_1_0_18.md) for current validation.
 
 - Multi-select delete progress: select multiple files/folders, delete, pause, send the progress window to Background, and confirm the toolbar progress button immediately reopens it.
 
@@ -99,7 +103,7 @@ Do not randomly change files before capturing the first error.
 - In the TXT viewer, confirm the page label remains `current / total` at exact page starts and becomes `current (line-in-page) / total` only when the visible position is mid-page.
 - Run optional external archive fixture tests with `TEXTVIEW_EXTERNAL_ARCHIVE_FIXTURE_DIR` when sample archives are available.
 
-## 2.2.2 quick manual QA
+## Historical 2.2.2 manual QA
 
 - Open a large ZIP/CBZ image archive: the selected image should appear before the whole archive is extracted, nearby pages should load lazily/prefetch, and zoom should request higher detail using the 12MP preview / 48MP detail policy.
 - Change folder sort order in a large folder: the currently loaded list should reorder without a long full reload.

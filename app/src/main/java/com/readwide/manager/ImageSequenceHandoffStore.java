@@ -3,6 +3,8 @@ package com.readwide.manager;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.readwide.manager.archive.ArchiveSourceSnapshot;
+
 import java.io.Closeable;
 import java.io.File;
 import java.util.ArrayList;
@@ -26,6 +28,7 @@ final class ImageSequenceHandoffStore {
         final ArrayList<String> entryPaths;
         @Nullable final char[] archivePassword;
         @NonNull final Set<String> verifiedSensitivePaths;
+        @Nullable final ArchiveSourceSnapshot sourceSnapshot;
         @Nullable final String archivePathSnapshot;
         final long archiveLengthSnapshot;
         final long archiveLastModifiedSnapshot;
@@ -71,6 +74,22 @@ final class ImageSequenceHandoffStore {
                  @Nullable String archivePathSnapshot,
                  long archiveLengthSnapshot,
                  long archiveLastModifiedSnapshot) {
+            this(paths, displayNames, entryPaths, archivePassword, preparedResource,
+                    verifiedSensitivePaths, archivePathSnapshot, archiveLengthSnapshot,
+                    archiveLastModifiedSnapshot, null);
+        }
+
+        Sequence(@NonNull ArrayList<String> paths,
+                 @Nullable ArrayList<String> displayNames,
+                 @Nullable ArrayList<String> entryPaths,
+                 @Nullable char[] archivePassword,
+                 @Nullable Closeable preparedResource,
+                 @Nullable Set<String> verifiedSensitivePaths,
+                 @Nullable String archivePathSnapshot,
+                 long archiveLengthSnapshot,
+                 long archiveLastModifiedSnapshot,
+                 @Nullable ArchiveSourceSnapshot sourceSnapshot) {
+            this.sourceSnapshot = sourceSnapshot;
             this.paths = paths;
             this.displayNames = displayNames != null ? displayNames : new ArrayList<>();
             this.entryPaths = entryPaths != null ? entryPaths : new ArrayList<>();
@@ -90,7 +109,7 @@ final class ImageSequenceHandoffStore {
          * archive version that is no longer current.
          */
         boolean matchesSourceArchiveSnapshot(@Nullable String sourceArchivePath) {
-            if (archivePathSnapshot == null) return true;
+            if (archivePathSnapshot == null) return sourceSnapshot == null;
             if (sourceArchivePath == null || sourceArchivePath.trim().isEmpty()
                     || archiveLengthSnapshot < 0L || archiveLastModifiedSnapshot < 0L) {
                 return false;
@@ -101,7 +120,8 @@ final class ImageSequenceHandoffStore {
                     source,
                     archivePathSnapshot,
                     archiveLengthSnapshot,
-                    archiveLastModifiedSnapshot);
+                    archiveLastModifiedSnapshot)
+                    && (sourceSnapshot == null || sourceSnapshot.matches(source));
         }
 
         @Nullable

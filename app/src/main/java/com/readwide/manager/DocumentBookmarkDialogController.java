@@ -335,7 +335,8 @@ final class DocumentBookmarkDialogController {
         box.addView(makeDialogTitle(getString(R.string.delete_bookmark)));
 
         TextView message = new TextView(activity);
-        message.setText(bookmark.getFileName() + "\n\n" + bookmark.getDisplayText());
+        message.setText(getString(R.string.dialog_header_body_format,
+                bookmark.getFileName(), bookmark.getDisplayText()));
         message.setTextColor(dialogSub());
         message.setTextSize(14f);
         message.setLineSpacing(0f, 1.15f);
@@ -360,9 +361,10 @@ final class DocumentBookmarkDialogController {
 
         TextView message = new TextView(activity);
         String displayName = folderName != null && !folderName.trim().isEmpty() ? folderName.trim() : getString(R.string.bookmark);
-        message.setText(displayName + "\n\n"
-                + getString(R.string.delete_bookmark_folder_message, bookmarkCount)
-                + "\n" + getString(R.string.delete_bookmark_folder_note));
+        message.setText(activity.getString(R.string.dialog_header_two_body_format,
+                displayName,
+                getString(R.string.delete_bookmark_folder_message, bookmarkCount),
+                getString(R.string.delete_bookmark_folder_note)));
         message.setTextColor(dialogSub());
         message.setTextSize(14f);
         message.setLineSpacing(0f, 1.15f);

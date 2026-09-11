@@ -44,6 +44,9 @@ final class RarPpmdVarHDecoder {
         PpmdDataException(String message) {
             super(message);
         }
+        PpmdDataException(java.io.IOException cause) {
+            super("PPMd packed input failed", cause);
+        }
     }
 
     // ---- derived lookup tables (built once per instance) ----
@@ -89,6 +92,7 @@ final class RarPpmdVarHDecoder {
     private int rdCode;
     private int rdRange;
     private byte[] input;
+    private java.io.InputStream streamInput;
     private int inputPos;
     private int inputLimit;
     private int eofPad;
@@ -493,6 +497,7 @@ final class RarPpmdVarHDecoder {
 
     /** Attaches the compressed payload and primes the range decoder. */
     void rangeInit(byte[] payload, int offset, int length) {
+        this.streamInput = null;
         this.input = payload;
         this.inputPos = offset;
         this.inputLimit = offset + length;
@@ -505,7 +510,28 @@ final class RarPpmdVarHDecoder {
         }
     }
 
+    /** Stream input is owned and bounded by the archive extractor. */
+    void rangeInit(java.io.InputStream payload) {
+        this.input = null;
+        this.streamInput = payload;
+        this.inputPos = 0;
+        this.inputLimit = 0;
+        this.eofPad = 0;
+        rdLow = 0;
+        rdRange = 0xFFFFFFFF;
+        rdCode = 0;
+        for (int i = 0; i < 4; i++) rdCode = (rdCode << 8) | nextByte();
+    }
+
     private int nextByte() {
+        if (streamInput != null) {
+            try {
+                int value = streamInput.read();
+                if (value >= 0) return value;
+            } catch (java.io.IOException failure) {
+                throw new PpmdDataException(failure);
+            }
+        }
         if (inputPos < inputLimit) {
             return input[inputPos++] & 0xFF;
         }

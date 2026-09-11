@@ -105,4 +105,51 @@ public class RarVolumeNameResolverTest {
     private File touch(String name) throws Exception {
         return tempFolder.newFile(name);
     }
+
+    @Test
+    public void oldStyleResolvesMixedCaseBaseAndCompanions() throws Exception {
+        File first = touch("Book.RAR");
+        File r00 = touch("book.R00");
+        File r01 = touch("BOOK.r01");
+        RarVolumeNameResolver.Result result = RarVolumeNameResolver.resolve(r01);
+        assertEquals(first, result.firstVolume());
+        assertEquals(java.util.Arrays.asList(first, r00, r01), result.volumes());
+        assertFalse(result.hasKnownGap());
+    }
+
+    @Test
+    public void volumeDiscoveryUsesOneDirectorySnapshot() {
+        final int[] scans = {0};
+        File parent = new File("virtual-volume-parent") {
+            @Override public File[] listFiles() {
+                scans[0]++;
+                return new File[0];
+            }
+        };
+        File selected = new File(parent, "comic.rar") {
+            @Override public File getParentFile() { return parent; }
+        };
+        RarVolumeNameResolver.resolve(selected);
+        assertEquals(1, scans[0]);
+    }
+
+    @Test
+    public void existingBaseRarIsNotRedirectedToAnotherPartSet() throws Exception {
+        File selected = touch("shared.rar");
+        touch("shared.part1.rar");
+        touch("shared.part2.rar");
+        RarVolumeNameResolver.Result result = RarVolumeNameResolver.resolve(selected);
+        assertEquals(selected, result.firstVolume());
+        assertEquals(java.util.Collections.singletonList(selected), result.volumes());
+    }
+
+    @Test
+    public void oldStyleSetTakesPriorityForItsSelectedBase() throws Exception {
+        File selected = touch("shared.rar");
+        File next = touch("shared.r00");
+        touch("shared.part1.rar");
+        touch("shared.part2.rar");
+        assertEquals(java.util.Arrays.asList(selected, next),
+                RarVolumeNameResolver.resolve(selected).volumes());
+    }
 }

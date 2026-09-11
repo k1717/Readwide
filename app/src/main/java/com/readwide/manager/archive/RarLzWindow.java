@@ -5,10 +5,12 @@ import java.io.IOException;
 import java.io.OutputStream;
 
 final class RarLzWindow {
-    private final byte[] window;
+    private byte[] window;
     private final RarDecodedOutput out;
     private int position;
     private long written;
+    private int retained;
+    private int maximumHistoryCapacity;
 
     RarLzWindow(int size, OutputStream out) {
         this(size, RarOutputStreamDecodedOutput.wrapOrMemory(out));
@@ -23,11 +25,18 @@ final class RarLzWindow {
     }
 
     RarLzWindow(byte[] sharedWindow, int initialPosition, RarDecodedOutput out) {
+        this(sharedWindow, initialPosition, sharedWindow == null ? 0 : sharedWindow.length, out);
+    }
+
+    RarLzWindow(byte[] sharedWindow, int initialPosition, int retained, RarDecodedOutput out) {
         if (sharedWindow == null || sharedWindow.length <= 0
                 || (sharedWindow.length & (sharedWindow.length - 1)) != 0) {
             throw new IllegalArgumentException("RAR LZ window size must be a power of two");
         }
         this.window = sharedWindow;
+        maximumHistoryCapacity = sharedWindow.length;
+        if (retained < 0 || retained > sharedWindow.length) throw new IllegalArgumentException("RAR history length");
+        this.retained = retained;
         this.position = initialPosition & (sharedWindow.length - 1);
         this.out = out != null ? out : new RarOutputStreamDecodedOutput(new ByteArrayOutputStream());
     }
@@ -40,11 +49,16 @@ final class RarLzWindow {
     }
 
     void writeLiteral(int value) throws IOException {
+        if (written == Long.MAX_VALUE) throw new IOException("RAR output counter overflow");
+        if (retained == window.length && window.length < maximumHistoryCapacity) {
+            ensureHistoryCapacity(Math.min(maximumHistoryCapacity, window.length * 2));
+        }
         byte b = (byte) value;
         window[position] = b;
         position = (position + 1) & (window.length - 1);
         out.writeDecodedByte(b & 0xff);
         written++;
+        if (retained < window.length) retained++;
     }
 
     void copyMatch(int distance, int length) throws IOException {
@@ -64,5 +78,30 @@ final class RarLzWindow {
 
     int position() {
         return position;
+    }
+
+    int size() {
+        return window.length;
+    }
+
+    int retained() { return retained; }
+    byte[] bytes() { return window; }
+
+    void retainUpTo(int size) {
+        validateWindowSize(size);
+        maximumHistoryCapacity = Math.max(window.length, size);
+    }
+
+    /** Preserve chronological history across ring wrap; never allocate from declared file size. */
+    void ensureHistoryCapacity(int size) {
+        validateWindowSize(size);
+        if (size <= window.length) return;
+        byte[] grown = new byte[size];
+        int first = (position - retained) & (window.length - 1);
+        int tail = Math.min(retained, window.length - first);
+        System.arraycopy(window, first, grown, 0, tail);
+        System.arraycopy(window, 0, grown, tail, retained - tail);
+        window = grown;
+        position = retained;
     }
 }

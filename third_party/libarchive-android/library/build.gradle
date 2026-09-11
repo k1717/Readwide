@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.library'
+}
+
+def readwideExternalBuildDir = System.getenv('READWIDE_APP_BUILD_DIR')
+def nativeStagingDir = readwideExternalBuildDir == null || readwideExternalBuildDir.trim().isEmpty()
+        ? layout.buildDirectory.dir('.cxx').get().asFile
+        : file("${readwideExternalBuildDir}/native-staging/libarchiveAndroid")
+
+android {
+    namespace 'me.zhanghai.android.libarchive'
+    compileSdk 35
+    ndkVersion '29.0.14206865'
+
+    defaultConfig {
+        minSdk 21
+        consumerProguardFiles 'proguard-rules.pro'
+        ndk {
+            abiFilters 'armeabi-v7a', 'arm64-v8a'
+        }
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=none'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('CMakeLists.txt')
+            version '3.22.1'
+            buildStagingDirectory nativeStagingDir
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.annotation:annotation:1.9.1'
+}

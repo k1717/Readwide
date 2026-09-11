@@ -205,7 +205,8 @@ public class BookmarkListActivity extends AppCompatActivity
         box.setPadding(dpToPx(22), dpToPx(12), dpToPx(22), dpToPx(10));
 
         TextView message = new TextView(this);
-        message.setText(bookmark.getFileName() + "\n\n" + bookmark.getDisplayText());
+        message.setText(getString(R.string.dialog_header_body_format,
+                bookmark.getFileName(), bookmark.getDisplayText()));
         message.setTextColor(fg);
         message.setTextSize(14f);
         message.setLineSpacing(0f, 1.15f);
@@ -274,9 +275,10 @@ public class BookmarkListActivity extends AppCompatActivity
         String displayName = folderName != null && !folderName.trim().isEmpty()
                 ? folderName.trim()
                 : getString(R.string.bookmark);
-        message.setText(displayName + "\n\n"
-                + getString(R.string.delete_bookmark_folder_message, bookmarkCount)
-                + "\n" + getString(R.string.delete_bookmark_folder_note));
+        message.setText(getString(R.string.dialog_header_two_body_format,
+                displayName,
+                getString(R.string.delete_bookmark_folder_message, bookmarkCount),
+                getString(R.string.delete_bookmark_folder_note)));
         message.setTextColor(fg);
         message.setTextSize(14f);
         message.setLineSpacing(0f, 1.15f);
@@ -587,7 +589,8 @@ public class BookmarkListActivity extends AppCompatActivity
         box.setPadding(dpToPx(22), dpToPx(12), dpToPx(22), dpToPx(10));
 
         TextView message = new TextView(this);
-        message.setText(bookmark.getFileName() + "\n\n" + bookmark.getDisplayText());
+        message.setText(getString(R.string.dialog_header_body_format,
+                bookmark.getFileName(), bookmark.getDisplayText()));
         message.setTextColor(sub);
         message.setTextSize(13f);
         message.setLineSpacing(0f, 1.15f);

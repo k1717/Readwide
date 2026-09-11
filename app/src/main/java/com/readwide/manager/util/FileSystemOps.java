@@ -8,6 +8,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Low-level file-system operations shared by main-screen file actions.
@@ -40,7 +41,9 @@ public final class FileSystemOps {
      * @return true if the entry now has the requested name
      */
     public static boolean renameInPlace(@NonNull File source, @NonNull String newName) {
-        if (newName.isEmpty()) return false;
+        if (!source.exists() || newName.isEmpty() || newName.equals(".") || newName.equals("..")
+                || newName.indexOf('/') >= 0 || newName.indexOf('\\') >= 0
+                || newName.indexOf('\0') >= 0) return false;
         File parent = source.getParentFile();
         if (parent == null) return false;
         File target = new File(parent, newName);
@@ -51,6 +54,19 @@ public final class FileSystemOps {
         }
 
         boolean caseOnlyChange = source.getName().equalsIgnoreCase(newName);
+        if (target.exists()) {
+            // Canonical paths alone need not preserve case on every Android
+            // mount. A separately listed target is a collision, even when its
+            // name differs only by case (or it is a hard link to the source).
+            String[] entries = parent.list();
+            if (entries == null) return false;
+            boolean sourceListed = false;
+            for (String entry : entries) {
+                if (entry.equals(newName)) return false;
+                if (entry.equals(source.getName())) sourceListed = true;
+            }
+            if (!caseOnlyChange || !sourceListed) return false;
+        }
         if (!caseOnlyChange) {
             // Different name (not just case): a plain rename is correct. Refuse to
             // clobber an unrelated existing entry.
@@ -74,13 +90,13 @@ public final class FileSystemOps {
         if (!source.renameTo(temp)) {
             return false;
         }
-        if (temp.renameTo(target)) {
+        if (!target.exists() && temp.renameTo(target)) {
             return true;
         }
         // Second hop failed: restore the original name so we don't leave the
         // entry stranded under the temporary name.
         //noinspection ResultOfMethodCallIgnored
-        temp.renameTo(source);
+        if (!source.exists()) temp.renameTo(source);
         return false;
     }
 
@@ -114,10 +130,8 @@ public final class FileSystemOps {
                                @Nullable FileOperationProgress progress,
                                boolean assignTotalBytes,
                                @Nullable FileTreeProgressTracker tracker) {
-        if (destination.exists()) {
-            if (!overwrite || sameCanonicalFile(source, destination)) return false;
-            if (!delete(destination)) return false;
-        }
+        if (!canTransfer(source, destination, overwrite)
+                || (progress != null && !progress.checkpoint())) return false;
 
         long totalBytes = measureBytes(source);
         if (progress != null) {
@@ -129,14 +143,18 @@ public final class FileSystemOps {
         }
 
         try {
-            if (progress == null && source.renameTo(destination)) {
+            if (progress == null && !destination.exists() && source.renameTo(destination)) {
                 return true;
             }
         } catch (SecurityException ignored) {
         }
 
-        boolean copied = copy(source, destination, false, progress, totalBytes, false, tracker);
+        boolean copied = copy(source, destination, overwrite, progress, totalBytes, false, tracker);
         if (!copied) return false;
+
+        // The replacement is committed. A late cancellation keeps the source
+        // too; never remove it after a cancelled or incomplete staging copy.
+        if (progress != null && !progress.checkpoint()) return false;
 
         boolean deleted = delete(source);
         if (deleted && progress != null && assignTotalBytes) progress.markComplete();
@@ -192,11 +210,8 @@ public final class FileSystemOps {
                                 long knownTotalBytes,
                                 boolean assignTotalBytes,
                                 @Nullable FileTreeProgressTracker tracker) {
-        if (!source.exists()) return false;
-        if (destination.exists()) {
-            if (!overwrite || sameCanonicalFile(source, destination)) return false;
-            if (!delete(destination)) return false;
-        }
+        if (!canTransfer(source, destination, overwrite)
+                || (progress != null && !progress.checkpoint())) return false;
         if (progress != null) {
             if (assignTotalBytes) {
                 progress.setTotalBytes(knownTotalBytes >= 0L ? knownTotalBytes : measureBytes(source));
@@ -204,13 +219,69 @@ public final class FileSystemOps {
             }
             if (!progress.checkpoint()) return false;
         }
-        if (source.isDirectory()) {
-            return copyDirectoryRecursively(source, destination, progress, tracker);
+        return stageAndCommit(source, destination, overwrite, progress, tracker);
+    }
+
+    /** Reject either containment direction before creating or replacing anything. */
+    static boolean canTransfer(@NonNull File source, @NonNull File destination, boolean overwrite) {
+        try {
+            if (!source.exists() || (!source.isFile() && !source.isDirectory())) return false;
+            File src = source.getCanonicalFile();
+            File dst = destination.getCanonicalFile();
+            if (isSameOrDescendant(src, dst) || isSameOrDescendant(dst, src)) return false;
+            File parent = destination.getAbsoluteFile().getParentFile();
+            return parent != null && parent.isDirectory() && (!destination.exists() || overwrite);
+        } catch (IOException | SecurityException ignored) {
+            return false; // Do not use an unresolved path for an overwrite.
         }
-        if (source.isFile()) {
-            return copyRegularFile(source, destination, progress, tracker);
+    }
+
+    private static boolean stageAndCommit(File source, File destination, boolean overwrite,
+                                          FileOperationProgress progress, FileTreeProgressTracker tracker) {
+        File parent = destination.getAbsoluteFile().getParentFile();
+        File transaction = new File(parent, ".rwtransfer_" + UUID.randomUUID());
+        File staged = new File(transaction, "replacement");
+        File previous = new File(transaction, "previous");
+        boolean ownsTransaction = false;
+        boolean backedUp = false;
+        boolean committed = false;
+        try {
+            if (progress != null && !progress.checkpoint()) return false;
+            if (!transaction.mkdir()) return false;
+            ownsTransaction = true;
+            boolean copied = source.isDirectory()
+                    ? copyDirectoryRecursively(source, staged, progress, tracker)
+                    : copyRegularFile(source, staged, progress, tracker);
+            if (!copied || (progress != null && !progress.checkpoint())) return false;
+            if (!canTransfer(source, destination, overwrite)) return false;
+
+            // Only rename after all streams have closed and staging succeeded.
+            // Cancellation is intentionally not observed between these renames:
+            // complete the short commit/rollback sequence first.
+            if (destination.exists()) {
+                if (!destination.renameTo(previous)) return false;
+                backedUp = true;
+            }
+            if (destination.exists() || !staged.renameTo(destination)) return false;
+            committed = true;
+            return true;
+        } catch (SecurityException ignored) {
+            return false;
+        } finally {
+            if (ownsTransaction) {
+                if (backedUp && !committed) {
+                    // If rollback itself is denied, preserve previous in the
+                    // transaction directory for recovery; never clean it away.
+                    try {
+                        if (!destination.exists()) previous.renameTo(destination);
+                    } catch (SecurityException ignored) { }
+                }
+                delete(staged);
+                if (committed) delete(previous);
+                // Nonrecursive: a failed rollback/cleanup retains the backup.
+                try { transaction.delete(); } catch (SecurityException ignored) { }
+            }
         }
-        return false;
     }
 
     public static boolean delete(@NonNull File target) {
@@ -410,19 +481,25 @@ public final class FileSystemOps {
         }
         byte[] buffer = new byte[COPY_BUFFER_BYTES];
         boolean copied = false;
+        boolean cancelled = false;
+        long expectedBytes = source.length();
+        long writtenBytes = 0L;
         try (FileInputStream in = new FileInputStream(source);
              FileOutputStream out = new FileOutputStream(destination)) {
             int read;
             while ((read = in.read(buffer)) != -1) {
                 if (progress != null && !progress.checkpoint()) {
-                    copied = false;
+                    cancelled = true;
                     break;
                 }
                 out.write(buffer, 0, read);
+                writtenBytes += read;
                 if (progress != null) progress.addDoneBytes(read);
             }
             out.flush();
-            copied = destination.length() == source.length();
+            copied = !cancelled && (progress == null || progress.checkpoint())
+                    && writtenBytes == expectedBytes && destination.length() == expectedBytes
+                    && source.length() == expectedBytes;
         } catch (IOException | SecurityException ignored) {
             copied = false;
         }

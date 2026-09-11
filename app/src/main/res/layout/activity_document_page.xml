@@ -259,6 +259,14 @@
                         android:drawableTop="@drawable/ic_bottom_bookmark"
                         android:text="@string/bookmark" />
                     <TextView
+                        android:id="@+id/btn_annotations"
+                        style="@style/ReaderBottomButton"
+                        android:layout_width="62dp"
+                        android:layout_weight="0"
+                        android:drawableTop="@drawable/ic_bottom_notes"
+                        android:text="@string/annotation_note"
+                        android:visibility="gone" />
+                    <TextView
                         android:id="@+id/btn_document_tts"
                         style="@style/ReaderBottomButton"
                         android:layout_width="62dp"

@@ -16,6 +16,21 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 public class EpubSmilParserTest {
+    @Test
+    public void opfResolvedSmilAndCuePathsPreserveLiteralPercentEscapes() throws Exception {
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("OPS/text%20.xhtml", utf8("<html><body id='a'/></html>"));
+        entries.put("OPS/audio%20.mp3", new byte[] {1,2,3});
+        entries.put("OPS/overlay%20.smil", utf8(smilWithPar(
+                "text%2520.xhtml#a", "audio%2520.mp3", "0", "1")));
+        File epub = createZip(entries);
+        try (ZipFile zip = new ZipFile(epub)) {
+            EpubSmilParser.Timeline timeline = EpubSmilParser.parseResolvedPath(zip, "OPS/overlay%20.smil");
+            assertEquals(1, timeline.cues.size());
+            assertEquals("OPS/text%20.xhtml", timeline.cues.get(0).textPath);
+            assertEquals("OPS/audio%20.mp3", timeline.cues.get(0).audioPath);
+        } finally { epub.delete(); }
+    }
 
     @Test
     public void parsesSampleClockForms() {

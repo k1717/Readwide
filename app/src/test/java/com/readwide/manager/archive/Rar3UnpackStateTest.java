@@ -6,6 +6,24 @@ import org.junit.Test;
 
 public class Rar3UnpackStateTest {
     @Test
+    public void newTableResetsLowDistanceButPreservesMatchHistory() {
+        Rar3UnpackState state = new Rar3UnpackState();
+        state.rememberNewDistanceMatch(10, 3);
+        state.rememberNewDistanceMatch(20, 4);
+        state.rememberLowDistance(7);
+        state.startLowDistanceRepeat(15);
+
+        state.resetLowDistanceForTable();
+
+        assertEquals(20, state.lastDistance());
+        assertEquals(4, state.lastLength());
+        assertEquals(20, state.oldDistance(0));
+        assertEquals(10, state.oldDistance(1));
+        assertEquals(0, state.previousLowDistance());
+        assertEquals(0, state.lowDistanceRepeatCount());
+    }
+
+    @Test
     public void rememberNewDistanceMatch_tracksLastAndMoveToFrontDistances() {
         Rar3UnpackState state = new Rar3UnpackState();
 

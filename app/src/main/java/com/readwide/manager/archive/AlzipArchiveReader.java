@@ -5,11 +5,9 @@ import androidx.annotation.Nullable;
 
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 
-import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -69,6 +67,11 @@ final class AlzipArchiveReader {
     private static final int SEGMENT_HEADER_BYTES = 8;   // sig u32 + version u16 + segment id u16
     private static final int SEGMENT_TRAILER_BYTES = 16; // CLZ\1 + 8 bytes + CLZ\2 or CLZ\3
     private static final int MAX_SPLIT_SEGMENTS = 1000;
+    // Admission limits for metadata retention, never archive or extracted-file size limits.
+    private static final int MAX_INDEX_ARCHIVES = 3;
+    private static final int MAX_INDEX_ENTRIES = 20000;
+    private static final long MAX_INDEX_NAME_CHARS = 1024 * 1024;
+    private static final Map<String, Index> INDEXES = new LinkedHashMap<>(4, 0.75f, true);
 
     private static final Pattern CONTINUATION_NAME =
             Pattern.compile("^(.*)\\.a(\\d{2,3})$", Pattern.CASE_INSENSITIVE);
@@ -89,15 +92,13 @@ final class AlzipArchiveReader {
             requirePasswordThenFailUnsupported(archive, password);
             throw unsupported(archive);
         }
-        try (SplitVolumeInput in = openAlzVolumes(archive)) {
-            List<AlzEntry> entries = readAlzEntries(archive, in);
-            if (entries.isEmpty()) throw unsupported(archive);
-            ArrayList<ArchiveSupport.EntryInfo> result = new ArrayList<>();
-            for (AlzEntry entry : entries) {
-                result.add(new ArchiveSupport.EntryInfo(entry.path, entry.directory, entry.uncompressedSize, entry.timeMillis));
-            }
-            return withSyntheticDirectories(result);
+        List<AlzEntry> entries = indexFor(archive).entries;
+        if (entries.isEmpty()) throw unsupported(archive);
+        ArrayList<ArchiveSupport.EntryInfo> result = new ArrayList<>();
+        for (AlzEntry entry : entries) {
+            result.add(new ArchiveSupport.EntryInfo(entry.path, entry.directory, entry.uncompressedSize, entry.timeMillis));
         }
+        return withSyntheticDirectories(result);
     }
 
     static boolean extractArchiveIntoDirectory(@NonNull File archive,
@@ -155,28 +156,141 @@ final class AlzipArchiveReader {
         }
         String normalized = sanitizeEntryPath(entryPath);
         if (normalized == null || normalized.endsWith("/")) return false;
+        Index index = indexFor(archive);
+        AlzEntry entry = index.files.get(normalized);
+        if (entry == null) return false;
         try (SplitVolumeInput in = openAlzVolumes(archive)) {
-            for (AlzEntry entry : readAlzEntries(archive, in)) {
-                if (entry.directory || !normalized.equals(entry.path)) continue;
+            index.requireUnchanged(archive);
+            try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
                 extractEntryPayload(in, entry, outFile, password, null);
-                return true;
+                index.requireUnchanged(archive);
+                guard.commit();
             }
         }
-        return false;
+        return true;
     }
 
     static boolean requiresPasswordForExtraction(@NonNull File archive) {
         Family family = detectFamily(archive);
         if (family == Family.UNKNOWN) return false;
         if (family == Family.EGG) return true;
-        try (SplitVolumeInput in = openAlzVolumes(archive)) {
-            for (AlzEntry entry : readAlzEntries(archive, in)) {
+        try {
+            for (AlzEntry entry : indexFor(archive).entries) {
                 if (!entry.directory && entry.encrypted) return true;
             }
         } catch (IOException ignored) {
             return true;
         }
         return false;
+    }
+
+    /** Immutable metadata only: no passwords, decoded bytes, or live file handles. */
+    static final class Index {
+        private final List<VolumeStamp> volumes;
+        private final List<AlzEntry> entries;
+        private final Map<String, AlzEntry> files;
+        private final boolean cacheable;
+
+        private Index(List<VolumeStamp> volumes, List<AlzEntry> entries) {
+            this.volumes = Collections.unmodifiableList(new ArrayList<>(volumes));
+            this.entries = Collections.unmodifiableList(new ArrayList<>(entries));
+            Map<String, AlzEntry> files = new LinkedHashMap<>();
+            long nameChars = 0;
+            for (AlzEntry entry : entries) {
+                nameChars += entry.path.length();
+                // Preserve the previous single-entry scanner's first-file-wins behavior.
+                if (!entry.directory && !files.containsKey(entry.path)) files.put(entry.path, entry);
+            }
+            this.files = Collections.unmodifiableMap(files);
+            cacheable = entries.size() <= MAX_INDEX_ENTRIES && nameChars <= MAX_INDEX_NAME_CHARS;
+        }
+
+        private boolean matches(List<VolumeStamp> current) {
+            if (volumes.size() != current.size()) return false;
+            for (int i = 0; i < volumes.size(); i++) {
+                if (!volumes.get(i).matches(current.get(i))) return false;
+            }
+            return true;
+        }
+
+        private void requireUnchanged(File archive) throws IOException {
+            indexCheckpoint();
+            if (!matches(snapshotVolumes(archive))) throw new IOException("ALZ volumes changed during indexed access");
+        }
+    }
+
+    private static final class VolumeStamp {
+        final String path;
+        final long length, modified;
+
+        VolumeStamp(File file) throws IOException {
+            if (!file.isFile()) throw new IOException("ALZ volume is missing or unreadable");
+            path = file.getCanonicalPath();
+            length = file.length();
+            modified = file.lastModified();
+        }
+
+        boolean matches(VolumeStamp other) {
+            return path.equals(other.path) && length == other.length && modified == other.modified;
+        }
+    }
+
+    private static List<VolumeStamp> snapshotVolumes(File archive) throws IOException {
+        indexCheckpoint();
+        List<VolumeStamp> result = new ArrayList<>();
+        result.add(new VolumeStamp(archive));
+        for (File part : collectContinuationSegments(archive)) {
+            indexCheckpoint();
+            result.add(new VolumeStamp(part));
+        }
+        return result;
+    }
+
+    static Index indexFor(File archive) throws IOException {
+        List<VolumeStamp> snapshot = snapshotVolumes(archive);
+        String path = snapshot.get(0).path;
+        synchronized (INDEXES) {
+            Index cached = INDEXES.get(path);
+            if (cached != null && cached.matches(snapshot)) return cached;
+            INDEXES.remove(path);
+        }
+        Index built;
+        try (SplitVolumeInput in = openAlzVolumes(archive)) {
+            built = new Index(snapshot, readAlzEntries(archive, in));
+        }
+        built.requireUnchanged(archive);
+        synchronized (INDEXES) {
+            Index concurrent = INDEXES.get(path);
+            if (concurrent != null && concurrent.matches(snapshot)) return concurrent;
+            if (built.cacheable) {
+                INDEXES.put(path, built);
+                while (INDEXES.size() > MAX_INDEX_ARCHIVES) {
+                    INDEXES.remove(INDEXES.keySet().iterator().next());
+                }
+            }
+        }
+        return built;
+    }
+
+    static void releaseArchiveIndex(File archive) {
+        try {
+            String path = archive.getCanonicalPath();
+            synchronized (INDEXES) {
+                // Also release when a viewer was opened through a continuation filename.
+                java.util.Iterator<Index> iterator = INDEXES.values().iterator();
+                while (iterator.hasNext()) {
+                    for (VolumeStamp volume : iterator.next().volumes) {
+                        if (path.equals(volume.path)) { iterator.remove(); break; }
+                    }
+                }
+            }
+        } catch (IOException | SecurityException ignored) { }
+    }
+
+    static void clearIndexes() { synchronized (INDEXES) { INDEXES.clear(); } }
+
+    private static void indexCheckpoint() throws IOException {
+        if (Thread.currentThread().isInterrupted()) throw new IOException("ALZ operation cancelled");
     }
 
     @NonNull
@@ -291,6 +405,7 @@ final class AlzipArchiveReader {
         in.seek(0);
         long len = in.length();
         while (in.getFilePointer() + 4 <= len) {
+            indexCheckpoint();
             int signature = readIntLE(in);
             if (signature == SIG_ALZ_FILE_HEADER) {
                 skipFully(in, 4);
@@ -308,8 +423,12 @@ final class AlzipArchiveReader {
         // unreliable for one-syllable names, so the long names in the archive
         // decide the code page for everyone.
         ArchiveFilenameDecoder.NameCorpus corpus = new ArchiveFilenameDecoder.NameCorpus();
-        for (PendingAlzEntry pending : pendings) corpus.observe(pending.nameBytes);
         for (PendingAlzEntry pending : pendings) {
+            indexCheckpoint();
+            corpus.observe(pending.nameBytes);
+        }
+        for (PendingAlzEntry pending : pendings) {
+            indexCheckpoint();
             String path = sanitizeEntryPath(ArchiveFilenameDecoder.decodeLegacyName(pending.nameBytes, corpus));
             if (path == null) continue;
             boolean directory = (pending.fileAttribute & ALZ_FILEATTR_DIRECTORY) != 0 || path.endsWith("/");
@@ -408,7 +527,7 @@ final class AlzipArchiveReader {
 
         boolean ok = false;
         try (InputStream decoded = openDecodedPayloadStream(in, entry, password);
-             OutputStream out = new BufferedOutputStream(new FileOutputStream(outFile))) {
+             OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             CRC32 crc = new CRC32();
             copyDecodedPayload(decoded, out, crc, progress);
             verifyCrc(entry, crc.getValue());

@@ -92,7 +92,7 @@ final class PdfPlainTextExtractor {
     /**
      * One page's text with a glyph rectangle per character, for the read-aloud
      * sentence highlight. {@code charRectsPts} is index-aligned with
-     * {@code text} (line separators get the previous glyph's box); rectangles
+     * {@code text} (inferred word/line separators have null boxes); rectangles
      * are in PDF point space with a top-left origin, and {@code wPts}/{@code
      * hPts} are the (rotation-adjusted) page dimensions to normalize against -
      * the same conventions the search-highlight overlay consumes.
@@ -115,13 +115,14 @@ final class PdfPlainTextExtractor {
     /**
      * Extracts one page's text together with per-character glyph boxes. Text
      * assembly mirrors {@link PageStripper} exactly (append the run string,
-     * '\n' on line separators) so the result can be verified against the
+     * space on word separators and '\n' on line separators) so the result can be verified against the
      * read-aloud buffer's page slice; callers MUST do that verification and
      * skip highlighting when it fails, because a mismatch means the character
      * offsets don't line up. Returns null when the page can't be extracted or
      * the glyph list doesn't align 1:1 with the text.
      */
     static PageGlyphs extractPageGlyphs(@NonNull Context context, @NonNull File pdf, int pageIndex) {
+        if (pageIndex < 0) return null;
         try {
             PDFBoxResourceLoader.init(context.getApplicationContext());
         } catch (Throwable ignored) {
@@ -129,13 +130,14 @@ final class PdfPlainTextExtractor {
         PDDocument document = null;
         try {
             document = PDDocument.load(pdf);
+            if (pageIndex >= document.getNumberOfPages()) return null;
             GlyphStripper stripper = new GlyphStripper();
             stripper.setSortByPosition(true);
             stripper.setStartPage(pageIndex + 1);
             stripper.setEndPage(pageIndex + 1);
             stripper.getText(document);
             String text = stripper.builder != null ? stripper.builder.toString() : "";
-            if (stripper.rects == null || stripper.rects.size() != text.length()) {
+            if (!stripper.mappingValid || stripper.rects == null || stripper.rects.size() != text.length()) {
                 // Chunk string and TextPosition list disagreed somewhere; offsets
                 // would be unreliable, so report "can't map" instead of guessing.
                 return null;
@@ -164,6 +166,7 @@ final class PdfPlainTextExtractor {
     private static final class GlyphStripper extends PDFTextStripper {
         StringBuilder builder;
         java.util.List<android.graphics.RectF> rects;
+        boolean mappingValid;
         float pageWpts;
         float pageHpts;
 
@@ -175,6 +178,7 @@ final class PdfPlainTextExtractor {
         protected void startPage(PDPage page) throws IOException {
             builder = new StringBuilder();
             rects = new java.util.ArrayList<>();
+            mappingValid = true;
             com.tom_roush.pdfbox.pdmodel.common.PDRectangle box = page.getCropBox();
             int rotation = (page.getRotation() % 360 + 360) % 360;
             if (rotation == 90 || rotation == 270) {
@@ -192,43 +196,34 @@ final class PdfPlainTextExtractor {
                                    java.util.List<com.tom_roush.pdfbox.text.TextPosition> textPositions) {
             if (builder == null || string == null) return;
             builder.append(string);
-            if (rects == null) return;
-            // Build the per-character boxes for this run. The run string is
-            // normally the concatenation of the positions' unicode; when the
-            // lengths disagree (rare normalization cases) pad/trim against the
-            // string so rects stays index-aligned - the caller's whole-text
-            // equality check still guards correctness.
-            int need = string.length();
-            int added = 0;
-            android.graphics.RectF last = null;
-            if (textPositions != null) {
-                for (com.tom_roush.pdfbox.text.TextPosition tp : textPositions) {
-                    String u = tp.getUnicode();
-                    if (u == null || u.isEmpty()) continue;
-                    android.graphics.RectF box = glyphBox(tp);
-                    last = box;
-                    for (int i = 0; i < u.length() && added < need; i++) {
-                        rects.add(box);
-                        added++;
-                    }
-                    if (added >= need) break;
-                }
+            if (!mappingValid || rects == null) return;
+            // PDFBox may normalize/reorder a run independently of its glyph list.
+            // Padding, trimming or checking only lengths would conceal wrong offsets.
+            if (!PdfGlyphText.matchesRun(string, textPositions,
+                    com.tom_roush.pdfbox.text.TextPosition::getUnicode)) {
+                mappingValid = false;
+                rects.clear(); // Do not retain unusable geometry for the rest of this page.
+                return;
             }
-            while (added < need) {
-                rects.add(last != null ? last : new android.graphics.RectF());
-                added++;
+            for (com.tom_roush.pdfbox.text.TextPosition tp : textPositions) {
+                String u = tp.getUnicode();
+                if (u == null || u.isEmpty()) continue;
+                android.graphics.RectF box = glyphBox(tp);
+                for (int i = 0; i < u.length(); i++) rects.add(box);
             }
         }
 
         @Override
-        protected void writeLineSeparator() throws IOException {
-            if (builder != null) {
-                builder.append('\n');
-                if (rects != null) {
-                    rects.add(!rects.isEmpty()
-                            ? rects.get(rects.size() - 1) : new android.graphics.RectF());
-                }
-            }
+        protected void writeWordSeparator() { appendSeparator(" "); }
+
+        @Override
+        protected void writeLineSeparator() { appendSeparator("\n"); }
+
+        private void appendSeparator(String separator) {
+            if (builder == null) return;
+            if (mappingValid && rects != null) {
+                PdfSearchText.appendSeparator(builder, rects, separator);
+            } else builder.append(separator);
         }
 
         private static android.graphics.RectF glyphBox(com.tom_roush.pdfbox.text.TextPosition tp) {
@@ -236,7 +231,8 @@ final class PdfPlainTextExtractor {
         }
     }
 
-    /** One-pass stripper that buckets text by page, like the search engine's. */    private static final class PageStripper extends PDFTextStripper {
+    /** One-pass stripper that buckets text by page, like the search engine's. */
+    private static final class PageStripper extends PDFTextStripper {
         final Map<Integer, String> result = new HashMap<>();
         private StringBuilder builder;
         private int pageIndex0 = -1;
@@ -258,6 +254,11 @@ final class PdfPlainTextExtractor {
             if (builder != null && string != null) {
                 builder.append(string);
             }
+        }
+
+        @Override
+        protected void writeWordSeparator() {
+            if (builder != null) builder.append(' ');
         }
 
         @Override
