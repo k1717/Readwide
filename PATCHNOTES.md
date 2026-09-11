@@ -101,7 +101,6 @@
 ### Release boundary
 
 - Version metadata is `1.0.18` / `10018`. No permission or runtime dependency changed.
-- Regression sources and implementation history remain in the versioned development/format notes. Current build and remaining test/device checks are tracked in [release readiness](docs/RELEASE_READINESS_1_0_18.md); support exclusions are summarized in [current source status](docs/CURRENT_SOURCE_STATUS_1_0_18.md).
 
 ## Readwide 1.0.17 - 2026-08-14
 
