@@ -151,4 +151,4 @@ Release signing is conditional. If the `READWIDE_*` (or legacy `TEXTVIEW_*`) sig
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — historical archive compatibility baseline and support-label glossary; use this README and current release notes for 1.0.18 support claims.
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md` — HWP/HWPX scope and license notes; its legacy `.doc` remarks are historical because `.doc` gained a basic read-only path in 1.0.11.
 - [1.0.18 license report](docs/LICENSE_REPORT_READWIDE_1_0_18.md) and [source/direct-dependency SBOM](docs/SBOM_READWIDE_1_0_18.spdx.json) — current release identity and unchanged declared dependencies; not a resolved transitive audit.
-- [Release readiness](docs/RELEASE_READINESS_1_0_18.md) — earlier maintainer-reported build success, later unbuilt UI/resource changes, and remaining validation.
+  
