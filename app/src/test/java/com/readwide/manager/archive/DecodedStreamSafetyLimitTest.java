@@ -20,10 +20,11 @@ public class DecodedStreamSafetyLimitTest {
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause();
             assertTrue(cause instanceof ArchiveSupport.UnsupportedArchiveFeatureException);
-            assertTrue(String.valueOf(cause.getMessage()).contains("safety limit"));
+            assertEquals(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE,
+                    ArchiveFailureClassifier.classify((Exception) cause));
             return;
         }
-        throw new AssertionError("Expected decoded stream safety-limit failure");
+        throw new AssertionError("Expected decoded-byte overflow rejection");
     }
 
     @Test

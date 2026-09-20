@@ -8,13 +8,12 @@ import org.json.JSONException;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class TextDisplayRuleManager {
     private static final String PREF_KEY = "txt_display_replacement_rules_json";
-    private static final int MAX_RULES = 50;
+    public static final int MAX_RULES = 50;
 
     private TextDisplayRuleManager() {}
 
@@ -22,28 +21,70 @@ public final class TextDisplayRuleManager {
         return PrefsManager.getInstance(context).getPrefs();
     }
 
-    /**
-     * Parsed-rules memo. The large-TXT partition reader calls getActiveRules on
-     * every partition read (including prefetches), which used to re-read prefs
-     * and re-parse the JSON each time. Volatile immutable-by-convention list:
-     * every caller that mutates already copies first; saveRules invalidates.
-     */
-    private static volatile List<TextDisplayRule> cachedRules;
-    /** Bumped whenever the rules change; the partition forward-cursor keys on it. */
-    private static volatile int rulesVersion = 0;
+    private static final Object RULE_LOCK = new Object();
+    private static List<TextDisplayRule> cachedRules;
+    private static String cachedRaw;
+    private static int rulesVersion;
 
     public static int getRulesVersion() {
-        return rulesVersion;
+        synchronized (RULE_LOCK) { return rulesVersion; }
     }
 
     public static List<TextDisplayRule> getRules(Context context) {
-        List<TextDisplayRule> memo = cachedRules;
-        if (memo != null) return memo;
+        if (context == null) return new ArrayList<>();
+        return getRules(prefs(context));
+    }
+
+    static List<TextDisplayRule> getRules(SharedPreferences preferences) {
+        synchronized (RULE_LOCK) {
+            refreshLocked(preferences.getString(PREF_KEY, "[]"));
+            return copyRules(cachedRules);
+        }
+    }
+
+    /** A single owned snapshot ties the cursor version to the actual transform. */
+    public static final class ActiveSnapshot {
+        public final int version;
+        public final CompiledRules compiled;
+        private ActiveSnapshot(int version, List<TextDisplayRule> rules) {
+            this.version = version;
+            this.compiled = compile(rules);
+        }
+    }
+
+    public static ActiveSnapshot captureActive(Context context, String filePath) {
+        if (context == null) return new ActiveSnapshot(0, new ArrayList<>());
+        return captureActive(prefs(context), filePath);
+    }
+
+    static ActiveSnapshot captureActive(SharedPreferences preferences, String filePath) {
+        List<TextDisplayRule> active = new ArrayList<>();
+        int version;
+        synchronized (RULE_LOCK) {
+            refreshLocked(preferences.getString(PREF_KEY, "[]"));
+            version = rulesVersion;
+            for (TextDisplayRule rule : cachedRules) if (rule.appliesTo(filePath)) active.add(rule.copy());
+        }
+        return new ActiveSnapshot(version, active);
+    }
+
+    /** Called after preference imports; raw-value matching also covers external edits. */
+    public static void invalidateCache() {
+        synchronized (RULE_LOCK) { cachedRules = null; cachedRaw = null; rulesVersion++; }
+    }
+
+    private static List<TextDisplayRule> copyRules(List<TextDisplayRule> rules) {
+        List<TextDisplayRule> copies = new ArrayList<>(rules.size());
+        for (TextDisplayRule rule : rules) copies.add(rule.copy());
+        return copies;
+    }
+
+    private static void refreshLocked(String raw) {
+        if (raw == null) raw = "[]";
+        if (cachedRules != null && raw.equals(cachedRaw)) return;
         ArrayList<TextDisplayRule> rules = new ArrayList<>();
-        if (context == null) return rules;
-        String raw = prefs(context).getString(PREF_KEY, "[]");
         try {
-            JSONArray arr = new JSONArray(raw != null ? raw : "[]");
+            JSONArray arr = new JSONArray(raw);
             for (int i = 0; i < arr.length() && rules.size() < MAX_RULES; i++) {
                 TextDisplayRule rule = TextDisplayRule.fromJson(arr.optJSONObject(i));
                 if (rule.isValid()) rules.add(rule);
@@ -52,7 +93,8 @@ public final class TextDisplayRuleManager {
             // Broken user-edited JSON should not break opening TXT files.
         }
         cachedRules = rules;
-        return rules;
+        cachedRaw = raw;
+        rulesVersion++;
     }
 
     public static List<TextDisplayRule> getActiveRules(Context context, String filePath) {
@@ -64,8 +106,6 @@ public final class TextDisplayRuleManager {
     }
 
     public static void saveRules(Context context, List<TextDisplayRule> rules) {
-        cachedRules = null; // rules changed; next read re-parses
-        rulesVersion++;
         if (context == null) return;
         JSONArray arr = new JSONArray();
         if (rules != null) {
@@ -80,7 +120,11 @@ public final class TextDisplayRuleManager {
         }
         // apply() updates SharedPreferences memory immediately and writes to disk in the
         // background, so rule windows can respond without blocking on synchronous I/O.
-        prefs(context).edit().putString(PREF_KEY, arr.toString()).apply();
+        SharedPreferences preferences = prefs(context);
+        synchronized (RULE_LOCK) {
+            preferences.edit().putString(PREF_KEY, arr.toString()).apply();
+            cachedRules = null; cachedRaw = null; rulesVersion++;
+        }
     }
 
     public static String getSignature(Context context, String filePath) {
@@ -127,16 +171,15 @@ public final class TextDisplayRuleManager {
     }
 
     private static final class CompiledRule {
-        final Pattern pattern;          // non-null for regex rules; null for literal rules
-        final String find;              // literal find text (literal rules only)
+        final Pattern pattern;          // regex or quoted case-insensitive literal
+        final String find;              // case-sensitive literal only
         final String replacement;
-        final boolean caseSensitive;
+        volatile boolean invalidReplacement;
 
-        CompiledRule(Pattern pattern, String find, String replacement, boolean caseSensitive) {
+        CompiledRule(Pattern pattern, String find, String replacement) {
             this.pattern = pattern;
             this.find = find;
             this.replacement = replacement;
-            this.caseSensitive = caseSensitive;
         }
     }
 
@@ -160,16 +203,30 @@ public final class TextDisplayRuleManager {
                     int flags = Pattern.MULTILINE;
                     if (!rule.caseSensitive) flags |= Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE;
                     Pattern pattern = Pattern.compile(rule.findText, flags);
-                    out.add(new CompiledRule(pattern, null, repl, rule.caseSensitive));
+                    if (!validReplacementSyntax(repl, pattern.matcher("").groupCount())) continue;
+                    out.add(new CompiledRule(pattern, null, repl));
                 } catch (IllegalArgumentException ex) {
                     // Bad user regex: skip this rule rather than break file loading.
                 }
             } else {
                 if (rule.findText == null || rule.findText.isEmpty()) continue;
-                out.add(new CompiledRule(null, rule.findText, repl, rule.caseSensitive));
+                // Lowercasing a whole string can change its UTF-16 length (e.g. İ),
+                // making offsets into the original string invalid. Match in place.
+                if (rule.caseSensitive) out.add(new CompiledRule(null, rule.findText, repl));
+                else out.add(new CompiledRule(Pattern.compile(Pattern.quote(rule.findText),
+                        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE), null,
+                        Matcher.quoteReplacement(repl)));
             }
         }
         return new CompiledRules(out.toArray(new CompiledRule[0]));
+    }
+
+    /** Validate even disabled drafts using the same compiler as the reader. */
+    public static boolean isValidExpression(TextDisplayRule rule) {
+        if (rule == null || !rule.isValid()) return false;
+        TextDisplayRule draft = rule.copy();
+        draft.enabled = true;
+        return !compile(java.util.Collections.singletonList(draft)).isEmpty();
     }
 
     /** Apply pre-compiled rules to one piece of text, reusing compiled patterns. */
@@ -179,42 +236,52 @@ public final class TextDisplayRuleManager {
         }
         String result = text;
         for (CompiledRule rule : compiled.rules) {
+            if (rule.invalidReplacement) continue;
             if (rule.pattern != null) {
                 try {
                     Matcher matcher = rule.pattern.matcher(result);
                     result = matcher.replaceAll(rule.replacement);
-                } catch (IndexOutOfBoundsException ex) {
-                    // Invalid replacement group reference: leave this text unchanged.
+                } catch (IndexOutOfBoundsException | IllegalArgumentException ex) {
+                    // Missing named groups are discovered on the first actual match.
+                    // Skip the rule for the rest of this snapshot, not an exception per line.
+                    rule.invalidReplacement = true;
                 }
             } else {
-                result = replaceLiteral(result, rule.find, rule.replacement, rule.caseSensitive);
+                result = result.replace(rule.find, rule.replacement);
             }
         }
         return result;
     }
 
-    private static String replaceLiteral(String source, String find, String replacement, boolean caseSensitive) {
-        if (source == null || source.isEmpty() || find == null || find.isEmpty()) {
-            return source != null ? source : "";
+    private static boolean validReplacementSyntax(String replacement, int groups) {
+        for (int i = 0; i < replacement.length(); i++) {
+            char c = replacement.charAt(i);
+            if (c == '\\') {
+                if (++i == replacement.length()) return false;
+            } else if (c == '$') {
+                if (++i == replacement.length()) return false;
+                c = replacement.charAt(i);
+                if (c == '{') {
+                    int start = ++i;
+                    if (i == replacement.length() || !asciiLetter(replacement.charAt(i))) return false;
+                    while (i < replacement.length() && (asciiLetter(replacement.charAt(i))
+                            || asciiDigit(replacement.charAt(i)))) i++;
+                    if (i == start || i == replacement.length() || replacement.charAt(i) != '}') return false;
+                } else {
+                    if (!asciiDigit(c) || c - '0' > groups) return false;
+                    int group = c - '0';
+                    while (i + 1 < replacement.length() && asciiDigit(replacement.charAt(i + 1))) {
+                        long next = (long) group * 10 + replacement.charAt(i + 1) - '0';
+                        if (next > groups) break; // Remaining digits are literal ($12 with one group).
+                        group = (int) next;
+                        i++;
+                    }
+                }
+            }
         }
-        String repl = replacement != null ? replacement : "";
-        if (caseSensitive) {
-            return source.replace(find, repl);
-        }
-
-        String lowerSource = source.toLowerCase(Locale.ROOT);
-        String lowerFind = find.toLowerCase(Locale.ROOT);
-        StringBuilder out = null;
-        int from = 0;
-        int idx;
-        while ((idx = lowerSource.indexOf(lowerFind, from)) >= 0) {
-            if (out == null) out = new StringBuilder(source.length());
-            out.append(source, from, idx);
-            out.append(repl);
-            from = idx + find.length();
-        }
-        if (out == null) return source;
-        out.append(source, from, source.length());
-        return out.toString();
+        return true;
     }
+
+    private static boolean asciiDigit(char c) { return c >= '0' && c <= '9'; }
+    private static boolean asciiLetter(char c) { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'; }
 }

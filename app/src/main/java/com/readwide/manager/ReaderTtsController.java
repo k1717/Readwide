@@ -52,6 +52,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     private boolean initialized = false;
     private boolean initializing = false;
     private boolean pendingStart = false;
+    private boolean pendingResume = false;
     private boolean pendingContinuous = false;
     private boolean pendingVoiceDialog = false;
     private boolean active = false;
@@ -385,6 +386,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     void start(boolean continuousMode) {
+        pendingResume = false;
         TtsTextSource source = host.ttsTextSource();
         if (source == null || TextUtils.isEmpty(source.getTextContent())) {
             ShortToast.show(activity, R.string.tts_no_text);
@@ -415,6 +417,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     private void stopInternal(boolean showToast, boolean stopService) {
         pendingStart = false;
+        pendingResume = false;
         active = false;
         paused = false;
         pausedForFocusLoss = false;
@@ -455,13 +458,17 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     }
 
     boolean isActive() {
-        return active || pendingStart;
+        return active || pendingStart || pendingResume;
     }
 
     /** True pause: stop speaking but keep state/focus/timer so we can resume in place. */
     void pausePlayback() {
-        if (!active || paused) return;
         pausedForFocusLoss = false;
+        if (pendingStart || pendingResume) {
+            stopInternal(false, false);
+            return;
+        }
+        if (!active || paused) return;
         sleepTimerAccrueSegment(); // stop accruing playback time while paused
         pausedSegmentIndex = currentSegmentIndex;
         paused = true;
@@ -534,12 +541,24 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
     void handlePlaybackCommand(@NonNull String action) {
         if (TtsPlaybackService.ACTION_STOP.equals(action)) {
             stop(true);
+        } else if (TtsPlaybackService.ACTION_PLAY.equals(action)) {
+            if (active) {
+                if (paused) resumePlayback();
+            } else if (!pendingStart && !pendingResume) {
+                if (hasResumeStateForCurrentFile()) {
+                    resumeFromSavedState();
+                } else {
+                    start(continuous || (host.ttsHostPrefs() != null && host.ttsHostPrefs().getTtsLastContinuous()));
+                }
+            }
+        } else if (TtsPlaybackService.ACTION_PAUSE.equals(action)) {
+            pausePlayback();
         } else if (TtsPlaybackService.ACTION_PLAY_PAUSE.equals(action)) {
             if (active && !paused) {
                 pausePlayback();
             } else if (active && paused) {
                 resumePlayback();
-            } else if (pendingStart) {
+            } else if (pendingStart || pendingResume) {
                 stopInternal(false, false);
             } else if (hasResumeStateForCurrentFile()) {
                 resumeFromSavedState();
@@ -586,6 +605,7 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         }
         int charPosition = host.ttsHostPrefs().getTtsLastCharPosition();
         boolean resumeContinuous = host.ttsHostPrefs().getTtsLastContinuous();
+        if (active || paused || pendingStart) stopInternal(false, false);
         host.ttsJumpToAbsoluteCharPosition(charPosition,
                 host.ttsHostPrefs().getTtsLastPageNumber(),
                 host.ttsDisplayedTotalPageCount());
@@ -593,10 +613,12 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         // request increments speechGeneration, so this task cannot resurrect TTS
         // after the user has explicitly stopped it while the page is settling.
         int resumeRequestGeneration = ++speechGeneration;
+        pendingResume = true;
         host.ttsHostHandler().postDelayed(() -> {
             if (!host.isTtsHostDestroyed()
                     && speechGeneration == resumeRequestGeneration
-                    && !active && !paused) {
+                    && pendingResume && !active && !paused) {
+                pendingResume = false;
                 start(resumeContinuous);
             }
         }, 420L);
@@ -755,6 +777,8 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
 
     private void startNow(boolean continuousMode) {
         if (tts == null || !initialized) return;
+        pendingStart = false;
+        pendingResume = false;
         if (!applySelectedLanguage(true)) {
             active = false;
             pendingStart = false;
@@ -1076,10 +1100,12 @@ final class ReaderTtsController implements TextToSpeech.OnInitListener {
         stopInternal(false, false);
         int restartGeneration = speechGeneration;
         host.ttsHostPageBy(direction);
+        pendingResume = true;
         host.ttsHostHandler().postDelayed(() -> {
             if (!host.isTtsHostDestroyed()
                     && speechGeneration == restartGeneration
-                    && !active && !paused) {
+                    && pendingResume && !active && !paused) {
+                pendingResume = false;
                 start(wasContinuous);
             }
         }, NEXT_PAGE_DELAY_MS);

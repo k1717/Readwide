@@ -130,6 +130,9 @@ final class DocumentContentAnchorJavascript {
                     }
                     return best;
                   };
+                  window.__rwDocIsSearchHit=function(el){
+                    return !!(el&&el.classList&&el.classList.contains('rw-document-search-hit'));
+                  };
                   window.__rwDocStableSentenceCandidates=function(){
                     var raw=Array.prototype.slice.call(document.querySelectorAll('span[id],p[id],li[id],blockquote[id]'));
                     var semantic=Array.prototype.slice.call(document.querySelectorAll('[id]'));
@@ -138,6 +141,7 @@ final class DocumentContentAnchorJavascript {
                       if(se.hasAttribute&&se.hasAttribute('epub:type')&&raw.indexOf(se)<0)raw.push(se);
                     }
                     return raw.filter(function(el){
+                      if(window.__rwDocIsSearchHit(el))return false;
                       if(el.closest&&el.closest('script,style,rt,rp'))return false;
                       return window.__rwDocCleanText(el).length>0;
                     });
@@ -146,9 +150,13 @@ final class DocumentContentAnchorJavascript {
                     var el=node&&node.nodeType===3?node.parentElement:node;
                     if(!el||!el.closest)return null;
                     var root=el.closest('span[id],p[id],li[id],blockquote[id]');
+                    while(window.__rwDocIsSearchHit(root)){
+                      root=root.parentElement&&root.parentElement.closest
+                        ?root.parentElement.closest('span[id],p[id],li[id],blockquote[id]'):null;
+                    }
                     if(!root){
                       for(var parent=el;parent;parent=parent.parentElement){
-                        if(parent.id&&parent.hasAttribute&&parent.hasAttribute('epub:type')){root=parent;break;}
+                        if(!window.__rwDocIsSearchHit(parent)&&parent.id&&parent.hasAttribute&&parent.hasAttribute('epub:type')){root=parent;break;}
                       }
                     }
                     if(!root)root=el.closest('p,li,blockquote,h1,h2,h3,h4,h5,h6,pre,td,th');
@@ -337,9 +345,14 @@ final class DocumentContentAnchorJavascript {
                   window.__rwDocVerticalColumnStart=function(selected){
                     if(!selected||!selected.glyphRect)return null;
                     var viewport=window.__rwDocUsableViewport();
+                    // The bookmark toolbar/dialog can cover the first glyphs
+                    // of this column while saving. Preview the column in the
+                    // reading viewport, not just the part below app chrome.
+                    // The selected glyph and every restore field stay intact.
+                    var previewViewport=viewport.visual;
                     var targetX=selected.glyphRect.left+selected.glyphRect.width/2;
                     var targetWidth=Math.max(1,selected.glyphRect.width);
-                    var startY=viewport.top+2,endY=viewport.bottom-2;
+                    var startY=previewViewport.top+0.5,endY=previewViewport.bottom-0.5;
                     var step=Math.max(5,Math.min(10,
                       Math.max(1,selected.glyphRect.height)*0.5));
                     var best=null;
@@ -350,7 +363,13 @@ final class DocumentContentAnchorJavascript {
                       var root=window.__rwDocStableSentenceRoot(caret&&caret.node);
                       if(!root)return;
                       var glyph=window.__rwDocGlyphForCaret(root,caret,targetX,clientY);
-                      if(!glyph||!window.__rwDocGlyphFullyInside(glyph.rect,viewport))return;
+                      if(!glyph)return;
+                      // A fully visible edge glyph belongs in the preview;
+                      // the save anchor's extra two-pixel guard would omit it.
+                      // Still reject text clipped by the actual viewport.
+                      var r=glyph.rect;
+                      if(r.left<previewViewport.left||r.right>previewViewport.right||
+                         r.top<previewViewport.top||r.bottom>previewViewport.bottom)return;
                       var centerX=glyph.rect.left+glyph.rect.width/2;
                       // Allow normal punctuation/ruby cell-width variation, but
                       // stay well below one full glyph advance so an adjacent
@@ -367,7 +386,7 @@ final class DocumentContentAnchorJavascript {
                     // on a handful of fixed Y probes. Blank space, ruby, and
                     // sentence boundaries can otherwise make a middle glyph
                     // become the bookmark label even though the column begins
-                    // near the top of the visible reading area.
+                    // near the top of the reading viewport behind app chrome.
                     for(var y=startY;y<=endY;y+=step)consider(y);
                     consider(selected.glyphRect.top+selected.glyphRect.height/2);
                     return best;

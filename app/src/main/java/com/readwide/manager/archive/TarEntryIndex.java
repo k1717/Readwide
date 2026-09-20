@@ -71,7 +71,7 @@ final class TarEntryIndex {
              TarFile tar = new TarFile(raw.getChannel())) {
             for (TarArchiveEntry entry : tar.getEntries()) {
                 checkpoint();
-                if (!entry.isCheckSumOK()) throw new IOException("Invalid TAR header checksum");
+                if (!entry.isCheckSumOK()) throw new ArchiveSupport.TarIntegrityException();
                 if (entry.isSymbolicLink() || entry.isLink()) continue;
                 if (!entry.isDirectory() && !entry.isFile() && !entry.isSparse()) continue;
                 String name = ArchiveSupport.sanitizeEntryPathForList(entry.getName());

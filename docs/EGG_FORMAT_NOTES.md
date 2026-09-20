@@ -27,14 +27,14 @@ metadata never authorizes passwords or skips block CRC/AES authentication.
 Retention budgets do not cap extraction size, and solid archives are not
 retained by this index. Directory classification follows decoded filenames.
 No new codec support or runtime validation is claimed; see
-`ARCHIVE_VIEWER_PERFORMANCE_1_0_18.md` for source-only regression coverage.
+`DEV_CHANGES_1_0_18.md` for implementation details.
 
 Store/Deflate/BZip2/LZMA no longer inherit the old 512 MiB per-file/block
 ceiling. AZO retains a 512 MiB per-block array-memory guard. Non-solid file
 sizes must match their block totals, decoded blocks must match declared
 lengths, and solid offset arithmetic rejects overflow. The shared fixed
 128 GiB ceiling has also been removed; available-space accounting remains.
-See `ARCHIVE_SIZE_POLICY_1_0_18.md` for scope and unexecuted regressions.
+See `DEV_CHANGES_1_0_18.md` for scope and implementation details.
 
 ## Signatures
 
@@ -115,7 +115,7 @@ whole** (its own header prefix, including its SPLIT field, is part of the
 logical stream) and every later volume contributes only the bytes **after its
 own header prefix**. Blocks may straddle volume boundaries at arbitrary byte
 positions. `SplitVolumeInput` presents this concatenation as one seekable
-stream. Since the thirteenth 1.0.18 viewer batch, the resolver catalogs sibling
+stream. The resolver catalogs sibling
 `volN` names by numeric ordinal, independent of case and leading zeroes, and
 rejects ambiguous aliases or missing numbers. Both links must match: each
 volume's `prev` equals the previous header id, and its own header id equals the
@@ -180,7 +180,7 @@ retains the absent-check behavior. Extracting a single entry decodes from the
 stream start, discards bytes outside the entry, and finishes its final containing
 block before success so its available CRC is checked too. The image viewer can
 retain one forward session with a length/available-CRC-checked block spool reused
-across entries; see `ARCHIVE_VIEWER_PERFORMANCE_1_0_18.md` for disk/latency tradeoffs
+across entries; see `DEV_CHANGES_1_0_18.md` for disk/latency tradeoffs
 and pending runtime validation. A stream shorter than the declared sizes
 fails with "Solid EGG stream ended before entry data" and no partial output.
 
@@ -197,7 +197,7 @@ typo.) Encrypted solid archives remain unsupported.
 
 ## Not supported (deliberate)
 
-The shared ALZ/EGG `SplitVolumeInput` has source-only batch-fifteen physical/logical
+The shared ALZ/EGG `SplitVolumeInput` has physical/logical
 range checks, cancellation/failure retirement and independent bounded-view
 lifecycle. Binary-search volume lookup and reusable one-byte storage reduce
 specific overheads but have not been benchmarked. Raw skipping does not verify

@@ -22,7 +22,7 @@ public final class BookmarkMergeMath {
         return first.equals(second);
     }
 
-    private static String normalizedAnchor(String anchor) {
+    static String normalizedAnchor(String anchor) {
         String normalized = anchor == null ? "" : anchor.trim();
         return stripTopLevelPresentationField(normalized, "columnStartText");
     }

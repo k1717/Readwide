@@ -32,6 +32,11 @@ import java.util.List;
 final class Rar5CompressedArchiveExtractor {
     private Rar5CompressedArchiveExtractor() {}
 
+    /** A decoded payload failed its checksum, not codec eligibility. */
+    static final class ChecksumException extends IOException {
+        ChecksumException(String path) { super("RAR5 entry failed checksum verification: " + path); }
+    }
+
     /** Keeps solid history across pages; only a completed, checked entry is exposed. */
     @Nullable
     static ArchiveSupport.ForwardArchiveReader openForwardReader(File archive, char[] password,
@@ -56,6 +61,7 @@ final class Rar5CompressedArchiveExtractor {
         private RarArchiveReader.RarEntry current;
         private File spool;
         private InputStream input;
+        private long verifiedSize, remainingBytes;
         private boolean decoded;
         private boolean closed;
         private boolean failed;
@@ -68,7 +74,11 @@ final class Rar5CompressedArchiveExtractor {
 
         private void checkpoint() throws IOException {
             if (closed || failed) throw new IOException("RAR forward reader is closed or failed");
-            if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+            if (Thread.currentThread().isInterrupted()) {
+                IOException failure = new IOException("RAR extraction cancelled");
+                retire(failure);
+                throw failure;
+            }
         }
 
         @Override public ArchiveSupport.ForwardEntry nextEntry() throws IOException {
@@ -100,17 +110,17 @@ final class Rar5CompressedArchiveExtractor {
                             decodeOne(decoder, current, entries, password, out, null);
                         }
                     }
-                    if (retain) input = new BufferedInputStream(new java.io.FileInputStream(spool));
-                    else clearSpool();
+                    if (retain) {
+                        verifiedSize = remainingBytes = spool.length();
+                        input = new java.io.BufferedInputStream(new java.io.FileInputStream(spool));
+                    } else clearSpool();
                 } else {
                     // Non-image predecessors still prime the solid window and verify their CRC.
                     decodeOne(decoder, current, entries, password, DISCARD, null);
                 }
                 decoded = true;
             } catch (IOException | RuntimeException | Error failure) {
-                failed = true; // Never reuse partially advanced solid history.
-                try { decoder.close(); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
-                try { clearSpool(); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+                retire(failure); // Never reuse partially advanced solid history.
                 if (failure instanceof IOException) throw (IOException) failure;
                 if (failure instanceof Error) throw (Error) failure;
                 throw new IOException("RAR5 forward decode failed", failure);
@@ -121,7 +131,18 @@ final class Rar5CompressedArchiveExtractor {
             checkpoint();
             if (buffer.length == 0) return 0;
             decode(true);
-            return input == null ? -1 : input.read(buffer);
+            try {
+                if (input == null) return -1;
+                if (spool.length() != verifiedSize) throw new IOException("Truncated or changed verified RAR spool");
+                if (remainingBytes == 0) return -1;
+                int count = input.read(buffer, 0, (int) Math.min(buffer.length, remainingBytes));
+                if (count <= 0) throw new IOException("Truncated verified RAR spool");
+                remainingBytes -= count;
+                return count;
+            } catch (IOException | RuntimeException | Error failure) {
+                retire(failure);
+                throw failure;
+            }
         }
 
         @Override public boolean drainCurrentEntry(long maximum) throws IOException {
@@ -131,26 +152,51 @@ final class Rar5CompressedArchiveExtractor {
                 throw new IOException("RAR entry exceeds requested drain bound");
             }
             decode(false);
-            clearSpool();
+            try { clearSpool(); }
+            catch (IOException | RuntimeException | Error failure) { retire(failure); throw failure; }
             return true;
         }
 
-        private void clearSpool() throws IOException {
-            try { if (input != null) input.close(); }
-            finally {
-                input = null;
-                if (spool != null) { spool.delete(); spool = null; }
+        private void retire(Throwable failure) {
+            failed = true;
+            try { close(); }
+            catch (IOException | RuntimeException | Error cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
             }
         }
 
+        private void clearSpool() throws IOException {
+            IOException failure = null;
+            try { if (input != null) input.close(); }
+            catch (IOException cleanup) { failure = cleanup; }
+            finally { input = null; remainingBytes = verifiedSize = 0; }
+            if (spool != null) {
+                try {
+                    if (spool.exists() && !spool.delete()) throw new IOException("Cannot delete verified RAR spool");
+                    spool = null;
+                } catch (IOException | SecurityException cleanup) {
+                    IOException deletion = cleanup instanceof IOException ? (IOException) cleanup
+                            : new IOException("Cannot delete verified RAR spool", cleanup);
+                    if (failure == null) failure = deletion; else failure.addSuppressed(deletion);
+                }
+            }
+            if (failure != null) throw failure;
+        }
+
         @Override public void close() throws IOException {
-            if (closed) return;
+            if (closed && spool == null && input == null && decoder == null) return;
             closed = true;
             if (password != null) java.util.Arrays.fill(password, '\0');
-            try { decoder.close(); }
+            Throwable failure = null;
+            try { if (decoder != null) decoder.close(); }
+            catch (IOException | RuntimeException | Error cleanup) { failure = cleanup; throw cleanup; }
             finally {
                 decoder = null;
-                clearSpool();
+                try { clearSpool(); }
+                catch (IOException | RuntimeException | Error cleanup) {
+                    if (failure == null) throw cleanup;
+                    if (cleanup != failure) failure.addSuppressed(cleanup);
+                }
             }
         }
     }
@@ -316,8 +362,7 @@ final class Rar5CompressedArchiveExtractor {
             // Intermediate split CRCs cover packed segments. Only the final part
             // carries the unpacked-file CRC; verify before any output is committed.
             if (!dataCheck.matches(packed.secrets)) {
-                throw new RarArchiveReader.UnsupportedRarFeatureException(
-                        "RAR5 entry failed checksum verification: " + entry.path);
+                throw new ChecksumException(entry.path);
             }
         }
     }

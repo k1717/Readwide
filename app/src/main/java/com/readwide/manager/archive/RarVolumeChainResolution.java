@@ -89,11 +89,26 @@ final class RarVolumeChainResolution {
 
     @NonNull
     List<File> requireReadableChain() throws IOException {
-        if (knownGapBeforeSelected || (resolverResult.selectedLaterVolume() && !selectedInContiguousChain)) {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new java.io.InterruptedIOException("RAR volume discovery interrupted");
+        }
+        if (resolverResult.problem() != null) {
+            throw new IOException("RAR split volume chain is incomplete or ambiguous: "
+                    + resolverResult.problem() + "; " + diagnostic);
+        }
+        if (knownGapBeforeSelected || knownGapInDiscoveredChain
+                || (resolverResult.selectedLaterVolume() && !selectedInContiguousChain)) {
             throw incompleteChainException();
         }
-        if (knownGapInDiscoveredChain && resolverResult.volumes().size() <= 1) {
-            throw incompleteChainException();
+        if (resolverResult.volumes().isEmpty() || !resolverResult.selected().isFile()
+                || !resolverResult.selected().canRead()) throw incompleteChainException();
+        for (File file : resolverResult.volumes()) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new java.io.InterruptedIOException("RAR volume discovery interrupted");
+            }
+            if (!file.isFile() || !file.canRead()) {
+                throw new IOException("RAR volume unavailable: " + file.getName());
+            }
         }
         return new ArrayList<>(resolverResult.volumes());
     }
@@ -141,6 +156,9 @@ final class RarVolumeChainResolution {
 
     private static boolean sameFileIdentity(@NonNull File a, @NonNull File b) {
         if (a.equals(b)) return true;
-        return a.getAbsolutePath().equals(b.getAbsolutePath());
+        try { return a.getCanonicalPath().equals(b.getCanonicalPath()); }
+        catch (IOException | SecurityException unavailable) {
+            return a.getAbsolutePath().equals(b.getAbsolutePath());
+        }
     }
 }

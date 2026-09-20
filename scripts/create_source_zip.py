@@ -25,6 +25,12 @@ EXCLUDED_DIRECTORIES = {
     ".cxx",
     ".externalNativeBuild",
     ".kotlin",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    ".vscode",
+    ".captures",
     "build",
     "captures",
 }
@@ -51,6 +57,9 @@ EXCLUDED_SUFFIXES = {
     ".der",
     ".dex",
     ".hprof",
+    ".iml",
+    ".pyc",
+    ".pyo",
     ".jks",
     ".keystore",
     ".log",
@@ -68,6 +77,9 @@ def is_under(path: PurePosixPath, directory: PurePosixPath) -> bool:
 
 
 def should_include(relative: PurePosixPath, output_relative: PurePosixPath | None) -> bool:
+    if relative.parts and relative.parts[0] in ("docs", "scripts") and len(relative.parts) > 1:
+        if relative.parts[1].lower().startswith(("review-", "archive-review-")):
+            return False
     if output_relative is not None and relative == output_relative:
         return False
     if relative.name in EXCLUDED_NAMES or Path(relative.name).suffix.lower() in EXCLUDED_SUFFIXES:

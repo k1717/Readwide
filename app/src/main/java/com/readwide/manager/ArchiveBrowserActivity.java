@@ -511,11 +511,6 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         return UiColorUtils.readableChipTextColorForBackground(backgroundColor);
     }
 
-    @NonNull
-    private List<ArchiveSupport.EntryInfo> filterArchiveEntries(@NonNull List<ArchiveSupport.EntryInfo> source) {
-        return ArchiveEntryListController.filter(source, archiveSearchQuery, activeArchiveFilter, archiveSortMode);
-    }
-
     private void loadArchiveEntries(@Nullable char[] password) {
         showLoading(true, getString(R.string.loading));
         executor.execute(() -> {
@@ -588,17 +583,13 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                 ? getString(R.string.archive_root)
                 : currentPrefix;
         pathText.setText(label);
-        List<ArchiveSupport.EntryInfo> visible = filterArchiveEntries(
-                buildDirectChildren(currentPrefix == null ? "" : currentPrefix));
+        List<ArchiveSupport.EntryInfo> visible = ArchiveEntryListController.visibleChildren(
+                allEntries, currentPrefix == null ? "" : currentPrefix,
+                archiveSearchQuery, activeArchiveFilter, archiveSortMode);
         adapter.setEntries(visible);
         emptyText.setText(R.string.no_archive_entries);
         emptyText.setVisibility(visible.isEmpty() ? View.VISIBLE : View.GONE);
         recyclerView.scrollToPosition(0);
-    }
-
-    @NonNull
-    private List<ArchiveSupport.EntryInfo> buildDirectChildren(@NonNull String prefix) {
-        return ArchiveEntryListController.directChildren(allEntries, prefix, archiveSortMode);
     }
 
     private void sortArchiveEntries(@NonNull List<ArchiveSupport.EntryInfo> target, int sortMode) {

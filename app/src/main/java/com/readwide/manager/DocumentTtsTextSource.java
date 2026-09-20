@@ -21,10 +21,8 @@ import java.util.List;
  * high-latency neural voice keeps synthesizing across page seams exactly as in
  * the text reader.</p>
  *
- * <p>Highlight is a no-op in this first version: the WebView page has no char
- * offset to rendered-node mapping yet (a later pass can map spoken sentences to
- * the injected {@code window.__rwDocBlocks} anchors). Audio, page-follow,
- * pause/resume, the sleep timer, and the notification controls all work.</p>
+ * <p>Highlights carry the source page and normalized character position into
+ * the DOM helper, so repeated sentences remain tied to the spoken occurrence.</p>
  *
  * <p>Construction runs {@code Html.fromHtml} per page and should happen off the
  * main thread for large books; the object is immutable afterwards and safe to
@@ -36,6 +34,8 @@ final class DocumentTtsTextSource implements TtsTextSource {
     private final String fullText;
     /** Start offset of each page in {@link #fullText}; length = pageCount + 1. */
     private final int[] pageStartOffsets;
+    private final int[] highlightPageLengths;
+    private final int[] highlightPageHashes;
 
     private DocumentTtsTextSource(@NonNull DocumentPageActivity activity,
                                   @NonNull String fullText,
@@ -43,6 +43,17 @@ final class DocumentTtsTextSource implements TtsTextSource {
         this.activity = activity;
         this.fullText = fullText;
         this.pageStartOffsets = pageStartOffsets;
+        // The source is built off-thread. Compute each page fingerprint once,
+        // instead of rebuilding the whole chapter on every spoken sentence.
+        int count = pageStartOffsets.length - 1;
+        highlightPageLengths = new int[count];
+        highlightPageHashes = new int[count];
+        for (int i = 0; i < count; i++) {
+            String normalized = DocumentTtsHighlightMath.squeezeForDomSearch(
+                    fullText.substring(pageStartOffsets[i], pageStartOffsets[i + 1]));
+            highlightPageLengths[i] = normalized.length();
+            highlightPageHashes[i] = normalized.hashCode();
+        }
     }
 
     /** Build from the loaded pages. Call off the main thread for large documents. */
@@ -176,16 +187,21 @@ final class DocumentTtsTextSource implements TtsTextSource {
         // Drive Markdown's scroll-following / speech anchor (no-op for paged
         // documents beyond the anchor bookkeeping).
         activity.onDocumentTtsSegmentSpoken(startChar, endChar);
-        // Highlight the spoken sentence in the WebView. The buffer is plain text
-        // (HTML flattened), so exact offsets don't map to the DOM; the controller
-        // searches the DOM for this sentence's text instead.
+        // Match in normalized text space, retaining the source page/offset and
+        // bounded context when HTML-to-text and rendered text differ.
         int s = Math.max(0, Math.min(fullText.length(), startChar));
         int e = Math.max(s, Math.min(fullText.length(), endChar));
-        if (e > s) {
+        if (e > s && pageCount() > 0) {
+            int page = pageIndexForChar(s);
+            int pageEnd = pageStartOffsets[page + 1];
+            e = Math.min(e, pageEnd);
+            DocumentTtsHighlightMath.TextLocation location = DocumentTtsHighlightMath.sourceLocation(
+                    fullText, pageStartOffsets[page], s, e, pageEnd,
+                    highlightPageLengths[page], highlightPageHashes[page]);
             // Markdown follows playback with its own scroll; let the highlight
             // scroll only in the paged viewers, and only when off-screen.
             activity.documentTtsHighlight().highlight(fullText.substring(s, e),
-                    !activity.isMarkdownDocument());
+                    !activity.isMarkdownDocument(), page, location);
         }
     }
 

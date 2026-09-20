@@ -75,6 +75,7 @@ final class Rar3PpmdSolidArchiveExtractor {
         private int index;
         private File spool;
         private java.io.InputStream input;
+        private long verifiedSize, remainingBytes;
         private boolean decoded, failed, closed;
 
         ForwardReader(List<RarArchiveReader.RarEntry> entries, char[] password, File directory) {
@@ -84,7 +85,11 @@ final class Rar3PpmdSolidArchiveExtractor {
 
         private void checkpoint() throws IOException {
             if (closed || failed) throw new IOException("RAR3 PPMd forward reader is closed or failed");
-            if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+            if (Thread.currentThread().isInterrupted()) {
+                IOException failure = new IOException("RAR extraction cancelled");
+                retire(failure);
+                throw failure;
+            }
         }
 
         @Override public ArchiveSupport.ForwardEntry nextEntry() throws IOException {
@@ -109,19 +114,19 @@ final class Rar3PpmdSolidArchiveExtractor {
                     spool = File.createTempFile("rar3_ppmd_verified_", ".spool", directory);
                     if (stored) RarArchiveReader.extractStoredEntry(current, spool, password, entries, null);
                     else writeVerifiedEntry(decoder, current, entries, password, spool, null);
-                    if (retain) input = new java.io.BufferedInputStream(new java.io.FileInputStream(spool));
-                    else clearSpool();
+                    if (retain) {
+                        verifiedSize = remainingBytes = spool.length();
+                        input = new java.io.BufferedInputStream(new java.io.FileInputStream(spool));
+                    } else clearSpool();
                 } else {
                     // Skipping output must still advance the model/window and check the primer CRC.
                     decodeOne(decoder, current, entries, password, DISCARD, null);
                 }
                 decoded = true;
-            } catch (IOException | RuntimeException failure) {
-                failed = true;
-                decoder = null;
-                if (password != null) java.util.Arrays.fill(password, '\0');
-                try { clearSpool(); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+            } catch (IOException | RuntimeException | Error failure) {
+                retire(failure);
                 if (failure instanceof IOException) throw (IOException) failure;
+                if (failure instanceof Error) throw (Error) failure;
                 throw new IOException("RAR3 PPMd forward decode failed", failure);
             }
         }
@@ -130,7 +135,18 @@ final class Rar3PpmdSolidArchiveExtractor {
             checkpoint();
             if (buffer.length == 0) return 0;
             decode(true);
-            return input == null ? -1 : input.read(buffer);
+            try {
+                if (input == null) return -1;
+                if (spool.length() != verifiedSize) throw new IOException("Truncated or changed verified RAR spool");
+                if (remainingBytes == 0) return -1;
+                int count = input.read(buffer, 0, (int) Math.min(buffer.length, remainingBytes));
+                if (count <= 0) throw new IOException("Truncated verified RAR spool");
+                remainingBytes -= count;
+                return count;
+            } catch (IOException | RuntimeException | Error failure) {
+                retire(failure);
+                throw failure;
+            }
         }
 
         @Override public boolean drainCurrentEntry(long maximum) throws IOException {
@@ -139,20 +155,39 @@ final class Rar3PpmdSolidArchiveExtractor {
                 throw new IOException("RAR entry exceeds requested drain bound");
             }
             decode(false);
-            clearSpool();
+            try { clearSpool(); }
+            catch (IOException | RuntimeException | Error failure) { retire(failure); throw failure; }
             return true;
         }
 
-        private void clearSpool() throws IOException {
-            try { if (input != null) input.close(); }
-            finally {
-                input = null;
-                if (spool != null) { spool.delete(); spool = null; }
+        private void retire(Throwable failure) {
+            failed = true;
+            try { close(); }
+            catch (IOException | RuntimeException | Error cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
             }
         }
 
+        private void clearSpool() throws IOException {
+            IOException failure = null;
+            try { if (input != null) input.close(); }
+            catch (IOException cleanup) { failure = cleanup; }
+            finally { input = null; remainingBytes = verifiedSize = 0; }
+            if (spool != null) {
+                try {
+                    if (spool.exists() && !spool.delete()) throw new IOException("Cannot delete verified RAR spool");
+                    spool = null;
+                } catch (IOException | SecurityException cleanup) {
+                    IOException deletion = cleanup instanceof IOException ? (IOException) cleanup
+                            : new IOException("Cannot delete verified RAR spool", cleanup);
+                    if (failure == null) failure = deletion; else failure.addSuppressed(deletion);
+                }
+            }
+            if (failure != null) throw failure;
+        }
+
         @Override public void close() throws IOException {
-            if (closed) return;
+            if (closed && spool == null && input == null) return;
             closed = true;
             decoder = null;
             if (password != null) java.util.Arrays.fill(password, '\0');

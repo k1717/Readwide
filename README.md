@@ -5,22 +5,17 @@ Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF
 [![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)](https://github.com/k1717/Readwide/releases)
 [![Downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)](https://github.com/k1717/Readwide/releases)
 
-Readwide is the public successor to TextView Reader. The Android `applicationId` has been `com.readwide.manager` since 1.0.4, and 1.0.18 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.17 through 1.0.6. Updating from 1.0.4/1.0.5 (which used the previous key) still requires uninstalling the old version, installing 1.0.18, then restoring bookmarks, reading positions, themes, and settings through the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Builds with the older `com.textview.reader` application ID likewise install as a separate app and migrate the same way.
+Readwide succeeds TextView Reader and uses the Android application ID
+`com.readwide.manager`. Updates from 1.0.6 or later require the same release
+signing key. Users of 1.0.4/1.0.5 or the older `com.textview.reader` app can move
+their bookmarks, reading positions, themes and settings through JSON backup
+export/import.
 
-- Current source version: **1.0.18**
-- Android metadata: `versionCode 10018`, `versionName "1.0.18"`
+- Current source version: **1.0.19**
+- Android metadata: `versionCode 10019`, `versionName "1.0.19"`
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
 - Release page: `https://github.com/k1717/Readwide/releases`
-
-## What's new in 1.0.18
-
-- Adjustable archive-viewer background timeout and folder-aware comic page order.
-- Scoped RAR LZ/PPMd, solid and encrypted/split improvements; streaming output and disk-backed RAR5/RAR7 history.
-- Broader special-7z coder chains, split forward reading, and reusable archive metadata.
-- More responsive thumbnail scheduling, safer file replacement, and search, EPUB and PDF fixes.
-
-See the [changelog](CHANGELOG.md), [patch notes](PATCHNOTES.md), and [GitHub release notes](docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_18.md). Precise support exclusions and remaining validation are in [current source status](docs/CURRENT_SOURCE_STATUS_1_0_18.md).
 
 ## Local-first privacy baseline
 
@@ -38,36 +33,29 @@ See `PRIVACY.md` for the full local-data and cache policy.
 
 ## Main features
 
-- TXT reader with exact page/bookmark continuity for large files and shared find-in-page options; sequential reading of very large files is O(N) (each line decoded once), so page turns and scrolling stay fast from the first page to the last.
-- Markdown reader through a themed WebView visual page model; TXT remains on the exact source-page model.
-- Source-safe TXT/Markdown annotations: select text to save a note or persistent highlight. Readwide keeps annotations in separate app-private data, never edits the original document, and includes them in JSON backup export/import.
-- TXT-style find-in-page options for TXT, Markdown, EPUB, HWP/HWPX, and Word-family document viewers: case-sensitive, whole-word, regex, nth-match jump, and current/total match status where supported.
-- PDF reader with single-page and vertical-continuous modes, bookmark restore, slider/page controls, inertial pan behavior while zoomed, and in-document text find for digital (text-based) PDFs.
-- PDF controls can be hidden in portrait or landscape to release the complete Readwide title/bottom-toolbar frame. The current bitmap expands immediately without PDF rerendering; Android status and navigation bars remain visible and system-safe.
-- EPUB reader through the document WebView path, including reflow/fixed-layout handling boundaries, direct image spine pages, legacy Japanese vertical-writing CSS compatibility, reader-theme integration, a dedicated global default-font setting shared with the in-book picker, scoped local scripted-spine/OPF-binding handling, point-CFI navigation, and basic foreground playback of OPF-linked SMIL text/audio cues. EPUB chrome overlays a stable WebView and releases the compact top strip; near-image-only fixed-layout pages bound incidental publisher overflow without applying that policy to text or mixed article pages.
-- Landscape page viewing for EPUB and PDF: PDF single-page mode shows a two-page spread in landscape. EPUB uses a compact 12px-gutter spread for image-page books on every device and for ordinary EPUBs on Android large screens (`sw600dp` or wider); smaller phones keep one responsive text page. Portrait stays single-page, spread controls move one spread at a time (with a `3-4 / 20` style indicator), and PDF vertical continuous mode is unchanged.
-- Word-family document filter:
-  - OOXML Word: `.docx`, `.docm`, `.dotx`, `.dotm`
-  - HWP/HWPX: `.hwp`, `.hwpx`
-  - Legacy `.doc` (Word 97-2003) opens through a self-contained pure-Java reader.
-- Read-aloud (text-to-speech) across the readers and viewers - plain-text/Markdown, the document viewer (EPUB, Word-family, HWP/HWPX, and Markdown), and text-based PDF: language and voice selection, speed and pitch, adjustable phrase length and pause reduction for neural voices, pause/resume, a sleep timer, a playback notification with media controls, and continuous reading that follows along as it goes (turning the page across boundaries in paginated viewers, and scrolling to follow in Markdown). On EPUB pages with publisher media overlays, the same button starts the declared local narration; long press opens Android TTS instead. A read-aloud button sits next to the bookmark button in each viewer's toolbar, and "continue reading aloud" from the main screen resumes at the saved spot. Android TTS works with installed system engines. Scanned/image-only PDFs report that they have no selectable text instead of playing silence.
-- HWP/HWPX text-first reading via Apache-2.0 dogfoot libraries (`hwplib`, `hwpxlib`). This is not Hancom-compatible layout rendering.
-- Image viewer with archive-backed image sequences, saved positions, direct original-byte archive-page export, optional touch page zones, adaptive image fit, and left-to-right/right-to-left flow mode. Its optional landscape spread pairs only two meaningfully portrait-shaped archive pages; square/wide and final unpaired pages remain single. Background memory pressure releases decoded image memory and reloads the same page on return. A numeric Settings value can close archive-backed viewers after `0..10080` background minutes; it defaults to `0` (disabled).
-- Archive browser and extraction/creation workflows for supported ZIP, 7z, TAR-family, RAR/CBR, ALZ, EGG, CAB, and LHA/LZH paths, with conservative support boundaries.
-- RAR 1.0.18 compatibility fixes include compressed-split checksums, solid preparation, mixed-case volume discovery, and high-precision timestamps; see `docs/RAR_COMPATIBILITY_FIXES_1_0_18.md` for the retained decoder and integrity limits.
-- The first-party 7z BCJ2 fallback now streams Copy/LZMA/LZMA2/AES coder chains and solid-folder file ranges instead of buffering entire files/folders. PPMd and header-parser memory guards remain. See `docs/SEVENZ_STREAMING_READWIDE_1_0_18.md`.
-- EPUB fixes preserve literal percent-escaped filenames and CFI assertions, keep media-overlay narration foreground/focus-gated, validate cached audio, and bound container/OPF text reads. See `docs/EPUB_FIXES_READWIDE_1_0_18.md` for scope and pending runtime validation.
-- RAR5/RAR7 long-history follow-up removes the fixed 64 MiB retained-history ceiling through encrypted temporary paging, without allocating a header-declared dictionary in RAM. See [history/storage details](docs/RAR5_RAR7_PAGED_HISTORY_1_0_18.md); tests and device verification remain pending.
-- First-party RAR5 compressed extraction streams packed and unpacked data, removing its former 64 MiB/256 MiB per-file caps. RAR3 PPMd now streams with rolling history instead of a 64 MiB cumulative-output ceiling. EGG's streaming methods no longer inherit a 512 MiB file/block cap. The fixed 128 GiB total ceiling is also removed; shared available-space accounting and decoder memory guards remain. See `docs/ARCHIVE_SIZE_POLICY_1_0_18.md` for scope and remaining fallback limits.
-- Supported first-party RAR5 routes verify CRC32 and BLAKE2sp, including encrypted HashMAC and final split-file checks without password-check metadata. Scoped RAR3/RAR4 PPMd forwarding handles AES, complete split chains, PPMd table changes and scoped standard VM filters. Mixed LZ/PPMd is now implemented in a separate, unvalidated plain single-volume fallback; encrypted/split mixed runs, custom VM and unsupported filter scheduling remain gaps. The new PPMd filter integration needs real filtered fixtures and runtime validation; see `docs/RAR3_PPMD_AND_RAR5_CHECKSUMS_1_0_18.md`.
-- File browser operations: recent files/folders, search/filtering, bookmarks, folder shortcuts, multi-select, copy/move/delete, archive extraction/compression queues, and progress UI. The fixed upper-right overflow beside the current location title offers a persistent compact-list or two-column tile display mode for both browser and Recent views. The drawer exposes one **Internal Storage** entry: it uses the normal raw-path browser when available and automatically routes through a persisted Android folder grant when an OEM cannot enumerate raw storage. The provider-backed compatibility path is deliberately read-oriented and supports navigation, sorting/filtering, and supported-file opening without pretending a content URI is a writable `File`. Optional cover thumbnails cover loose images, folder cover sources, ZIP/CBZ, RAR/CBR, 7z/CB7, ALZ, EGG, CAB, LHA/LZH, and TAR/CBT-family first images, PDF first pages, and raster EPUB covers in both normal and Recent lists. Generated previews are reused from bounded memory/disk caches; work is queue-bounded, transient failures can retry, changed folder covers are revalidated, and folder/archive sources fall through to later candidates when the first nominal image cannot be decoded. Folder, Recent, and multi-selection overflow menus size themselves for localized labels; the fixed top-right menu reports the active display, hidden-file, and thumbnail state.
-- Reader themes, custom colors, toolbar/icon ordering, and display-rule support.
+- TXT reading with bookmarks, saved positions, large-file support and configurable
+  text display rules.
+- Markdown, EPUB, Word-family and HWP/HWPX reading with shared search options.
+- Notes and highlights in TXT and Markdown, stored separately from the original
+  document and included in JSON backups.
+- PDF reading in single-page, landscape spread and continuous-scroll modes, with
+  zoom, bookmarks, page controls and search in text-based PDFs.
+- EPUB support for reflowable text, image pages, Japanese vertical writing, reader
+  themes, point-CFI navigation and basic local media-overlay narration.
+- Landscape EPUB spreads for image-page books on phones and tablets, and for
+  ordinary text EPUBs on large screens (`sw600dp` or wider).
+- Read-aloud with installed Android TTS engines: voice, speed, pitch, pause/resume,
+  sleep timer, playback controls and saved reading positions.
+- Image and comic-archive reading with touch page zones, zoom, optional landscape
+  spreads and left-to-right or right-to-left reading order.
+- File browsing with List or Tiles, recent files, pinned folders, thumbnails,
+  search, sorting, bookmarks and multi-selection.
+- Copy, move, delete, extraction and archive creation for supported formats.
+- Reader themes, custom colors, toolbar ordering and JSON backup export/import.
 
 ## Format support summary
 
-This table is the current release-summary view. Use the 1.0.18 release notes and format-specific documents for current precise boundaries; `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` is retained as a historical support-label baseline.
-
-EGG integrity qualification: the decoder checks declared lengths and nonzero block CRCs; zero CRC means no CRC comparison in the current implementation. Supported AES entries also require footer authentication. Metadata-cache identity is not a content hash.
+This table is the current release-summary view. Use the 1.0.19 release notes and format-specific documents for current precise boundaries; `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` is retained as a historical support-label baseline.
 
 | Family | Current public scope |
 | --- | --- |
@@ -79,11 +67,11 @@ EGG integrity qualification: the decoder checks declared lengths and nonzero blo
 | HWP/HWPX | Text-first read-only extraction through `hwplib` / `hwpxlib`, including shared document search; no Hancom layout parity, editing, writing, or password/encrypted HWP support. |
 | Legacy DOC | Read-only rendering through a self-contained pure-Java parser (paragraph text with alignment and indents); layout fidelity is limited compared to `.docx`. |
 | ZIP/CBZ/ZIPX | Zip4j-primary listing/extraction for Store/Deflate, password, and covered split cases. Unencrypted extended methods route through Commons Compress/libarchive. WinZip-AES ZIPX supports Deflate64, BZip2, LZMA, and XZ on the authenticated Java supplement, PPMd and Zstandard through source-built libarchive 3.8.9, and JPEG/WavPack through the separate source-built FOSS native codec module. |
-| 7z/CB7 | Apache Commons Compress for common methods, first-party PPMd/BCJ2 including covered AES/header-encrypted variants and additional bundled Deflate/Deflate64/BZip2/Delta/BCJ graph coders (latest additions untested), libarchive forward/fallback routing for covered unencrypted special-coder cases, and standard `.001/.002/...` split chains. |
+| 7z/CB7 | Common methods through Apache Commons Compress, with supplemental PPMd/BCJ2, ARM64/RISC-V and other supported filter combinations. Covered AES/header-encrypted archives and standard `.001/.002/...` split chains are supported; decoder-graph and split-naming limits still apply. |
 | TAR family / single compressor streams | Commons Compress for pure-Java covered combinations; Android Zstandard (`.tar.zst`/`.tzst`/`.zst`) routes through the bundled libarchive Zstd filter, including raw single-stream handling with shared storage-based output accounting. |
-| RAR/CBR | Limited extraction/read support. libarchive-android is the primary compressed-RAR backend; first-party Java handles covered stored entries, scoped RAR3/RAR4 PPMd cases plus an unvalidated plain single-volume mixed/solid fallback with CRC/boundary checks, RAR5-container algorithm v0 (RAR 5/6), algorithm v1 (RAR 7), and fixture-verified RAR5 AES paths. The RAR7 path parses 80 distance codes and extended/non-power-of-two dictionary declarations up to 1 TiB without allocating that amount, with a bounded RAM cache and encrypted temporary paging for history beyond 64 MiB; large dictionaries require additional storage. This latest history path has not been runtime-validated. The classic-LZ fallback preserves/reuses the six standard RAR3 VM filter programs; custom VM bytecode remains unsupported. No complete RAR claim. |
+| RAR/CBR | Limited read/extraction support through libarchive and first-party Java readers, including covered stored, compressed, solid, split and encrypted cases. The mixed LZ/PPMd fallback is limited to plain single-volume archives; stored members within solid runs, custom VM programs and unsupported filter arrangements remain excluded. Large RAR5/RAR7 history can require temporary storage. |
 | CAB / LHA / LZH | Read-only listing, image browsing, and extraction through the source-built libarchive backend. Archive creation, password handling, and broad multi-volume compatibility are not claimed. |
-| ALZ/EGG | First-party read/extraction paths for covered ALZ Store/Deflate/BZip2 and EGG Store/Deflate/BZip2/AZO/LZMA cases, with CRC checks and split-volume support (EGG `.volN.egg`, ALZ `.a00`...). Covered ZipCrypto entries, WinZip-AES-128/256 non-solid EGG entries, and unencrypted solid EGG archives extract. LEA-encrypted EGG entries and encrypted solid EGG archives remain unsupported. |
+| ALZ/EGG | Covered ALZ Store/Deflate/BZip2 and EGG Store/Deflate/BZip2/AZO/LZMA, with split-volume support. EGG checks decoded lengths, nonzero block CRCs and authentication for supported AES entries. ZipCrypto, AES-128/256 non-solid EGG and unencrypted solid EGG are covered; LEA and encrypted-solid EGG remain unsupported. |
 
 ## Quick filter buttons
 
@@ -104,13 +92,13 @@ The same image extension set is also what the image viewer opens (including imag
 
 ## FOSS / F-Droid preparation
 
-Readwide 1.0.18 is structured as a FOSS-friendly source release. For publication or repository submission, use the immutable tagged commit and run the clean source-builder checks below.
+Readwide 1.0.19 is structured as a FOSS-friendly source release. For publication or repository submission, use the immutable tagged commit and run the clean source-builder checks below.
 
 - First-party code is Apache-2.0.
 - The default build does not bundle Junrar or RARLAB UnRAR-license code.
 - HWP/HWPX support uses Apache-2.0 Java libraries.
-- `THIRD_PARTY_NOTICES.md`, `docs/FOSS_STATUS.md`, license reports, and SBOM drafts are included where available.
-- The checked-in F-Droid metadata file is a historical mirror through 1.0.13, not a submission-ready copy. Start from current upstream metadata and add 1.0.18 only after the final tag exists, pinning it to the immutable 40-character release commit hash.
+- `THIRD_PARTY_NOTICES.md`, `docs/FOSS_STATUS.md`, license reports, and the source dependency SBOM are included.
+- The checked-in F-Droid metadata file is a historical mirror through 1.0.13, not a submission-ready copy. Start from current upstream metadata and add 1.0.19 only after the final tag exists, pinning it to the immutable 40-character release commit hash.
 
 F-Droid-facing notes are in `docs/FDROID_SUBMISSION.md`.
 
@@ -139,16 +127,14 @@ Release signing is conditional. If the `READWIDE_*` (or legacy `TEXTVIEW_*`) sig
 
 ## Release documents
 
-- `docs/CURRENT_SOURCE_STATUS_1_0_18.md` — current code/support/verification summary and guide to historical notes.
 - `CHANGELOG.md` — public changelog.
 - `PATCHNOTES.md` — detailed public release notes.
 - `GITHUB_UPLOAD_NOTES.md` — GitHub upload checklist.
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_18.md` — copy-ready GitHub release notes (per-version notes back through 1.0.2 are retained alongside).
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_19.md` — copy-ready GitHub release notes (per-version notes back through 1.0.2 are retained alongside).
 - `docs/FDROID_SUBMISSION.md` — F-Droid submission notes.
 - `docs/EPUB_COMPATIBILITY_AUDIT_1_0_16.md` — off-device audit against the 45 supplied IDPF EPUB 3 samples, including supported structural paths and known feature gaps.
 - `docs/TXT_SEARCH_USAGE.md` — reader find-in-page options for TXT and WebView document readers (case sensitive, whole word, regular expression).
 - `docs/FOSS_STATUS.md` — FOSS boundary and caveats.
-- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — historical archive compatibility baseline and support-label glossary; use this README and current release notes for 1.0.18 support claims.
+- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — historical archive compatibility baseline and support-label glossary; use this README and current release notes for 1.0.19 support claims.
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md` — HWP/HWPX scope and license notes; its legacy `.doc` remarks are historical because `.doc` gained a basic read-only path in 1.0.11.
-- [1.0.18 license report](docs/LICENSE_REPORT_READWIDE_1_0_18.md) and [source/direct-dependency SBOM](docs/SBOM_READWIDE_1_0_18.spdx.json) — current release identity and unchanged declared dependencies; not a resolved transitive audit.
-- [Release readiness](docs/RELEASE_READINESS_1_0_18.md) — earlier maintainer-reported build success, later unbuilt UI/resource changes, and remaining validation.
+- [1.0.19 license report](docs/LICENSE_REPORT_READWIDE_1_0_19.md) and [source/direct-dependency SBOM](docs/SBOM_READWIDE_1_0_19.spdx.json) — current release identity and updated declared dependencies; not a resolved transitive audit.

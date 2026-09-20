@@ -15,7 +15,6 @@ import com.readwide.manager.model.FileListItem;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -59,15 +58,15 @@ public final class FileSortUtils {
         // where they would run O(n log n) times (and isDirectory()/length() hit
         // the filesystem). This is the main list-refresh speedup.
         SortKey[] keys = new SortKey[n];
-        for (int i = 0; i < n; i++) {
+        int index = 0;
+        for (File f : target) {
             // Cooperative cancellation: when the search is superseded the executor
             // calls Future.cancel(true), which interrupts this thread. Bail out
             // promptly; the caller discards stale results by search generation.
-            if ((i & 0x3FF) == 0 && Thread.currentThread().isInterrupted()) {
+            if ((index & 0x3FF) == 0 && Thread.currentThread().isInterrupted()) {
                 Thread.currentThread().interrupt();
                 return false;
             }
-            File f = target.get(i);
             SortKey k = new SortKey();
             k.file = f;
             k.name = f.getName();
@@ -75,7 +74,7 @@ public final class FileSortUtils {
             k.date = needDate ? filesystemSortDate(f) : 0L;
             k.size = needSize ? fileSortSize(f) : 0L;
             k.ext = needExt ? fileExtension(k.name) : null;
-            keys[i] = k;
+            keys[index++] = k;
         }
         try {
             java.util.Arrays.sort(keys, new java.util.Comparator<SortKey>() {
@@ -118,7 +117,9 @@ public final class FileSortUtils {
             Thread.currentThread().interrupt();
             return false;
         }
-        for (int i = 0; i < n; i++) target.set(i, keys[i].file);
+        if (Thread.currentThread().isInterrupted()) return false;
+        java.util.ListIterator<File> output = target.listIterator();
+        for (SortKey key : keys) { output.next(); output.set(key.file); }
         return true;
     }
 
@@ -142,14 +143,14 @@ public final class FileSortUtils {
         // filesystem access here). Extracting the type key once also avoids
         // recomputing fileExtension() inside the comparator O(n log n) times.
         ItemSortKey[] keys = new ItemSortKey[n];
-        for (int i = 0; i < n; i++) {
+        int index = 0;
+        for (FileListItem item : target) {
             // Cooperative here too: building n keys is cheap (no stat), but for a very
             // large list abandon promptly on cancellation instead of allocating them all.
-            if ((i & 0x3FF) == 0 && Thread.currentThread().isInterrupted()) {
+            if ((index & 0x3FF) == 0 && Thread.currentThread().isInterrupted()) {
                 Thread.currentThread().interrupt();
                 return false;
             }
-            FileListItem item = target.get(i);
             ItemSortKey k = new ItemSortKey();
             k.item = item;
             k.name = item.getName();
@@ -157,7 +158,7 @@ public final class FileSortUtils {
             k.date = needDate ? item.getSortDate() : 0L;
             k.size = needSize ? item.getSize() : 0L;
             k.ext = needExt ? fileExtension(k.name) : null;
-            keys[i] = k;
+            keys[index++] = k;
         }
         try {
             java.util.Arrays.sort(keys, new java.util.Comparator<ItemSortKey>() {
@@ -205,7 +206,9 @@ public final class FileSortUtils {
             Thread.currentThread().interrupt();
             return false;
         }
-        for (int i = 0; i < n; i++) target.set(i, keys[i].item);
+        if (Thread.currentThread().isInterrupted()) return false;
+        java.util.ListIterator<FileListItem> output = target.listIterator();
+        for (ItemSortKey key : keys) { output.next(); output.set(key.item); }
         return true;
     }
 
@@ -225,19 +228,19 @@ public final class FileSortUtils {
         if (n < 2) return true;
         boolean newest = sortMode == PrefsManager.SORT_DATE_NEW;
         ItemSortKey[] keys = new ItemSortKey[n];
-        for (int i = 0; i < n; i++) {
-            if ((i & 0x3FF) == 0 && Thread.currentThread().isInterrupted()) {
+        int index = 0;
+        for (FileListItem item : target) {
+            if ((index & 0x3FF) == 0 && Thread.currentThread().isInterrupted()) {
                 Thread.currentThread().interrupt();
                 return false;
             }
-            FileListItem item = target.get(i);
             ItemSortKey k = new ItemSortKey();
             k.item = item;
             k.name = item.getName();
             k.isDir = item.isDirectory();
             Long override = dateOverrides.get(item.getAbsolutePath());
             k.date = override != null && override > 0L ? override : item.getSortDate();
-            keys[i] = k;
+            keys[index++] = k;
         }
         try {
             java.util.Arrays.sort(keys, new java.util.Comparator<ItemSortKey>() {
@@ -255,7 +258,9 @@ public final class FileSortUtils {
             Thread.currentThread().interrupt();
             return false;
         }
-        for (int i = 0; i < n; i++) target.set(i, keys[i].item);
+        if (Thread.currentThread().isInterrupted()) return false;
+        java.util.ListIterator<FileListItem> output = target.listIterator();
+        for (ItemSortKey key : keys) { output.next(); output.set(key.item); }
         return true;
     }
 
@@ -335,56 +340,87 @@ public final class FileSortUtils {
     }
 
     public static void sortArchiveImageSequence(@NonNull List<ArchiveSupport.EntryInfo> target) {
-        Collections.sort(target, (a, b) -> {
-            int cmp = NaturalSort.compare(archiveImageSequenceKey(a), archiveImageSequenceKey(b));
+        if (target.size() < 2) return;
+        ArchiveSortKey[] keys = archiveKeys(target, true, false);
+        java.util.Arrays.sort(keys, (a, b) -> {
+            int cmp = NaturalSort.compare(a.path, b.path);
             if (cmp != 0) return cmp;
-            cmp = NaturalSort.compare(a.name(), b.name());
+            cmp = NaturalSort.compare(a.name, b.name);
             if (cmp != 0) return cmp;
-            cmp = Long.compare(a.size, b.size);
+            cmp = Long.compare(a.entry.size, b.entry.size);
             if (cmp != 0) return cmp;
-            return Long.compare(a.timeMillis, b.timeMillis);
+            return Long.compare(a.entry.timeMillis, b.entry.timeMillis);
         });
+        applyArchiveOrder(target, keys);
     }
 
     @NonNull
     private static String archiveImageSequenceKey(@NonNull ArchiveSupport.EntryInfo entry) {
-        String path = entry.path == null ? "" : entry.path.replace('\\', '/');
-        while (path.startsWith("./")) path = path.substring(2);
-        while (path.contains("//")) path = path.replace("//", "/");
-        return path;
+        return ArchiveEntryPaths.normalize(entry.path == null ? "" : entry.path);
     }
 
     public static void sortArchiveEntries(@NonNull List<ArchiveSupport.EntryInfo> target, int sortMode) {
-        Collections.sort(target, (a, b) -> {
-            if (a.directory != b.directory) return a.directory ? -1 : 1;
+        if (target.size() < 2) return;
+        ArchiveSortKey[] keys = archiveKeys(target, false, sortMode == PrefsManager.SORT_TYPE);
+        java.util.Arrays.sort(keys, (a, b) -> {
+            if (a.entry.directory != b.entry.directory) return a.entry.directory ? -1 : 1;
             switch (sortMode) {
                 case PrefsManager.SORT_NAME_DESC:
-                    return NaturalSort.compare(b.name(), a.name());
+                    return NaturalSort.compare(b.name, a.name);
                 case PrefsManager.SORT_DATE_NEW: {
-                    int cmp = Long.compare(b.timeMillis, a.timeMillis);
-                    return cmp != 0 ? cmp : NaturalSort.compare(a.name(), b.name());
+                    int cmp = Long.compare(b.entry.timeMillis, a.entry.timeMillis);
+                    return cmp != 0 ? cmp : NaturalSort.compare(a.name, b.name);
                 }
                 case PrefsManager.SORT_DATE_OLD: {
-                    int cmp = Long.compare(a.timeMillis, b.timeMillis);
-                    return cmp != 0 ? cmp : NaturalSort.compare(a.name(), b.name());
+                    int cmp = Long.compare(a.entry.timeMillis, b.entry.timeMillis);
+                    return cmp != 0 ? cmp : NaturalSort.compare(a.name, b.name);
                 }
                 case PrefsManager.SORT_SIZE_LARGE: {
-                    int cmp = Long.compare(b.size, a.size);
-                    return cmp != 0 ? cmp : NaturalSort.compare(a.name(), b.name());
+                    int cmp = Long.compare(b.entry.size, a.entry.size);
+                    return cmp != 0 ? cmp : NaturalSort.compare(a.name, b.name);
                 }
                 case PrefsManager.SORT_SIZE_SMALL: {
-                    int cmp = Long.compare(a.size, b.size);
-                    return cmp != 0 ? cmp : NaturalSort.compare(a.name(), b.name());
+                    int cmp = Long.compare(a.entry.size, b.entry.size);
+                    return cmp != 0 ? cmp : NaturalSort.compare(a.name, b.name);
                 }
                 case PrefsManager.SORT_TYPE: {
-                    int cmp = fileExtension(a.name()).compareTo(fileExtension(b.name()));
-                    return cmp != 0 ? cmp : NaturalSort.compare(a.name(), b.name());
+                    int cmp = a.ext.compareTo(b.ext);
+                    return cmp != 0 ? cmp : NaturalSort.compare(a.name, b.name);
                 }
                 case PrefsManager.SORT_NAME_ASC:
                 default:
-                    return NaturalSort.compare(a.name(), b.name());
+                    return NaturalSort.compare(a.name, b.name);
             }
         });
+        applyArchiveOrder(target, keys);
+    }
+
+    // Extract path/name/type keys once per entry, not during every comparison.
+    // Iterator access keeps linked-list inputs and writeback linear as well.
+    private static ArchiveSortKey[] archiveKeys(List<ArchiveSupport.EntryInfo> entries,
+                                                 boolean sequence, boolean needExt) {
+        ArchiveSortKey[] keys = new ArchiveSortKey[entries.size()];
+        int index = 0;
+        for (ArchiveSupport.EntryInfo entry : entries) {
+            keys[index++] = new ArchiveSortKey(entry, sequence, needExt);
+        }
+        return keys;
+    }
+
+    private static void applyArchiveOrder(List<ArchiveSupport.EntryInfo> entries, ArchiveSortKey[] keys) {
+        java.util.ListIterator<ArchiveSupport.EntryInfo> iterator = entries.listIterator();
+        for (ArchiveSortKey key : keys) { iterator.next(); iterator.set(key.entry); }
+    }
+
+    private static final class ArchiveSortKey {
+        final ArchiveSupport.EntryInfo entry;
+        final String name, path, ext;
+        ArchiveSortKey(ArchiveSupport.EntryInfo entry, boolean sequence, boolean needExt) {
+            this.entry = entry;
+            name = entry.name();
+            path = sequence ? archiveImageSequenceKey(entry) : null;
+            ext = needExt ? fileExtension(name) : null;
+        }
     }
 
     private static long fileSortSize(@NonNull File file) {

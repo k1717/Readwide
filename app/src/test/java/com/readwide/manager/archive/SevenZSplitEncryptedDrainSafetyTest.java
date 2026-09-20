@@ -20,10 +20,11 @@ public class SevenZSplitEncryptedDrainSafetyTest {
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause();
             assertTrue(cause instanceof ArchiveSupport.UnsupportedArchiveFeatureException);
-            assertTrue(String.valueOf(cause.getMessage()).contains("safety limit"));
+            assertEquals(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE,
+                    ArchiveFailureClassifier.classify((Exception) cause));
             return;
         }
-        throw new AssertionError("Expected the shared decoded stream safety-limit guard to fail");
+        throw new AssertionError("Expected the shared decoded-byte overflow guard to fail");
     }
 
     @Test

@@ -66,9 +66,34 @@ final class RarLzWindow {
             throw new IOException("Invalid RAR LZ distance");
         }
         if (length < 0) throw new IOException("Invalid RAR LZ length");
-        for (int i = 0; i < length; i++) {
+        if (length > Long.MAX_VALUE - written) throw new IOException("RAR output counter overflow");
+        int remaining = length;
+        while (remaining > 0) {
+            if (Thread.currentThread().isInterrupted()) throw new IOException("RAR match copying cancelled");
+            if (retained == window.length && window.length < maximumHistoryCapacity) {
+                ensureHistoryCapacity(Math.min(maximumHistoryCapacity, window.length * 2));
+            }
+            int count = Math.min(remaining, Math.min(window.length - position, 64 * 1024));
+            if (window.length < maximumHistoryCapacity) count = Math.min(count, window.length - retained);
             int source = (position - distance) & (window.length - 1);
-            writeLiteral(window[source] & 0xff);
+            // Seed at most one period from existing history, including ring wrap.
+            // A single overlapping arraycopy would NOT implement LZ repetition.
+            int seed = Math.min(distance, count);
+            int tail = Math.min(seed, window.length - source);
+            System.arraycopy(window, source, window, position, tail);
+            System.arraycopy(window, 0, window, position + tail, seed - tail);
+            // Doubling the initialized prefix handles distance=1 and every other
+            // overlapping match in O(log(count / distance)) array-copy calls.
+            for (int filled = seed; filled < count; ) {
+                int next = Math.min(filled, count - filled);
+                System.arraycopy(window, position, window, position + filled, next);
+                filled += next;
+            }
+            out.writeDecodedBytes(window, position, count);
+            position = (position + count) & (window.length - 1);
+            written += count;
+            retained = Math.min(window.length, retained + count);
+            remaining -= count;
         }
     }
 

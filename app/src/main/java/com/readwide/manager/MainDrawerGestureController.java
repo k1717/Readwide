@@ -137,7 +137,11 @@ final class MainDrawerGestureController {
     }
 
     private boolean isTouchInsideMainBottomControls(@NonNull MotionEvent event) {
-        return isTouchInsideView(activity.fileSearchBar, event)
+        // Home pins scroll horizontally; the custom anywhere-right-swipe opener
+        // must not steal their gesture (even when the strip is at its first item).
+        return (activity.homeMode && !activity.searchMode
+                && isTouchInsideView(activity.findViewById(R.id.home_shortcuts_list), event))
+                || isTouchInsideView(activity.fileSearchBar, event)
                 || isTouchInsideView(activity.fileTypeFilterScroll, event)
                 || isTouchInsideView(activity.filterAllChip, event)
                 || isTouchInsideView(activity.filterGeneralChip, event)

@@ -29,7 +29,9 @@ import java.util.List;
  * bounded {@link InputStream} handed to a decompressor can share the view with
  * the sequential parser. Bounded views own their cursors and close state, not
  * the volume handles. Physical I/O failures and cancellation retire the owner;
- * caller range errors do not. Physical/logical bounds are not integrity checks
+ * caller range errors do not. At most one physical volume is kept open; file
+ * length and modification time are rechecked when switching volumes. This bounds
+ * descriptor use for large EGG/ALZ/7z chains. Physical/logical bounds are not integrity checks
  * and cannot detect every concurrent modification of the backing files.</p>
  */
 final class SplitVolumeInput implements Closeable {
@@ -47,7 +49,11 @@ final class SplitVolumeInput implements Closeable {
         }
     }
 
-    private final RandomAccessFile[] files;
+    private final File[] files;
+    private final long[] physicalLengths;
+    private final long[] modifiedTimes;
+    private RandomAccessFile activeFile;
+    private int activeSegment = -1;
     private final long[] segStart;   // logical start offset of each segment
     private final long[] segOffset;  // physical payload offset within each file
     private final long totalLength;
@@ -58,7 +64,9 @@ final class SplitVolumeInput implements Closeable {
 
     SplitVolumeInput(@NonNull List<Segment> segments) throws IOException {
         if (segments.isEmpty()) throw new IOException("split volume set is empty");
-        files = new RandomAccessFile[segments.size()];
+        files = new File[segments.size()];
+        physicalLengths = new long[segments.size()];
+        modifiedTimes = new long[segments.size()];
         segStart = new long[segments.size()];
         segOffset = new long[segments.size()];
         long total = 0L;
@@ -68,8 +76,14 @@ final class SplitVolumeInput implements Closeable {
                 checkReadable();
                 Segment seg = segments.get(i);
                 if (seg.dataOffset < 0 || seg.length < 0) throw new IOException("Invalid split volume segment");
-                files[i] = new RandomAccessFile(seg.file, "r");
-                long physicalLength = files[i].length();
+                files[i] = seg.file.getCanonicalFile();
+                if (!files[i].isFile() || !files[i].canRead()) throw new IOException("Split volume unavailable");
+                long physicalLength;
+                try (RandomAccessFile checking = new RandomAccessFile(files[i], "r")) {
+                    physicalLength = checking.length();
+                }
+                physicalLengths[i] = physicalLength;
+                modifiedTimes[i] = files[i].lastModified();
                 if (seg.dataOffset > physicalLength || seg.length > physicalLength - seg.dataOffset) {
                     throw new IOException("Split volume segment exceeds physical file bounds");
                 }
@@ -151,7 +165,7 @@ final class SplitVolumeInput implements Closeable {
                 long inSeg = pos - segStart[seg];
                 if (inSeg >= segLen) { seg++; continue; }
                 int want = (int) Math.min((long) (length - done), segLen - inSeg);
-                RandomAccessFile raf = files[seg];
+                RandomAccessFile raf = fileFor(seg);
                 raf.seek(segOffset[seg] + inSeg);
                 int n = raf.read(buffer, offset + done, want);
                 if (n <= 0) throw new IOException("Split volume shorter than expected");
@@ -277,13 +291,27 @@ final class SplitVolumeInput implements Closeable {
         return error;
     }
 
-    private void closeQuietly() {
-        for (RandomAccessFile raf : files) {
-            if (raf == null) continue;
-            try {
-                raf.close();
-            } catch (IOException ignored) {
-            }
+    private RandomAccessFile fileFor(int segment) throws IOException {
+        if (activeSegment == segment) return activeFile;
+        closeQuietly();
+        File file = files[segment];
+        if (!file.isFile() || file.length() != physicalLengths[segment]
+                || file.lastModified() != modifiedTimes[segment]) {
+            throw new IOException("Split volume changed during read: " + file.getName());
         }
+        activeFile = new RandomAccessFile(file, "r");
+        if (activeFile.length() != physicalLengths[segment]) {
+            throw new IOException("Split volume size changed during open");
+        }
+        activeSegment = segment;
+        return activeFile;
+    }
+
+    private void closeQuietly() {
+        if (activeFile != null) {
+            try { activeFile.close(); } catch (IOException ignored) { }
+            activeFile = null;
+        }
+        activeSegment = -1;
     }
 }

@@ -21,6 +21,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Manages bookmarks and reading states.
@@ -50,9 +53,28 @@ public class BookmarkManager {
     private final Context context;
     private List<Bookmark> bookmarks;
     private Map<String, ReaderState> readingStates;
+    private long readingStateRevision;
+    private final CoalescingSnapshotWriter<Map<String, ReaderState>> readingStateWriter;
+
+    private static final class ReadingStateIo {
+        static final ScheduledExecutorService EXECUTOR = Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(() -> {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+                task.run();
+            }, "readwide-progress-writer");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
 
     private BookmarkManager(Context context) {
         this.context = context.getApplicationContext();
+        readingStateWriter = new CoalescingSnapshotWriter<>(
+                task -> ReadingStateIo.EXECUTOR.schedule(task, 100L, TimeUnit.MILLISECONDS),
+                this::snapshotReadingStates,
+                BookmarkManager::encodeReadingStates,
+                text -> AtomicUtf8File.write(new File(this.context.getFilesDir(), STATES_FILE), text),
+                failure -> Log.e(TAG, "Failed to save reading states", failure));
         loadBookmarks();
         loadReadingStates();
     }
@@ -174,6 +196,18 @@ public class BookmarkManager {
         state.setLastReadAt(System.currentTimeMillis());
         readingStates.put(state.getFilePath(), state);
         saveReadingStates();
+    }
+
+    /**
+     * Publish PDF page-turn progress in memory immediately; serialize/write later.
+     * The app-owned writer never retains an Activity. Other save/delete/import
+     * operations still use synchronous, revision-ordered checkpoints below.
+     */
+    public synchronized void saveReadingStateDeferred(ReaderState state) {
+        state.setLastReadAt(System.currentTimeMillis());
+        ReaderState owned = state.copy();
+        readingStates.put(owned.getFilePath(), owned);
+        readingStateWriter.request(++readingStateRevision);
     }
 
     public synchronized void deleteReadingState(String filePath) {
@@ -429,7 +463,7 @@ public class BookmarkManager {
             return root.toString(2); // pretty-printed for readability
         } catch (JSONException e) {
             Log.e(TAG, "Export failed", e);
-            return "{}";
+            throw new IllegalStateException("Could not serialize the backup", e);
         }
     }
 
@@ -575,101 +609,134 @@ public class BookmarkManager {
      * Import bookmarks and states from a JSON string.
      * @param merge if true, merge with existing; if false, replace all
      */
-    public synchronized void importAll(String jsonString, boolean merge) {
-        try {
-            JSONObject root = new JSONObject(jsonString);
-            boolean importedBookmarks = false;
-            boolean importedReadingStates = false;
-            boolean importedSettings = false;
-
-            // Import bookmarks
-            Map<String, JSONObject> beginnerEditMap = readBeginnerEditableBookmarkMap(root);
-            Map<String, JSONObject> developerEditMap = readDeveloperEditableBookmarkMap(root);
-            JSONArray arr = root.optJSONArray("bookmarks");
-            if (arr != null) {
-                if (!merge) {
-                    bookmarks.clear();
-                }
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject bookmarkObj = arr.getJSONObject(i);
-                    Bookmark b = Bookmark.fromJson(bookmarkObj);
-                    applyPcEditableBookmarkFields(bookmarkObj, b);
-                    applyDeveloperEditableBookmarkFields(developerEditMap.get(b.getId()), b);
-                    applyBeginnerEditableBookmarkFields(beginnerEditMap.get(b.getId()), b);
-                    enrichPortableIdentity(b);
-                    if (merge) {
-                        // If this is the same bookmark id, replace it so PC edits
-                        // from the backup are not lost during a merge import.
-                        int sameIdIndex = -1;
-                        for (int j = 0; j < bookmarks.size(); j++) {
-                            if (safeEquals(bookmarks.get(j).getId(), b.getId())) {
-                                sameIdIndex = j;
-                                break;
-                            }
-                        }
-                        if (sameIdIndex >= 0) {
-                            bookmarks.set(sameIdIndex, b);
-                        } else {
-                            boolean duplicate = false;
-                            for (Bookmark existing : bookmarks) {
-                                if (isSameBookmarkLocation(existing, b)) {
-                                    duplicate = true;
-                                    break;
-                                }
-                            }
-                            if (!duplicate) {
-                                bookmarks.add(b);
-                            }
-                        }
-                    } else {
-                        bookmarks.add(b);
-                    }
-                }
-                saveBookmarks();
-                importedBookmarks = true;
+    public void importAll(String jsonString, boolean merge) throws Exception {
+        // Parsing, validation and optional local-file edits happen on owned rows,
+        // outside the live model lock. Nothing is cleared on a malformed backup.
+        BackupImportData data = new BackupImportData(jsonString);
+        if (data.bookmarks != null) {
+            Map<String, JSONObject> beginner = readBeginnerEditableBookmarkMap(data.root);
+            Map<String, JSONObject> developer = readDeveloperEditableBookmarkMap(data.root);
+            JSONArray rows = data.root.getJSONArray("bookmarks");
+            for (int i = 0; i < data.bookmarks.size(); i++) {
+                if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException();
+                Bookmark value = data.bookmarks.get(i);
+                applyPcEditableBookmarkFields(rows.getJSONObject(i), value);
+                applyDeveloperEditableBookmarkFields(developer.get(value.getId()), value);
+                applyBeginnerEditableBookmarkFields(beginner.get(value.getId()), value);
+                enrichPortableIdentity(value);
             }
-
-            // Import reading states
-            JSONObject statesObj = root.optJSONObject("readingStates");
-            if (statesObj != null) {
-                if (!merge) {
-                    readingStates.clear();
-                }
-                Iterator<String> keys = statesObj.keys();
-                while (keys.hasNext()) {
-                    String key = keys.next();
-                    ReaderState state = ReaderState.fromJson(statesObj.getJSONObject(key));
-                    readingStates.put(key, state);
-                }
-                saveReadingStates();
-                importedReadingStates = true;
-            }
-
-            // Import settings and custom themes when present. Older backups that
-            // only contain bookmarks/reading states remain valid.
-            JSONObject settingsObj = root.optJSONObject("settings");
-            if (settingsObj != null) {
-                PrefsManager.getInstance(context).importSettingsFromJson(settingsObj, merge);
-                importedSettings = true;
-            }
-
-            JSONArray themesArr = root.optJSONArray("customThemes");
-            if (themesArr != null) {
-                ThemeManager.getInstance(context).importCustomThemesFromJson(themesArr, merge);
-            }
-
-            JSONArray annotationsArr = root.optJSONArray("annotations");
-            if (annotationsArr != null) {
-                DocumentAnnotationManager.getInstance(context)
-                        .importJson(annotationsArr, merge);
-            }
-
-            if (importedBookmarks || importedReadingStates || importedSettings) {
-                invalidateTxtLayoutDependentPageMetadata("backup import or settings migration");
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Import failed", e);
         }
+        ThemeManager themes = ThemeManager.getInstance(context);
+        DocumentAnnotationManager annotations = DocumentAnnotationManager.getInstance(context);
+        PrefsManager preferences = PrefsManager.getInstance(context);
+        synchronized (this) {
+            synchronized (themes) {
+                synchronized (annotations) {
+                    commitImport(data, merge, themes, annotations, preferences);
+                }
+            }
+        }
+    }
+
+    private void commitImport(BackupImportData data, boolean merge, ThemeManager themes,
+                              DocumentAnnotationManager annotations, PrefsManager preferences) throws Exception {
+        if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException();
+        final List<Bookmark> previousBooks = bookmarks;
+        final Map<String, ReaderState> previousStates = readingStates;
+        boolean refreshPages = data.bookmarks != null || data.states != null || data.settings != null;
+        List<Bookmark> ownedBooks = new ArrayList<>(refreshPages ? bookmarks.size() : 0);
+        if (refreshPages) for (Bookmark value : bookmarks) ownedBooks.add(value.copy());
+        final List<Bookmark> plannedBooks = data.bookmarks == null ? ownedBooks
+                : merge ? IndexedBackupMerge.merge(ownedBooks, data.bookmarks, Bookmark::getId, this::bookmarkLocationKeys)
+                : new ArrayList<>(data.bookmarks);
+        final Map<String, ReaderState> plannedStates = new HashMap<>();
+        if (refreshPages && (merge || data.states == null)) for (Map.Entry<String, ReaderState> entry : readingStates.entrySet())
+            plannedStates.put(entry.getKey(), entry.getValue().copy());
+        if (data.states != null) plannedStates.putAll(data.states);
+
+        final Map<String, ?> previousPrefs = data.settings == null ? null : preferences.snapshotForImport();
+        final Map<String, Object> plannedPrefs = data.settings == null ? null
+                : preferences.planImportSettings(data.settings, merge, previousPrefs);
+        final List<com.readwide.manager.model.Theme> previousThemes = data.themes == null ? null : themes.snapshotForImport();
+        final List<com.readwide.manager.model.Theme> plannedThemes = data.themes == null ? null
+                : IndexedBackupMerge.merge(merge ? previousThemes : Collections.emptyList(),
+                    data.themes, com.readwide.manager.model.Theme::getId, null);
+        final List<com.readwide.manager.model.DocumentAnnotation> previousAnnotations = data.annotations == null ? null : annotations.snapshotForImport();
+        final List<com.readwide.manager.model.DocumentAnnotation> plannedAnnotations = data.annotations == null ? null
+                : annotations.planImport(data.annotations, merge);
+
+        if (refreshPages) {
+            for (Bookmark value : plannedBooks) if (isTxtBookmark(value)) clearBookmarkPageMetadata(value);
+            for (ReaderState value : plannedStates.values()) if (isTxtLikePath(value.getFilePath())) {
+                value.setPageNumber(0); value.setTotalPages(0);
+            }
+        }
+        List<BackupImportTransaction.Step> steps = new ArrayList<>();
+        if (refreshPages) {
+            // Serialize before the first mutation. Saving uses checked I/O, not
+            // the best-effort wrappers used by ordinary background bookkeeping.
+            final String encodedBooks = encodeBookmarks(plannedBooks);
+            encodeReadingStates(plannedStates);
+            steps.add(BackupImportTransaction.step(() -> {
+                AtomicUtf8File.write(new File(context.getFilesDir(), BOOKMARKS_FILE), encodedBooks);
+                bookmarks = plannedBooks;
+            }, () -> {
+                bookmarks = previousBooks;
+                AtomicUtf8File.write(new File(context.getFilesDir(), BOOKMARKS_FILE), encodeBookmarks(previousBooks));
+            }));
+            steps.add(BackupImportTransaction.step(() -> {
+                readingStateWriter.writeNow(new CoalescingSnapshotWriter.Snapshot<>(++readingStateRevision, plannedStates));
+                readingStates = plannedStates;
+            }, () -> {
+                readingStates = previousStates;
+                readingStateWriter.writeNow(new CoalescingSnapshotWriter.Snapshot<>(++readingStateRevision, previousStates));
+            }));
+        }
+        if (plannedThemes != null) steps.add(BackupImportTransaction.step(
+                () -> themes.replaceFromImport(plannedThemes), () -> themes.restoreAfterImportFailure(previousThemes)));
+        if (plannedAnnotations != null) steps.add(BackupImportTransaction.step(
+                () -> annotations.replaceFromImport(plannedAnnotations), () -> annotations.restoreAfterImportFailure(previousAnnotations)));
+        if (plannedPrefs != null) steps.add(BackupImportTransaction.step(
+                () -> preferences.replaceImportSettings(plannedPrefs), () -> preferences.replaceImportSettings(previousPrefs)));
+        // Once committing starts, finish or roll back; do not abort midway merely
+        // because the Settings screen rotated or closed.
+        BackupImportTransaction.run(steps);
+    }
+
+    private List<Object> bookmarkLocationKeys(Bookmark value) {
+        List<Object> keys = new ArrayList<>(2);
+        String anchor = BookmarkMergeMath.normalizedAnchor(value.getContentAnchorJson());
+        keys.add(java.util.Arrays.asList("path", value.getFilePath(), value.getCharPosition(), anchor));
+        String fingerprint = value.getQuickFingerprint();
+        if (fingerprint != null && !fingerprint.isEmpty()) keys.add(java.util.Arrays.asList(
+                "portable", new IgnoreCaseName(bookmarkFileName(value)), fingerprint, value.getCharPosition(), anchor));
+        return keys;
+    }
+
+    private static final class IgnoreCaseName {
+        final String value;
+        IgnoreCaseName(String value) { this.value = value; }
+        @Override public boolean equals(Object other) {
+            return other instanceof IgnoreCaseName && value.equalsIgnoreCase(((IgnoreCaseName) other).value);
+        }
+        @Override public int hashCode() {
+            int hash = 0;
+            for (int i = 0; i < value.length();) {
+                int cp = value.codePointAt(i);
+                hash = 31 * hash + Character.toLowerCase(Character.toUpperCase(cp));
+                i += Character.charCount(cp);
+            }
+            return hash;
+        }
+    }
+
+    private static String encodeBookmarks(List<Bookmark> values) throws JSONException {
+        JSONObject root = new JSONObject();
+        root.put("version", FORMAT_VERSION);
+        JSONArray rows = new JSONArray();
+        for (Bookmark value : values) rows.put(value.toJson());
+        root.put("bookmarks", rows);
+        return root.toString(2);
     }
 
 
@@ -1503,21 +1570,6 @@ public class BookmarkManager {
         }
     }
 
-    private boolean isSameBookmarkLocation(Bookmark a, Bookmark b) {
-        if (a == null || b == null) return false;
-        if (safeEquals(a.getFilePath(), b.getFilePath())) {
-            return BookmarkMergeMath.isSameLogicalPosition(
-                    a.getCharPosition(), a.getContentAnchorJson(),
-                    b.getCharPosition(), b.getContentAnchorJson());
-        }
-        if (!bookmarkFileName(a).equalsIgnoreCase(bookmarkFileName(b))) return false;
-        String fpA = a.getQuickFingerprint();
-        String fpB = b.getQuickFingerprint();
-        return fpA != null && !fpA.isEmpty() && fpA.equals(fpB)
-                && BookmarkMergeMath.isSameLogicalPosition(
-                        a.getCharPosition(), a.getContentAnchorJson(),
-                        b.getCharPosition(), b.getContentAnchorJson());
-    }
 
     private boolean safeEquals(String a, String b) {
         return a == null ? b == null : a.equals(b);
@@ -1572,38 +1624,6 @@ public class BookmarkManager {
     }
 
 
-    /**
-     * TXT displayed Page X/Y is layout dependent. Importing settings from another
-     * device or older app version can change font, line spacing, boundaries,
-     * screen-size assumptions, and the large-TXT partition model. Keep the stable
-     * location fields (charPosition, lineNumber, anchors) but discard stale page
-     * labels so the next real open recalculates them from the current layout.
-     */
-    private void invalidateTxtLayoutDependentPageMetadata(String reason) {
-        boolean bookmarksChanged = false;
-        for (Bookmark bookmark : bookmarks) {
-            if (!isTxtBookmark(bookmark)) continue;
-            if (clearBookmarkPageMetadata(bookmark)) {
-                bookmarksChanged = true;
-            }
-        }
-        if (bookmarksChanged) {
-            saveBookmarks();
-        }
-
-        boolean statesChanged = false;
-        for (ReaderState state : readingStates.values()) {
-            if (state == null || !isTxtLikePath(state.getFilePath())) continue;
-            if (state.getPageNumber() != 0 || state.getTotalPages() != 0) {
-                state.setPageNumber(0);
-                state.setTotalPages(0);
-                statesChanged = true;
-            }
-        }
-        if (statesChanged) {
-            saveReadingStates();
-        }
-    }
 
     private boolean clearBookmarkPageMetadata(Bookmark bookmark) {
         if (bookmark == null) return false;
@@ -1682,27 +1702,38 @@ public class BookmarkManager {
         }
     }
 
-    private void saveReadingStates() {
+    private synchronized void saveReadingStates() {
+        ++readingStateRevision;
         try {
-            JSONObject root = new JSONObject();
-            root.put("version", FORMAT_VERSION);
-            JSONObject statesObj = new JSONObject();
-            for (Map.Entry<String, ReaderState> entry : readingStates.entrySet()) {
-                statesObj.put(entry.getKey(), entry.getValue().toJson());
-            }
-            root.put("states", statesObj);
-            writeFile(STATES_FILE, root.toString(2));
-        } catch (JSONException e) {
+            readingStateWriter.writeNow(snapshotReadingStates());
+        } catch (Exception e) {
             Log.e(TAG, "Failed to save reading states", e);
         }
     }
 
+    private synchronized CoalescingSnapshotWriter.Snapshot<Map<String, ReaderState>> snapshotReadingStates() {
+        Map<String, ReaderState> snapshot = new HashMap<>();
+        for (Map.Entry<String, ReaderState> entry : readingStates.entrySet()) {
+            snapshot.put(entry.getKey(), entry.getValue().copy());
+        }
+        return new CoalescingSnapshotWriter.Snapshot<>(readingStateRevision, snapshot);
+    }
+
+    private static String encodeReadingStates(Map<String, ReaderState> snapshot) throws JSONException {
+        JSONObject root = new JSONObject();
+        root.put("version", FORMAT_VERSION);
+        JSONObject statesObj = new JSONObject();
+        for (Map.Entry<String, ReaderState> entry : snapshot.entrySet()) {
+            statesObj.put(entry.getKey(), entry.getValue().toJson());
+        }
+        root.put("states", statesObj);
+        return root.toString(2);
+    }
+
     private String readFile(String fileName) {
         File file = new File(context.getFilesDir(), fileName);
-        if (!file.exists()) return null;
-
         try {
-            return AtomicUtf8File.read(file);
+            return AtomicUtf8File.readIfPresent(file);
         } catch (Exception e) {
             Log.e(TAG, "Failed to read " + fileName, e);
             return null;

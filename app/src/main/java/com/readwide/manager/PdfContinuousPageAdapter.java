@@ -14,9 +14,10 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.RejectedExecutionException;
 
 class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAdapter.PageViewHolder> {
     private final PdfReaderActivity activity;
@@ -26,34 +27,49 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
     private int count = 0;
     private int viewportWidth = 0;
     private float adapterZoom = 1.0f;
-    private int adapterGeneration = 0;
+    private volatile int adapterGeneration = 0;
     private final SparseIntArray pageHeightCache = new SparseIntArray();
     private final SparseIntArray pagePanXCache = new SparseIntArray();
     private long[] pageHeightDeltaTree = new long[1];
     private long[] fastScrollHeightDeltaSnapshot;
-    private final Set<String> pagesRendering = new HashSet<>();
-    private final Set<Bitmap> displayedBitmaps = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final PdfContinuousRenderQueue renderQueue = new PdfContinuousRenderQueue();
+    private final Set<PageViewHolder> boundHolders = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Map<Bitmap, Integer> displayedBitmaps = new IdentityHashMap<>();
+    private final Runnable renderPump = this::pumpRenderQueue;
+    private boolean renderPumpPosted;
+    private int readingDirection = 1;
+    private int fallbackPage;
     private final int cacheMaxKb;
-    private final LruCache<Integer, Bitmap> bitmapCache;
+    private final LruCache<Integer, RenderedPage> bitmapCache;
+
+    /** Keep display geometry with the bitmap, including cache hits and OOM retries. */
+    private static final class RenderedPage {
+        final Bitmap bitmap;
+        final int displayWidth;
+        final int displayHeight;
+
+        RenderedPage(Bitmap bitmap, int displayWidth, int displayHeight) {
+            this.bitmap = bitmap;
+            this.displayWidth = displayWidth;
+            this.displayHeight = displayHeight;
+        }
+    }
 
     PdfContinuousPageAdapter(@NonNull PdfReaderActivity activity) {
         this.activity = activity;
         setHasStableIds(true);
         cacheMaxKb = activity.calculatePdfContinuousCacheKb();
-        bitmapCache = new LruCache<Integer, Bitmap>(cacheMaxKb) {
+        bitmapCache = new LruCache<Integer, RenderedPage>(cacheMaxKb) {
             @Override
-            protected int sizeOf(Integer key, Bitmap value) {
-                if (value == null || value.isRecycled()) return 0;
-                return Math.max(1, value.getByteCount() / 1024);
+            protected int sizeOf(Integer key, RenderedPage value) {
+                return value == null ? 0 : bitmapSizeKb(value.bitmap);
             }
 
             @Override
-            protected void entryRemoved(boolean evicted, Integer key, Bitmap oldValue, Bitmap newValue) {
-                if (oldValue != null && oldValue != newValue && !oldValue.isRecycled()) {
-                    if (displayedBitmaps.contains(oldValue)) {
-                        return;
-                    }
-                    oldValue.recycle();
+            protected void entryRemoved(boolean evicted, Integer key, RenderedPage oldValue,
+                                        RenderedPage newValue) {
+                if (oldValue != null && (newValue == null || oldValue.bitmap != newValue.bitmap)) {
+                    recycleIfNotDisplayed(oldValue.bitmap);
                 }
             }
         };
@@ -74,12 +90,12 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
             clearAllState();
             notifyDataSetChanged();
         }
+        onViewportChanged(0);
     }
 
-    void prefetchPage(int pageIndex) {
-        if (pageIndex < 0 || pageIndex >= count) return;
-        if (bitmapCache.get(pageIndex) != null) return;
-        startRender(pageIndex, null, adapterGeneration);
+    void prefetchAround(int pageIndex) {
+        fallbackPage = Math.max(0, Math.min(count - 1, pageIndex));
+        onViewportChanged(0);
     }
 
     void clearBitmaps() {
@@ -92,12 +108,15 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
         adapterGeneration++;
         count = 0;
         clearAllState();
+        for (PageViewHolder holder : boundHolders.toArray(new PageViewHolder[0])) {
+            holder.clear();
+        }
     }
 
     private void clearBitmapAndRenderingState() {
-        synchronized (pagesRendering) {
-            pagesRendering.clear();
-        }
+        activity.handler.removeCallbacks(renderPump);
+        renderPumpPosted = false;
+        renderQueue.cancelPending();
         bitmapCache.evictAll();
     }
 
@@ -110,18 +129,27 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
     }
 
     private boolean isBitmapStillCached(@NonNull Bitmap bitmap) {
-        for (Bitmap cached : bitmapCache.snapshot().values()) {
-            if (cached == bitmap) return true;
+        for (RenderedPage cached : bitmapCache.snapshot().values()) {
+            if (cached.bitmap == bitmap) return true;
         }
         return false;
     }
 
     private void markBitmapDetached(Bitmap bitmap) {
         if (bitmap == null) return;
-        displayedBitmaps.remove(bitmap);
-        if (!isBitmapStillCached(bitmap) && !bitmap.isRecycled()) {
-            bitmap.recycle();
-        }
+        Integer references = displayedBitmaps.get(bitmap);
+        if (references != null && references > 1) displayedBitmaps.put(bitmap, references - 1);
+        else displayedBitmaps.remove(bitmap);
+        if (!isBitmapStillCached(bitmap)) recycleIfNotDisplayed(bitmap);
+    }
+
+    private void markBitmapDisplayed(Bitmap bitmap) {
+        Integer references = displayedBitmaps.get(bitmap);
+        displayedBitmaps.put(bitmap, references == null ? 1 : references + 1);
+    }
+
+    private void recycleIfNotDisplayed(Bitmap bitmap) {
+        if (!displayedBitmaps.containsKey(bitmap) && !bitmap.isRecycled()) bitmap.recycle();
     }
 
     @NonNull
@@ -165,6 +193,18 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
     public void onViewRecycled(@NonNull PageViewHolder holder) {
         holder.clear();
         super.onViewRecycled(holder);
+    }
+
+    @Override
+    public void onViewAttachedToWindow(@NonNull PageViewHolder holder) {
+        super.onViewAttachedToWindow(holder);
+        onViewportChanged(0);
+    }
+
+    @Override
+    public void onViewDetachedFromWindow(@NonNull PageViewHolder holder) {
+        super.onViewDetachedFromWindow(holder);
+        onViewportChanged(0);
     }
 
     private int estimatePageRowHeight() {
@@ -274,50 +314,98 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
         return bitmapSizeKb(bitmap) <= Math.max(1, cacheMaxKb);
     }
 
-    private void deliverRenderedBitmap(int pageIndex, int generation, int renderedHeight,
-                                       @NonNull Bitmap bitmap, PageViewHolder originalHolder) {
+    private void deliverRenderedBitmap(int pageIndex, int generation, @NonNull RenderedPage rendered) {
+        Bitmap bitmap = rendered.bitmap;
         if (bitmap.isRecycled()) return;
-        rememberPageHeight(pageIndex, renderedHeight);
+        rememberPageHeight(pageIndex, rendered.displayHeight);
 
         boolean applied = false;
-        if (originalHolder != null) {
-            applied = originalHolder.setBitmapIfStillBound(bitmap, pageIndex, generation);
-        }
-
-        if (activity.pdfContinuousList != null) {
-            RecyclerView.ViewHolder visibleHolder = activity.pdfContinuousList.findViewHolderForAdapterPosition(pageIndex);
-            if (visibleHolder instanceof PageViewHolder && visibleHolder != originalHolder) {
-                applied = ((PageViewHolder) visibleHolder).setBitmapIfStillBound(bitmap, pageIndex, generation) || applied;
-            }
+        // Include RecyclerView's detached bound cache; it may reattach without a
+        // new onBind callback. Reference counts also cover change-animation twins.
+        for (PageViewHolder holder : boundHolders) {
+            applied = holder.setBitmapIfStillBound(rendered, pageIndex, generation) || applied;
         }
 
         if (canCacheBitmap(bitmap)) {
-            bitmapCache.put(pageIndex, bitmap);
+            bitmapCache.put(pageIndex, rendered);
         } else if (!applied) {
             bitmap.recycle();
             return;
         }
 
-        if (!applied) {
-            notifyItemChanged(pageIndex);
-        }
         activity.schedulePdfFastScrollUpdate();
     }
 
-    private String renderKeyFor(int pageIndex, int generation) {
-        return generation + ":" + pageIndex + ":" + viewportWidth + ":" + Math.round(adapterZoom * 100f);
+    /** Called only on the main thread; workers never query RecyclerView state. */
+    void onViewportChanged(int dy) {
+        if (dy != 0) readingDirection = Integer.signum(dy);
+        updateRenderWindow();
+        // The posted pump also checks visible priority before retaining an active
+        // speculative token. Wait until layout finishes before choosing a new one.
+        scheduleRenderPump();
     }
 
-    private void startRender(int pageIndex, PageViewHolder holder, int generation) {
-        if (activity.pdfRenderer == null || pageIndex < 0 || pageIndex >= activity.pageCount) return;
-        String key = renderKeyFor(pageIndex, generation);
-        synchronized (pagesRendering) {
-            if (pagesRendering.contains(key)) return;
-            pagesRendering.add(key);
+    private boolean renderingEnabled() {
+        return !activity.activityDestroyed && activity.verticalPageSlideMode
+                && activity.pdfRenderer != null && count > 0
+                && activity.pdfContinuousList != null
+                && activity.pdfContinuousList.getAdapter() == this
+                && activity.pdfContinuousList.getVisibility() == View.VISIBLE;
+    }
+
+    private void updateRenderWindow() {
+        if (!renderingEnabled()) {
+            renderQueue.cancelPending();
+            return;
         }
-        renderContinuousPageIntoHolder(holder, pageIndex, generation, key,
-                Math.max(1, viewportWidth), adapterZoom,
-                activity.getContinuousPageMaxPixels(), false);
+        int first = RecyclerView.NO_POSITION;
+        int last = RecyclerView.NO_POSITION;
+        if (activity.pdfContinuousList != null) {
+            RecyclerView.LayoutManager manager = activity.pdfContinuousList.getLayoutManager();
+            if (manager instanceof LinearLayoutManager) {
+                first = ((LinearLayoutManager) manager).findFirstVisibleItemPosition();
+                last = ((LinearLayoutManager) manager).findLastVisibleItemPosition();
+            }
+        }
+        PageViewHolder middle = findBestVisibleHolder();
+        int center = middle == null ? fallbackPage : middle.boundPage;
+        if (first == RecyclerView.NO_POSITION || last == RecyclerView.NO_POSITION) {
+            first = last = fallbackPage;
+        }
+        renderQueue.update(first, last, center, count, readingDirection, adapterGeneration);
+    }
+
+    private boolean hasRenderedPage(int pageIndex) {
+        return findRenderedPage(pageIndex) != null;
+    }
+
+    private RenderedPage findRenderedPage(int pageIndex) {
+        RenderedPage cached = bitmapCache.get(pageIndex);
+        if (cached != null && !cached.bitmap.isRecycled()) return cached;
+        for (PageViewHolder holder : boundHolders) {
+            if (holder.boundPage == pageIndex && holder.boundGeneration == adapterGeneration
+                    && holder.displayedPage != null && !holder.displayedBitmap.isRecycled()) {
+                return holder.displayedPage;
+            }
+        }
+        return null;
+    }
+
+    private void scheduleRenderPump() {
+        if (renderPumpPosted || !renderingEnabled()) return;
+        renderPumpPosted = true;
+        activity.handler.post(renderPump);
+    }
+
+    private void pumpRenderQueue() {
+        renderPumpPosted = false;
+        updateRenderWindow();
+        if (!renderingEnabled()) return;
+        PdfContinuousRenderQueue.Request request = renderQueue.next(this::hasRenderedPage);
+        if (request == null) return;
+        long budget = PdfContinuousRenderQueue.pagePixelBudget(cacheMaxKb * 1024L,
+                activity.getContinuousPageMaxPixels());
+        renderContinuousPage(request, Math.max(1, viewportWidth), adapterZoom, budget, false);
     }
 
     private PageViewHolder findBestVisibleHolder() {
@@ -404,6 +492,7 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
     class PageViewHolder extends RecyclerView.ViewHolder {
         private final ImageView image;
         private Bitmap displayedBitmap;
+        private RenderedPage displayedPage;
         private int boundPage = RecyclerView.NO_POSITION;
         private int boundGeneration = -1;
         private int imageWidth = 0;
@@ -414,41 +503,49 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
         }
 
         void bind(int pageIndex, int generation) {
+            if (boundPage == pageIndex && boundGeneration == generation
+                    && displayedPage != null && !displayedBitmap.isRecycled()) {
+                setBitmapIfStillBound(displayedPage, pageIndex, generation);
+                scheduleRenderPump();
+                return;
+            }
             clear();
             boundPage = pageIndex;
             boundGeneration = generation;
+            boundHolders.add(this);
             image.setBackgroundColor(Color.WHITE);
             setRowHeight(estimatedHeightForPage(pageIndex));
 
-            Bitmap cached = bitmapCache.get(pageIndex);
-            if (cached != null && !cached.isRecycled()) {
+            // An evicted bitmap can still belong to another bound holder. Reuse
+            // it here; treating it as ready without binding it leaves a blank row.
+            RenderedPage cached = findRenderedPage(pageIndex);
+            if (cached != null && !cached.bitmap.isRecycled()) {
                 setBitmapIfStillBound(cached, pageIndex, generation);
-                return;
+            } else {
+                image.setImageDrawable(null);
             }
-
-            image.setImageDrawable(null);
-            startRender(pageIndex, this, generation);
+            scheduleRenderPump();
         }
 
-        boolean setBitmapIfStillBound(Bitmap nextBitmap, int pageIndex, int generation) {
+        boolean setBitmapIfStillBound(RenderedPage rendered, int pageIndex, int generation) {
             if (boundPage != pageIndex || boundGeneration != generation || activity.activityDestroyed) {
                 return false;
             }
+            Bitmap nextBitmap = rendered.bitmap;
             if (nextBitmap == null || nextBitmap.isRecycled()) {
                 image.setImageDrawable(null);
                 return false;
             }
             if (displayedBitmap != nextBitmap) {
+                image.setImageDrawable(null);
                 markBitmapDetached(displayedBitmap);
                 displayedBitmap = nextBitmap;
-                displayedBitmaps.add(nextBitmap);
+                markBitmapDisplayed(nextBitmap);
             }
-            // Bitmap is supersampled; frame it at fit size so the extra pixels
-            // are detail (sharper text), not an enlarged page.
-            float ss = PdfReaderActivity.PDF_SUPERSAMPLE;
-            int fitW = Math.max(1, Math.round(nextBitmap.getWidth() / ss));
-            int fitH = Math.max(1, Math.round(nextBitmap.getHeight() / ss));
-            setImageFrame(fitW, fitH);
+            displayedPage = rendered;
+            // Resolution caps and reduced OOM retries affect detail, not page
+            // size. Never infer the logical frame by dividing bitmap dimensions.
+            setImageFrame(rendered.displayWidth, rendered.displayHeight);
             image.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
             image.setImageBitmap(nextBitmap);
             applyHorizontalPan();
@@ -523,50 +620,52 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
         }
 
         void clear() {
+            boundHolders.remove(this);
             image.setImageDrawable(null);
             image.setTranslationX(0f);
             imageWidth = 0;
             markBitmapDetached(displayedBitmap);
             displayedBitmap = null;
+            displayedPage = null;
             boundPage = RecyclerView.NO_POSITION;
             boundGeneration = -1;
         }
     }
 
-    private void renderContinuousPageIntoHolder(
-            PdfContinuousPageAdapter.PageViewHolder holder,
-            int pageIndex,
-            int generation,
-            @NonNull String renderKey,
+    private void renderContinuousPage(
+            PdfContinuousRenderQueue.Request request,
             int widthForRender,
             float zoomForRender,
             long maxBitmapPixels,
             boolean reducedOomRetry
     ) {
-        final int pageToRender = pageIndex;
-
-        activity.executor.execute(() -> {
+        final int pageToRender = request.page;
+        final int minimumRowHeight = activity.dpToPx(180);
+        final int horizontalReserve = activity.dpToPx(24);
+        Runnable render = () -> {
             Bitmap bitmap = null;
-            int intendedDisplayHeight = 0;
+            PdfPageRenderPlan.Plan plan = null;
+            boolean outOfMemory = false;
             try {
+                if (isObsoleteRender(request)) return;
                 synchronized (activity.rendererLock) {
+                    if (isObsoleteRender(request)) return;
                     if (activity.activityDestroyed || activity.pdfRenderer == null || pageToRender >= activity.pageCount) {
                         throw new IllegalStateException("PDF renderer is closed");
                     }
                     PdfRenderer.Page page = activity.pdfRenderer.openPage(pageToRender);
                     try {
-                        PdfPageRenderPlan.Plan plan = PdfPageRenderPlan.create(
+                        plan = PdfPageRenderPlan.create(
                                 page.getWidth(),
                                 page.getHeight(),
                                 widthForRender,
                                 1,
                                 zoomForRender,
                                 PdfReaderActivity.PDF_SUPERSAMPLE,
-                                activity.dpToPx(24),
+                                horizontalReserve,
                                 0,
                                 false,
                                 Math.max(1L, maxBitmapPixels));
-                        intendedDisplayHeight = plan.intendedDisplayHeightPx;
                         int width = plan.bitmapWidthPx;
                         int height = plan.bitmapHeightPx;
 
@@ -577,67 +676,58 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
                         page.close();
                     }
                 }
-
-                Bitmap finalBitmap = bitmap;
-                // Keep layout at the intended fit/zoom height even when the pixel
-                // cap reduces the backing bitmap. Deriving row height from the
-                // capped bitmap made very tall pages visibly shrink.
-                int finalRenderedHeight = Math.max(1, intendedDisplayHeight);
-                activity.handler.post(() -> {
-                    synchronized (pagesRendering) {
-                        pagesRendering.remove(renderKey);
-                    }
-                    if (activity.activityDestroyed || generation != adapterGeneration) {
-                        if (finalBitmap != null && !finalBitmap.isRecycled()) finalBitmap.recycle();
-                        return;
-                    }
-                    if (finalBitmap == null || finalBitmap.isRecycled()) return;
-                    deliverRenderedBitmap(pageToRender, generation,
-                            finalRenderedHeight, finalBitmap, holder);
-                    if (activity.verticalPageSlideMode && pageToRender == activity.currentPage) {
-                        activity.updatePageStatus();
-                    }
-                });
             } catch (OutOfMemoryError oom) {
                 if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
-                activity.handler.post(() -> {
-                    synchronized (pagesRendering) {
-                        pagesRendering.remove(renderKey);
-                    }
-                    if (activity.activityDestroyed
-                            || generation != adapterGeneration
-                            || !activity.verticalPageSlideMode) {
-                        return;
-                    }
-                    // Release cached, non-visible bitmaps without invalidating
-                    // geometry or rebinding the whole dataset.
-                    bitmapCache.evictAll();
-                    if (!reducedOomRetry) {
-                        boolean accepted;
-                        synchronized (pagesRendering) {
-                            accepted = pagesRendering.add(renderKey);
-                        }
-                        if (accepted) {
-                            renderContinuousPageIntoHolder(
-                                    holder,
-                                    pageToRender,
-                                    generation,
-                                    renderKey,
-                                    widthForRender,
-                                    zoomForRender,
-                                    Math.max(1L, maxBitmapPixels / 2L),
-                                    true);
-                        }
-                    }
-                });
+                bitmap = null;
+                outOfMemory = true;
             } catch (Exception e) {
                 if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+                bitmap = null;
+            } finally {
+                final Bitmap result = bitmap;
+                final PdfPageRenderPlan.Plan resultPlan = plan;
+                final boolean retryOom = outOfMemory;
                 activity.handler.post(() -> {
-                    synchronized (pagesRendering) {
-                        pagesRendering.remove(renderKey);
+                    updateRenderWindow();
+                    if (isObsoleteRender(request) || !renderingEnabled()
+                            || !renderQueue.wants(pageToRender)) {
+                        if (result != null && !result.isRecycled()) result.recycle();
+                        renderQueue.finish(request, false);
+                        scheduleRenderPump();
+                        return;
                     }
+                    if (retryOom) {
+                        bitmapCache.evictAll();
+                        if (!reducedOomRetry && maxBitmapPixels > 1L) {
+                            // One smaller attempt, same token and display geometry.
+                            renderContinuousPage(request, widthForRender, zoomForRender,
+                                    Math.max(1L, maxBitmapPixels / 2L), true);
+                            return;
+                        }
+                    }
+                    renderQueue.finish(request, true);
+                    if (result != null && !result.isRecycled() && resultPlan != null) {
+                        deliverRenderedBitmap(pageToRender, request.generation,
+                                new RenderedPage(result, resultPlan.intendedDisplayWidthPx,
+                                        Math.max(minimumRowHeight, resultPlan.intendedDisplayHeightPx)));
+                        if (pageToRender == activity.currentPage) activity.updatePageStatus();
+                    }
+                    scheduleRenderPump();
                 });
             }
-        });
+        };
+        try {
+            activity.executor.execute(render);
+        } catch (RejectedExecutionException closedExecutor) {
+            renderQueue.finish(request, true);
+            // Destruction may shut down the executor between a posted pump and
+            // submission. Do not leave a permanently owned token or retry loop.
+        }
+    }
+
+    /** Worker-safe; all three fields are volatile and no View/cache is read. */
+    private boolean isObsoleteRender(PdfContinuousRenderQueue.Request request) {
+        return activity.activityDestroyed || request.cancelled
+                || request.generation != adapterGeneration;
     }
 }

@@ -15,16 +15,11 @@ import java.io.PushbackInputStream;
 import java.io.SequenceInputStream;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.zip.CRC32;
-import java.util.zip.Inflater;
-import java.util.zip.InflaterInputStream;
 
 import com.readwide.manager.util.FileOperationProgress;
 
@@ -64,17 +59,11 @@ final class AlzipArchiveReader {
     private static final int COMP_BZIP2 = 1;
     private static final int COMP_DEFLATE = 2;
     private static final int BUFFER_SIZE = 64 * 1024;
-    private static final int SEGMENT_HEADER_BYTES = 8;   // sig u32 + version u16 + segment id u16
-    private static final int SEGMENT_TRAILER_BYTES = 16; // CLZ\1 + 8 bytes + CLZ\2 or CLZ\3
-    private static final int MAX_SPLIT_SEGMENTS = 1000;
     // Admission limits for metadata retention, never archive or extracted-file size limits.
     private static final int MAX_INDEX_ARCHIVES = 3;
     private static final int MAX_INDEX_ENTRIES = 20000;
     private static final long MAX_INDEX_NAME_CHARS = 1024 * 1024;
     private static final Map<String, Index> INDEXES = new LinkedHashMap<>(4, 0.75f, true);
-
-    private static final Pattern CONTINUATION_NAME =
-            Pattern.compile("^(.*)\\.a(\\d{2,3})$", Pattern.CASE_INSENSITIVE);
 
     private AlzipArchiveReader() {
     }
@@ -137,7 +126,7 @@ final class AlzipArchiveReader {
                 if (out == null) return false;
                 sawEntry = true;
                 if (entry.directory || entry.path.endsWith("/")) {
-                    if (!out.exists() && !out.mkdirs()) return false;
+                    if (!out.isDirectory() && !out.mkdirs() && !out.isDirectory()) return false;
                     continue;
                 }
                 extractEntryPayload(in, entry, out, password, progress);
@@ -171,6 +160,8 @@ final class AlzipArchiveReader {
     }
 
     static boolean requiresPasswordForExtraction(@NonNull File archive) {
+        try { archive = AlzVolumeResolver.resolveFirstVolume(archive); }
+        catch (IOException unavailable) { return false; }
         Family family = detectFamily(archive);
         if (family == Family.UNKNOWN) return false;
         if (family == Family.EGG) return true;
@@ -238,8 +229,7 @@ final class AlzipArchiveReader {
     private static List<VolumeStamp> snapshotVolumes(File archive) throws IOException {
         indexCheckpoint();
         List<VolumeStamp> result = new ArrayList<>();
-        result.add(new VolumeStamp(archive));
-        for (File part : collectContinuationSegments(archive)) {
+        for (File part : AlzVolumeResolver.resolve(archive).files) {
             indexCheckpoint();
             result.add(new VolumeStamp(part));
         }
@@ -325,73 +315,7 @@ final class AlzipArchiveReader {
      */
     @NonNull
     private static SplitVolumeInput openAlzVolumes(@NonNull File archive) throws IOException {
-        List<File> continuations = collectContinuationSegments(archive);
-        List<SplitVolumeInput.Segment> segments = new ArrayList<>();
-        long firstLength = archive.length();
-        if (!continuations.isEmpty()) {
-            firstLength -= SEGMENT_TRAILER_BYTES;
-            if (firstLength < SEGMENT_HEADER_BYTES) {
-                throw new IOException("ALZ split first segment shorter than its framing: " + archive.getName());
-            }
-        }
-        segments.add(new SplitVolumeInput.Segment(archive, 0L, firstLength));
-        for (File part : continuations) {
-            long offset = startsWithAlzSignature(part) ? SEGMENT_HEADER_BYTES : 0L;
-            long trailer = offset > 0L ? SEGMENT_TRAILER_BYTES : 0L;
-            long length = part.length() - offset - trailer;
-            if (length < 0L) throw new IOException("ALZ split segment shorter than its framing: " + part.getName());
-            segments.add(new SplitVolumeInput.Segment(part, offset, length));
-        }
-        return new SplitVolumeInput(segments);
-    }
-
-    /** Ordered {@code name.a00}, {@code name.a01}, ... siblings of the first part. */
-    @NonNull
-    private static List<File> collectContinuationSegments(@NonNull File firstPart) throws IOException {
-        File parent = firstPart.getParentFile();
-        String name = firstPart.getName();
-        int dot = name.toLowerCase(Locale.ROOT).lastIndexOf(".alz");
-        if (parent == null || dot <= 0) return Collections.emptyList();
-        String base = name.substring(0, dot);
-        File[] children = parent.listFiles();
-        if (children == null) return Collections.emptyList();
-        ArrayList<File> parts = new ArrayList<>();
-        for (File child : children) {
-            if (!child.isFile()) continue;
-            Matcher m = CONTINUATION_NAME.matcher(child.getName());
-            if (!m.matches() || !m.group(1).equalsIgnoreCase(base)) continue;
-            parts.add(child);
-        }
-        if (parts.isEmpty()) return Collections.emptyList();
-        parts.sort(Comparator.comparingInt(AlzipArchiveReader::continuationIndex));
-        if (parts.size() > MAX_SPLIT_SEGMENTS) throw new IOException("ALZ split has too many segments");
-        // The set must be contiguous from .a00; a gap means a missing segment.
-        for (int i = 0; i < parts.size(); i++) {
-            if (continuationIndex(parts.get(i)) != i) {
-                throw new IOException("Missing ALZ split segment before " + parts.get(i).getName());
-            }
-        }
-        return parts;
-    }
-
-    private static int continuationIndex(@NonNull File part) {
-        Matcher m = CONTINUATION_NAME.matcher(part.getName());
-        if (!m.matches()) return Integer.MAX_VALUE;
-        try {
-            return Integer.parseInt(m.group(2));
-        } catch (NumberFormatException e) {
-            return Integer.MAX_VALUE;
-        }
-    }
-
-    private static boolean startsWithAlzSignature(@NonNull File part) {
-        byte[] signature = new byte[4];
-        try (InputStream in = new FileInputStream(part)) {
-            if (in.read(signature) < 4) return false;
-            return signature[0] == 'A' && signature[1] == 'L' && signature[2] == 'Z';
-        } catch (IOException | SecurityException ignored) {
-            return false;
-        }
+        return new SplitVolumeInput(AlzVolumeResolver.resolve(archive).segments);
     }
 
     // ----- Parsing -----
@@ -399,7 +323,8 @@ final class AlzipArchiveReader {
     @NonNull
     private static List<AlzEntry> readAlzEntries(@NonNull File archive,
                                                  @NonNull SplitVolumeInput in) throws IOException {
-        if (detectFamily(archive) != Family.ALZ) throw invalidSignature(archive);
+        in.seek(0);
+        if (in.length() < 8 || readIntLE(in) != SIG_ALZ_FILE_HEADER) throw invalidSignature(archive);
         ArrayList<AlzEntry> entries = new ArrayList<>();
         ArrayList<PendingAlzEntry> pendings = new ArrayList<>();
         in.seek(0);
@@ -516,30 +441,26 @@ final class AlzipArchiveReader {
                                             @NonNull File outFile,
                                             @Nullable char[] password,
                                             @Nullable FileOperationProgress progress) throws IOException {
-        if (progress != null && !progress.checkpoint()) throw new IOException("ALZ extraction cancelled");
+        if (Thread.currentThread().isInterrupted()
+                || (progress != null && !progress.checkpoint())) throw new IOException("ALZ extraction cancelled");
         if (entry.directory) return;
-        if (entry.compressedSize < 0L) {
+        if (entry.compressedSize < 0L || entry.uncompressedSize < 0L) {
             throw new ArchiveSupport.UnsupportedArchiveFeatureException("ALZ entry has an invalid size");
         }
         File parent = outFile.getParentFile();
         if (parent == null) throw new IOException("Output file has no parent");
-        if (!parent.exists() && !parent.mkdirs()) throw new IOException("Cannot create output directory");
+        if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) throw new IOException("Cannot create output directory");
 
-        boolean ok = false;
-        try (InputStream decoded = openDecodedPayloadStream(in, entry, password);
-             OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
-            CRC32 crc = new CRC32();
-            copyDecodedPayload(decoded, out, crc, progress);
-            verifyCrc(entry, crc.getValue());
-            out.flush();
-            ok = true;
-        } finally {
-            if (!ok) {
-                try { //noinspection ResultOfMethodCallIgnored
-                    outFile.delete();
-                } catch (SecurityException ignored) {
-                }
+        try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
+            try (InputStream decoded = openDecodedPayloadStream(in, entry, password);
+                 OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
+                CRC32 crc = new CRC32();
+                copyDecodedPayload(decoded, out, crc, entry.uncompressedSize, progress);
+                verifyCrc(entry, crc.getValue());
+                out.flush();
             }
+            // Stream close failures must also roll back the current destination.
+            guard.commit();
         }
     }
 
@@ -551,7 +472,7 @@ final class AlzipArchiveReader {
         try {
             if (entry.method == COMP_STORED) return payload;
             if (entry.method == COMP_DEFLATE) {
-                return new InflaterInputStream(payload, new Inflater(true));
+                return new OwnedDeflateInputStream(payload);
             }
             if (entry.method == COMP_BZIP2) {
                 return openAlzBzipStream(payload);
@@ -628,15 +549,22 @@ final class AlzipArchiveReader {
     private static void copyDecodedPayload(@NonNull InputStream decoded,
                                            @NonNull OutputStream out,
                                            @NonNull CRC32 crc,
+                                           long expectedSize,
                                            @Nullable FileOperationProgress progress) throws IOException {
         byte[] buffer = new byte[BUFFER_SIZE];
+        long written = 0L;
         int read;
         while ((read = decoded.read(buffer)) != -1) {
-            if (progress != null && !progress.checkpoint()) throw new IOException("ALZ extraction cancelled");
+            if (Thread.currentThread().isInterrupted()
+                    || (progress != null && !progress.checkpoint())) throw new IOException("ALZ extraction cancelled");
+            if (read <= 0) throw new IOException("ALZ decoder made no progress");
+            if (read > expectedSize - written) throw new IOException("ALZ decoded size exceeds declared size");
             crc.update(buffer, 0, read);
             out.write(buffer, 0, read);
+            written += read;
             if (progress != null) progress.addDoneBytes(read);
         }
+        if (written != expectedSize) throw new IOException("ALZ decoded size mismatch");
     }
 
     private static void verifyCrc(@NonNull AlzEntry entry, long actualCrc) throws IOException {

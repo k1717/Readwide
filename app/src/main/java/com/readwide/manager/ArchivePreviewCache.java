@@ -2,6 +2,8 @@ package com.readwide.manager;
 
 import android.content.Context;
 
+import com.readwide.manager.archive.ArchiveSourceSnapshot;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -14,17 +16,18 @@ import java.util.Arrays;
 import java.util.Comparator;
 
 /**
- * Builds stable-but-content-aware cache paths for archive preview extraction.
+ * Builds stable, metadata-aware cache paths for archive preview extraction.
  *
- * <p>The cache namespace includes the archive canonical path, length, and modified time so a
- * replaced archive at the same path does not normally reuse stale extracted preview files. Each
+ * <p>The versioned namespace uses a source snapshot: complete RAR/numeric volume metadata,
+ * or one source stamp for other families. Capture once per sequence/session. Each
  * entry file name also includes a hash of the full internal entry path, avoiding collisions such as
  * {@code a/b.png} and {@code a_b.png} after filesystem-name sanitization.</p>
  */
 final class ArchivePreviewCache {
     private static final String ROOT_NAME = "archive_preview";
     private static final String SENSITIVE_ROOT_NAME = "archive_preview_sensitive";
-    private static final int MAX_SAFE_BASE_CHARS = 96;
+    private static final int MAX_SAFE_BASE_BYTES = 180;
+    private static final int MAX_EXTENSION_BYTES = 16;
     private static final int MAX_ARCHIVE_CACHE_DIRS = 32;
     private static final long MAX_ARCHIVE_CACHE_BYTES = 256L * 1024L * 1024L;
     private static final long MAX_ARCHIVE_CACHE_AGE_MS = 14L * 24L * 60L * 60L * 1000L;
@@ -52,8 +55,17 @@ final class ArchivePreviewCache {
                                    @NonNull File archiveFile,
                                    @NonNull String entryPath,
                                    boolean sensitive) {
+        return outputFileForEntry(context, ArchiveSourceSnapshot.capture(archiveFile), entryPath, sensitive);
+    }
+
+    /** Reuse a captured identity while building a sequence or advancing a forward reader. */
+    @NonNull
+    static File outputFileForEntry(@NonNull Context context,
+                                  @NonNull ArchiveSourceSnapshot snapshot,
+                                  @NonNull String entryPath,
+                                  boolean sensitive) {
         File root = new File(context.getCacheDir(), sensitive ? SENSITIVE_ROOT_NAME : ROOT_NAME);
-        File archiveDir = new File(root, archiveFingerprint(archiveFile));
+        File archiveDir = new File(root, snapshot.cacheFingerprint());
         // Touch the archive cache directory when it is used so pruning prefers
         // old/inactive archives. This is intentionally best-effort.
         try {
@@ -139,22 +151,12 @@ final class ArchivePreviewCache {
 
     @NonNull
     static String archiveFingerprint(@NonNull File archiveFile) {
-        String canonical;
-        try {
-            canonical = archiveFile.getCanonicalPath();
-        } catch (IOException | SecurityException ignored) {
-            canonical = archiveFile.getAbsolutePath();
-        }
-        String material = canonical + "\n" + archiveFile.length() + "\n" + archiveFile.lastModified();
-        return sha256Hex(material).substring(0, 24);
+        return ArchiveSourceSnapshot.capture(archiveFile).cacheFingerprint();
     }
 
     @NonNull
     static String normalizeEntryPath(@NonNull String entryPath) {
-        String normalized = entryPath.replace('\\', '/').trim();
-        while (normalized.startsWith("./")) normalized = normalized.substring(2);
-        while (normalized.contains("//")) normalized = normalized.replace("//", "/");
-        return normalized;
+        return com.readwide.manager.util.ArchiveEntryPaths.normalize(entryPath.trim());
     }
 
     @NonNull
@@ -162,19 +164,41 @@ final class ArchivePreviewCache {
         String normalized = normalizeEntryPath(entryPath);
         int slash = normalized.lastIndexOf('/');
         String name = slash >= 0 ? normalized.substring(slash + 1) : normalized;
-        name = name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
-        if (name.length() == 0 || ".".equals(name) || "..".equals(name)) name = "archive_entry";
-        if (name.length() > MAX_SAFE_BASE_CHARS) {
+        StringBuilder safe = new StringBuilder();
+        for (int i = 0; i < name.length();) {
+            int cp = name.codePointAt(i);
+            i += Character.charCount(cp);
+            if (Character.isISOControl(cp) || (cp >= 0xd800 && cp <= 0xdfff)
+                    || "\\/:*?\"<>|".indexOf(cp) >= 0) safe.append('_');
+            else safe.appendCodePoint(cp);
+        }
+        name = safe.toString().trim();
+        if (name.isEmpty() || ".".equals(name) || "..".equals(name)) name = "archive_entry";
+        if (utf8Length(name) > MAX_SAFE_BASE_BYTES) {
             int dot = name.lastIndexOf('.');
-            if (dot > 0 && dot < name.length() - 1) {
-                String ext = name.substring(dot);
-                int stemMax = Math.max(16, MAX_SAFE_BASE_CHARS - ext.length());
-                name = name.substring(0, Math.min(stemMax, dot)) + ext;
-            } else {
-                name = name.substring(0, MAX_SAFE_BASE_CHARS);
-            }
+            String extension = dot > 0 && dot < name.length() - 1 ? name.substring(dot) : "";
+            if (utf8Length(extension) > MAX_EXTENSION_BYTES) extension = "";
+            String stem = extension.isEmpty() ? name : name.substring(0, dot);
+            name = utf8Prefix(stem, MAX_SAFE_BASE_BYTES - utf8Length(extension)) + extension;
         }
         return name;
+    }
+
+    private static int utf8Length(String value) {
+        return value.getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    /** Never cut a surrogate pair or UTF-8 encoding in the middle. */
+    private static String utf8Prefix(String value, int maximumBytes) {
+        int end = 0, bytes = 0;
+        while (end < value.length()) {
+            int cp = value.codePointAt(end);
+            int width = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+            if (bytes + width > maximumBytes) break;
+            bytes += width;
+            end += Character.charCount(cp);
+        }
+        return value.substring(0, end);
     }
 
     @NonNull

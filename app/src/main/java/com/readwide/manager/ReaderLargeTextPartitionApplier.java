@@ -33,6 +33,8 @@ final class ReaderLargeTextPartitionApplier {
             return;
         }
 
+        final int layoutGeneration = activity.loadGeneration.get();
+        activity.textContentReadyForPersistence = false;
         applyPartitionState(partition);
         activity.readerView.setLargeTextPartitionMode(true);
         activity.readerView.setOverlapLines(activity.prefs.getPagingOverlapLines());
@@ -40,14 +42,18 @@ final class ReaderLargeTextPartitionApplier {
         activity.refreshTxtAnnotationHighlights();
         activity.applySearchHighlight();
 
-        activity.readerView.post(() -> finishAfterLayout(
+        activity.readerView.post(() -> {
+            if (activity.activityDestroyed || layoutGeneration != activity.loadGeneration.get()
+                    || switchGeneration != activity.largeTextPartitionSwitchGeneration.get()) return;
+            finishAfterLayout(
                 targetCharPosition,
                 displayPage,
                 totalPages,
                 anchorBefore,
                 anchorAfter,
                 hideLoadingAfterApply,
-                switchGeneration));
+                switchGeneration);
+        });
     }
 
     private void applyPartitionState(@NonNull LargeTextLinePartitionResult partition) {
@@ -112,6 +118,7 @@ final class ReaderLargeTextPartitionApplier {
             activity.clearLargeTextPartitionSwitchPending();
         }
         activity.updatePositionLabel();
+        activity.textContentReadyForPersistence = true;
         activity.hideLoadingWindowForPartitionJumpIfCurrent(hideLoadingAfterApply, switchGeneration);
         activity.prefetchNeighborLargeTextPartitions();
         activity.processQueuedLargeTextPageDeltaAfterPartitionApply();

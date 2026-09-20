@@ -137,44 +137,60 @@ public final class DocumentAnnotationManager {
         if (changed) save();
     }
 
-    public synchronized JSONArray exportJson() {
+    public synchronized JSONArray exportJson() throws org.json.JSONException {
         JSONArray array = new JSONArray();
         for (DocumentAnnotation annotation : annotations) {
-            try {
-                array.put(annotation.toJson());
-            } catch (Exception e) {
-                Log.e(TAG, "Could not export annotation", e);
-            }
+            array.put(annotation.toJson());
         }
         return array;
     }
 
-    public synchronized void importJson(JSONArray array, boolean merge) {
+    public synchronized void importJson(JSONArray array, boolean merge)
+            throws org.json.JSONException, java.io.IOException {
         if (array == null) return;
-        if (!merge) annotations.clear();
-        for (int i = 0; i < array.length(); i++) {
-            JSONObject obj = array.optJSONObject(i);
-            if (obj == null) continue;
-            DocumentAnnotation incoming = DocumentAnnotation.fromJson(obj);
-            int sameId = -1;
-            for (int j = 0; j < annotations.size(); j++) {
-                if (incoming.getId().equals(annotations.get(j).getId())) {
-                    sameId = j;
-                    break;
-                }
-            }
-            if (sameId >= 0) annotations.set(sameId, incoming);
-            else annotations.add(incoming);
-        }
-        removeDuplicateHighlights();
-        save();
+        List<DocumentAnnotation> imported = new ArrayList<>();
+        for (int i = 0; i < array.length(); i++)
+            imported.add(DocumentAnnotation.fromJson(array.getJSONObject(i)));
+        replaceFromImport(planImport(imported, merge));
+    }
+
+    synchronized List<DocumentAnnotation> snapshotForImport() { return new ArrayList<>(annotations); }
+
+    synchronized List<DocumentAnnotation> planImport(List<DocumentAnnotation> imported, boolean merge) {
+        List<DocumentAnnotation> planned = IndexedBackupMerge.merge(
+                merge ? annotations : java.util.Collections.emptyList(), imported, DocumentAnnotation::getId, null);
+        removeDuplicateHighlights(planned);
+        return planned;
+    }
+
+    synchronized void replaceFromImport(List<DocumentAnnotation> planned)
+            throws org.json.JSONException, java.io.IOException {
+        writeImportAnnotations(planned);
+        annotations.clear(); annotations.addAll(planned);
+    }
+
+    synchronized void restoreAfterImportFailure(List<DocumentAnnotation> previous)
+            throws org.json.JSONException, java.io.IOException {
+        annotations.clear(); annotations.addAll(previous);
+        writeImportAnnotations(previous);
+    }
+
+    private void writeImportAnnotations(List<DocumentAnnotation> planned)
+            throws org.json.JSONException, java.io.IOException {
+        JSONArray rows = new JSONArray();
+        for (DocumentAnnotation annotation : planned) rows.put(annotation.toJson());
+        JSONObject root = new JSONObject();
+        root.put("version", FORMAT_VERSION);
+        root.put("annotations", rows);
+        AtomicUtf8File.write(new File(context.getFilesDir(), FILE_NAME), root.toString(2));
     }
 
     private void load() {
         File file = new File(context.getFilesDir(), FILE_NAME);
-        if (!file.exists()) return;
         try {
-            JSONObject root = new JSONObject(AtomicUtf8File.read(file));
+            String saved = AtomicUtf8File.readIfPresent(file);
+            if (saved == null) return;
+            JSONObject root = new JSONObject(saved);
             JSONArray array = root.optJSONArray("annotations");
             if (array == null) return;
             for (int i = 0; i < array.length(); i++) {
@@ -189,9 +205,13 @@ public final class DocumentAnnotationManager {
 
     /** Removes exact duplicate highlight ranges left by older builds. */
     private boolean removeDuplicateHighlights() {
+        return removeDuplicateHighlights(annotations);
+    }
+
+    private static boolean removeDuplicateHighlights(List<DocumentAnnotation> values) {
         Set<String> seen = new HashSet<>();
         boolean changed = false;
-        Iterator<DocumentAnnotation> iterator = annotations.iterator();
+        Iterator<DocumentAnnotation> iterator = values.iterator();
         while (iterator.hasNext()) {
             DocumentAnnotation annotation = iterator.next();
             if (!annotation.isHighlight()) continue;

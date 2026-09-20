@@ -20,6 +20,31 @@ import java.util.concurrent.atomic.AtomicReference;
 public class LargeTextSearchEngineIndexTest {
     @Rule public final TemporaryFolder temporaryFolder = new TemporaryFolder();
 
+    @Test public void previousBeforeFirstMatchWrapsInStreamingAndIndexedPaths() throws Exception {
+        File file = textFile("hit\nhit\nhit");
+        LargeTextSearchEngine engine = engine(new AtomicInteger(), new AtomicReference<>("rules"));
+        try {
+            assertEquals(8, engine.searchNearest(file, "hit", -1, false,
+                    SearchOptions.literal(), false, null).charPosition);
+            assertEquals(8, engine.search(file, "hit", -1, false, -1,
+                    SearchOptions.literal(), false, null).charPosition);
+            assertEquals(3, engine.countMatches(file, "hit", SearchOptions.literal(), false, null));
+            assertEquals(8, engine.searchNearest(file, "hit", -1, false,
+                    SearchOptions.literal(), false, null).charPosition);
+        } finally { engine.close(); }
+    }
+
+    @Test public void diskBackedPreviousBeforeZeroWraps() throws Exception {
+        File file = textFile("hit hit hit");
+        try (LargeTextMatchIndex.Builder builder = new LargeTextMatchIndex.Builder(1, temporaryFolder.newFolder())) {
+            builder.add(0, 1); builder.add(4, 1); builder.add(8, 1);
+            try (LargeTextMatchIndex index = builder.build(file, "hit", "options", false, "rules")) {
+                assertEquals(8, index.nearest(-1, false).charPosition);
+                assertEquals(3, index.nearest(-1, false).ordinal);
+            }
+        }
+    }
+
     @Test
     public void completedCountReusesPositionsForNearestAndOccurrenceSearches() throws Exception {
         File file = textFile("alpha beta\nbeta\n\nomega beta");

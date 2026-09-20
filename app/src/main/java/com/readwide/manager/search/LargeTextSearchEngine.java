@@ -69,12 +69,13 @@ public final class LargeTextSearchEngine {
             List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
                     appContext, file.getAbsolutePath());
             String signature = ruleSignature(activeRules);
+            TextDisplayRuleManager.CompiledRules compiledRules = TextDisplayRuleManager.compile(activeRules);
             return new LineTransform() {
                 @NonNull
                 @Override
                 public String apply(@NonNull String line) {
                     String normalized = FileUtils.enforceTextPresentationSelectors(line);
-                    return TextDisplayRuleManager.apply(normalized, activeRules);
+                    return TextDisplayRuleManager.apply(normalized, compiledRules);
                 }
 
                 @NonNull
@@ -135,7 +136,7 @@ public final class LargeTextSearchEngine {
             catch (IOException unavailable) { discardIndex(cached); }
         }
 
-        int start = Math.max(0, startPosition);
+        int start = startPosition;
         int ordinal = 0;
 
         int firstChar = -1;
@@ -325,7 +326,7 @@ public final class LargeTextSearchEngine {
             catch (IOException unavailable) { discardIndex(cached); }
         }
 
-        int start = Math.max(0, startPosition);
+        int start = startPosition;
         int total = 0;
 
         int firstChar = -1;

@@ -77,6 +77,22 @@ public class Bookmark {
 
     // --- JSON serialization ---
 
+    /** Owned import snapshot: staging edits must never mutate live bookmarks. */
+    public Bookmark copy() {
+        Bookmark b = new Bookmark();
+        b.id = id; b.filePath = filePath; b.fileName = fileName;
+        b.charPosition = charPosition; b.endPosition = endPosition; b.lineNumber = lineNumber;
+        b.pageNumber = pageNumber; b.totalPages = totalPages; b.pageLayoutSignature = pageLayoutSignature;
+        b.excerpt = excerpt; b.label = label; b.anchorTextBefore = anchorTextBefore;
+        b.anchorTextAfter = anchorTextAfter; b.contentAnchorJson = contentAnchorJson;
+        b.fileSizeBytes = fileSizeBytes; b.quickFingerprint = quickFingerprint;
+        b.pendingPcEditLine = pendingPcEditLine; b.pendingPcMoveByLines = pendingPcMoveByLines;
+        b.pendingPcFindText = pendingPcFindText; b.pendingPcFindOccurrence = pendingPcFindOccurrence;
+        b.pendingPcFindCaseSensitive = pendingPcFindCaseSensitive;
+        b.createdAt = createdAt; b.updatedAt = updatedAt;
+        return b;
+    }
+
     public JSONObject toJson() throws JSONException {
         JSONObject obj = new JSONObject();
         obj.put("id", id);

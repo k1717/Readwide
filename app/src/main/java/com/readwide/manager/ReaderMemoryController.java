@@ -23,7 +23,7 @@ final class ReaderMemoryController {
     }
 
     void scheduleBackgroundMemoryTrim() {
-        if (activity.activityDestroyed || activity.filePath == null || activity.readerView == null || activity.backgroundTextMemoryReleased) return;
+        if (!activity.textContentReadyForPersistence || activity.activityDestroyed || activity.filePath == null || activity.readerView == null || activity.backgroundTextMemoryReleased) return;
         activity.handler.removeCallbacks(activity.backgroundMemoryTrimRunnable);
         activity.handler.postDelayed(activity.backgroundMemoryTrimRunnable, ReaderActivity.BACKGROUND_MEMORY_TRIM_DELAY_MS);
     }
@@ -80,7 +80,7 @@ final class ReaderMemoryController {
     }
 
     void trimReaderMemoryForBackground(boolean force) {
-        if (activity.activityDestroyed || activity.backgroundTextMemoryReleased || activity.filePath == null || activity.readerView == null) return;
+        if (!activity.textContentReadyForPersistence || activity.activityDestroyed || activity.backgroundTextMemoryReleased || activity.filePath == null || activity.readerView == null) return;
         if (!force && !activity.isFinishing() && !activity.isChangingConfigurations() && activity.hasWindowFocus()) return;
 
         int currentPosition = Math.max(0, activity.getBookmarkSaveCharPosition());
@@ -104,9 +104,11 @@ final class ReaderMemoryController {
         activity.backgroundTextRestoreIntent = restoreIntent;
 
         saveReadingState();
+        activity.textContentReadyForPersistence = false;
         activity.clearLoadedTextSnapshot();
 
         // Cancel outstanding readers/indexers/searches before dropping their backing data.
+        activity.clearTextSearchWork();
         activity.loadGeneration.incrementAndGet();
         activity.largeTextPartitionSwitchGeneration.incrementAndGet();
         activity.invalidateLargeTextExactPageIndexBuild();
@@ -160,6 +162,8 @@ final class ReaderMemoryController {
     }
 
     void releaseReaderMemory() {
+        activity.textContentReadyForPersistence = false;
+        activity.clearTextSearchWork();
         activity.activeSearchQuery = "";
         activity.activeSearchIndex = -1;
         activity.activeSearchOrdinal = 0;
@@ -200,13 +204,11 @@ final class ReaderMemoryController {
     }
 
     void saveReadingState() {
-        // Do not persist position while the reader content is released for a
-        // background memory trim. In that window fileContent is empty, so the
-        // derived char position would collapse to 0 and overwrite the real
-        // saved position. The correct position was already saved by the trim
-        // itself just before it cleared the content, and the in-memory restore
-        // intent recovers it on the next return to the reader.
-        if (activity.backgroundTextMemoryReleased) return;
+        // A pending/failed load can retain the previous view and path after
+        // clearing its text and partition base. Only save after this load's
+        // position is restored, or those mixed coordinates overwrite the real
+        // reading state. A completed empty file is still safe to save.
+        if (!activity.textContentReadyForPersistence || activity.backgroundTextMemoryReleased) return;
         if (activity.filePath != null && activity.prefs.getAutoSavePosition()) {
             ReaderState state = new ReaderState(activity.filePath);
             int savePosition = activity.getBookmarkSaveCharPosition();

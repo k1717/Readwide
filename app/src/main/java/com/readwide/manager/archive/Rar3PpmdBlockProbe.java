@@ -15,9 +15,9 @@ import java.util.Locale;
  * highest bit of the first byte selects PPMd (1) versus classic-LZ table data
  * (0). For classic-LZ the next bit is keep-old-table, while for PPMd it means that
  * an escape-character byte follows and the reset flag decides whether the old model is reused.
- * This class does not decode PPMd symbols; it only gives routing, reports, and future PPMd tests a precise,
- * file-backed way to distinguish PPMd fixtures from classic-LZ fixtures before trying the
- * unfinished first-party PPMd statistical model.</p>
+ * This class does not decode symbols. Routing, diagnostics and the checked planner use it
+ * to classify visible independent starts. A table-less solid continuation must not be
+ * classified as a fresh mode header; its decoder state decides how to read it.</p>
  */
 final class Rar3PpmdBlockProbe {
     static final int KIND_NOT_RAR3_OR4_COMPRESSED = 0;
@@ -51,9 +51,11 @@ final class Rar3PpmdBlockProbe {
                     "source archive is unavailable for block probing");
         }
         try (RandomAccessFile raf = new RandomAccessFile(source, "r")) {
-            if (entry.dataOffset < 0 || entry.dataOffset + 2 > raf.length()) {
+            long length = raf.length();
+            if (entry.dataOffset < 0 || entry.dataOffset > length
+                    || entry.packedSize > length - entry.dataOffset) {
                 return new Result(KIND_UNKNOWN, false, -1, -1,
-                        "packed payload offset is outside the source archive");
+                        "packed payload range is outside the source archive");
             }
             raf.seek(entry.dataOffset);
             int first = raf.readUnsignedByte();

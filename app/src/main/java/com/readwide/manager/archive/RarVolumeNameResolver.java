@@ -13,331 +13,193 @@ import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Resolves RAR multi-volume file-name chains without touching payload bytes.
- *
- * <p>The Java RAR split path is intentionally narrow: stored split payloads and covered
- * RAR5 compressed split variants. This resolver does not claim broad split compatibility.
- * It only makes the volume discovery boundary deterministic and testable, especially when
- * the user opens a later volume such as {@code .part02.rar} or {@code .r01}.</p>
- */
+/** Metadata-only RAR catalogue; callers must require a readable chain before decoding. */
 final class RarVolumeNameResolver {
     private static final Pattern NEW_STYLE_PART = Pattern.compile(
-            "^(.*)\\.part(\\d{1,6})\\.rar$", Pattern.CASE_INSENSITIVE);
+            "^(.*)\\.part([0-9]+)\\.rar$", Pattern.CASE_INSENSITIVE);
     private static final Pattern OLD_STYLE_PART = Pattern.compile(
-            "^(.*)\\.r(\\d{2,3})$", Pattern.CASE_INSENSITIVE);
+            "^(.*)\\.r([0-9]{2,3})$", Pattern.CASE_INSENSITIVE);
 
     private RarVolumeNameResolver() {}
 
     enum Style {
-        SINGLE,
-        NEW_STYLE_PART,
-        OLD_STYLE_RAR_PLUS_RNN,
-        BASE_RAR_WITH_NEW_STYLE_COMPANIONS,
-        BASE_RAR_WITH_OLD_STYLE_COMPANIONS
+        SINGLE, NEW_STYLE_PART, OLD_STYLE_RAR_PLUS_RNN,
+        BASE_RAR_WITH_NEW_STYLE_COMPANIONS, BASE_RAR_WITH_OLD_STYLE_COMPANIONS
     }
 
     static final class Result {
         private final Style style;
-        private final File selected;
-        private final File firstVolume;
+        private final File selected, firstVolume;
         private final List<File> volumes;
-        private final int selectedPartIndex;
-        private final int nextMissingPartIndex;
-        private final int maxSeenPartIndex;
+        private final int selectedPartIndex, nextMissingPartIndex, maxSeenPartIndex;
         private final boolean selectedLaterVolume;
         private final String prefix;
+        @Nullable private final String problem;
 
-        private Result(@NonNull Style style,
-                       @NonNull File selected,
-                       @NonNull File firstVolume,
-                       @NonNull List<File> volumes,
-                       int selectedPartIndex,
-                       int nextMissingPartIndex,
-                       int maxSeenPartIndex,
-                       boolean selectedLaterVolume,
-                       @NonNull String prefix) {
+        private Result(Style style, File selected, File firstVolume, Chain chain,
+                       int selectedPartIndex, boolean selectedLaterVolume, String prefix) {
             this.style = style;
             this.selected = selected;
             this.firstVolume = firstVolume;
-            this.volumes = Collections.unmodifiableList(new ArrayList<>(volumes));
+            this.volumes = Collections.unmodifiableList(new ArrayList<>(chain.volumes));
             this.selectedPartIndex = selectedPartIndex;
-            this.nextMissingPartIndex = nextMissingPartIndex;
-            this.maxSeenPartIndex = maxSeenPartIndex;
+            this.nextMissingPartIndex = chain.nextMissingIndex;
+            this.maxSeenPartIndex = chain.maxSeenIndex;
             this.selectedLaterVolume = selectedLaterVolume;
             this.prefix = prefix;
+            this.problem = chain.problem;
         }
 
-        @NonNull
-        Style style() {
-            return style;
-        }
-
-        @NonNull
-        File selected() {
-            return selected;
-        }
-
-        @NonNull
-        File firstVolume() {
-            return firstVolume;
-        }
-
-        @NonNull
-        List<File> volumes() {
-            return volumes;
-        }
-
-        int selectedPartIndex() {
-            return selectedPartIndex;
-        }
-
-        int nextMissingPartIndex() {
-            return nextMissingPartIndex;
-        }
-
-        int maxSeenPartIndex() {
-            return maxSeenPartIndex;
-        }
-
+        @NonNull Style style() { return style; }
+        @NonNull File selected() { return selected; }
+        @NonNull File firstVolume() { return firstVolume; }
+        @NonNull List<File> volumes() { return volumes; }
+        int selectedPartIndex() { return selectedPartIndex; }
+        int nextMissingPartIndex() { return nextMissingPartIndex; }
+        int maxSeenPartIndex() { return maxSeenPartIndex; }
         boolean hasKnownGap() {
             return nextMissingPartIndex >= 0 && maxSeenPartIndex >= nextMissingPartIndex;
         }
-
-        boolean selectedLaterVolume() {
-            return selectedLaterVolume;
-        }
-
-        @NonNull
-        String prefix() {
-            return prefix;
-        }
-
-        boolean hasSplitCompanions() {
-            return volumes.size() > 1;
-        }
+        boolean selectedLaterVolume() { return selectedLaterVolume; }
+        @NonNull String prefix() { return prefix; }
+        boolean hasSplitCompanions() { return volumes.size() > 1; }
+        @Nullable String problem() { return problem; }
     }
 
     @NonNull
     static Result resolve(@NonNull File selected) {
+        if (Thread.currentThread().isInterrupted()) return single(selected, "RAR volume discovery interrupted");
         File parent = selected.getParentFile();
-        if (parent == null) return single(selected);
-
-        // Reuse one directory snapshot; only matched volume names enter the sorted map.
-        File[] siblings = parent.listFiles();
-        if (siblings == null) siblings = new File[0];
+        if (parent == null) parent = selected.getAbsoluteFile().getParentFile();
+        if (parent == null) return single(selected, "RAR volume directory unavailable");
+        // Exactly one directory snapshot. A failed enumeration is not a singleton archive.
+        File[] siblings;
+        try { siblings = parent.listFiles(); }
+        catch (SecurityException denied) { return single(selected, "RAR volume directory unavailable"); }
+        if (siblings == null) return single(selected, "RAR volume directory unavailable");
 
         String name = selected.getName();
-        Matcher newStyle = NEW_STYLE_PART.matcher(name);
-        if (newStyle.matches()) {
-            String prefix = newStyle.group(1);
-            int selectedIndex = parseNonNegativeInt(newStyle.group(2));
+        Matcher numbered = NEW_STYLE_PART.matcher(name);
+        if (numbered.matches()) {
+            String prefix = numbered.group(1);
+            int index = parseNonNegativeInt(numbered.group(2));
             Chain chain = collectNewStyle(siblings, prefix);
-            if (!chain.volumes.isEmpty()) {
-                return new Result(
-                        Style.NEW_STYLE_PART,
-                        selected,
-                        chain.volumes.get(0),
-                        chain.volumes,
-                        selectedIndex,
-                        chain.nextMissingIndex,
-                        chain.maxSeenIndex,
-                        selectedIndex > 1,
-                        prefix);
-            }
-            if (selectedIndex > 1 && chain.maxSeenIndex >= selectedIndex) {
-                return new Result(
-                        Style.NEW_STYLE_PART,
-                        selected,
-                        expectedNewStyleFirstVolume(parent, prefix, newStyle.group(2)),
-                        chain.volumes,
-                        selectedIndex,
-                        chain.nextMissingIndex,
-                        chain.maxSeenIndex,
-                        true,
-                        prefix);
-            }
-            return single(selected);
+            if (index < 1) chain.problem = "Invalid RAR volume number: " + name;
+            File first = chain.volumes.isEmpty()
+                    ? expectedNewStyleFirstVolume(parent, prefix, numbered.group(2)) : chain.volumes.get(0);
+            return new Result(Style.NEW_STYLE_PART, selected, first, chain, index, index > 1, prefix);
         }
-
-        Matcher oldStyle = OLD_STYLE_PART.matcher(name);
-        if (oldStyle.matches()) {
-            String prefix = oldStyle.group(1);
-            int selectedIndex = parseNonNegativeInt(oldStyle.group(2));
+        Matcher legacy = OLD_STYLE_PART.matcher(name);
+        if (legacy.matches()) {
+            String prefix = legacy.group(1);
+            int index = parseNonNegativeInt(legacy.group(2));
             Chain chain = collectOldStyle(siblings, prefix, selected);
-            if (!chain.volumes.isEmpty()) {
-                return new Result(
-                        Style.OLD_STYLE_RAR_PLUS_RNN,
-                        selected,
-                        chain.volumes.get(0),
-                        chain.volumes,
-                        selectedIndex,
-                        chain.nextMissingIndex,
-                        chain.maxSeenIndex,
-                        true,
-                        prefix);
-            }
-            if (selectedIndex >= 0) {
-                return new Result(
-                        Style.OLD_STYLE_RAR_PLUS_RNN,
-                        selected,
-                        new File(parent, prefix + ".rar"),
-                        chain.volumes,
-                        selectedIndex,
-                        chain.nextMissingIndex >= 0 ? chain.nextMissingIndex : 0,
-                        Math.max(chain.maxSeenIndex, selectedIndex),
-                        true,
-                        prefix);
-            }
-            return single(selected);
+            File first = chain.volumes.isEmpty() ? new File(parent, prefix + ".rar") : chain.volumes.get(0);
+            return new Result(Style.OLD_STYLE_RAR_PLUS_RNN, selected, first, chain, index, true, prefix);
         }
-
         if (name.toLowerCase(Locale.ROOT).endsWith(".rar")) {
             String prefix = name.substring(0, name.length() - 4);
-            Chain oldStyleChain = collectOldStyle(siblings, prefix, selected);
-            if (oldStyleChain.volumes.size() > 1) {
-                return new Result(
-                        Style.BASE_RAR_WITH_OLD_STYLE_COMPANIONS,
-                        selected, oldStyleChain.volumes.get(0), oldStyleChain.volumes, 0,
-                        oldStyleChain.nextMissingIndex, oldStyleChain.maxSeenIndex, false, prefix);
+            Chain chain = collectOldStyle(siblings, prefix, selected);
+            if (chain.maxSeenIndex >= 0) {
+                File first = chain.volumes.isEmpty() ? selected : chain.volumes.get(0);
+                return new Result(Style.BASE_RAR_WITH_OLD_STYLE_COMPANIONS,
+                        selected, first, chain, 0, false, prefix);
             }
-            // book.rar and book.part1.rar can be different archives. Never redirect
-            // an existing user-selected base archive merely because part files coexist.
-            if (selected.isFile()) return single(selected);
-            Chain newStyleChain = collectNewStyle(siblings, prefix);
-            if (newStyleChain.volumes.size() > 1) {
-                return new Result(
-                        Style.BASE_RAR_WITH_NEW_STYLE_COMPANIONS,
-                        selected,
-                        newStyleChain.volumes.get(0),
-                        newStyleChain.volumes,
-                        0,
-                        newStyleChain.nextMissingIndex,
-                        newStyleChain.maxSeenIndex,
-                        false,
-                        prefix);
-            }
+            // A base .rar is a different identity from a coexisting .partN.rar set.
+            // A missing selected file is an error at the strict boundary, not an alias.
         }
-        return single(selected);
+        return single(selected, null);
     }
 
-    @NonNull
-    private static File expectedNewStyleFirstVolume(@NonNull File parent,
-                                                   @NonNull String prefix,
-                                                   @NonNull String selectedDigits) {
-        int width = Math.max(1, selectedDigits.length());
-        String number = String.format(Locale.ROOT, "%0" + width + "d", 1);
-        return new File(parent, prefix + ".part" + number + ".rar");
+    private static File expectedNewStyleFirstVolume(File parent, String prefix, String digits) {
+        // Width affects only diagnostics when part 1 is absent; there is no ordinal probing loop.
+        StringBuilder first = new StringBuilder(digits.length());
+        for (int i = 1; i < digits.length(); i++) first.append('0');
+        first.append('1');
+        return new File(parent, prefix + ".part" + first + ".rar");
     }
 
-    @NonNull
-    private static Result single(@NonNull File selected) {
-        List<File> volumes = new ArrayList<>();
-        volumes.add(selected);
-        return new Result(Style.SINGLE, selected, selected, volumes, 0, -1, 0, false, selected.getName());
+    private static Result single(File selected, @Nullable String problem) {
+        Chain chain = new Chain(Collections.singletonList(selected), -1, 0, problem);
+        return new Result(Style.SINGLE, selected, selected, chain, 0, false, selected.getName());
     }
 
-    @NonNull
-    private static Chain collectNewStyle(@NonNull File[] files, @NonNull String prefix) {
-        Pattern pattern = Pattern.compile(
-                "^" + Pattern.quote(prefix) + "\\.part(\\d{1,6})\\.rar$",
-                Pattern.CASE_INSENSITIVE);
-        Map<Integer, File> byIndex = new TreeMap<>();
+    private static Chain collectNewStyle(File[] files, String prefix) {
+        TreeMap<Integer, File> byIndex = new TreeMap<>();
+        String problem = null;
         for (File file : files) {
+            if (Thread.currentThread().isInterrupted()) { problem = "RAR volume discovery interrupted"; break; }
             if (file == null) continue;
-            Matcher matcher = pattern.matcher(file.getName());
-            if (!matcher.matches() || !file.isFile()) continue;
-            int index = parseNonNegativeInt(matcher.group(1));
-            if (index <= 0) continue;
-            putDeterministic(byIndex, index, file);
+            Matcher match = NEW_STYLE_PART.matcher(file.getName());
+            if (!match.matches() || !match.group(1).equalsIgnoreCase(prefix)) continue;
+            int index = parseNonNegativeInt(match.group(2));
+            if (index <= 0) { problem = "Invalid RAR volume number: " + file.getName(); continue; }
+            File prior = byIndex.putIfAbsent(index, file);
+            if (prior != null) problem = "Ambiguous RAR volume " + index + ": "
+                    + prior.getName() + " / " + file.getName();
         }
-        return contiguous(byIndex, 1);
+        return contiguous(byIndex, 1, problem);
     }
 
-    @NonNull
-    private static Chain collectOldStyle(@NonNull File[] files, @NonNull String prefix,
-                                         @NonNull File selected) {
+    private static Chain collectOldStyle(File[] files, String prefix, File selected) {
         File first = null;
+        boolean ambiguousBase = false;
+        String problem = null;
+        TreeMap<Integer, File> byIndex = new TreeMap<>();
         String baseName = prefix + ".rar";
-        Pattern pattern = Pattern.compile(
-                "^" + Pattern.quote(prefix) + "\\.r(\\d{2,3})$",
-                Pattern.CASE_INSENSITIVE);
-        Map<Integer, File> byIndex = new TreeMap<>();
         for (File file : files) {
+            if (Thread.currentThread().isInterrupted()) { problem = "RAR volume discovery interrupted"; break; }
             if (file == null) continue;
-            if (file.getName().equalsIgnoreCase(baseName) && file.isFile()) {
-                // Preserve the chosen base file if case-distinct archives coexist.
-                if (first == null || file.equals(selected)
-                        || (!first.equals(selected) && compareNames(file, first) < 0)) {
-                    first = file;
-                }
+            if (file.getName().equalsIgnoreCase(baseName)) {
+                if (first != null) ambiguousBase = true;
+                if (first == null || file.equals(selected)) first = file;
                 continue;
             }
-            Matcher matcher = pattern.matcher(file.getName());
-            if (!matcher.matches() || !file.isFile()) continue;
-            int index = parseNonNegativeInt(matcher.group(1));
-            if (index < 0) continue;
-            putDeterministic(byIndex, index, file);
+            Matcher match = OLD_STYLE_PART.matcher(file.getName());
+            if (!match.matches() || !match.group(1).equalsIgnoreCase(prefix)) continue;
+            int index = parseNonNegativeInt(match.group(2));
+            File prior = byIndex.putIfAbsent(index, file);
+            if (prior != null) problem = "Ambiguous RAR continuation " + index + ": "
+                    + prior.getName() + " / " + file.getName();
         }
-
-        if (first == null) return new Chain(new ArrayList<File>(), -1, -1);
-
-        Chain continuations = contiguous(byIndex, 0);
-        List<File> result = new ArrayList<>();
+        Chain tail = contiguous(byIndex, 0, problem);
+        if (first == null) return new Chain(Collections.emptyList(), 0, tail.maxSeenIndex,
+                problem != null ? problem : "Missing first RAR volume");
+        if (ambiguousBase && !byIndex.isEmpty()) tail.problem = "Ambiguous first RAR volume";
+        ArrayList<File> result = new ArrayList<>();
         result.add(first);
-        result.addAll(continuations.volumes);
-        return new Chain(result, continuations.nextMissingIndex, continuations.maxSeenIndex);
+        result.addAll(tail.volumes);
+        return new Chain(result, tail.nextMissingIndex, tail.maxSeenIndex, tail.problem);
     }
 
-    @NonNull
-    private static Chain contiguous(@NonNull Map<Integer, File> byIndex, int firstIndex) {
-        List<File> result = new ArrayList<>();
-        int maxSeen = -1;
-        for (Integer seen : byIndex.keySet()) {
-            if (seen != null && seen > maxSeen) maxSeen = seen;
+    /** O(V) walk of an ordered catalogue, not O(largest attacker-chosen ordinal). */
+    private static Chain contiguous(TreeMap<Integer, File> byIndex, int firstIndex, @Nullable String problem) {
+        ArrayList<File> result = new ArrayList<>();
+        long expected = firstIndex;
+        for (Map.Entry<Integer, File> entry : byIndex.entrySet()) {
+            if (entry.getKey().longValue() != expected) break;
+            result.add(entry.getValue());
+            expected++;
         }
-        int index = firstIndex;
-        for (; index <= 9999; index++) {
-            File file = byIndex.get(index);
-            if (file == null) break;
-            result.add(file);
-        }
-        int nextMissing = byIndex.isEmpty() ? -1 : index;
-        return new Chain(result, nextMissing, maxSeen);
+        int nextMissing = byIndex.isEmpty() ? -1 : expected > Integer.MAX_VALUE ? -1 : (int) expected;
+        int maxSeen = byIndex.isEmpty() ? -1 : byIndex.lastKey();
+        return new Chain(result, nextMissing, maxSeen, problem);
     }
 
-    private static void putDeterministic(@NonNull Map<Integer, File> byIndex,
-                                         int index,
-                                         @NonNull File file) {
-        File existing = byIndex.get(index);
-        if (existing == null || compareNames(file, existing) < 0) {
-            byIndex.put(index, file);
-        }
-    }
-
-    private static int compareNames(@NonNull File a, @NonNull File b) {
-        int insensitive = a.getName().compareToIgnoreCase(b.getName());
-        return insensitive != 0 ? insensitive : a.getName().compareTo(b.getName());
-    }
-
-    private static int parseNonNegativeInt(@Nullable String value) {
-        if (value == null || value.length() == 0) return -1;
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException ignored) {
-            return -1;
-        }
+    private static int parseNonNegativeInt(String value) {
+        try { return Integer.parseInt(value); }
+        catch (NumberFormatException invalid) { return -1; }
     }
 
     private static final class Chain {
         final List<File> volumes;
-        final int nextMissingIndex;
-        final int maxSeenIndex;
-
-        Chain(@NonNull List<File> volumes, int nextMissingIndex, int maxSeenIndex) {
+        final int nextMissingIndex, maxSeenIndex;
+        @Nullable String problem;
+        Chain(List<File> volumes, int nextMissingIndex, int maxSeenIndex, @Nullable String problem) {
             this.volumes = volumes;
             this.nextMissingIndex = nextMissingIndex;
             this.maxSeenIndex = maxSeenIndex;
+            this.problem = problem;
         }
     }
 }

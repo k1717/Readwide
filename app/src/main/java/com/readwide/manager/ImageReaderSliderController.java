@@ -30,6 +30,8 @@ final class ImageReaderSliderController {
     private int rightInset;
     private int bottomInset;
     private int sliderDirection = PrefsManager.IMAGE_SLIDER_DIRECTION_LTR;
+    private boolean userTracking;
+    private int latestItemCount;
 
     ImageReaderSliderController(@NonNull ImageReaderActivity activity, @NonNull Listener listener) {
         this.activity = activity;
@@ -72,13 +74,20 @@ final class ImageReaderSliderController {
         sliderBar.addView(imageSlider, sliderLp);
         imageSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (fromUser) updateLabel(progressToIndex(progress, imageSlider.getMax() + 1), imageSlider.getMax() + 1);
+                if (fromUser) updateLabel(progressToIndex(progress, latestItemCount), latestItemCount);
             }
 
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {
+                userTracking = true;
+            }
 
             @Override public void onStopTrackingTouch(SeekBar seekBar) {
-                listener.onSliderTargetSelected(progressToIndex(seekBar.getProgress(), seekBar.getMax() + 1));
+                int target = progressToIndex(seekBar.getProgress(), latestItemCount);
+                userTracking = false;
+                seekBar.setMax(Math.max(0, latestItemCount - 1));
+                seekBar.setProgress(indexToProgress(target, latestItemCount));
+                updateLabel(target, latestItemCount);
+                if (latestItemCount > 0) listener.onSliderTargetSelected(target);
             }
         });
         update(0, itemCount, true);
@@ -106,8 +115,15 @@ final class ImageReaderSliderController {
 
     void update(int currentIndex, int itemCount, boolean chromeVisible) {
         if (sliderBar == null || imageSlider == null || imageSliderLabel == null) return;
+        latestItemCount = Math.max(0, itemCount);
         boolean hasSequence = itemCount > 1;
         sliderBar.setVisibility(chromeVisible && hasSequence ? View.VISIBLE : View.GONE);
+        if (userTracking) {
+            // Decode/spread completion refreshes the title while this thumb may
+            // still be under the user's finger. Preserve its target until UP.
+            updateLabel(progressToIndex(imageSlider.getProgress(), latestItemCount), latestItemCount);
+            return;
+        }
         imageSlider.setMax(Math.max(0, itemCount - 1));
         int safeIndex = ImageSequenceNavigationMath.clampIndex(currentIndex, itemCount);
         int visualProgress = indexToProgress(safeIndex, itemCount);

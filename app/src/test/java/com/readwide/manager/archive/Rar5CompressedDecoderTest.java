@@ -25,6 +25,43 @@ import java.util.zip.CRC32;
  * compressed entry, a stored+compressed mix, and a solid continuation.
  */
 public class Rar5CompressedDecoderTest {
+    @Test public void finalChecksumFailureIsCorruptionAndPreservesOutput() throws Exception {
+        File archive = writeFixture("bad-final.rar", SOLID_CBR_HEX);
+        RarArchiveReader.RarEntry first = RarArchiveReader.readEntries(archive, null).get(0);
+        RarArchiveReader.RarEntry bad = new RarArchiveReader.RarEntry("unsupported-wrong-password.jpg", false,
+                first.unpackedSize, first.packedSize, first.dataOffset, 5, first.method, first.solid,
+                false, false, null, first.dataCrc ^ 1, first.timeMillis, first.rar5CompressionInfo);
+        bad.sourceArchive = first.sourceArchive;
+        File output = temp.newFile();
+        Files.writeString(output.toPath(), "existing");
+        try {
+            Rar5CompressedArchiveExtractor.tryExtractEntry(bad, java.util.Collections.singletonList(bad),
+                    output, null, null);
+            fail("Expected checksum failure");
+        } catch (Rar5CompressedArchiveExtractor.ChecksumException expected) {
+            assertEquals(ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE,
+                    ArchiveFailureClassifier.classify(expected));
+        }
+        assertEquals("existing", Files.readString(output.toPath()));
+    }
+    @Test public void forwardFailure_truncatedSpool() throws Exception {
+        File archive = writeFixture("failure.rar", SOLID_CBR_HEX);
+        File spool = temp.newFolder();
+        RarForwardFailureAssertions.truncatedSpool(Rar5CompressedArchiveExtractor.openForwardReader(archive, null, spool, false), spool);
+    }
+
+    @Test public void forwardFailure_deletionRetry() throws Exception {
+        File archive = writeFixture("failure.rar", SOLID_CBR_HEX);
+        File spool = temp.newFolder();
+        RarForwardFailureAssertions.deletionRetry(Rar5CompressedArchiveExtractor.openForwardReader(archive, null, spool, false), spool);
+    }
+
+    @Test public void forwardFailure_interruptionRetires() throws Exception {
+        File archive = writeFixture("failure.rar", SOLID_CBR_HEX);
+        File spool = temp.newFolder();
+        RarForwardFailureAssertions.interruptionRetires(Rar5CompressedArchiveExtractor.openForwardReader(archive, null, spool, false), spool);
+    }
+
 
     @Rule
     public TemporaryFolder temp = new TemporaryFolder();

@@ -22,7 +22,7 @@ final class ArchiveTypeDetector {
     static final Pattern RAR_NEW_STYLE_PART = Pattern.compile("^(.*)\\.part(\\d+)\\.rar$", Pattern.CASE_INSENSITIVE);
     static final Pattern RAR_OLD_STYLE_PART = Pattern.compile("^(.*)\\.r(\\d{2,3})$", Pattern.CASE_INSENSITIVE);
     static final Pattern EGG_VOLUME_PART = Pattern.compile("^(.*)\\.vol(\\d+)\\.egg$", Pattern.CASE_INSENSITIVE);
-    static final Pattern ALZ_VOLUME_PART = Pattern.compile("^(.*)\\.a(\\d{2,3})$", Pattern.CASE_INSENSITIVE);
+    static final Pattern ALZ_VOLUME_PART = AlzVolumeResolver.CONTINUATION;
 
     private static final String[] OUTPUT_BASE_EXTENSIONS = new String[] {
             ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.lzma", ".tar.z", ".tar.zst", ".tar.lz4",
@@ -44,12 +44,20 @@ final class ArchiveTypeDetector {
 
     @Nullable
     static ArchiveSupport.Type fromFileName(@NonNull String fileName) {
+        String stem = numericSplitStem(fileName);
+        return fromUnsplitFileName(stem != null ? stem : fileName);
+    }
+
+    /** Only strip a numeric suffix when its base is an already-supported family. */
+    @Nullable
+    static String numericSplitStem(@NonNull String fileName) {
+        String stem = SevenZSplitVolumeResolver.numericArchiveStem(fileName);
+        return stem != null && fromUnsplitFileName(stem) != null ? stem : null;
+    }
+
+    @Nullable
+    private static ArchiveSupport.Type fromUnsplitFileName(@NonNull String fileName) {
         String name = fileName.toLowerCase(Locale.ROOT);
-        if (SevenZSplitVolumeResolver.isSevenZSplitPartName(fileName)) return ArchiveSupport.Type.SEVEN_Z;
-        if (isFirstNumericSplitName(name)) {
-            ArchiveSupport.Type splitBaseType = fromFileName(name.substring(0, name.length() - 4));
-            if (splitBaseType != null) return splitBaseType;
-        }
         if (isFirstRarSplitName(name)) return ArchiveSupport.Type.RAR;
         if (RAR_OLD_STYLE_PART.matcher(name).matches()) return ArchiveSupport.Type.RAR;
         if (EGG_VOLUME_PART.matcher(name).matches()) return ArchiveSupport.Type.EGG;
@@ -113,21 +121,27 @@ final class ArchiveTypeDetector {
         if (EGG_VOLUME_PART.matcher(lower).matches()) return ArchiveSupport.Type.EGG;
         Matcher alzPart = ALZ_VOLUME_PART.matcher(lower);
         if (!alzPart.matches()) return null;
-        File parent = file.getParentFile();
-        if (parent == null) return null;
-        String prefix = file.getName().substring(0, lower.lastIndexOf(".a"));
-        File first = new File(parent, prefix + ".alz");
-        return first.exists() && first.isFile() ? ArchiveSupport.Type.ALZ : null;
+        try {
+            AlzVolumeResolver.resolveFirstVolume(file);
+            return ArchiveSupport.Type.ALZ;
+        } catch (IOException | SecurityException unavailable) {
+            return null;
+        }
     }
 
     @NonNull
     static String outputBaseName(@NonNull File archive, @NonNull String fallback) {
         String name = archive.getName();
         String lower = name.toLowerCase(Locale.ROOT);
-        if (isFirstNumericSplitName(lower) || SevenZSplitVolumeResolver.isSevenZSplitPartName(name)) {
-            name = name.substring(0, name.length() - 4);
-            lower = lower.substring(0, lower.length() - 4);
+        String numericStem = numericSplitStem(name);
+        if (numericStem != null) {
+            name = numericStem;
+            lower = name.toLowerCase(Locale.ROOT);
         }
+        Matcher eggVolume = EGG_VOLUME_PART.matcher(name);
+        Matcher alzVolume = ALZ_VOLUME_PART.matcher(name);
+        if (eggVolume.matches()) return eggVolume.group(1).isEmpty() ? fallback : eggVolume.group(1);
+        if (alzVolume.matches()) return alzVolume.group(1).isEmpty() ? fallback : alzVolume.group(1);
         Matcher rarPartMatcher = RAR_NEW_STYLE_PART.matcher(name);
         if (rarPartMatcher.matches()) {
             name = rarPartMatcher.group(1) + ".rar";

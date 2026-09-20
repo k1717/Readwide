@@ -463,12 +463,17 @@ final class ReaderToolsDialogController {
                 int ordinal = activity.activeSearchIndex >= 0 ? Math.max(1, activity.activeSearchOrdinal) : 0;
                 activity.updateLargeTextSearchStatus(matchStatus, ordinal, knownTotal);
             } else {
-                int total = activity.countTextMatches(rememberedQuery);
-                int ordinal = activity.activeSearchIndex >= 0 ? activity.matchIndexForPosition(rememberedQuery, activity.activeSearchIndex) : 0;
-                activity.activeSearchOrdinal = ordinal;
-                matchStatus.setText(String.format(Locale.getDefault(), "%d / %d", ordinal, total));
+                activity.refreshTextSearchStatus(rememberedQuery, matchStatus);
             }
         }
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                activity.resetActiveSearchState();
+                matchStatus.setText("0 / 0");
+            }
+            @Override public void afterTextChanged(android.text.Editable value) { }
+        });
         box.addView(input, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 activity.dpToPx(52)));
@@ -507,10 +512,7 @@ final class ReaderToolsDialogController {
                 activity.activeSearchOrdinal = 0;
                 matchStatus.setText("0 / 0");
             } else {
-                int total = activity.countTextMatches(q);
-                int ordinal = activity.activeSearchIndex >= 0 ? activity.matchIndexForPosition(q, activity.activeSearchIndex) : 0;
-                activity.activeSearchOrdinal = ordinal;
-                matchStatus.setText(String.format(Locale.getDefault(), "%d / %d", ordinal, total));
+                activity.refreshTextSearchStatus(q, matchStatus);
             }
         };
 

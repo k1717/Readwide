@@ -122,7 +122,7 @@ public class RarSolidFixtureReportTest {
             java.io.File payload = java.io.File.createTempFile("classiclz-probe", ".rar");
             payload.deleteOnExit();
             try (java.io.FileOutputStream out = new java.io.FileOutputStream(payload)) {
-                out.write(new byte[]{0x00, 0x00, 0x00, 0x00}); // first bit clear = classic LZ block
+                out.write(new byte[32]); // Complete declared range; first bit clear = classic LZ.
             }
             return payload;
         } catch (java.io.IOException e) {

@@ -690,7 +690,7 @@
     <string name="archive_support_boundary_title">Giới hạn hỗ trợ tệp nén</string>
     <string name="archive_support_boundary_rar">Khả năng hỗ trợ RAR còn hạn chế và phụ thuộc vào cách nén, mã hóa và chia phần. Không hỗ trợ chương trình VM tùy chỉnh hoặc luồng LZ/PPMd hỗn hợp đã mã hóa hay chia phần.</string>
     <string name="archive_support_boundary_zip">ZIP/CBZ/ZIPX hỗ trợ Store/Deflate thông thường và ZIP mã hóa qua Zip4j. ZIPX dùng WinZip AES còn hỗ trợ Deflate64, BZip2, LZMA và XZ, cùng PPMd và Zstandard qua libarchive 3.8.9. AES ZIPX dùng JPEG hoặc WavPack được hỗ trợ bằng mô-đun codec native FOSS đi kèm.</string>
-    <string name="archive_support_boundary_7z">7z/CB7 hỗ trợ các phương thức nén phổ biến và một số tổ hợp PPMd/BCJ2, bao gồm tệp nén mã hóa hoặc chia phần tương thích. Một số tổ hợp chưa được hỗ trợ; tệp nén đặc có thể mất nhiều thời gian để mở.</string>
+    <string name="archive_support_boundary_7z">7z/CB7 hỗ trợ các phương thức nén phổ biến và một số tổ hợp PPMd/BCJ2/ARM64/RISC-V, bao gồm tệp nén mã hóa hoặc chia phần tương thích. Một số tổ hợp chưa được hỗ trợ; tệp nén đặc có thể mất nhiều thời gian để mở.</string>
     <string name="archive_support_boundary_alz">ALZ hỗ trợ Store, Deflate, BZip2 và một số mục kiểu ZipCrypto. Các biến thể chia phần, mã hóa, nhiều descriptor hoặc ESTsoft bất thường vẫn là best-effort.</string>
     <string name="archive_support_boundary_egg">EGG hỗ trợ Store, Deflate, BZip2, AZO và LZMA, tệp nén chia phần, tệp nén đặc không mã hóa và các mục ZipCrypto/AES tương thích không dùng nén đặc. Không hỗ trợ mã hóa LEA hoặc tệp nén đặc đã mã hóa.</string>
     <string name="archive_support_boundary_generic">Tệp nén này dùng tính năng nằm ngoài giới hạn giải nén hiện được hỗ trợ.</string>

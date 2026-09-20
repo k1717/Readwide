@@ -557,6 +557,169 @@ public class EggArchiveReaderTest {
         assertEquals(0, spool.listFiles().length);
     }
 
+    @Test public void solidForwardInterruptionClosesOwnedResourcesImmediately() throws Exception {
+        File archive = buildSolidEggArchive(new String[]{"page.jpg"},
+                new byte[][]{new byte[]{1, 2, 3}}, 0, 1);
+        File spool = tempFolder.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = ArchiveSupport.openForwardReader(archive, null, spool)) {
+            reader.nextEntry();
+            assertEquals(1, reader.read(new byte[1]));
+            assertEquals(1, spool.listFiles().length);
+            Thread.currentThread().interrupt();
+            try { reader.read(new byte[1]); fail("Interrupted reads must retire the session"); }
+            catch (IOException expected) { }
+            finally { Thread.interrupted(); }
+            assertEquals(0, spool.listFiles().length);
+            assertRetiredForward(reader);
+        }
+    }
+
+    @Test public void solidForwardTruncatedSpoolRetiresSession() throws Exception {
+        File archive = buildSolidEggArchive(new String[]{"page.jpg"},
+                new byte[][]{new byte[]{1, 2, 3}}, 0, 1);
+        File spool = tempFolder.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = ArchiveSupport.openForwardReader(archive, null, spool)) {
+            reader.nextEntry();
+            reader.read(new byte[1]);
+            try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(spool.listFiles()[0], "rw")) {
+                file.setLength(0);
+            }
+            try { reader.read(new byte[1]); fail("Truncated spool must fail"); }
+            catch (IOException expected) { }
+            assertEquals(0, spool.listFiles().length);
+            assertRetiredForward(reader);
+        }
+    }
+
+    @Test public void solidForwardNegativeDrainBoundRetiresSession() throws Exception {
+        File archive = buildSolidEggArchive(new String[]{"page.jpg"},
+                new byte[][]{new byte[]{1, 2, 3}}, 0, 1);
+        File spool = tempFolder.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = ArchiveSupport.openForwardReader(archive, null, spool)) {
+            reader.nextEntry();
+            try { reader.drainCurrentEntry(-1); fail("Negative drain budget must fail"); }
+            catch (IOException expected) { }
+            assertEquals(0, spool.listFiles().length);
+            assertRetiredForward(reader);
+        }
+    }
+
+    @Test public void solidForwardCrcFailureCannotBeRetriedOnSameReader() throws Exception {
+        File archive = buildSolidEggArchive(new String[]{"page.jpg"},
+                new byte[][]{new byte[]{1, 2, 3}}, 0, 1);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        bytes[bytes.length - 5] ^= 1;
+        Files.write(archive.toPath(), bytes);
+        File spool = tempFolder.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = ArchiveSupport.openForwardReader(archive, null, spool)) {
+            reader.nextEntry();
+            byte[] unchanged = new byte[]{42};
+            try { reader.read(unchanged); fail("CRC must precede publication"); }
+            catch (IOException expected) { }
+            org.junit.Assert.assertArrayEquals(new byte[]{42}, unchanged);
+            assertEquals(0, spool.listFiles().length);
+            assertRetiredForward(reader);
+        }
+    }
+
+    @Test public void solidForwardShorteningToCursorCannotSpliceNextBlockIntoImage() throws Exception {
+        assertChangedSolidBlockFails(false, false);
+    }
+
+    @Test public void solidForwardDrainRejectsShorteningToCursor() throws Exception {
+        assertChangedSolidBlockFails(true, false);
+    }
+
+    @Test public void solidForwardRejectsGrowthOfVerifiedBlock() throws Exception {
+        assertChangedSolidBlockFails(false, true);
+    }
+
+    private void assertChangedSolidBlockFails(boolean drain, boolean grow) throws Exception {
+        File archive = buildSolidEggArchive(new String[]{"page.jpg", "later.jpg"},
+                new byte[][]{new byte[]{1, 2}, new byte[]{3, 4, 5, 6, 7, 8}}, 0, 2);
+        File directory = tempFolder.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = EggArchiveReader.openSolidForwardReader(archive, directory)) {
+            assertEquals("page.jpg", reader.nextEntry().path);
+            assertEquals(1, reader.read(new byte[1])); // First block holds bytes 1..4; cursor is now 1.
+            try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(directory.listFiles()[0], "rw")) {
+                file.setLength(grow ? 5 : 1);
+            }
+            byte[] unchanged = {42};
+            try {
+                if (drain) reader.drainCurrentEntry(Long.MAX_VALUE);
+                else reader.read(unchanged);
+                fail("Changed block must fail before advancing to the next block");
+            } catch (IOException expected) { assertTrue(expected.getMessage().contains("spool")); }
+            org.junit.Assert.assertArrayEquals(new byte[]{42}, unchanged);
+            assertRetiredForward(reader);
+        }
+        assertEquals(0, directory.list().length);
+    }
+
+    @Test public void solidForwardCloseRetriesFailedSpoolDeletion() throws Exception {
+        assertSolidCleanupRetry(false);
+    }
+
+    @Test public void solidForwardPreservesCloseFailureWhenDeletionAlsoFails() throws Exception {
+        assertSolidCleanupRetry(true);
+    }
+
+    private void assertSolidCleanupRetry(boolean failHandleClose) throws Exception {
+        File archive = buildSolidEggArchive(new String[]{"page.jpg"}, new byte[][]{new byte[]{1, 2, 3}}, 0, 1);
+        File directory = tempFolder.newFolder();
+        ArchiveSupport.ForwardArchiveReader reader = EggArchiveReader.openSolidForwardReader(archive, directory);
+        java.lang.reflect.Field pathField = reader.getClass().getDeclaredField("spoolFile");
+        java.lang.reflect.Field handleField = reader.getClass().getDeclaredField("spool");
+        pathField.setAccessible(true);
+        handleField.setAccessible(true);
+        File original = null;
+        try {
+            reader.nextEntry();
+            assertEquals(1, reader.read(new byte[1]));
+            original = (File) pathField.get(reader);
+            pathField.set(reader, new File(original.getAbsolutePath()) {
+                @Override public boolean delete() { return false; }
+            });
+            if (failHandleClose) {
+                ((java.io.RandomAccessFile) handleField.get(reader)).close();
+                handleField.set(reader, new java.io.RandomAccessFile(original, "r") {
+                    @Override public void close() throws IOException {
+                        super.close();
+                        throw new IOException("Injected handle-close failure");
+                    }
+                });
+            }
+            try { reader.close(); fail("Cleanup failure must be reported"); }
+            catch (IOException expected) {
+                if (failHandleClose) {
+                    assertEquals("Injected handle-close failure", expected.getMessage());
+                    assertEquals(1, expected.getSuppressed().length);
+                    assertTrue(expected.getSuppressed()[0].getMessage().contains("spool"));
+                } else assertTrue(expected.getMessage().contains("spool"));
+            }
+            assertTrue(original.exists());
+            org.junit.Assert.assertNotNull(pathField.get(reader));
+            pathField.set(reader, original);
+            reader.close();
+            reader.close();
+            assertFalse(original.exists());
+            assertRetiredForward(reader);
+        } finally {
+            if (original != null && original.exists()) pathField.set(reader, original);
+            reader.close();
+        }
+        assertEquals(0, directory.list().length);
+    }
+
+    private static void assertRetiredForward(ArchiveSupport.ForwardArchiveReader reader) throws Exception {
+        try { reader.read(new byte[1]); fail("Failed reader must reject reads"); }
+        catch (IOException expected) { }
+        try { reader.nextEntry(); fail("Failed reader must reject advance"); }
+        catch (IOException expected) { }
+        try { reader.drainCurrentEntry(100); fail("Failed reader must reject drains"); }
+        catch (IOException expected) { }
+    }
+
     @Test public void nonSolidEggKeepsDirectEntryRoute() throws Exception {
         File archive = buildEggArchive("page.jpg", new byte[]{1, 2, 3}, 0, false);
         assertFalse(ArchiveSupport.isForwardImageReadableType(archive));

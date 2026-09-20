@@ -117,12 +117,14 @@ public class PdfPageView extends View {
 
     private ScaleGestureDetector scaleDetector;
     private GestureDetector gestureDetector;
+    private GestureDetector pageGestureDetector;
+    private boolean pageTurnGesture;
+    private boolean gestureStartedZoomed;
     private OverScroller scroller;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private boolean scaling = false;
     private boolean dragging = false;
-    private boolean handledByTapUp = false;
 
     @Nullable private SharpenRequestListener sharpenListener;
     @Nullable private TapListener tapListener;
@@ -139,7 +141,12 @@ public class PdfPageView extends View {
     private void init(Context c) {
         scroller = new OverScroller(c);
         scaleDetector = new ScaleGestureDetector(c, new ScaleListener());
-        gestureDetector = new GestureDetector(c, new GestureListener());
+        gestureDetector = new GestureDetector(c, new GestureListener(false));
+        // Page taps are independent releases, even at the same point in a fast burst.
+        // SimpleOnGestureListener also implements OnDoubleTapListener, so explicitly
+        // disable grouping on this detector. Center gestures retain zoom detection.
+        pageGestureDetector = new GestureDetector(c, new GestureListener(true));
+        pageGestureDetector.setOnDoubleTapListener(null);
         setClickable(true);
         setFocusable(true);
         float density = getResources().getDisplayMetrics().density;
@@ -163,11 +170,14 @@ public class PdfPageView extends View {
      * currentNormRect, if non-null, is the active match and is emphasized.
      */
     public void setHighlights(@Nullable List<RectF> normRects, @Nullable RectF currentNormRect) {
+        boolean currentMatchChanged = currentHighlightRect == null
+                ? currentNormRect != null : !currentHighlightRect.equals(currentNormRect);
         this.highlightRects = normRects;
         this.currentHighlightRect = currentNormRect;
-        // A new current match (or refreshed page) — allow revealing again even if
-        // the user had panned away from the previous one.
-        revealSuppressedByUser = false;
+        // Search progress refreshes rectangles even when the active match stays
+        // the same. Respect a manual pan until a different match arrives; a new
+        // page clears currentHighlightRect in setFitBitmap before this callback.
+        if (currentMatchChanged) revealSuppressedByUser = false;
         // A new current match may sit behind the find dialog; lift it into view.
         // Compute now (works when the matrix is already settled, e.g. same page),
         // and once more on the next frame to catch the case where this arrives
@@ -464,6 +474,11 @@ public class PdfPageView extends View {
         return true;
     }
 
+    /** Zoom gestures take priority over tap paging anywhere on an enlarged page. */
+    public boolean isZoomedIn() {
+        return fitBitmap != null && PdfPageGestureMath.isZoomed(currentScale(), minScale);
+    }
+
     private float currentScale() {
         matrix.getValues(matrixVals);
         return matrixVals[Matrix.MSCALE_X];
@@ -570,15 +585,26 @@ public class PdfPageView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        boolean r = scaleDetector.onTouchEvent(event);
-        r = gestureDetector.onTouchEvent(event) || r;
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            gestureStartedZoomed = isZoomedIn();
+            captureSwipeStart(event);
+            boolean nextPageTurnGesture = !gestureStartedZoomed && tapZoneQuery != null
+                    && tapZoneQuery.isPageTurnZone(event.getX(), event.getY());
+            if (nextPageTurnGesture != pageTurnGesture) {
+                // Navigation interrupts a pending center gesture. Do not group two
+                // center taps across an intervening page tap or toggle chrome later.
+                MotionEvent cancel = MotionEvent.obtain(event);
+                cancel.setAction(MotionEvent.ACTION_CANCEL);
+                (pageTurnGesture ? pageGestureDetector : gestureDetector).onTouchEvent(cancel);
+                cancel.recycle();
+            }
+            pageTurnGesture = nextPageTurnGesture;
+        }
+        scaleDetector.onTouchEvent(event);
+        // Keep one detector for the entire touch sequence, including drags/pinches.
+        (pageTurnGesture ? pageGestureDetector : gestureDetector).onTouchEvent(event);
 
         switch (event.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN:
-                swipeStartX = event.getX();
-                swipeStartY = event.getY();
-                swipeTracking = true;
-                break;
             case MotionEvent.ACTION_POINTER_DOWN:
                 swipeTracking = false; // multi-touch => pinch, not a swipe
                 break;
@@ -600,19 +626,34 @@ public class PdfPageView extends View {
     private float swipeStartX, swipeStartY;
     private boolean swipeTracking = false;
 
-    /** A horizontal drag, when the page can't pan horizontally, turns the page. */
+    private boolean swipeStartedAtLeftEdge, swipeStartedAtRightEdge;
+
+    private void captureSwipeStart(MotionEvent down) {
+        swipeStartX = down.getX();
+        swipeStartY = down.getY();
+        swipeTracking = fitBitmap != null;
+        swipeStartedAtLeftEdge = swipeStartedAtRightEdge = false;
+        if (fitBitmap == null) return;
+        matrix.getValues(matrixVals);
+        float left = matrixVals[Matrix.MTRANS_X];
+        float width = fitBitmap.getWidth() * matrixVals[Matrix.MSCALE_X];
+        swipeStartedAtLeftEdge = PdfPageGestureMath.atLeftEdge(left);
+        swipeStartedAtRightEdge = PdfPageGestureMath.atRightEdge(left, width, getWidth());
+    }
+
+    /** Only an outward swipe that starts at the content edge may turn a zoomed page. */
     private void maybePageSwipe(MotionEvent up) {
         if (pageSwipeListener == null || fitBitmap == null || scaling) return;
-        float scale = currentScale();
-        float drawnW = fitBitmap.getWidth() * scale;
-        // Only when the page is NOT wider than the viewport (i.e. not zoomed in
-        // horizontally) — otherwise a horizontal drag is a pan, not a page turn.
-        if (drawnW > getWidth() + 1) return;
-        float dx = up.getX() - swipeStartX;
-        float dy = up.getY() - swipeStartY;
-        float threshold = getWidth() * 0.18f;
-        if (Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy) * 1.3f) {
-            int direction = dx < 0 ? +1 : -1; // swipe left => next page
+        matrix.getValues(matrixVals);
+        int direction = PdfPageGestureMath.pageSwipeDirection(
+                up.getX() - swipeStartX, up.getY() - swipeStartY, getWidth(),
+                swipeStartedAtLeftEdge, swipeStartedAtRightEdge,
+                matrixVals[Matrix.MTRANS_X],
+                fitBitmap.getWidth() * matrixVals[Matrix.MSCALE_X]);
+        if (direction != 0) {
+            // GestureDetector may have just started a pan fling on this UP.
+            // Stop it before the host installs the next page's matrix.
+            scroller.forceFinished(true);
             pageSwipeListener.onPageSwipe(direction);
         }
     }
@@ -625,6 +666,7 @@ public class PdfPageView extends View {
 
     private void requestSharpenNow() {
         if (sharpenListener == null || fitBitmap == null || getWidth() == 0) return;
+        if (!PdfSharpPatchPlan.needsSharpen(currentScale())) return;
         // Invert matrix to find which part of the bitmap is visible.
         if (!matrix.invert(tmpMatrix)) return;
         float[] pts = {0, 0, getWidth(), getHeight()};
@@ -643,6 +685,14 @@ public class PdfPageView extends View {
         float pxPerPoint = (pageWidthPts > 0)
                 ? (bmpW * currentScale()) / pageWidthPts
                 : currentScale() * supersample;
+        PdfSharpPatchPlan requested = PdfSharpPatchPlan.create(
+                pageWidthPts, pageHeightPts, nl, nt, nr, nb, pxPerPoint);
+        if (requested == null) return;
+        if (sharpPatch != null && !sharpPatch.isRecycled()
+                && PdfSharpPatchPlan.canReuse(sharpPatch.getWidth(), sharpPatch.getHeight(),
+                        sharpPatchPageRect.left, sharpPatchPageRect.top,
+                        sharpPatchPageRect.right, sharpPatchPageRect.bottom,
+                        nl, nt, nr, nb, requested)) return;
         sharpenListener.onSharpenRequested(nl, nt, nr, nb, pxPerPoint);
     }
 
@@ -690,6 +740,7 @@ public class PdfPageView extends View {
     private class ScaleListener extends ScaleGestureDetector.SimpleOnScaleGestureListener {
         @Override public boolean onScaleBegin(ScaleGestureDetector d) {
             scaling = true;
+            swipeTracking = false;
             releaseRevealLift();
             scroller.forceFinished(true);
             handler.removeCallbacks(sharpenRunnable);
@@ -717,16 +768,24 @@ public class PdfPageView extends View {
     }
 
     private class GestureListener extends GestureDetector.SimpleOnGestureListener {
+        private final boolean immediateTaps;
+        private boolean handledByTapUp;
+
+        GestureListener(boolean immediateTaps) {
+            this.immediateTaps = immediateTaps;
+        }
+
         @Override public boolean onDown(MotionEvent e) {
+            handledByTapUp = false;
             scroller.forceFinished(true);
             return true;
         }
 
         @Override public boolean onSingleTapUp(MotionEvent e) {
-            // Page-turn zones suppress double-tap zoom, so there's no need to wait
-            // out the double-tap timeout there — act immediately for snappy paging
-            // that matches swipe responsiveness.
-            if (tapZoneQuery != null && tapZoneQuery.isPageTurnZone(e.getX(), e.getY())) {
+            // Page-zone sequences always finish on release. The listener state is
+            // per detector so a later center tap cannot inherit a consumed page tap.
+            if (!gestureStartedZoomed && (immediateTaps || (tapZoneQuery != null
+                    && tapZoneQuery.isPageTurnZone(e.getX(), e.getY())))) {
                 handledByTapUp = true;
                 if (tapListener != null) tapListener.onSingleTap(e.getX(), e.getY());
                 return true;
@@ -743,16 +802,17 @@ public class PdfPageView extends View {
         @Override public boolean onDoubleTap(MotionEvent e) {
             handledByTapUp = false;
             if (fitBitmap == null) return false;
-            // In a page-turn zone, don't zoom — turn the page instead (a fast
-            // double tap to flip pages must not be captured as a zoom toggle).
-            if (tapZoneQuery != null && tapZoneQuery.isPageTurnZone(e.getX(), e.getY())) {
-                if (tapListener != null) tapListener.onSingleTap(e.getX(), e.getY());
+            // Page-zone detection belongs to pageGestureDetector, which never groups
+            // double taps. Do not turn a page on a double-tap DOWN callback.
+            if (!gestureStartedZoomed && tapZoneQuery != null
+                    && tapZoneQuery.isPageTurnZone(e.getX(), e.getY())) {
                 return true;
             }
+            swipeTracking = false; // the zoom/reset sequence must not also page on UP
             clearSharpPatch();
             releaseRevealLift();
             float scale = currentScale();
-            boolean zoomedIn = scale > minScale * 1.08f;
+            boolean zoomedIn = gestureStartedZoomed || isZoomedIn();
             float targetScale = zoomedIn ? minScale : Math.min(maxScale, minScale * 2.5f);
             float factor = (scale != 0) ? targetScale / scale : 1f;
             matrix.postScale(factor, factor, e.getX(), e.getY());

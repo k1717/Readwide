@@ -9,9 +9,10 @@ import androidx.annotation.Nullable;
 /**
  * Highlights the currently spoken read-aloud sentence in the document viewer's
  * WebView (EPUB / Word-family / HWP/HWPX / Markdown). The read-aloud text buffer
- * is plain text (HTML flattened by {@code Html.fromHtml}), so exact character
- * offsets do not map onto the rendered DOM; instead this searches the DOM for
- * the spoken sentence's text and wraps the matching range in a highlight span.
+ * is plain text (HTML flattened by {@code Html.fromHtml}). Matching uses the
+ * known source page and character offset after both source and DOM whitespace
+ * are removed. If the normalized page differs, only a unique full sentence
+ * with matching surrounding context is accepted.
  *
  * <p>All state lives in an injected script (`window.__rwTtsHl`) so it survives
  * across highlight calls without Java holding DOM references. The script is
@@ -36,6 +37,8 @@ final class DocumentTtsHighlightController {
      */
     @Nullable private String pendingSentence;
     private boolean pendingAllowScroll;
+    private int pendingPage = -1;
+    @Nullable private DocumentTtsHighlightMath.TextLocation pendingLocation;
 
     /**
      * Installs the highlight helper into the current page. Safe to call on every
@@ -46,42 +49,46 @@ final class DocumentTtsHighlightController {
     void installScript() {
         if (activity.webView == null) return;
         evaluate(HIGHLIGHT_SCRIPT, null);
-        if (pendingSentence != null) {
-            evaluate(showJs(pendingSentence, pendingAllowScroll), null);
+        if (pendingSentence != null && pendingPage == activity.currentPage && pendingLocation != null) {
+            evaluate(showJs(pendingSentence, pendingAllowScroll, pendingLocation), null);
         }
     }
 
     /**
-     * Highlights the given spoken sentence. The text is matched against the DOM
-     * with whitespace collapsed and case ignored; if it can't be found (heavily
-     * marked-up passage, or text that spans structural boundaries) nothing is
-     * highlighted and the previous highlight is cleared.
+     * Highlights the given source occurrence. Whitespace is removed and simple
+     * character case is normalized on both sides. If its known position and
+     * context cannot identify a match, the previous highlight is cleared.
      */
-    void highlight(@Nullable String sentence, boolean allowScroll) {
+    void highlight(@Nullable String sentence, boolean allowScroll, int page,
+                   @NonNull DocumentTtsHighlightMath.TextLocation location) {
         if (activity.webView == null) return;
         String normalized = DocumentTtsHighlightMath.normalizeForDomSearch(sentence);
         if (normalized.isEmpty()) {
             clear();
             return;
         }
-        // Latest-wins: kept for the page-load replay above. A sentence from the
-        // previous page simply fails the DOM search on the new page, so a stale
-        // replay paints nothing rather than something wrong.
+        // Keep the source page/position for replay; the same sentence can occur
+        // more than once within a chapter or on an unrelated page.
         pendingSentence = normalized;
         pendingAllowScroll = allowScroll;
-        evaluate(showJs(normalized, allowScroll), null);
+        pendingPage = page;
+        pendingLocation = location;
+        if (page == activity.currentPage) evaluate(showJs(normalized, allowScroll, location), null);
     }
 
-    private static String showJs(@NonNull String normalized, boolean allowScroll) {
+    private static String showJs(@NonNull String normalized, boolean allowScroll,
+                                 @NonNull DocumentTtsHighlightMath.TextLocation location) {
         return "(function(){try{return window.__rwTtsHl&&window.__rwTtsHl.show("
                 + DocumentTtsHighlightMath.toJsStringLiteral(normalized)
-                + "," + (allowScroll ? "true" : "false")
+                + "," + (allowScroll ? "true" : "false") + "," + location.toJavascript()
                 + ");}catch(e){return false;}})()";
     }
 
     /** Removes any current highlight. */
     void clear() {
         pendingSentence = null;
+        pendingLocation = null;
+        pendingPage = -1;
         if (activity.webView == null) return;
         evaluate("(function(){try{if(window.__rwTtsHl)window.__rwTtsHl.clear();}catch(e){}})()", null);
     }
@@ -104,11 +111,11 @@ final class DocumentTtsHighlightController {
     }
 
     /**
-     * The injected highlight helper. Walks visible text nodes, concatenates their
-     * text with single-space collapsing while remembering each node/offset, finds
-     * the target sentence in that concatenation, then wraps the corresponding DOM
-     * range in a `<span>` with a highlight background and scrolls it into view.
-     * A single reused span id keeps only one highlight at a time.
+     * The injected helper maps normalized text positions back to DOM ranges.
+     * It retains node/offset mappings while removing whitespace, verifies the
+     * source position against the page fingerprint, and falls back to unique
+     * surrounding context if rendering changed the text. Highlight spans share
+     * a class so the previous spoken range can be removed before the next one.
      */
     private static final String HIGHLIGHT_SCRIPT =
             "(function(){try{"
@@ -133,14 +140,24 @@ final class DocumentTtsHighlightController {
             + "return {text:text,map:map};}"
             + "function squeeze(s){var o='';for(var i=0;i<s.length;i++){var c=s.charAt(i);"
             + "if(!/\\s/.test(c))o+=lower1(c);}return o;}"
+            + "function hash(s){var h=0;for(var i=0;i<s.length;i++)h=(Math.imul(h,31)+s.charCodeAt(i))|0;return h;}"
+            + "function locate(text,target,location){if(!location)return -1;"
+            + "var at=location.start;"
+            + "if(text.length===location.pageLength&&hash(text)===location.pageHash"
+            + "&&text.substring(at,at+target.length)===target)return at;"
+            // When rendered text differs (e.g. an image replacement character),
+            // accept only one exact surrounding-context match. Never guess the
+            // first occurrence or a short prefix of an unrelated sentence.
+            + "var before=location.before||'',after=location.after||'',found=-1;"
+            + "for(var i=text.indexOf(target);i>=0;i=text.indexOf(target,i+1)){"
+            + "var end=i+target.length;"
+            + "var left=before?i>=before.length&&text.substring(i-before.length,i)===before:i===0;"
+            + "var right=after?text.substring(end,end+after.length)===after:end===text.length;"
+            + "if(left&&right){if(found>=0)return -1;found=i;}}return found;}"
             + "window.__rwTtsHl={"
-            + "show:function(target,allowScroll){clearSpan();"
+            + "show:function(target,allowScroll,location){clearSpan();"
             + "var tq=squeeze(target||'');if(!tq)return false;"
-            + "var b=build();var idx=b.text.indexOf(tq);var matchLen=tq.length;"
-            + "if(idx<0&&tq.length>40){idx=b.text.indexOf(tq.substring(0,40));"
-            // Prefix fallback: highlight ONLY the found prefix; extending by the
-            // full target length would bleed into unrelated following text.
-            + "matchLen=40;}"
+            + "var b=build();var idx=locate(b.text,tq,location);var matchLen=tq.length;"
             + "if(idx<0)return false;"
             + "var startM=b.map[idx];var endIdx=idx+matchLen-1;if(endIdx>=b.map.length)endIdx=b.map.length-1;"
             + "var endM=b.map[endIdx];if(!startM||!endM)return false;"
@@ -163,7 +180,13 @@ final class DocumentTtsHighlightController {
             // follow at the bottom of long pages - partially visible (or chrome-
             // covered) sentences never triggered a scroll. At the true end of a
             // page the browser clamps the scroll, so this is harmless there.
-            + "if(allowScroll&&rc&&(rc.top<0||rc.bottom>window.innerHeight-180)){span.scrollIntoView({block:'center'});}"
+            + "var vv=window.visualViewport;"
+            + "var vw=vv&&Number(vv.width)>0&&isFinite(Number(vv.width))?Number(vv.width):window.innerWidth;"
+            + "var vh=vv&&Number(vv.height)>0&&isFinite(Number(vv.height))?Number(vv.height):window.innerHeight;"
+            + "var vl=vv&&isFinite(Number(vv.offsetLeft))?Number(vv.offsetLeft):0;"
+            + "var vt=vv&&isFinite(Number(vv.offsetTop))?Number(vv.offsetTop):0;"
+            + "if(allowScroll&&rc&&(rc.left<vl||rc.right>vl+vw||rc.top<vt||rc.bottom>vt+vh-180)){"
+            + "span.scrollIntoView({block:'center',inline:'nearest',behavior:'auto'});}"
             + "return true;},"
             + "clear:function(){clearSpan();}};"
             + "return true;}catch(e){return false;}})()";

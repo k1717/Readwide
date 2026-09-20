@@ -43,21 +43,37 @@ public final class TtsAnchorTextMath {
      * the same rendering.
      */
     public static int indexOfCollapsed(String hay, String needle) {
-        int nStart = 0;
-        while (nStart < needle.length() && Character.isWhitespace(needle.charAt(nStart))) nStart++;
-        if (nStart >= needle.length()) return -1;
-        char first = needle.charAt(nStart);
+        char[] pattern = new char[needle.length()];
+        int length = 0;
+        for (int i = 0; i < needle.length(); i++) {
+            char c = needle.charAt(i);
+            if (!Character.isWhitespace(c)) pattern[length++] = c;
+        }
+        if (length == 0) return -1;
+
+        // Prefix fallback avoids restarting a long partial match at every
+        // repeated character in the document (KMP, O(hay + needle)).
+        int[] prefix = new int[length];
+        for (int i = 1, matched = 0; i < length; i++) {
+            while (matched > 0 && pattern[i] != pattern[matched]) matched = prefix[matched - 1];
+            if (pattern[i] == pattern[matched]) matched++;
+            prefix[i] = matched;
+        }
+        int matched = 0;
         for (int i = 0; i < hay.length(); i++) {
-            if (hay.charAt(i) != first) continue;
-            int h = i, n = nStart;
-            while (n < needle.length()) {
-                while (n < needle.length() && Character.isWhitespace(needle.charAt(n))) n++;
-                if (n >= needle.length()) break;
-                while (h < hay.length() && Character.isWhitespace(hay.charAt(h))) h++;
-                if (h >= hay.length() || hay.charAt(h) != needle.charAt(n)) { n = -1; break; }
-                h++; n++;
+            char c = hay.charAt(i);
+            if (Character.isWhitespace(c)) continue;
+            while (matched > 0 && c != pattern[matched]) matched = prefix[matched - 1];
+            if (c == pattern[matched]) matched++;
+            if (matched == length) {
+                // Recover the raw UTF-16 start only for the first full match.
+                // This final backward walk avoids an O(hay) offset map.
+                int start = i;
+                for (int remaining = length; remaining > 0; start--) {
+                    if (!Character.isWhitespace(hay.charAt(start))) remaining--;
+                }
+                return start + 1;
             }
-            if (n != -1) return i;
         }
         return -1;
     }

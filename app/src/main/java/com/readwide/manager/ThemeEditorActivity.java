@@ -101,6 +101,13 @@ public class ThemeEditorActivity extends AppCompatActivity {
         toolbarG = findViewById(R.id.toolbar_green);
         toolbarB = findViewById(R.id.toolbar_blue);
 
+        // Restore the draft as one unit; individual RGB/HEX callbacks would overwrite
+        // fields that Android has not restored yet.
+        for (View control : new View[]{nameInput, bgHexInput, textHexInput, toolbarHexInput,
+                bgR, bgG, bgB, txtR, txtG, txtB, toolbarR, toolbarG, toolbarB}) {
+            control.setSaveFromParentEnabled(false);
+        }
+
         applyReadableThemeEditorColors();
 
         ThemeManager tm = ThemeManager.getInstance(this);
@@ -110,7 +117,7 @@ public class ThemeEditorActivity extends AppCompatActivity {
         if (themeId != null) {
             for (Theme t : tm.getAllThemes()) {
                 if (t.getId().equals(themeId) && !t.isBuiltIn()) {
-                    editingTheme = t;
+                    editingTheme = t.copy();
                     break;
                 }
             }
@@ -138,6 +145,8 @@ public class ThemeEditorActivity extends AppCompatActivity {
                 currentToolbarColor = currentBgColor;
             }
         }
+
+        restoreEditorState(savedInstanceState);
 
         // Set slider positions from colors
         bgR.setProgress(Color.red(currentBgColor));
@@ -185,8 +194,44 @@ public class ThemeEditorActivity extends AppCompatActivity {
         findViewById(R.id.btn_save_theme).setOnClickListener(v -> saveTheme());
 
         updatePreview();
+        restoreHexDrafts(savedInstanceState);
     }
 
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        outState.putInt("theme_editor_bg", currentBgColor);
+        outState.putInt("theme_editor_text", currentTextColor);
+        outState.putInt("theme_editor_toolbar", currentToolbarColor);
+        outState.putString("theme_editor_image", backgroundImagePath);
+        outState.putString("theme_editor_name", nameInput.getText().toString());
+        outState.putString("theme_editor_bg_hex", bgHexInput.getText().toString());
+        outState.putString("theme_editor_text_hex", textHexInput.getText().toString());
+        outState.putString("theme_editor_toolbar_hex", toolbarHexInput.getText().toString());
+        super.onSaveInstanceState(outState);
+    }
+
+    private void restoreEditorState(Bundle state) {
+        if (state == null || !state.containsKey("theme_editor_bg")) return;
+        currentBgColor = state.getInt("theme_editor_bg", currentBgColor);
+        currentTextColor = state.getInt("theme_editor_text", currentTextColor);
+        currentToolbarColor = state.getInt("theme_editor_toolbar", currentToolbarColor);
+        // A null image also matters: the user may have cleared a saved image.
+        backgroundImagePath = state.getString("theme_editor_image");
+        nameInput.setText(state.getString("theme_editor_name", nameInput.getText().toString()));
+    }
+
+    private void restoreHexDrafts(Bundle state) {
+        if (state == null || !state.containsKey("theme_editor_bg")) return;
+        updatingHexFields = true;
+        try {
+            bgHexInput.setText(state.getString("theme_editor_bg_hex", colorToHex(currentBgColor)));
+            textHexInput.setText(state.getString("theme_editor_text_hex", colorToHex(currentTextColor)));
+            toolbarHexInput.setText(state.getString("theme_editor_toolbar_hex", colorToHex(currentToolbarColor)));
+        } finally {
+            updatingHexFields = false;
+        }
+        renderPreview(false);
+    }
 
     private void applyThemeEditorSafeInsets() {
         View root = findViewById(R.id.theme_editor_root);
@@ -483,21 +528,18 @@ public class ThemeEditorActivity extends AppCompatActivity {
 
         ThemeManager tm = ThemeManager.getInstance(this);
 
-        if (editingTheme != null) {
-            editingTheme.setName(name);
-            editingTheme.setBackgroundColor(currentBgColor);
-            editingTheme.setTextColor(currentTextColor);
-            editingTheme.setToolbarColor(currentToolbarColor);
-            editingTheme.setBackgroundImagePath(backgroundImagePath);
-            tm.updateCustomTheme(editingTheme);
-        } else {
-            Theme newTheme = new Theme();
-            newTheme.setName(name);
-            newTheme.setBackgroundColor(currentBgColor);
-            newTheme.setTextColor(currentTextColor);
-            newTheme.setToolbarColor(currentToolbarColor);
-            newTheme.setBackgroundImagePath(backgroundImagePath);
-            tm.addCustomTheme(newTheme);
+        Theme candidate = editingTheme != null ? editingTheme.copy() : new Theme();
+        candidate.setName(name);
+        candidate.setBackgroundColor(currentBgColor);
+        candidate.setTextColor(currentTextColor);
+        candidate.setToolbarColor(currentToolbarColor);
+        candidate.setBackgroundImagePath(backgroundImagePath);
+        boolean saved = editingTheme != null
+                ? tm.updateCustomTheme(candidate)
+                : tm.addCustomTheme(candidate);
+        if (!saved) {
+            ShortToast.show(this, R.string.theme_editor_save_failed);
+            return;
         }
 
         ShortToast.show(this, R.string.theme_editor_saved);

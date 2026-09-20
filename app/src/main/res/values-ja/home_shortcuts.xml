@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_shortcuts_title">固定フォルダ</string>
+    <string name="home_shortcuts_expand">固定フォルダを展開</string>
+    <string name="home_shortcuts_collapse">固定フォルダを折りたたむ</string>
+    <string name="home_shortcuts_manage">管理</string>
+    <string name="home_shortcuts_empty">フォルダのメニューから「ショートカットを追加」を選択してください。</string>
+    <string name="home_shortcut_unavailable">利用できません</string>
+    <string name="home_shortcut_unavailable_hint">フォルダを利用できません。ストレージの接続またはアクセス権を確認してください。ショートカットは保持されます。</string>
+    <string name="home_shortcut_remove_description">ショートカットを削除: %1$s</string>
+</resources>

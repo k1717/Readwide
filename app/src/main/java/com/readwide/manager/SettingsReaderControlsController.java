@@ -1,23 +1,30 @@
 package com.readwide.manager;
 
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
-import androidx.appcompat.app.AlertDialog;
 
+import com.google.android.material.button.MaterialButton;
 import com.readwide.manager.util.EpubFontPreferenceMath;
 import com.readwide.manager.util.ArchiveViewerTimeoutPolicy;
 import com.readwide.manager.util.FontManager;
@@ -25,6 +32,7 @@ import com.readwide.manager.util.PrefsManager;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntSupplier;
 
 final class SettingsReaderControlsController {
     private static final int STEP_PX = 5;
@@ -182,18 +190,13 @@ final class SettingsReaderControlsController {
         };
         ArrayAdapter<String> adapter = makeSettingsSpinnerAdapter(choices);
         modeSpinner.setAdapter(adapter);
-        modeSpinner.setSelection(prefs.getLargeTextPartitionMode() == PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
-                ? PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
-                : PrefsManager.LARGE_TEXT_PARTITION_MODE_STANDARD);
-        modeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                styleSpinnerText(view);
-                prefs.setLargeTextPartitionMode(position == PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
+        bindSettingsSpinnerSelection(modeSpinner,
+                () -> prefs.getLargeTextPartitionMode() == PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
                         ? PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
-                        : PrefsManager.LARGE_TEXT_PARTITION_MODE_STANDARD);
-            }
-            @Override public void onNothingSelected(AdapterView<?> parent) {}
-        });
+                        : PrefsManager.LARGE_TEXT_PARTITION_MODE_STANDARD,
+                position -> prefs.setLargeTextPartitionMode(position == PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
+                        ? PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
+                        : PrefsManager.LARGE_TEXT_PARTITION_MODE_STANDARD));
     }
 
     private void setupArchiveOpenMode() {
@@ -205,18 +208,13 @@ final class SettingsReaderControlsController {
                 activity.getString(R.string.archive_open_mode_comic)
         };
         modeSpinner.setAdapter(makeSettingsSpinnerAdapter(choices));
-        modeSpinner.setSelection(prefs.getArchiveOpenMode() == PrefsManager.ARCHIVE_OPEN_MODE_COMIC
-                ? PrefsManager.ARCHIVE_OPEN_MODE_COMIC
-                : PrefsManager.ARCHIVE_OPEN_MODE_NORMAL);
-        modeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                styleSpinnerText(view);
-                prefs.setArchiveOpenMode(position == PrefsManager.ARCHIVE_OPEN_MODE_COMIC
+        bindSettingsSpinnerSelection(modeSpinner,
+                () -> prefs.getArchiveOpenMode() == PrefsManager.ARCHIVE_OPEN_MODE_COMIC
                         ? PrefsManager.ARCHIVE_OPEN_MODE_COMIC
-                        : PrefsManager.ARCHIVE_OPEN_MODE_NORMAL);
-            }
-            @Override public void onNothingSelected(AdapterView<?> parent) {}
-        });
+                        : PrefsManager.ARCHIVE_OPEN_MODE_NORMAL,
+                position -> prefs.setArchiveOpenMode(position == PrefsManager.ARCHIVE_OPEN_MODE_COMIC
+                        ? PrefsManager.ARCHIVE_OPEN_MODE_COMIC
+                        : PrefsManager.ARCHIVE_OPEN_MODE_NORMAL));
     }
 
     private void setupArchiveViewerBackgroundTimeout() {
@@ -300,27 +298,63 @@ final class SettingsReaderControlsController {
     private void showEpubDefaultFontDialog(@NonNull TextView valueView) {
         List<EpubFontOption> options = epubFontOptions();
         String current = EpubFontPreferenceMath.normalize(prefs.getEpubFontFamily());
-        int selected = 0;
-        CharSequence[] labels = new CharSequence[options.size()];
-        for (int i = 0; i < options.size(); i++) {
-            EpubFontOption option = options.get(i);
-            labels[i] = option.label;
-            if (option.value.equals(current)) selected = i;
-        }
+        android.app.Dialog dialog = activity.createRoundedSettingsDialog();
+        LinearLayout panel = activity.createRoundedSettingsDialogPanel();
+        int text = activity.dialogTextColor();
+        int sub = activity.dialogSubTextColor();
+        int outline = activity.dialogOutlineColor();
+        panel.addView(activity.makeSettingsDialogTitle(activity.getString(R.string.select_font), text));
 
-        AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setTitle(R.string.select_font)
-                .setSingleChoiceItems(labels, selected, null)
-                .setNegativeButton(R.string.cancel, null)
-                .create();
-        dialog.setOnShowListener(ignored -> {
-            dialog.getListView().setOnItemClickListener((parent, view, position, id) -> {
-                prefs.setEpubFontFamily(options.get(position).value);
+        RadioGroup list = new RadioGroup(activity);
+        list.setOrientation(LinearLayout.VERTICAL);
+        for (EpubFontOption option : options) {
+            boolean selected = option.value.equals(current);
+            RadioButton row = new RadioButton(activity);
+            row.setId(View.generateViewId());
+            row.setText(option.label);
+            row.setTextColor(text);
+            row.setTextSize(14.5f);
+            row.setSingleLine(false);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setMinHeight(activity.dpToPx(48));
+            row.setPaddingRelative(activity.dpToPx(12), activity.dpToPx(8),
+                    activity.dpToPx(12), activity.dpToPx(8));
+            row.setButtonTintList(new ColorStateList(
+                    new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
+                    new int[]{text, sub}));
+            GradientDrawable background = new GradientDrawable();
+            background.setColor(selected ? prefs.getMainSelectedColor(activity) : activity.dialogRowBackgroundColor());
+            background.setCornerRadius(activity.dpToPx(13));
+            background.setStroke(activity.dpToPx(1), selected ? prefs.getMainFileLongHoldColor(activity) : outline);
+            row.setBackground(background);
+            row.setChecked(selected);
+            row.setOnClickListener(v -> {
+                prefs.setEpubFontFamily(option.value);
                 updateEpubDefaultFontValue(valueView);
                 dialog.dismiss();
             });
-        });
-        dialog.show();
+            RadioGroup.LayoutParams rowParams = new RadioGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rowParams.setMargins(0, 0, 0, activity.dpToPx(6));
+            list.addView(row, rowParams);
+        }
+
+        ScrollView scroll = new ScrollView(activity);
+        scroll.setFillViewport(false);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        scroll.addView(list, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        int listHeight = Math.max(activity.dpToPx(160),
+                Math.min(activity.dpToPx(360), activity.currentVisibleWindowHeightPx() - activity.dpToPx(220)));
+        panel.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, listHeight));
+
+        MaterialButton cancel = activity.makeTextRuleDialogButton(activity.getString(R.string.cancel), text);
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        panel.addView(cancel);
+        activity.showRoundedSettingsDialog(dialog, panel);
+        View selectedRow = list.findViewById(list.getCheckedRadioButtonId());
+        if (selectedRow != null) scroll.post(() -> scroll.scrollTo(0, selectedRow.getTop()));
     }
 
     private List<EpubFontOption> epubFontOptions() {
@@ -435,16 +469,10 @@ final class SettingsReaderControlsController {
             };
             ArrayAdapter<String> adapter = makeSettingsSpinnerAdapter(directionChoices);
             directionSpinner.setAdapter(adapter);
-            directionSpinner.setSelection(prefs.getEpubPageDirection());
-            directionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-                @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                    styleSpinnerText(view);
-                    prefs.setEpubPageDirection(position == PrefsManager.EPUB_PAGE_DIRECTION_RTL
+            bindSettingsSpinnerSelection(directionSpinner, prefs::getEpubPageDirection,
+                    position -> prefs.setEpubPageDirection(position == PrefsManager.EPUB_PAGE_DIRECTION_RTL
                             ? PrefsManager.EPUB_PAGE_DIRECTION_RTL
-                            : PrefsManager.EPUB_PAGE_DIRECTION_LTR);
-                }
-                @Override public void onNothingSelected(AdapterView<?> parent) {}
-            });
+                            : PrefsManager.EPUB_PAGE_DIRECTION_LTR));
         }
     }
 
@@ -483,14 +511,7 @@ final class SettingsReaderControlsController {
                 activity.getString(R.string.page_status_align_hidden)
         };
         spinner.setAdapter(makeSettingsSpinnerAdapter(choices));
-        spinner.setSelection(prefs.getPageStatusAlignment());
-        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                styleSpinnerText(view);
-                prefs.setPageStatusAlignment(position);
-            }
-            @Override public void onNothingSelected(AdapterView<?> parent) {}
-        });
+        bindSettingsSpinnerSelection(spinner, prefs::getPageStatusAlignment, prefs::setPageStatusAlignment);
     }
 
     private void bindTextAlignmentSpinner() {
@@ -502,14 +523,7 @@ final class SettingsReaderControlsController {
                 activity.getString(R.string.page_status_align_right)
         };
         spinner.setAdapter(makeSettingsSpinnerAdapter(choices));
-        spinner.setSelection(prefs.getTextAlignment());
-        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                styleSpinnerText(view);
-                prefs.setTextAlignment(position);
-            }
-            @Override public void onNothingSelected(AdapterView<?> parent) {}
-        });
+        bindSettingsSpinnerSelection(spinner, prefs::getTextAlignment, prefs::setTextAlignment);
     }
 
     private void bindTapZoneModeSpinner() {
@@ -520,14 +534,7 @@ final class SettingsReaderControlsController {
                 activity.getString(R.string.tap_zone_horizontal)
         };
         spinner.setAdapter(makeSettingsSpinnerAdapter(choices));
-        spinner.setSelection(prefs.getTapZoneMode());
-        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                styleSpinnerText(view);
-                prefs.setTapZoneMode(position);
-            }
-            @Override public void onNothingSelected(AdapterView<?> parent) {}
-        });
+        bindSettingsSpinnerSelection(spinner, prefs::getTapZoneMode, prefs::setTapZoneMode);
     }
 
     private void bindPagingOverlapSpinner() {
@@ -541,11 +548,26 @@ final class SettingsReaderControlsController {
                 activity.getString(R.string.keep_4_lines)
         };
         spinner.setAdapter(makeSettingsSpinnerAdapter(choices));
-        spinner.setSelection(prefs.getPagingOverlapLines());
+        bindSettingsSpinnerSelection(spinner, prefs::getPagingOverlapLines, prefs::setPagingOverlapLines);
+    }
+
+    private void bindSettingsSpinnerSelection(@NonNull Spinner spinner,
+                                              @NonNull IntSupplier storedSelection,
+                                              @NonNull IntSetter setter) {
+        final int initialSelection = storedSelection.getAsInt();
+        spinner.setSelection(initialSelection);
         spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            private int previousSelection = initialSelection;
+
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 styleSpinnerText(view);
-                prefs.setPagingOverlapLines(position);
+                // Android may deliver the initial selection after an import has
+                // committed. Binding and duplicate notifications must not write
+                // that old displayed value back into the newer preferences.
+                if (position == previousSelection) return;
+                previousSelection = position;
+                // A programmatic refresh to the current preference is display-only.
+                if (position != storedSelection.getAsInt()) setter.set(position);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });

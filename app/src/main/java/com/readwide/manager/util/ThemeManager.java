@@ -81,36 +81,41 @@ public class ThemeManager {
                 .putString("active_theme_id", themeId).commit();
     }
 
-    public synchronized void addCustomTheme(Theme theme) {
-        customThemes.add(theme);
-        saveCustomThemes();
+    public synchronized boolean addCustomTheme(Theme theme) {
+        List<Theme> planned = new ArrayList<>(customThemes);
+        planned.add(theme.copy());
+        return saveCustomThemes(planned);
     }
 
-    public synchronized void updateCustomTheme(Theme theme) {
+    public synchronized boolean updateCustomTheme(Theme theme) {
         for (int i = 0; i < customThemes.size(); i++) {
             if (customThemes.get(i).getId().equals(theme.getId())) {
-                customThemes.set(i, theme);
-                saveCustomThemes();
-                return;
+                List<Theme> planned = new ArrayList<>(customThemes);
+                planned.set(i, theme.copy());
+                return saveCustomThemes(planned);
             }
         }
+        return false;
     }
 
-    public synchronized void deleteCustomTheme(String themeId) {
-        customThemes.removeIf(t -> t.getId().equals(themeId));
-        if (activeThemeId.equals(themeId)) {
+    public synchronized boolean deleteCustomTheme(String themeId) {
+        List<Theme> planned = new ArrayList<>(customThemes);
+        if (!planned.removeIf(t -> t.getId().equals(themeId))) return false;
+        if (!saveCustomThemes(planned)) return false;
+        syncActiveThemeIdFromPrefs();
+        if (themeId.equals(activeThemeId)) {
             setActiveTheme("light");
         }
-        saveCustomThemes();
+        return true;
     }
 
     private void loadCustomThemes() {
         customThemes = new ArrayList<>();
         File file = new File(context.getFilesDir(), THEMES_FILE);
-        if (!file.exists()) return;
-
         try {
-            JSONObject root = new JSONObject(AtomicUtf8File.read(file));
+            String saved = AtomicUtf8File.readIfPresent(file);
+            if (saved == null) return;
+            JSONObject root = new JSONObject(saved);
             JSONArray arr = root.optJSONArray("themes");
             if (arr != null) {
                 for (int i = 0; i < arr.length(); i++) {
@@ -122,19 +127,15 @@ public class ThemeManager {
         }
     }
 
-    private void saveCustomThemes() {
+    private boolean saveCustomThemes(List<Theme> planned) {
         try {
-            JSONObject root = new JSONObject();
-            JSONArray arr = new JSONArray();
-            for (Theme t : customThemes) {
-                arr.put(t.toJson());
-            }
-            root.put("themes", arr);
-
-            File file = new File(context.getFilesDir(), THEMES_FILE);
-            AtomicUtf8File.write(file, root.toString(2));
+            // Publish new objects only after the atomic file write succeeds.
+            writeImportThemes(planned);
+            customThemes = new ArrayList<>(planned);
+            return true;
         } catch (Exception e) {
             Log.e(TAG, "Failed to save custom themes", e);
+            return false;
         }
     }
 
@@ -146,34 +147,36 @@ public class ThemeManager {
         return arr;
     }
 
-    public synchronized void importCustomThemesFromJson(JSONArray arr, boolean merge) throws JSONException {
+    public synchronized void importCustomThemesFromJson(JSONArray arr, boolean merge)
+            throws JSONException, java.io.IOException {
         if (arr == null) return;
-
-        if (!merge) {
-            customThemes.clear();
-        }
-
+        List<Theme> imported = new ArrayList<>();
         for (int i = 0; i < arr.length(); i++) {
-            Theme imported = Theme.fromJson(arr.getJSONObject(i));
-            if (imported.isBuiltIn()) continue;
-
-            int existingIndex = -1;
-            for (int j = 0; j < customThemes.size(); j++) {
-                if (customThemes.get(j).getId().equals(imported.getId())) {
-                    existingIndex = j;
-                    break;
-                }
-            }
-
-            if (existingIndex >= 0) {
-                customThemes.set(existingIndex, imported);
-            } else {
-                customThemes.add(imported);
-            }
+            Theme theme = Theme.fromJson(arr.getJSONObject(i));
+            if (!theme.isBuiltIn()) imported.add(theme);
         }
+        replaceFromImport(IndexedBackupMerge.merge(
+                merge ? customThemes : java.util.Collections.emptyList(), imported, Theme::getId, null));
+    }
 
-        saveCustomThemes();
-        syncActiveThemeIdFromPrefs();
+    synchronized List<Theme> snapshotForImport() { return new ArrayList<>(customThemes); }
+
+    synchronized void replaceFromImport(List<Theme> planned) throws JSONException, java.io.IOException {
+        writeImportThemes(planned);
+        customThemes = new ArrayList<>(planned);
+    }
+
+    synchronized void restoreAfterImportFailure(List<Theme> previous) throws JSONException, java.io.IOException {
+        customThemes = new ArrayList<>(previous);
+        writeImportThemes(previous);
+    }
+
+    private void writeImportThemes(List<Theme> planned) throws JSONException, java.io.IOException {
+        JSONArray rows = new JSONArray();
+        for (Theme theme : planned) rows.put(theme.toJson());
+        JSONObject root = new JSONObject();
+        root.put("themes", rows);
+        AtomicUtf8File.write(new File(context.getFilesDir(), THEMES_FILE), root.toString(2));
     }
 
 }

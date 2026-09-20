@@ -118,6 +118,10 @@ final class DocumentWebViewController {
                 super.onPageFinished(view, url);
                 if (activity.activityDestroyed
                         || !activity.isCurrentDocumentPageLoad(view, url)) return;
+                if (primary) {
+                    activity.primaryDocumentPageReadyGeneration =
+                            activity.primaryDocumentPageLoadGeneration;
+                }
                 activity.applyEpubBoundaryCssToLoadedWebView(view);
                 activity.scheduleDocumentFastScrollUpdate();
                 if (!primary) {

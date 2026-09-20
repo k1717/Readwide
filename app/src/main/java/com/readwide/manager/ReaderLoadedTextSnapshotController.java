@@ -22,7 +22,8 @@ final class ReaderLoadedTextSnapshotController {
     }
 
     void cacheLoadedTextSnapshot() {
-        if (activity.readerView == null
+        if (!activity.textContentReadyForPersistence
+                || activity.readerView == null
                 || activity.fileContent == null
                 || activity.fileContent.isEmpty()
                 || activity.filePath == null) {
@@ -110,6 +111,8 @@ final class ReaderLoadedTextSnapshotController {
             }
         }
 
+        final int restoreGeneration = activity.loadGeneration.get();
+        activity.textContentReadyForPersistence = false;
         activity.activityDestroyed = false;
         activity.hideLoadingWindow();
         // Restoring an ongoing session: keep whatever chrome state the reader
@@ -171,9 +174,10 @@ final class ReaderLoadedTextSnapshotController {
         activity.refreshTxtAnnotationHighlights();
         activity.applySearchHighlight();
         activity.readerView.post(() -> {
-            if (activity.activityDestroyed) return;
+            if (activity.activityDestroyed || restoreGeneration != activity.loadGeneration.get()) return;
             activity.scrollToCharPosition(snapshot.charPosition);
             activity.updatePositionLabel();
+            activity.textContentReadyForPersistence = true;
         });
         // A normal open registers the active partition, schedules exact-page indexing, and
         // prefetches neighbors during load; this restore bypasses that path, so mirror the

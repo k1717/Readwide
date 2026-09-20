@@ -1,6 +1,6 @@
 # TXT, archive, and comic-mode engine audit (Readwide 1.0.15)
 
-> Historical 1.0.15 audit. Later search/index and archive changes supersede some boundaries below; see [current 1.0.18 source status](CURRENT_SOURCE_STATUS_1_0_18.md). Past verification results do not cover subsequent patches.
+> Historical 1.0.15 audit. Later search/index and archive changes supersede some boundaries below; see [release notes](GITHUB_RELEASE_NOTES_READWIDE_1_0_18.md). Past verification results do not cover subsequent patches.
 
 This note records the follow-up audit performed after the spread/TTS/PDF fixes. It separates verified routing improvements from archive-format claims that still depend on the bundled backend.
 

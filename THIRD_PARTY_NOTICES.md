@@ -2,11 +2,11 @@
 
 Readwide first-party source code is licensed under the Apache License 2.0. Keep this file with source releases and with binary release materials such as APK/AAB release assets.
 
-This notice summarizes direct dependencies and important source/provenance boundaries for the default Readwide 1.0.18 build. It does not replace a fully resolved transitive dependency report. Version 1.0.18 changes no dependency; the matching 1.0.18 license report and source/direct-dependency SBOM record the current app identity. Earlier editions remain historical.
+This notice summarizes direct dependencies and bundled source for Readwide 1.0.19. The matching license report and source dependency SBOM record the declared versions and licenses. They do not replace a Gradle-resolved transitive dependency report.
 
 ## Default build boundary
 
-The default Readwide 1.0.18 package is the FOSS-oriented public line:
+The default Readwide 1.0.19 package is the FOSS-oriented public line:
 
 - first-party source: Apache-2.0;
 - no Junrar or RARLAB UnRAR-license code bundled;
@@ -16,7 +16,7 @@ The default Readwide 1.0.18 package is the FOSS-oriented public line:
 - no Hancom proprietary SDK, LibreOffice bundle, or server conversion service;
 - no ads, analytics, telemetry SDK, account system, or network update checker in the default app.
 
-See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_18.md`, and `docs/SBOM_READWIDE_1_0_18.spdx.json`.
+See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_19.md`, and `docs/SBOM_READWIDE_1_0_19.spdx.json`.
 
 ## RAR5 checksum algorithm reference
 
@@ -25,19 +25,20 @@ JCE. Its format behavior was cross-checked with Nicholas Waples'
 [rardecode](https://github.com/nwaples/rardecode) (BSD-2-Clause;
 [license](https://github.com/nwaples/rardecode/blob/main/LICENSE)).
 No Go source or new runtime component is bundled. See
-`docs/RAR3_PPMD_AND_RAR5_CHECKSUMS_1_0_18.md` for scope and provenance.
+`docs/DEV_CHANGES_1_0_18.md` for scope and provenance.
 No UnRAR source was used for this change.
 
 ## Runtime dependencies
 
 ### AndroidX libraries
 
-- `androidx.appcompat:appcompat:1.7.1`
+- `androidx.appcompat:appcompat:1.8.0`
 - `androidx.recyclerview:recyclerview:1.4.0`
-- `androidx.constraintlayout:constraintlayout:2.2.1`
+- `androidx.constraintlayout:constraintlayout:2.2.2`
 - `androidx.activity:activity:1.10.1`
 - `androidx.drawerlayout:drawerlayout:1.2.0`
-- `androidx.swiperefreshlayout:swiperefreshlayout:1.1.0`
+- `androidx.swiperefreshlayout:swiperefreshlayout:1.2.0`
+- `androidx.annotation:annotation:1.9.1` (libarchive Android wrapper)
 
 License: Apache License 2.0.
 
@@ -87,7 +88,7 @@ License: Apache License 2.0.
 
 ### zstd-jni
 
-- Artifact: `com.github.luben:zstd-jni:1.5.7-9`
+- Artifact: `com.github.luben:zstd-jni:1.5.7-17`
 - Purpose: JVM unit-test fixtures for Commons Compress Zstandard streams. It is a `testImplementation` dependency and is not packaged in the Android APK; Android runtime Zstandard uses libarchive's bundled filter.
 - License position: BSD-family licensing path for the JNI binding and bundled native Zstandard library.
 - Distribution note: no zstd-jni binary notice is required for the APK because its classes/native resources are not shipped there. Keep this source/test notice with the repository.
@@ -100,7 +101,7 @@ License: Apache License 2.0.
 
 ### hwplib
 
-- Artifact: `kr.dogfoot:hwplib:1.1.10`
+- Artifact: `kr.dogfoot:hwplib:1.1.11`
 - Project: `https://github.com/neolord0/hwplib`
 - Purpose: scoped HWP 5.x read/text extraction backend for `.hwp` files.
 - License: Apache License 2.0.
@@ -182,5 +183,5 @@ The Gradle packaging block may exclude duplicate dependency `META-INF/LICENSE*` 
 - `LICENSE`
 - `NOTICE`
 - `THIRD_PARTY_NOTICES.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_18.md` (current source-declared report)
-- `docs/SBOM_READWIDE_1_0_18.spdx.json` (current source-declared report)
+- `docs/LICENSE_REPORT_READWIDE_1_0_19.md` (current source-declared report)
+- `docs/SBOM_READWIDE_1_0_19.spdx.json` (current source-declared report)

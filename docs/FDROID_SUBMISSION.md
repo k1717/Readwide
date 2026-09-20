@@ -1,44 +1,19 @@
-# F-Droid submission notes for Readwide 1.0.18
+# F-Droid submission notes for Readwide 1.0.19
 
-This document records project-side preparation only. It is not a submitted 1.0.18
-metadata file or evidence of a successful current build. See
-[release handoff gates](RELEASE_READINESS_1_0_18.md).
+Use these instructions to submit Readwide 1.0.19 to F-Droid. Build and signing commands are in [RELEASE_BUILD.md](../RELEASE_BUILD.md).
 
-## Source review — 2026-09-11
+## Release identity
 
-No obvious inclusion-policy blocker was found in this static source review.
-This is a submission-readiness assessment, not F-Droid approval, a passing
-`fdroid scanner` result, or proof that version 1.0.18 builds on its servers.
-The maintainer's earlier successful build predates the latest timeout-field and
-translation changes; the exact final snapshot still needs a release build.
-
-Read-only checks of the [public app listing](https://f-droid.org/packages/com.readwide.manager/)
-and [live upstream metadata](https://gitlab.com/fdroid/fdroiddata/-/raw/master/metadata/com.readwide.manager.yml)
-showed 1.0.17 / 10017, using commit
-`1adcb9471235496307f20928e4ba94b8a74a7900`. The upstream file had no 1.0.18
-build entry at the time of review. Do not replace it with the older local mirror.
-
-The declared repositories are Google Maven, Maven Central and the Gradle plugin
-portal. The only checked-in JAR is the official Gradle wrapper; no APK, AAR, native
-shared-library prebuilt, optional app JAR or signing key was found in the source
-tree. Both native modules compile checked-in C/CMake source. App version,
-permissions, source license notices and EN/KR store metadata agree with the
-current source. This does not inspect resolved transitive dependencies or an APK.
-
-The [inclusion policy](https://f-droid.org/en/docs/Inclusion_Policy/) permits
-FLOSS source and dependencies from accepted sources; LGPL code is not inherently
-excluded. Preserve the ZIPX LGPL corresponding source/build scripts and packaged
-notices. The [metadata license field](https://f-droid.org/en/docs/Build_Metadata_Reference/#License)
-describes the distributable app, not merely first-party Java: disclose the separate
-LGPL-2.1-or-later ZIPX library when maintainers review that field. Do not describe
-the whole native stack as Apache-only or silently relicense the first-party app.
+Readwide 1.0.19 uses version code `10019`. The release includes archive, reader
+and settings fixes and updates five existing dependency versions. Permissions
+and the release signing key are unchanged.
 
 ## App identity
 
 - App name: Readwide
 - Android application ID: `com.readwide.manager`
-- Version name: `1.0.18`
-- Version code: `10018`
+- Version name: `1.0.19`
+- Version code: `10019`
 - First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
@@ -59,10 +34,10 @@ preserved and updated from upstream when a submission is actually prepared.
 Create and push the immutable release tag before opening the merge request:
 
 ```text
-v1.0.18
+v1.0.19
 ```
 
-The checked-in metadata file is only a historical mirror through `1.0.13`; do not copy it over current fdroiddata. After `v1.0.18` is pushed, start from current upstream metadata, add only the `1.0.18` block, set its `commit` to the full 40-character hash that the final tag points to, and then update `CurrentVersion: 1.0.18` / `CurrentVersionCode: 10018`. A commented template may be kept locally as guidance but must not be activated with a guessed or abbreviated hash. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the tag and propose the build entry automatically.
+The checked-in metadata file is only a historical mirror through `1.0.13`; do not copy it over current fdroiddata. After `v1.0.19` is pushed, start from current upstream metadata, add only the `1.0.19` block, set its `commit` to the full 40-character hash that the final tag points to, and then update `CurrentVersion: 1.0.19` / `CurrentVersionCode: 10019`. A commented template may be kept locally as guidance but must not be activated with a guessed or abbreviated hash. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the tag and propose the build entry automatically.
 
 ## F-Droid-facing baseline
 
@@ -93,7 +68,7 @@ Both values are the official Gradle 9.4.1 checksums. F-Droid also verifies wrapp
 
 ## Build command
 
-The 1.0.18 build block should use the `app` module's normal Gradle release
+The 1.0.19 build block should use the `app` module's normal Gradle release
 build and explicitly select the native toolchain. These are build-block fields,
 not a complete submission file; add the final version and immutable commit:
 
@@ -132,14 +107,14 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These provide title, short description, full description, and versionCode `10018` changelog text.
+These provide title, short description, full description, and versionCode `10019` changelog text.
 
 ## Conservative support wording for review
 
 Use conservative wording in the merge request:
 
 - RAR/CBR support is limited and not complete.
-- Describe encrypted, split, SFX and VM-filtered RAR by their specific implemented paths, not as universally supported or universally absent. The new mixed fallback is plain/single-volume only; custom VM and unsupported scheduling remain excluded. See `CURRENT_SOURCE_STATUS_1_0_18.md`.
+- Describe encrypted, split, SFX and VM-filtered RAR by their specific implemented paths, not as universally supported or universally absent. The new mixed fallback is plain/single-volume only; custom VM and unsupported scheduling remain excluded. See `GITHUB_RELEASE_NOTES_READWIDE_1_0_19.md`.
 - HWP/HWPX support is text-first reading only; no Hancom layout parity, editing, writing, cloud/server conversion, or password/encrypted HWP support is claimed.
 - Legacy `.doc` files have basic read-only rendering through a self-contained pure-Java parser; layout fidelity is limited compared with OOXML `.docx`.
 
@@ -149,8 +124,8 @@ Use conservative wording in the merge request:
 - `PRIVACY.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_18.md` (current source-declared report)
-- `docs/SBOM_READWIDE_1_0_18.spdx.json` (current source-declared report)
+- `docs/LICENSE_REPORT_READWIDE_1_0_19.md` (current source-declared report)
+- `docs/SBOM_READWIDE_1_0_19.spdx.json` (current source-declared report)
 - `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
 - `fdroid/metadata/com.readwide.manager.yml`
@@ -163,15 +138,15 @@ The Android runtime native backend is built entirely from source checked into th
 
 Readwide packages `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt`, derived from those pinned source revisions, so the APK retains the applicable copyright, redistribution, and warranty-disclaimer terms. The corresponding source licenses also remain beside their components in `third_party/libarchive-android`.
 
-`com.github.luben:zstd-jni:1.5.7-9` remains only under `testImplementation` so plain-JVM archive fixtures can decode Zstandard. Its desktop native resources are not part of the Android release APK and are not required by the F-Droid release assembly path.
+`com.github.luben:zstd-jni:1.5.7-17` remains only under `testImplementation` in the 1.0.19 source so plain-JVM archive fixtures can decode Zstandard. Its desktop native resources are not part of the Android release APK and are not required by the F-Droid release assembly path.
 
 The APK also includes the source-built `project(':zipxCodecsAndroid')` module in `third_party/zipx-codecs-android`. Its `readwide-zipx-codecs` shared library includes the XADMaster WinZip JPEG decoder and is documented as LGPL-2.1-or-later; WavPack itself is BSD-3-Clause. Keep its corresponding source, build scripts, component licenses and packaged notices with the release, as described in `THIRD_PARTY_NOTICES.md` and the module's `UPSTREAM.md`. The native stack is therefore not exclusively permissively licensed. Zstandard's BSD option and Mbed TLS's Apache-2.0 option apply to those components, not to the ZIPX library as a whole.
 
-For the 1.0.18 fdroiddata build block, declare `ndk: 29.0.14206865` and `buildjni: no`; Gradle/CMake performs both JNI builds from the checked-in source. This provenance correction does not claim that the LGPL component is incompatible with F-Droid or certify the complete distribution's license compliance.
+For the 1.0.19 fdroiddata build block, declare `ndk: 29.0.14206865` and `buildjni: no`; Gradle/CMake performs both JNI builds from the checked-in source. This provenance correction does not claim that the LGPL component is incompatible with F-Droid or certify the complete distribution's license compliance.
 
 ## Remaining submitter tasks
 
 - Confirm a clean network-enabled Gradle build from the tagged source.
-- Confirm the submitted build's `commit` field is the full 40-character hash of the final `v1.0.18` release commit. Start from current upstream metadata and add only the version actually submitted.
+- Confirm the submitted build's `commit` field is the full 40-character hash of the final `v1.0.19` release commit. Start from current upstream metadata and add only the version actually submitted.
 - Confirm no optional local jars are present in `app/libs`.
 - Confirm the built APK contains `assets/open_source_licenses/libarchive_android_and_codecs.txt`, `xadmaster_winzip_jpeg_lgpl_2_1.txt`, and `wavpack_bsd_3_clause.txt`. Keep the `zstd-jni` notice with source/test materials; it is not shipped in the APK.

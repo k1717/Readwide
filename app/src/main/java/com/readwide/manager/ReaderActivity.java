@@ -141,6 +141,8 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     String filePath;
     String fileName;
     String fileContent = "";
+    // Content and its restored position must belong to the completed current load.
+    boolean textContentReadyForPersistence = false;
     int totalChars;
     int totalLines;
 
@@ -2093,6 +2095,14 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
 
     void resetActiveSearchState() {
         readerSearch().resetActiveSearchState();
+    }
+
+    void clearTextSearchWork() {
+        if (readerSearchController != null) readerSearchController.clearTextSearchWork(activityDestroyed);
+    }
+
+    void refreshTextSearchStatus(String query, TextView matchStatus) {
+        readerSearch().refreshTextSearchStatus(query, matchStatus);
     }
 
     int getCachedLargeTextSearchTotal(@NonNull String query) {

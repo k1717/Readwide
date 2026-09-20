@@ -19,11 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.zip.CRC32;
-import java.util.zip.Inflater;
-import java.util.zip.InflaterInputStream;
 
 import com.readwide.manager.util.FileOperationProgress;
 
@@ -102,20 +98,15 @@ final class EggArchiveReader {
     private static final int ENC_LEA256 = 6;
 
     private static final int LZMA_DATA_HEADER_SIZE = 9;
-    private static final int LZMA_PROPS_OFFSET = 4;
     // AZO alone still materializes a whole block in Java arrays. This is not
     // a file-size cap on Store/Deflate/BZip2/LZMA or on multi-block EGG entries.
     private static final long MAX_AZO_BLOCK_BYTES = 512L * 1024 * 1024;
-    private static final int MAX_SPLIT_VOLUMES = 999;
     // Metadata retention budgets only; larger archives remain usable uncached.
     private static final int MAX_INDEX_ARCHIVES = 3;
     private static final int MAX_INDEX_ENTRIES = 20000;
     private static final int MAX_INDEX_BLOCKS = 40000;
     private static final long MAX_INDEX_NAME_CHARS = 1024 * 1024;
     private static final Map<String, Index> INDEXES = new LinkedHashMap<>(4, 0.75f, true);
-
-    private static final Pattern VOLUME_NAME =
-            Pattern.compile("^(.*\\.vol)(\\d+)(\\.egg)$", Pattern.CASE_INSENSITIVE);
 
     private EggArchiveReader() {
     }
@@ -145,16 +136,6 @@ final class EggArchiveReader {
         long compSize;
         long crc;       // unsigned 32-bit, stored in a long
         long dataOffset;
-    }
-
-    /** Archive-level header prefix of one physical volume. */
-    private static final class VolumePrefix {
-        long programId;    // header id, used as the split chain link
-        long splitPrev;    // Split field: previous volume's header id (0 = first)
-        long splitNext;    // Split field: next volume's header id (0 = last)
-        boolean hasSplit;
-        boolean solid;
-        long dataOffset;   // physical offset of the first byte after the prefix END
     }
 
     // ----- Public API (mirrors AlzipArchiveReader shape) -----
@@ -202,13 +183,16 @@ final class EggArchiveReader {
         try (SplitVolumeInput in = openVolumes(archive)) {
             index.requireUnchanged(archive);
             List<EggEntry> entries = index.entries;
-            if (index.solid) {
-                return extractSolidSingle(in, entries, normalized, outFile, password);
-            }
             EggEntry entry = index.files.get(normalized);
             if (entry == null) return false;
             try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
-                writeEntry(in, entry, outFile, password, null);
+                if (index.solid) {
+                    if (!extractSolidSingle(in, entries, normalized, outFile, password)) return false;
+                } else {
+                    writeEntry(in, entry, outFile, password, null);
+                }
+                // Solid extraction needs the same post-decode source check and
+                // rollback as independent entries, including stream-close errors.
                 index.requireUnchanged(archive);
                 guard.commit();
             }
@@ -365,13 +349,23 @@ final class EggArchiveReader {
                 if (progress != null && !progress.checkpoint()) return false;
                 if (entry.directory) {
                     if (entryProgress != null) entryProgress.onDirectory(entry.path);
+                    File directory = resolveOutput(targetDir, entry.path);
+                    if (directory != null) {
+                        if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory()) {
+                            throw new IOException("Cannot create output directory");
+                        }
+                        any = true;
+                    }
                     continue;
                 }
                 if (entryProgress != null) entryProgress.onFile(entry.path);
                 else if (progress != null) progress.setDetail(entry.path);
                 File outFile = resolveOutput(targetDir, entry.path);
                 if (outFile == null) continue;
-                writeEntry(in, entry, outFile, password, progress);
+                try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
+                    writeEntry(in, entry, outFile, password, progress);
+                    guard.commit();
+                }
                 any = true;
             }
         }
@@ -427,6 +421,7 @@ final class EggArchiveReader {
         private long remaining;
         private File spoolFile;
         private RandomAccessFile spool;
+        private long verifiedBlockSize;
         private boolean closed;
 
         SolidForwardReader(SplitVolumeInput input, List<EggEntry> entries, File spoolDirectory)
@@ -444,12 +439,17 @@ final class EggArchiveReader {
                 blockBytes = addEntryBytes(blockBytes, block.uncompSize);
             }
             if (entryBytes != blockBytes) throw new IOException("Solid EGG stream size differs from entry sizes");
-            if (!spoolDirectory.isDirectory() && !spoolDirectory.mkdirs()) {
+            if (!spoolDirectory.isDirectory() && !spoolDirectory.mkdirs() && !spoolDirectory.isDirectory()) {
                 throw new IOException("Cannot create solid EGG spool directory");
             }
         }
 
         @Override public ArchiveSupport.ForwardEntry nextEntry() throws IOException {
+            try { return advanceEntry(); }
+            catch (IOException | RuntimeException | Error failure) { retire(failure); throw failure; }
+        }
+
+        private ArchiveSupport.ForwardEntry advanceEntry() throws IOException {
             requireOpen();
             drainCurrentEntry(Long.MAX_VALUE);
             if (++entryIndex >= entries.size()) {
@@ -469,12 +469,18 @@ final class EggArchiveReader {
         }
 
         @Override public int read(byte[] buffer) throws IOException {
+            try { return readCurrent(buffer); }
+            catch (IOException | RuntimeException | Error failure) { retire(failure); throw failure; }
+        }
+
+        private int readCurrent(byte[] buffer) throws IOException {
             requireOpen();
             if (buffer.length == 0) return 0;
             if (remaining == 0) return -1;
             if (!ensureBlock()) throw new IOException("Solid EGG stream ended before entry data");
             int count = (int) Math.min(buffer.length, Math.min(remaining,
                     spool.length() - spool.getFilePointer()));
+            if (count <= 0) throw new IOException("Truncated solid EGG spool");
             int read = spool.read(buffer, 0, count);
             if (read <= 0) throw new IOException("Truncated solid EGG spool");
             remaining -= read;
@@ -482,11 +488,18 @@ final class EggArchiveReader {
         }
 
         @Override public boolean drainCurrentEntry(long maxDecodedBytes) throws IOException {
+            try { return drainCurrent(maxDecodedBytes); }
+            catch (IOException | RuntimeException | Error failure) { retire(failure); throw failure; }
+        }
+
+        private boolean drainCurrent(long maxDecodedBytes) throws IOException {
             requireOpen();
-            if (remaining > maxDecodedBytes) throw new IOException("Solid EGG drain budget exceeded");
+            if (maxDecodedBytes < 0 || remaining > maxDecodedBytes) throw new IOException("Solid EGG drain budget exceeded");
             while (remaining > 0) {
+                requireOpen();
                 if (!ensureBlock()) throw new IOException("Solid EGG stream ended before entry data");
                 long count = Math.min(remaining, spool.length() - spool.getFilePointer());
+                if (count <= 0) throw new IOException("Truncated solid EGG spool");
                 spool.seek(spool.getFilePointer() + count);
                 remaining -= count;
             }
@@ -494,7 +507,15 @@ final class EggArchiveReader {
         }
 
         private boolean ensureBlock() throws IOException {
-            while (spool == null || spool.getFilePointer() == spool.length()) {
+            while (true) {
+                requireOpen();
+                if (spool != null) {
+                    long position = spool.getFilePointer();
+                    if (spool.length() != verifiedBlockSize || position > verifiedBlockSize) {
+                        throw new IOException("Truncated or changed solid EGG spool");
+                    }
+                    if (position < verifiedBlockSize) return true;
+                }
                 closeBlock();
                 if (blockIndex >= blocks.size()) return false;
                 EggBlock block = blocks.get(blockIndex);
@@ -505,35 +526,62 @@ final class EggArchiveReader {
                     }
                     if (spoolFile.length() != block.uncompSize) throw new IOException("Invalid EGG spool length");
                     spool = new RandomAccessFile(spoolFile, "r");
+                    verifiedBlockSize = block.uncompSize;
                     blockIndex++;
-                } catch (IOException | RuntimeException e) {
-                    closeBlock();
+                } catch (IOException | RuntimeException | Error e) {
+                    try { closeBlock(); }
+                    catch (IOException | RuntimeException cleanup) { e.addSuppressed(cleanup); }
                     throw e;
                 }
             }
-            return true;
         }
 
         private void requireOpen() throws IOException {
             if (closed) throw new IOException("Solid EGG reader is closed");
+            if (Thread.currentThread().isInterrupted()) throw new IOException("EGG extraction cancelled");
+        }
+
+        private void retire(Throwable failure) {
+            try { close(); }
+            catch (IOException | RuntimeException | Error cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
+            }
         }
 
         private void closeBlock() throws IOException {
+            Throwable failure = null;
             try {
                 if (spool != null) spool.close();
+            } catch (IOException | RuntimeException | Error closeFailure) {
+                failure = closeFailure;
+                throw closeFailure;
             } finally {
                 spool = null;
-                if (spoolFile != null && spoolFile.exists() && !spoolFile.delete()) {
-                    throw new IOException("Cannot remove solid EGG spool");
+                verifiedBlockSize = 0;
+                try {
+                    if (spoolFile != null && spoolFile.exists() && !spoolFile.delete()) {
+                        throw new IOException("Cannot remove solid EGG spool");
+                    }
+                    spoolFile = null;
+                } catch (IOException | RuntimeException | Error cleanup) {
+                    if (failure == null) throw cleanup;
+                    if (cleanup != failure) failure.addSuppressed(cleanup);
                 }
-                spoolFile = null;
             }
         }
 
         @Override public void close() throws IOException {
-            if (closed) return;
+            if (closed && spool == null && spoolFile == null) return;
             closed = true;
-            try { closeBlock(); } finally { input.close(); }
+            try { closeBlock(); }
+            catch (IOException | RuntimeException | Error failure) {
+                try { input.close(); }
+                catch (RuntimeException | Error cleanup) {
+                    if (cleanup != failure) failure.addSuppressed(cleanup);
+                }
+                throw failure;
+            }
+            input.close();
         }
     }
 
@@ -578,13 +626,15 @@ final class EggArchiveReader {
                                                @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
         requireSolidSupported(entries);
         List<SolidTarget> targets = new ArrayList<>();
+        boolean createdDirectory = false;
         for (EggEntry entry : entries) {
             if (entry.directory) {
                 if (entryProgress != null) entryProgress.onDirectory(entry.path);
                 File dir = resolveOutput(targetDir, entry.path);
-                if (dir != null && !dir.exists() && !dir.mkdirs()) {
+                if (dir != null && !dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory()) {
                     throw new IOException("Cannot create output directory");
                 }
+                if (dir != null) createdDirectory = true;
                 continue;
             }
             File outFile = resolveOutput(targetDir, entry.path);
@@ -592,21 +642,20 @@ final class EggArchiveReader {
             // aligned in the solid stream; it just writes nowhere.
             targets.add(new SolidTarget(entry.path, entry.uncompressedSize, outFile));
         }
-        if (targets.isEmpty()) return false;
-        SolidEntryWriter writer = new SolidEntryWriter(targets, progress, entryProgress);
-        boolean ok = false;
-        try {
+        if (targets.isEmpty()) return createdDirectory;
+        try (SolidEntryWriter writer = new SolidEntryWriter(targets, progress, entryProgress)) {
             CRC32 runningCrc = new CRC32();
             for (EggBlock block : collectSolidBlocks(entries)) {
                 if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");
                 writeBlock(in, block, writer, runningCrc, progress, null);
+                // An entry boundary is NOT an integrity boundary. A block may
+                // end well after several files have been written and closed.
+                writer.commitVerifiedFiles();
             }
             writer.finish();
-            ok = true;
-        } finally {
-            writer.closeQuietly(ok);
+            writer.commitVerifiedFiles();
+            return writer.wroteAnything() || createdDirectory;
         }
-        return writer.wroteAnything();
     }
 
     /**
@@ -634,7 +683,7 @@ final class EggArchiveReader {
 
         File parent = outFile.getParentFile();
         if (parent == null) throw new IOException("Output file has no parent");
-        if (!parent.exists() && !parent.mkdirs()) throw new IOException("Cannot create output directory");
+        if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) throw new IOException("Cannot create output directory");
 
         boolean ok = false;
         try (OutputStream fileOut = ArchiveSupport.openExtractionOutputStream(outFile)) {
@@ -679,7 +728,8 @@ final class EggArchiveReader {
         private int index = -1;
         private long remaining;
         @Nullable private OutputStream current;
-        @Nullable private File currentFile;
+        @Nullable private RarOutputFileGuard currentGuard;
+        private final List<RarOutputFileGuard> awaitingVerification = new ArrayList<>();
         private boolean wroteAny;
 
         SolidEntryWriter(@NonNull List<SolidTarget> targets,
@@ -723,15 +773,15 @@ final class EggArchiveReader {
             else if (progress != null) progress.setDetail(target.path);
             if (target.outFile != null) {
                 File parent = target.outFile.getParentFile();
-                if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
                     throw new IOException("Cannot create output directory");
                 }
+                currentGuard = RarOutputFileGuard.forTarget(target.outFile);
                 current = ArchiveSupport.openExtractionOutputStream(target.outFile);
-                currentFile = target.outFile;
                 wroteAny = true;
             } else {
                 current = null;
-                currentFile = null;
+                currentGuard = null;
             }
             remaining = target.size;
             return true;
@@ -756,24 +806,48 @@ final class EggArchiveReader {
 
         private void closeCurrent() throws IOException {
             if (current != null) {
-                current.close();
+                OutputStream stream = current;
                 current = null;
-                currentFile = null;
+                stream.close();
+            }
+            if (currentGuard != null) {
+                awaitingVerification.add(currentGuard);
+                currentGuard = null;
             }
         }
 
-        void closeQuietly(boolean ok) {
-            try {
-                if (current != null) current.close();
-            } catch (IOException ignored) {
+        /** Commit only closed, complete files after every contributing block passed. */
+        void commitVerifiedFiles() throws IOException {
+            if (remaining == 0L) closeCurrent();
+            for (RarOutputFileGuard guard : awaitingVerification) {
+                guard.commit();
+                guard.close();
             }
-            if (!ok && currentFile != null) {
-                try { //noinspection ResultOfMethodCallIgnored
-                    currentFile.delete();
-                } catch (SecurityException ignored) {
+            awaitingVerification.clear();
+        }
+
+        @Override public void close() throws IOException {
+            Throwable failure = null;
+            try { closeCurrent(); }
+            catch (IOException | RuntimeException | Error e) { failure = e; }
+            // The current guard can remain here if closing its stream failed.
+            if (currentGuard != null) {
+                awaitingVerification.add(currentGuard);
+                currentGuard = null;
+            }
+            // Reverse order also restores duplicate output paths correctly:
+            // each guard may have backed up the previous entry's tentative file.
+            for (int i = awaitingVerification.size() - 1; i >= 0; i--) {
+                try { awaitingVerification.get(i).close(); }
+                catch (IOException | RuntimeException | Error e) {
+                    if (failure == null) failure = e;
+                    else if (failure != e) failure.addSuppressed(e);
                 }
             }
-            current = null;
+            awaitingVerification.clear();
+            if (failure instanceof IOException) throw (IOException) failure;
+            if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+            if (failure instanceof Error) throw (Error) failure;
         }
     }
 
@@ -830,147 +904,11 @@ final class EggArchiveReader {
     }
 
     private static List<SplitVolumeInput.Segment> resolveVolumes(@NonNull File archive) throws IOException {
-        indexCheckpoint();
-        VolumePrefix first = scanPrefix(archive);
-        List<SplitVolumeInput.Segment> segments = new ArrayList<>();
-        segments.add(new SplitVolumeInput.Segment(archive, 0L, archive.length()));
-        if (!first.hasSplit || first.splitNext == 0L) {
-            if (first.hasSplit && first.splitPrev != 0L) {
-                throw new IOException("EGG split volume opened without its first volume: " + archive.getName());
-            }
-            return segments;
-        }
-        if (first.splitPrev != 0L) {
-            throw new IOException("EGG split volume opened without its first volume: " + archive.getName());
-        }
-        VolumeFiles volumeFiles = new VolumeFiles(archive);
-        long volumeNumber = volumeNumber(archive);
-        volumeFiles.require(volumeNumber); // Also reject aliases of the opened first part.
-        long expectedPrev = first.programId;
-        long nextId = first.splitNext;
-        int guard = 0;
-        while (nextId != 0L) {
-            indexCheckpoint();
-            if (++guard > MAX_SPLIT_VOLUMES) throw new IOException("EGG split volume chain too long");
-            if (volumeNumber == Long.MAX_VALUE) throw new IOException("EGG volume number overflow");
-            File next = volumeFiles.require(++volumeNumber);
-            VolumePrefix prefix = scanPrefix(next);
-            if (!prefix.hasSplit || prefix.splitPrev != expectedPrev || prefix.programId != nextId) {
-                throw new IOException("EGG split volume chain mismatch at " + next.getName());
-            }
-            long payload = next.length() - prefix.dataOffset;
-            if (payload < 0) throw new IOException("EGG split volume shorter than its header: " + next.getName());
-            segments.add(new SplitVolumeInput.Segment(next, prefix.dataOffset, payload));
-            expectedPrev = prefix.programId;
-            nextId = prefix.splitNext;
-        }
-        return segments;
+        return EggVolumeResolver.resolve(archive).segments;
     }
 
-    /** Resolve numeric volume identity independently of case and leading zeroes. */
     static File resolveFirstVolume(File selected) throws IOException {
-        if (!VOLUME_NAME.matcher(selected.getName()).matches()) return selected;
-        volumeNumber(selected); // Reject invalid selected ordinals rather than silently aliasing them.
-        return new VolumeFiles(selected).require(1L);
-    }
-
-    private static long volumeNumber(File file) throws IOException {
-        Matcher matcher = VOLUME_NAME.matcher(file.getName());
-        if (!matcher.matches()) throw new IOException("EGG split filename must contain .volN.egg");
-        long number = parseVolumeNumber(matcher.group(2));
-        if (number < 1) throw new IOException("Invalid EGG split volume number");
-        return number;
-    }
-
-    private static long parseVolumeNumber(String digits) {
-        long number = 0;
-        for (int i = 0; i < digits.length(); i++) {
-            int digit = digits.charAt(i) - '0';
-            if (digit < 0 || digit > 9 || number > (Long.MAX_VALUE - digit) / 10) return -1;
-            number = number * 10 + digit;
-        }
-        return number;
-    }
-
-    /** One directory scan per resolution, not one scan for each next volume. */
-    private static final class VolumeFiles {
-        private final Map<Long, File> files = new LinkedHashMap<>();
-        private final java.util.Set<Long> ambiguous = new java.util.HashSet<>();
-
-        VolumeFiles(File selected) throws IOException {
-            indexCheckpoint();
-            Matcher selectedName = VOLUME_NAME.matcher(selected.getName());
-            if (!selectedName.matches()) throw new IOException("EGG split filename must contain .volN.egg");
-            File parent = selected.getAbsoluteFile().getParentFile();
-            File[] siblings = parent == null ? null : parent.listFiles();
-            if (siblings == null) throw new IOException("Cannot read EGG split volume directory");
-            for (File sibling : siblings) {
-                indexCheckpoint();
-                if (!sibling.isFile()) continue;
-                Matcher name = VOLUME_NAME.matcher(sibling.getName());
-                if (!name.matches() || !name.group(1).equalsIgnoreCase(selectedName.group(1))) continue;
-                long number = parseVolumeNumber(name.group(2));
-                if (number < 1) continue;
-                if (files.containsKey(number)) ambiguous.add(number);
-                else files.put(number, sibling);
-            }
-        }
-
-        File require(long number) throws IOException {
-            indexCheckpoint();
-            if (ambiguous.contains(number)) throw new IOException("Ambiguous EGG split volume number: " + number);
-            File file = files.get(number);
-            if (file == null || !file.isFile()) throw new IOException("Missing EGG split volume number: " + number);
-            return file;
-        }
-    }
-
-    /** Reads one physical volume's 14-byte header and archive-level extra fields. */
-    @NonNull
-    private static VolumePrefix scanPrefix(@NonNull File volume) throws IOException {
-        indexCheckpoint();
-        try (RandomAccessFile raf = new RandomAccessFile(volume, "r")) {
-            VolumePrefix prefix = new VolumePrefix();
-            if (raf.length() < 14 || readUInt32LE(raf) != MAGIC_EGG) {
-                throw invalidSignature(volume);
-            }
-            readUInt16LE(raf);                                // version
-            prefix.programId = readUInt32LE(raf) & 0xffffffffL; // header id
-            readUInt32LE(raf);                                // reserved
-            long len = raf.length();
-            while (raf.getFilePointer() + 4 <= len) {
-                indexCheckpoint();
-                long fieldPos = raf.getFilePointer();
-                int sig = readUInt32LE(raf);
-                if (sig == MAGIC_END) {
-                    prefix.dataOffset = raf.getFilePointer();
-                    return prefix;
-                }
-                if (sig == MAGIC_FILE) {
-                    // Tolerated legacy layout without a prefix END: data begins here.
-                    prefix.dataOffset = fieldPos;
-                    return prefix;
-                }
-                int gpb = raf.readUnsignedByte();
-                long size;
-                if ((gpb & 1) == 1) {
-                    size = readUInt32LE(raf) & 0xffffffffL;
-                } else {
-                    size = readUInt16LE(raf);
-                }
-                long payloadStart = raf.getFilePointer();
-                long payloadEnd = checkedPayloadEnd(payloadStart, size, len);
-                if (sig == MAGIC_SPLIT && size >= 8) {
-                    prefix.hasSplit = true;
-                    prefix.splitPrev = readUInt32LE(raf) & 0xffffffffL;
-                    prefix.splitNext = readUInt32LE(raf) & 0xffffffffL;
-                } else if (sig == MAGIC_SOLID) {
-                    prefix.solid = true;
-                }
-                raf.seek(payloadEnd);
-            }
-            throw unsupported(volume);
-        }
+        return EggVolumeResolver.resolveFirstVolume(selected);
     }
 
     // ----- Parsing -----
@@ -1266,7 +1204,7 @@ final class EggArchiveReader {
 
         File parent = outFile.getParentFile();
         if (parent == null) throw new IOException("Output file has no parent");
-        if (!parent.exists() && !parent.mkdirs()) throw new IOException("Cannot create output directory");
+        if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) throw new IOException("Cannot create output directory");
 
         boolean ok = false;
         try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
@@ -1342,32 +1280,54 @@ final class EggArchiveReader {
         // entry is ZipCrypto-encrypted the whole stored payload (including the
         // LZMA preamble or AZO framing) is ciphertext, so decryption wraps the
         // raw bytes here, sharing the per-file keystream across blocks.
-        try (InputStream input = openBlockInputStream(in, block, crypto)) {
+        try (InputStream packed = openBlockInputStream(in, block, crypto)) {
+            // A codec may stop at its own end marker before the bounded packed
+            // block ends. Keep that stream open until all declared ciphertext
+            // has passed through the per-file decryptor/MAC. Decoder prefetch
+            // has already authenticated its bytes and must NOT be replayed.
+            InputStream input = new java.io.FilterInputStream(packed) {
+                @Override public void close() { /* packed is owned by this scope */ }
+            };
             switch (block.method) {
                 case COMP_STORE:
                     copyDecodedBlock(input, out, runningCrc, block, progress);
-                    return;
-                case COMP_DEFLATE: {
-                    Inflater inflater = new Inflater(true);
-                    try {
-                        copyDecodedBlock(new InflaterInputStream(input, inflater), out, runningCrc, block, progress);
-                    } finally {
-                        inflater.end();
+                    break;
+                case COMP_DEFLATE:
+                    try (InputStream decoded = new OwnedDeflateInputStream(input)) {
+                        copyDecodedBlock(decoded, out, runningCrc, block, progress);
                     }
-                    return;
-                }
+                    break;
                 case COMP_BZIP:
-                    copyDecodedBlock(new BZip2CompressorInputStream(input), out, runningCrc, block, progress);
-                    return;
+                    try (InputStream decoded = new BZip2CompressorInputStream(input)) {
+                        copyDecodedBlock(decoded, out, runningCrc, block, progress);
+                    }
+                    break;
                 case COMP_LZMA:
                     writeLzmaBlock(input, block, out, runningCrc, progress);
-                    return;
+                    break;
                 case COMP_AZO:
                     writeAzoBlock(input, block, out, runningCrc, progress);
-                    return;
+                    break;
                 default:
                     throw new ArchiveSupport.UnsupportedArchiveFeatureException(
                             "Unsupported EGG compression method " + block.method);
+            }
+            // Do not use skip(): it can bypass decryption and authentication.
+            // Finish only after a successful decode/close; never hide a failure
+            // by draining in finally. This also keeps ZipCrypto aligned for the
+            // following block of the same file.
+            indexCheckpoint();
+            if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");
+            // Ordinary blocks have already reached EOF. Avoid allocating an
+            // extra 64 KiB buffer for each such block merely to discover that.
+            if (packed.read() == -1) return;
+            byte[] drain = new byte[64 * 1024];
+            while (true) {
+                indexCheckpoint();
+                if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");
+                int n = packed.read(drain);
+                if (n == -1) break;
+                if (n <= 0 || n > drain.length) throw new IOException("EGG packed input made invalid progress");
             }
         }
     }
@@ -1401,7 +1361,9 @@ final class EggArchiveReader {
         long total = 0L;
         int read;
         while ((read = input.read(chunk)) != -1) {
+            indexCheckpoint();
             if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");
+            if (read <= 0) throw new IOException("EGG decoder made no progress");
             if (read > block.uncompSize - total) {
                 throw new IOException("EGG block exceeds its declared unpacked size");
             }
@@ -1457,23 +1419,18 @@ final class EggArchiveReader {
         while (done < header.length) {
             int n = input.read(header, done, header.length - done);
             if (n < 0) throw new ArchiveSupport.UnsupportedArchiveFeatureException("Truncated EGG LZMA header");
+            if (n == 0) throw new IOException("EGG input made no progress");
+            indexCheckpoint();
             done += n;
         }
-        byte propsByte = header[LZMA_PROPS_OFFSET];
-        int dictSize = (header[LZMA_PROPS_OFFSET + 1] & 0xff)
-                | ((header[LZMA_PROPS_OFFSET + 2] & 0xff) << 8)
-                | ((header[LZMA_PROPS_OFFSET + 3] & 0xff) << 16)
-                | ((header[LZMA_PROPS_OFFSET + 4] & 0xff) << 24);
-        try (InputStream lzma = new LZMAInputStream(input, block.uncompSize, propsByte, dictSize)) {
+        EggLzmaProperties properties = EggLzmaProperties.parse(header, block.uncompSize, LZMAInputStream.DICT_SIZE_MAX);
+        byte propsByte = properties.properties;
+        int dictSize = properties.dictionarySize;
+        // XZ's raw LZMA decoder reads packed input one byte at a time. Buffer AFTER
+        // decryption and INSIDE the bounded block so it cannot consume another block.
+        try (InputStream lzma = new LZMAInputStream(new java.io.BufferedInputStream(input, 64 * 1024),
+                block.uncompSize, propsByte, dictSize)) {
             copyDecodedBlock(lzma, out, runningCrc, block, progress);
-        } catch (IOException e) {
-            if (e instanceof ArchiveSupport.UnsupportedArchiveFeatureException) throw (ArchiveSupport.UnsupportedArchiveFeatureException) e;
-            if (Thread.currentThread().isInterrupted()) throw e;
-            String message = e.getMessage();
-            if (message != null && (message.toLowerCase(Locale.ROOT).contains("crc")
-                    || message.toLowerCase(Locale.ROOT).contains("free space"))) throw e;
-            throw new ArchiveSupport.UnsupportedArchiveFeatureException(
-                    "EGG LZMA block could not be decoded: " + e.getMessage());
         }
     }
 
@@ -1488,6 +1445,8 @@ final class EggArchiveReader {
         while (done < compressed.length) {
             int n = input.read(compressed, done, compressed.length - done);
             if (n < 0) throw new IOException("Unexpected EOF in EGG block");
+            if (n == 0) throw new IOException("EGG input made no progress");
+            indexCheckpoint();
             done += n;
         }
         return compressed;
@@ -1531,6 +1490,7 @@ final class EggArchiveReader {
     private static final class EggDecryptingInputStream extends InputStream {
         @NonNull private final InputStream source;
         @NonNull private final BlockDecryptor crypto;
+        private final byte[] single = new byte[1];
 
         EggDecryptingInputStream(@NonNull InputStream source, @NonNull BlockDecryptor crypto) {
             this.source = source;
@@ -1539,9 +1499,10 @@ final class EggArchiveReader {
 
         @Override
         public int read() throws IOException {
-            byte[] one = new byte[1];
-            int n = read(one, 0, 1);
-            return n <= 0 ? -1 : (one[0] & 0xff);
+            int n = read(single, 0, 1);
+            if (n == -1) return -1;
+            if (n != 1) throw new IOException("EGG decrypting input made invalid progress");
+            return single[0] & 0xff;
         }
 
         @Override

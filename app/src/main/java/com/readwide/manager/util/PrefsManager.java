@@ -133,7 +133,7 @@ public class PrefsManager {
     // Security PINs are intentionally not exported/imported. Restoring lock_enabled
     // without a matching PIN can lock the user into a broken state, and exporting the
     // PIN would place sensitive data in a plain JSON backup file.
-    private boolean isBackupExcludedKey(String key) {
+    private static boolean isBackupExcludedKey(String key) {
         return KEY_LOCK_PIN.equals(key)
                 || KEY_LOCK_ENABLED.equals(key)
                 || (key != null && key.startsWith("auto_text_encoding::"))
@@ -184,116 +184,158 @@ public class PrefsManager {
         return root;
     }
 
-    public void importSettingsFromJson(JSONObject root, boolean merge) throws JSONException {
+    public void importSettingsFromJson(JSONObject root, boolean merge) throws JSONException, java.io.IOException {
         if (root == null) return;
-        JSONObject values = root.optJSONObject("values");
-        if (values == null) return;
-
-        String previousLastDirectory = prefs.getString("last_directory", null);
-        String previousRecentFolders = prefs.getString("recent_folders", "");
-        String previousFolderShortcuts = prefs.getString("folder_shortcuts", "");
-
-        SharedPreferences.Editor editor = prefs.edit();
-        if (!merge) {
-            for (String key : prefs.getAll().keySet()) {
-                if (!isBackupExcludedKey(key)) editor.remove(key);
-            }
+        Map<String, ?> before = snapshotForImport();
+        try { replaceImportSettings(planImportSettings(root, merge, before)); }
+        catch (java.io.IOException | RuntimeException failure) {
+            try { replaceImportSettings(before); }
+            catch (Exception rollback) { failure.addSuppressed(rollback); }
+            throw failure;
         }
+    }
 
+    static void validateImportSettings(JSONObject root) throws JSONException { decodeImportSettings(root); }
+
+    private static Map<String, Object> decodeImportSettings(JSONObject root) throws JSONException {
+        JSONObject values = root.getJSONObject("values");
+        Map<String, Object> result = new java.util.HashMap<>();
         Iterator<String> keys = values.keys();
         while (keys.hasNext()) {
             String key = keys.next();
-            if (key == null || isBackupExcludedKey(key)) continue;
-            if (isDeviceLocalDirectoryPreferenceKey(key)) continue;
-
-            JSONObject item = values.optJSONObject(key);
-            if (item == null) continue;
+            if (isBackupExcludedKey(key)) continue;
+            JSONObject item = values.getJSONObject(key);
             String type = item.optString("type", "string");
-
-            if ("boolean".equals(type)) {
-                editor.putBoolean(key, item.optBoolean("value", false));
-            } else if ("float".equals(type)) {
-                editor.putFloat(key, (float) item.optDouble("value", 0.0));
-            } else if ("int".equals(type)) {
-                editor.putInt(key, item.optInt("value", 0));
-            } else if ("long".equals(type)) {
-                editor.putLong(key, item.optLong("value", 0L));
-            } else if ("stringSet".equals(type)) {
-                JSONArray arr = item.optJSONArray("value");
-                LinkedHashSet<String> set = new LinkedHashSet<>();
-                if (arr != null) {
-                    for (int i = 0; i < arr.length(); i++) {
-                        String setItem = arr.optString(i, null);
-                        if (setItem != null) set.add(setItem);
+            Object value = item.get("value");
+            boolean valid;
+            switch (type) {
+                case "boolean": valid = value instanceof Boolean; break;
+                case "string": valid = value instanceof String; break;
+                case "int":
+                    valid = (value instanceof Integer || value instanceof Long)
+                            && ((Number) value).longValue() >= Integer.MIN_VALUE
+                            && ((Number) value).longValue() <= Integer.MAX_VALUE;
+                    if (valid) value = ((Number) value).intValue();
+                    break;
+                case "long":
+                    valid = value instanceof Integer || value instanceof Long;
+                    if (valid) value = ((Number) value).longValue();
+                    break;
+                case "float":
+                    valid = value instanceof Number;
+                    if (valid) {
+                        float number = ((Number) value).floatValue();
+                        valid = !Float.isInfinite(number) && !Float.isNaN(number);
+                        value = number;
                     }
-                }
-                editor.putStringSet(key, set);
-            } else {
-                editor.putString(key, item.optString("value", ""));
+                    break;
+                case "stringSet":
+                    valid = value instanceof JSONArray;
+                    if (valid) {
+                        JSONArray array = (JSONArray) value;
+                        Set<String> set = new LinkedHashSet<>();
+                        for (int i = 0; i < array.length(); i++) {
+                            Object member = array.get(i);
+                            if (!(member instanceof String)) throw new JSONException("Invalid preference string set: " + key);
+                            set.add((String) member);
+                        }
+                        value = set;
+                    }
+                    break;
+                default: valid = false;
             }
+            // Default values are usually absent from the preference file. Validate
+            // against the getter's stored type even when there is no previous value
+            // to compare, after applying the existing JSON numeric conversions.
+            if (!valid || !PreferenceBackupSchema.accepts(key, value))
+                throw new JSONException("Invalid preference value/type: " + key);
+            if ("txt_display_replacement_rules_json".equals(key)) {
+                if (!(value instanceof String)) throw new JSONException("Invalid TXT display-rule preference");
+                JSONArray rules = new JSONArray((String) value);
+                for (int i = 0; i < rules.length(); i++) rules.getJSONObject(i);
+            }
+            result.put(key, value);
         }
-
-        editor.commit();
-        importDeviceLocalDirectoryPreferences(values,
-                previousLastDirectory,
-                previousRecentFolders,
-                previousFolderShortcuts);
+        return result;
     }
 
-    /**
-     * Directory UI preferences are useful in a backup, but only if the restored
-     * paths are real directories on the current device.  Import accessible
-     * backup paths; when a backup path does not exist here, do not import it.
-     * Existing local drawer/recent directory settings are kept if the backup has
-     * no accessible replacement.  Bookmarks and reading states are intentionally
-     * handled elsewhere because they can rebind through portable file identity.
-     */
-    private void importDeviceLocalDirectoryPreferences(JSONObject values,
-                                                       String previousLastDirectory,
-                                                       String previousRecentFolders,
-                                                       String previousFolderShortcuts) {
+    Map<String, ?> snapshotForImport() {
+        return new java.util.HashMap<>(prefs.getAll());
+    }
+
+    Map<String, Object> planImportSettings(JSONObject root, boolean merge, Map<String, ?> before)
+            throws JSONException {
+        Map<String, Object> imported = decodeImportSettings(root);
+        Map<String, Object> planned = new java.util.HashMap<>();
+        for (Map.Entry<String, ?> entry : before.entrySet()) {
+            if (merge || isBackupExcludedKey(entry.getKey())) planned.put(entry.getKey(), entry.getValue());
+        }
+        for (Map.Entry<String, Object> entry : imported.entrySet()) {
+            if (isDeviceLocalDirectoryPreferenceKey(entry.getKey())) {
+                if (!(entry.getValue() instanceof String)) throw new JSONException("Invalid folder preference");
+                continue;
+            }
+            Object previous = before.get(entry.getKey());
+            if (previous != null && !samePreferenceType(previous, entry.getValue()))
+                throw new JSONException("Preference type changed: " + entry.getKey());
+            planned.put(entry.getKey(), entry.getValue());
+        }
+        // Resolve local folders before committing anything, preserving the existing
+        // cross-device policy. These changes now share the same durable commit.
+        String last = stringValue(imported, "last_directory");
+        last = isExistingDirectory(last) ? last.trim() : firstExistingDirectory(stringValue(before, "last_directory"), 1);
+        putPlannedDirectory(planned, "last_directory", last);
+        for (String key : new String[]{"recent_folders", "folder_shortcuts"}) {
+            int limit = "recent_folders".equals(key) ? 20 : 30;
+            String folders = joinExistingDirectories(stringValue(imported, key), limit);
+            if (folders.isEmpty()) folders = joinExistingDirectories(stringValue(before, key), limit);
+            putPlannedDirectory(planned, key, folders);
+        }
+        return planned;
+    }
+
+    private static boolean samePreferenceType(Object a, Object b) {
+        return a instanceof Set ? b instanceof Set : a.getClass().equals(b.getClass());
+    }
+
+    private static String stringValue(Map<String, ?> values, String key) {
+        Object value = values.get(key);
+        return value instanceof String ? (String) value : null;
+    }
+
+    private static void putPlannedDirectory(Map<String, Object> values, String key, String value) {
+        if (value == null || value.isEmpty()) values.remove(key); else values.put(key, value);
+    }
+
+    void replaceImportSettings(Map<String, ?> values) throws java.io.IOException {
         SharedPreferences.Editor editor = prefs.edit();
-
-        String importedLastDirectory = readBackupStringPreference(values, "last_directory");
-        String validLastDirectory = isExistingDirectory(importedLastDirectory)
-                ? importedLastDirectory.trim()
-                : firstExistingDirectory(previousLastDirectory, 1);
-        putOrRemoveString(editor, "last_directory", validLastDirectory);
-
-        String importedRecentFolders = readBackupStringPreference(values, "recent_folders");
-        String validRecentFolders = joinExistingDirectories(importedRecentFolders, 20);
-        if (validRecentFolders == null || validRecentFolders.isEmpty()) {
-            validRecentFolders = joinExistingDirectories(previousRecentFolders, 20);
+        for (String key : prefs.getAll().keySet()) if (!isBackupExcludedKey(key)) editor.remove(key);
+        for (Map.Entry<String, ?> entry : values.entrySet()) {
+            String key = entry.getKey();
+            if (isBackupExcludedKey(key)) continue; // Never restore/roll back PINs or device encoding caches.
+            Object value = entry.getValue();
+            if (value instanceof Boolean) editor.putBoolean(key, (Boolean) value);
+            else if (value instanceof Integer) editor.putInt(key, (Integer) value);
+            else if (value instanceof Long) editor.putLong(key, (Long) value);
+            else if (value instanceof Float) editor.putFloat(key, (Float) value);
+            else if (value instanceof String) editor.putString(key, (String) value);
+            else if (value instanceof Set) {
+                Set<String> copy = new LinkedHashSet<>();
+                for (Object member : (Set<?>) value) copy.add((String) member);
+                editor.putStringSet(key, copy);
+            } else throw new java.io.IOException("Unsupported preference value: " + key);
         }
-        putOrRemoveString(editor, "recent_folders", validRecentFolders);
-
-        String importedFolderShortcuts = readBackupStringPreference(values, "folder_shortcuts");
-        String validFolderShortcuts = joinExistingDirectories(importedFolderShortcuts, 30);
-        if (validFolderShortcuts == null || validFolderShortcuts.isEmpty()) {
-            validFolderShortcuts = joinExistingDirectories(previousFolderShortcuts, 30);
+        try {
+            if (!editor.commit()) throw new java.io.IOException("Could not save imported preferences");
+        } finally {
+            TextDisplayRuleManager.invalidateCache();
         }
-        putOrRemoveString(editor, "folder_shortcuts", validFolderShortcuts);
-
-        editor.apply();
     }
 
     private boolean isDeviceLocalDirectoryPreferenceKey(String key) {
         return "last_directory".equals(key)
                 || "recent_folders".equals(key)
                 || "folder_shortcuts".equals(key);
-    }
-
-    private String readBackupStringPreference(JSONObject values, String key) {
-        if (values == null || key == null) return null;
-        JSONObject item = values.optJSONObject(key);
-        if (item == null) return null;
-        return item.optString("value", null);
-    }
-
-    private void putOrRemoveString(SharedPreferences.Editor editor, String key, String value) {
-        if (editor == null || key == null) return;
-        if (value == null || value.trim().isEmpty()) editor.remove(key);
-        else editor.putString(key, value.trim());
     }
 
     private String firstExistingDirectory(String raw, int limit) {
@@ -356,6 +398,7 @@ public class PrefsManager {
                 "keep_screen_on",
                 "show_status_bar",
                 "page_status_alignment",
+                "text_alignment",
                 "auto_save_position",
                 "auto_page_turn_interval_seconds",
                 "last_reader_search_query",

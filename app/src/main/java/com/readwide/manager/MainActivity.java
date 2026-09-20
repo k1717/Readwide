@@ -302,6 +302,21 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         return mainDrawerGestureController;
     }
 
+    private MainHomeShortcutsController mainHomeShortcutsController;
+
+    void setupHomeShortcuts() {
+        mainHomeShortcutsController = new MainHomeShortcutsController(this);
+        mainHomeShortcutsController.bind();
+    }
+
+    void refreshHomeShortcuts() {
+        if (mainHomeShortcutsController != null) mainHomeShortcutsController.refresh();
+    }
+
+    void refreshHomeShortcutsTheme() {
+        if (mainHomeShortcutsController != null) mainHomeShortcutsController.refreshTheme();
+    }
+
     private MainDrawerController mainDrawerController;
 
     private MainDrawerController mainDrawer() {
@@ -662,12 +677,14 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
 
     @Override
     protected void onPause() {
+        if (mainHomeShortcutsController != null) mainHomeShortcutsController.cancelPendingOpen();
         stopVisibleFolderChangeObserver();
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
+        if (mainHomeShortcutsController != null) mainHomeShortcutsController.close();
         if (mainImageOpenController != null) mainImageOpenController.onDestroy();
         else hideImageOpenLoadingWindow();
         activityDestroyed = true;
@@ -815,7 +832,10 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
 
     void setupDrawerStorageList() { mainDrawer().setupDrawerStorageList(); }
 
-    void rebuildDrawerStorageEntries() { mainDrawer().rebuildDrawerStorageEntries(); }
+    void rebuildDrawerStorageEntries() {
+        mainDrawer().rebuildDrawerStorageEntries();
+        refreshHomeShortcuts();
+    }
 
     boolean isBuiltInDrawerPath(@NonNull String path) { return mainDrawer().isBuiltInDrawerPath(path); }
 
@@ -1322,7 +1342,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         ShortToast.show(this, getString(R.string.shortcut_removed));
     }
 
-    private void showShortcutRemoveDialog(@NonNull File folder) {
+    void showShortcutRemoveDialog(@NonNull File folder) {
         final boolean dark = prefs == null || prefs.shouldUseDarkColors(this);
         final int bg = prefs != null ? prefs.getMainBgColor(this) : (dark ? Color.rgb(33, 33, 33) : Color.rgb(255, 255, 255));
         final int panel = prefs != null ? prefs.getMainPanelColor(this) : (dark ? Color.rgb(48, 48, 48) : Color.rgb(245, 245, 245));
@@ -1648,6 +1668,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     // -------------------------------------------------------------------------
 
     void showHomeMode() {
+        refreshHomeShortcuts();
         // Save the visible browse folder before leaving Browse mode so returning
         // to it can reuse the adapter list and RecyclerView position when the
         // folder contents are unchanged. The fast save reuses the cached load
@@ -1677,6 +1698,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     void showBrowseMode(@NonNull File dir) {
+        if (mainHomeShortcutsController != null) mainHomeShortcutsController.cancelPendingOpen();
         // Capture the current browse folder even when switching through Home or
         // drawer shortcuts. This enables A -> B -> A -> B folder-state reuse.
         // Use the fast save (reuse the cached load signature) so a large outgoing
@@ -1703,6 +1725,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     void showBrowseModeFromDrawerShortcut(@NonNull File dir) {
+        if (mainHomeShortcutsController != null) mainHomeShortcutsController.cancelPendingOpen();
         // Drawer shortcut taps should never block on a full directory signature scan.
         // Save the outgoing visible list with the already-known load signature, then
         // restore the target cache optimistically and validate it in the background.

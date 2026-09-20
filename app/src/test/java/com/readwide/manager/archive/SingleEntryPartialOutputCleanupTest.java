@@ -15,7 +15,7 @@ import java.util.zip.ZipOutputStream;
 
 public class SingleEntryPartialOutputCleanupTest {
     @Test
-    public void missingSingleEntryRemovesExistingOrPartialOutput() throws Exception {
+    public void missingSingleEntryPreservesExistingOutput() throws Exception {
         File dir = createTempDir("single-entry-cleanup");
         File archive = new File(dir, "sample.zip");
         try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(archive))) {
@@ -34,7 +34,9 @@ public class SingleEntryPartialOutputCleanupTest {
                 archive, "missing.txt", out, null);
 
         assertFalse(result.success);
-        assertFalse("failed single-entry extraction must not leave stale/partial output", out.exists());
+        assertTrue("failed extraction must preserve the original destination", out.isFile());
+        org.junit.Assert.assertArrayEquals("stale".getBytes(StandardCharsets.UTF_8),
+                java.nio.file.Files.readAllBytes(out.toPath()));
     }
 
     private static File createTempDir(String prefix) throws Exception {

@@ -7,23 +7,42 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.readwide.manager.search.LargeTextSearchResult;
+import com.readwide.manager.util.SearchOptions;
+import com.readwide.manager.util.TextMatchIndex;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.Locale;
+import java.util.Objects;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 final class ReaderSearchController {
     private final ReaderActivity activity;
+    private final ThreadPoolExecutor textSearchExecutor = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1));
+    private final AtomicInteger textSearchGeneration = new AtomicInteger();
+    // Accessed on the UI thread only; matching inside the snapshot stays on one worker.
+    private TextMatchIndex textMatchIndex;
+    private Future<?> textSearchTask;
 
     ReaderSearchController(@NonNull ReaderActivity activity) {
         this.activity = activity;
     }
 
     void resetActiveSearchState() {
+        clearTextSearchWork(false);
         activity.activeSearchQuery = "";
         activity.activeSearchIndex = -1;
         activity.activeSearchOrdinal = 0;
         activity.largeTextSearchCountGeneration.incrementAndGet();
+        activity.largeTextSearchGeneration.incrementAndGet();
         activity.largeTextSearchTotalCache.clear();
         activity.applySearchHighlight();
     }
@@ -149,7 +168,8 @@ final class ReaderSearchController {
                 idx = hit.start;
             }
         } else {
-            int from = Math.min(bodyEnd - 1, Math.max(0, localStart));
+            if (localStart < 0) return null;
+            int from = Math.min(bodyEnd - 1, localStart);
             com.readwide.manager.util.SearchMatcher.Match hit = matcher.lastUpTo(activity.fileContent, from);
             while (hit != null && hit.end > bodyEnd) {
                 if (hit.start <= 0) { hit = null; break; }
@@ -233,7 +253,7 @@ final class ReaderSearchController {
             startPosition = activity.getCurrentCharPosition();
         }
 
-        if (targetOccurrence <= 0 && activity.activeSearchOrdinal > 0) {
+        if (targetOccurrence <= 0 && activity.activeSearchOrdinal > 0 && !searchOptions.regex) {
             LargeTextSearchResult instantResult = searchCurrentLargeTextPartitionInstant(query, startPosition, forward);
             if (instantResult != null && instantResult.found()) {
                 applyInstantLargeTextSearchResult(query, instantResult, matchStatus);
@@ -342,6 +362,95 @@ final class ReaderSearchController {
         });
     }
 
+    void clearTextSearchWork(boolean close) {
+        textSearchGeneration.incrementAndGet();
+        if (textSearchTask != null) textSearchTask.cancel(true);
+        textSearchTask = null;
+        textSearchExecutor.getQueue().clear();
+        textMatchIndex = null;
+        if (close) textSearchExecutor.shutdownNow();
+    }
+
+    void refreshTextSearchStatus(String query, TextView matchStatus) {
+        if (activity.largeTextEstimateActive) return;
+        int position = Objects.equals(query, activity.activeSearchQuery) ? activity.activeSearchIndex : -1;
+        enqueueTextSearch(query, true, position, -1, true, matchStatus);
+    }
+
+    private void enqueueTextSearch(String query, boolean forward, int start, int occurrence,
+                                   boolean statusOnly, TextView matchStatus) {
+        if (activity.activityDestroyed || textSearchExecutor.isShutdown()) return;
+        final String content = activity.fileContent;
+        final String path = activity.filePath;
+        final int load = activity.loadGeneration.get();
+        final int request = textSearchGeneration.incrementAndGet();
+        final SearchOptions options = activity.currentSearchOptions();
+        final TextMatchIndex cached = textMatchIndex;
+        if (textSearchTask != null) textSearchTask.cancel(true);
+        textSearchExecutor.getQueue().clear();
+        if (statusOnly && matchStatus != null) matchStatus.setText("0 / …");
+        // Bound the queue as well as the index. Replaced requests cannot publish
+        // a stale counter or move the reader after an option/file/dialog change.
+        final BooleanSupplier cancelled = () -> activity.activityDestroyed
+                || request != textSearchGeneration.get() || load != activity.loadGeneration.get();
+        try {
+            textSearchTask = textSearchExecutor.submit(() -> {
+                try {
+                    TextMatchIndex index = cached != null && cached.matches(content, query, options)
+                            ? cached : TextMatchIndex.build(content, query, options, cancelled);
+                    int total = index.count();
+                    TextMatchIndex.Hit hit = statusOnly ? null : occurrence > 0
+                            ? index.occurrence(occurrence, cancelled) : index.nearest(start, forward, cancelled);
+                    int ordinal = statusOnly ? index.ordinalAt(start, cancelled) : hit.ordinal;
+                    if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) return;
+                    activity.handler.post(() -> {
+                        if (!isCurrentTextSearch(request, load, path, content, options)) return;
+                        textMatchIndex = index;
+                        textSearchTask = null;
+                        updateLargeTextSearchStatus(matchStatus, ordinal, total);
+                        if (statusOnly) {
+                            if (Objects.equals(query, activity.activeSearchQuery)) activity.activeSearchOrdinal = ordinal;
+                            return;
+                        }
+                        if (occurrence > total && total > 0) {
+                            ShortToast.show(activity, activity.getString(R.string.search_occurrence_out_of_range, total));
+                            return;
+                        }
+                        activity.activeSearchIndex = hit.position;
+                        activity.activeSearchOrdinal = hit.ordinal;
+                        activity.applySearchHighlight();
+                        if (hit.position >= 0) {
+                            activity.scrollToSearchResultPosition(hit.position);
+                            activity.updatePositionLabel();
+                        } else {
+                            ShortToast.show(activity, activity.getString(R.string.not_found));
+                        }
+                    });
+                } catch (CancellationException ignored) {
+                    // An incomplete count must never be cached or displayed.
+                } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                    String error = failure.getClass().getSimpleName();
+                    activity.handler.post(() -> {
+                        if (!isCurrentTextSearch(request, load, path, content, options)) return;
+                        textSearchTask = null;
+                        textMatchIndex = null;
+                        if (matchStatus != null) matchStatus.setText("0 / 0");
+                        ShortToast.show(activity, activity.getString(R.string.error_prefix) + error);
+                    });
+                }
+            });
+        } catch (RejectedExecutionException ignored) {
+            // The activity was closed; do not fall back to scanning on the UI thread.
+        }
+    }
+
+    private boolean isCurrentTextSearch(int request, int load, String path, String content, SearchOptions options) {
+        return !activity.activityDestroyed && !activity.largeTextEstimateActive
+                && request == textSearchGeneration.get() && load == activity.loadGeneration.get()
+                && Objects.equals(path, activity.filePath) && content == activity.fileContent
+                && options.signature().equals(activity.currentSearchOptions().signature());
+    }
+
     void performTextSearchMove(String rawQuery, boolean forward, TextView matchStatus) {
         performTextSearchMove(rawQuery, forward, matchStatus, -1);
     }
@@ -365,18 +474,6 @@ final class ReaderSearchController {
 
         if (activity.fileContent == null || activity.fileContent.isEmpty()) return;
 
-        int total = activity.countTextMatches(query);
-        if (total <= 0) {
-            if (activity.prefs != null) activity.prefs.setLastReaderSearchQuery(query);
-            activity.activeSearchQuery = query;
-            activity.activeSearchIndex = -1;
-            activity.activeSearchOrdinal = 0;
-            activity.applySearchHighlight();
-            if (matchStatus != null) matchStatus.setText("0 / 0");
-            ShortToast.show(activity, activity.getString(R.string.not_found));
-            return;
-        }
-
         if (!query.equals(activity.activeSearchQuery)) {
             activity.activeSearchQuery = query;
             activity.activeSearchIndex = -1;
@@ -384,55 +481,9 @@ final class ReaderSearchController {
             activity.applySearchHighlight();
         }
         if (activity.prefs != null) activity.prefs.setLastReaderSearchQuery(query);
-
-        int idx;
-        if (targetOccurrence > 0) {
-            if (targetOccurrence > total) {
-                if (matchStatus != null) {
-                    matchStatus.setText(String.format(Locale.getDefault(), "0 / %d", total));
-                }
-                ShortToast.show(activity, activity.getString(R.string.search_occurrence_out_of_range, total));
-                return;
-            }
-            idx = activity.findNthText(query, targetOccurrence);
-        } else if (activity.activeSearchIndex >= 0) {
-            idx = forward
-                    ? activity.findText(query, activity.activeSearchIndex + 1)
-                    : activity.findTextBackward(query, activity.activeSearchIndex - 1);
-        } else {
-            int currentPos = activity.getCurrentCharPosition();
-            idx = forward
-                    ? activity.findText(query, currentPos)
-                    : activity.findTextBackward(query, currentPos);
-        }
-
-        if (targetOccurrence <= 0 && idx < 0) {
-            idx = forward ? activity.findText(query, 0) : activity.findTextBackward(query, activity.fileContent.length() - 1);
-        }
-
-        if (idx >= 0) {
-            activity.activeSearchIndex = idx;
-            activity.activeSearchOrdinal = targetOccurrence > 0 ? targetOccurrence : activity.matchIndexForPosition(query, idx);
-            activity.applySearchHighlight();
-
-            // Search movement should use the same reveal-safe placement as large-TXT
-            // search, including nth-result jumps.  Keep bookmark and saved-position
-            // restore on exact top alignment; only search gets the popup-safe offset.
-            activity.scrollToSearchResultPosition(idx);
-            activity.updatePositionLabel();
-
-            int ordinal = activity.activeSearchOrdinal;
-            if (matchStatus != null) {
-                matchStatus.setText(String.format(Locale.getDefault(), "%d / %d", ordinal, total));
-            }
-
-        } else {
-            activity.activeSearchIndex = -1;
-            activity.activeSearchOrdinal = 0;
-            activity.applySearchHighlight();
-            if (matchStatus != null) matchStatus.setText(String.format(Locale.getDefault(), "0 / %d", total));
-            ShortToast.show(activity, activity.getString(R.string.not_found));
-        }
+        int start = activity.activeSearchIndex >= 0
+                ? activity.activeSearchIndex + (forward ? 1 : -1) : activity.getCurrentCharPosition();
+        enqueueTextSearch(query, forward, start, targetOccurrence, false, matchStatus);
     }
 
 }

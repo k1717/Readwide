@@ -62,7 +62,8 @@ $outputDirectory = Split-Path -Parent $outputPath
 $libarchiveCmake = 'third_party/libarchive-android/library/src/main/jni/external/libarchive/build/cmake'
 $excludedDirectories = @(
     '.git', '.gradle', '.idea', '.cxx', '.externalNativeBuild',
-    '.kotlin', 'build', 'captures'
+    '.kotlin', 'build', 'captures', '.captures', '__pycache__',
+    '.pytest_cache', '.ruff_cache', '.venv', '.vscode'
 )
 $excludedNames = @(
     '.DS_Store', 'Thumbs.db', 'desktop.ini', 'GoogleService-Info.plist',
@@ -72,7 +73,7 @@ $excludedNames = @(
 $excludedSuffixes = @(
     '.aab', '.apk', '.apks', '.ap_', '.bak', '.class', '.der', '.dex',
     '.hprof', '.jks', '.keystore', '.log', '.orig', '.p12', '.pem',
-    '.pfx', '.swp', '.tmp'
+    '.pfx', '.swp', '.tmp', '.iml', '.pyc', '.pyo'
 )
 
 function Get-RelativeSourcePath([string]$FullName) {
@@ -100,6 +101,7 @@ function Test-SourceIncluded([string]$Relative) {
     if ($Relative -eq $outputRelative -or $Relative -eq $temporaryRelative) {
         return $false
     }
+    if ($Relative -match '^(docs|scripts)/(review-|archive-review-)') { return $false }
     $parts = $Relative -split '/'
     $name = $parts[$parts.Length - 1]
     if ($excludedNames -contains $name) {
@@ -134,7 +136,7 @@ function Test-SourceIncluded([string]$Relative) {
 }
 
 $files = @(
-    Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
+    Get-ChildItem -LiteralPath $root -Recurse -File -Force | ForEach-Object {
         $relative = Get-RelativeSourcePath $_.FullName
         if (Test-SourceIncluded $relative) {
             [pscustomobject]@{ Relative = $relative; Source = $_.FullName }
@@ -287,7 +289,14 @@ try {
 }
 
 $outputFile = Get-Item -LiteralPath $outputPath
-$digest = (Get-FileHash -LiteralPath $outputPath -Algorithm SHA256).Hash
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+$hashStream = [System.IO.File]::OpenRead($outputPath)
+try {
+    $digest = [System.BitConverter]::ToString($sha256.ComputeHash($hashStream)).Replace('-', '')
+} finally {
+    $hashStream.Dispose()
+    $sha256.Dispose()
+}
 Write-Output "ZIP=$outputPath"
 Write-Output "FILES=$($files.Count)"
 Write-Output "BYTES=$($outputFile.Length)"

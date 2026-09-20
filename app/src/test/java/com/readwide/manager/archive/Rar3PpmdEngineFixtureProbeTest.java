@@ -28,6 +28,24 @@ import java.util.zip.CRC32;
  * against a caller-provided file when configured.</p>
  */
 public class Rar3PpmdEngineFixtureProbeTest {
+    @Test public void forwardFailure_truncatedSpool() throws Exception {
+        File archive = writeEmbeddedFixture();
+        File spool = temp.newFolder();
+        RarForwardFailureAssertions.truncatedSpool(Rar3PpmdSolidArchiveExtractor.openForwardReader(archive, spool, false), spool);
+    }
+
+    @Test public void forwardFailure_deletionRetry() throws Exception {
+        File archive = writeEmbeddedFixture();
+        File spool = temp.newFolder();
+        RarForwardFailureAssertions.deletionRetry(Rar3PpmdSolidArchiveExtractor.openForwardReader(archive, spool, false), spool);
+    }
+
+    @Test public void forwardFailure_interruptionRetires() throws Exception {
+        File archive = writeEmbeddedFixture();
+        File spool = temp.newFolder();
+        RarForwardFailureAssertions.interruptionRetires(Rar3PpmdSolidArchiveExtractor.openForwardReader(archive, spool, false), spool);
+    }
+
 
     @Rule
     public TemporaryFolder temp = new TemporaryFolder();

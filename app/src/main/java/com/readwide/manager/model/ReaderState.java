@@ -29,6 +29,24 @@ public class ReaderState {
         this.encoding = "UTF-8";
     }
 
+    /** Owned snapshot for deferred persistence; all reference fields are immutable strings. */
+    public ReaderState copy() {
+        ReaderState copy = new ReaderState();
+        copy.filePath = filePath;
+        copy.charPosition = charPosition;
+        copy.scrollY = scrollY;
+        copy.pageNumber = pageNumber;
+        copy.totalPages = totalPages;
+        copy.fileLength = fileLength;
+        copy.lastReadAt = lastReadAt;
+        copy.encoding = encoding;
+        copy.contentAnchorJson = contentAnchorJson;
+        copy.presentationSignature = presentationSignature;
+        copy.anchorTextBefore = anchorTextBefore;
+        copy.anchorTextAfter = anchorTextAfter;
+        return copy;
+    }
+
     public JSONObject toJson() throws JSONException {
         JSONObject obj = new JSONObject();
         obj.put("filePath", filePath);

@@ -709,7 +709,7 @@ final class DocumentFontDialogController {
     private void refreshCurrentDocumentFont() {
         activity.clearDocumentEdgeArm();
         if (activity.hasValidCurrentDocumentPage()) {
-            activity.showPage(activity.currentPage, 0);
+            activity.reloadCurrentDocumentPreservingPosition();
         }
     }
 

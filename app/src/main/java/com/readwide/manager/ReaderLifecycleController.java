@@ -13,7 +13,7 @@ final class ReaderLifecycleController {
     }
 
     void onSaveInstanceState(@NonNull Bundle outState) {
-        if (!activity.backgroundTextMemoryReleased) {
+        if (activity.textContentReadyForPersistence && !activity.backgroundTextMemoryReleased) {
             activity.cacheLoadedTextSnapshot();
             outState.putBoolean(ReaderActivity.STATE_RESTORE_FROM_MEMORY, true);
         } else {

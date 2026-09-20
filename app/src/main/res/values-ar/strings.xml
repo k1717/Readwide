@@ -690,7 +690,7 @@
     <string name="archive_support_boundary_title">حدود دعم الأرشيفات</string>
     <string name="archive_support_boundary_rar">دعم RAR محدود ويعتمد على طريقة الضغط والتشفير والتقسيم إلى أجزاء. لا تُدعم برامج VM المخصصة ولا تدفقات LZ/PPMd المختلطة إذا كانت مشفّرة أو مقسّمة.</string>
     <string name="archive_support_boundary_zip">يدعم ZIP/CBZ/ZIPX طريقتي Store وDeflate العاديتين وملفات ZIP المشفرة عبر Zip4j. ويدعم WinZip AES ZIPX أيضًا Deflate64 وBZip2 وLZMA وXZ، بالإضافة إلى PPMd وZstandard عبر libarchive 3.8.9. كما تدعم وحدة الترميز الأصلية الحرة المضمّنة AES ZIPX الذي يستخدم JPEG أو WavPack.</string>
-    <string name="archive_support_boundary_7z">يدعم 7z/CB7 طرق الضغط الشائعة وبعض تركيبات PPMd/BCJ2، بما فيها الأرشيفات المشفّرة والمقسّمة المتوافقة. بعض التركيبات غير مدعومة، وقد يستغرق فتح الأرشيفات ذات الضغط المتصل وقتًا أطول.</string>
+    <string name="archive_support_boundary_7z">يدعم 7z/CB7 طرق الضغط الشائعة وبعض تركيبات PPMd/BCJ2/ARM64/RISC-V، بما فيها الأرشيفات المشفّرة والمقسّمة المتوافقة. بعض التركيبات غير مدعومة، وقد يستغرق فتح الأرشيفات ذات الضغط المتصل وقتًا أطول.</string>
     <string name="archive_support_boundary_alz">يدعم ALZ طرق Store وDeflate وBZip2 وبعض الإدخالات بأسلوب ZipCrypto. أما المتغيرات المقسّمة أو المشفّرة أو كثيرة الواصفات أو غير المعتادة من ESTsoft فتبقى ضمن أفضل محاولة.</string>
     <string name="archive_support_boundary_egg">يدعم EGG طرق Store وDeflate وBZip2 وAZO وLZMA، والأرشيفات المقسّمة، والأرشيفات غير المشفّرة ذات الضغط المتصل، وإدخالات ZipCrypto/AES المتوافقة دون ضغط متصل. لا يُدعم تشفير LEA ولا الأرشيفات المشفّرة ذات الضغط المتصل.</string>
     <string name="archive_support_boundary_generic">يستخدم هذا الأرشيف ميزة خارج حدود الاستخراج المدعومة حاليًا.</string>

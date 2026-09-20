@@ -6,12 +6,16 @@ import java.util.Arrays;
 
 final class RarCanonicalHuffman {
     private static final int MAX_BITS = 15;
+    private static final int LOOKUP_BITS = 8;
 
     private final int[] symbolsByCode;
     private final int[] firstCodeByLength;
     private final int[] firstSymbolIndexByLength;
     private final int[] symbolCountByLength;
     private final int maxLength;
+    private final int lookupBits;
+    private final int[] lookupSymbols;
+    private final byte[] lookupLengths;
 
     private RarCanonicalHuffman(int[] symbolsByCode,
                                 int[] firstCodeByLength,
@@ -21,6 +25,9 @@ final class RarCanonicalHuffman {
         this.firstCodeByLength = firstCodeByLength;
         this.firstSymbolIndexByLength = firstSymbolIndexByLength;
         this.maxLength = maxLength;
+        this.lookupBits = Math.min(LOOKUP_BITS, maxLength);
+        this.lookupSymbols = new int[1 << lookupBits];
+        this.lookupLengths = new byte[1 << lookupBits];
         this.symbolCountByLength = new int[MAX_BITS + 1];
         int nextIndex = symbolsByCode.length;
         for (int length = MAX_BITS; length > 0; length--) {
@@ -28,6 +35,17 @@ final class RarCanonicalHuffman {
             if (first >= 0) {
                 symbolCountByLength[length] = nextIndex - first;
                 nextIndex = first;
+            }
+        }
+        // Replicate short codes over their unused suffix bits. Zero length means
+        // a longer/invalid prefix: retain the checked canonical fallback below.
+        for (int length = 1; length <= lookupBits; length++) {
+            int first = firstSymbolIndexByLength[length];
+            for (int index = 0; index < symbolCountByLength[length]; index++) {
+                int prefix = (firstCodeByLength[length] + index) << (lookupBits - length);
+                int end = prefix + (1 << (lookupBits - length));
+                Arrays.fill(lookupSymbols, prefix, end, symbolsByCode[first + index]);
+                Arrays.fill(lookupLengths, prefix, end, (byte) length);
             }
         }
     }
@@ -98,6 +116,16 @@ final class RarCanonicalHuffman {
 
     int decode(RarBitInput input) throws IOException {
         if (maxLength == 0) throw new IOException("RAR Huffman decode from empty table");
+        // Never require a full lookup prefix at a valid short-code stream tail.
+        // RarBitInput retains prefetched bytes across aligned PPMd transitions.
+        if (input.remainingBits() >= lookupBits) {
+            int prefix = input.peekBits(lookupBits);
+            int length = lookupLengths[prefix];
+            if (length != 0) {
+                input.skipBits(length);
+                return lookupSymbols[prefix];
+            }
+        }
         int code = 0;
         for (int length = 1; length <= maxLength; length++) {
             try {

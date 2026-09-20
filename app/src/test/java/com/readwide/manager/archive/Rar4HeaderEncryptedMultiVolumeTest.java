@@ -75,18 +75,51 @@ public class Rar4HeaderEncryptedMultiVolumeTest {
         }
     }
 
+    @Test
+    public void corruptIntermediateCrcPreservesExistingOutput() throws Exception {
+        verifyCorruptIntermediate(true);
+    }
+
+    @Test
+    public void corruptIntermediateCrcRemovesNewPartialOutput() throws Exception {
+        verifyCorruptIntermediate(false);
+    }
+
+    private void verifyCorruptIntermediate(boolean existing) throws Exception {
+        byte[] original = "do not overwrite me".getBytes(StandardCharsets.UTF_8);
+        char[] password = "chain-pass".toCharArray();
+        File archive = buildSplitChain("bad-crc", "entry.txt", original, password, true);
+        File out = new File(tempFolder.getRoot(), "protected.txt");
+        if (existing) Files.write(out.toPath(), original);
+        try {
+            RarArchiveReader.extractSingleEntry(archive, "entry.txt", out, password);
+            fail("Corrupt intermediate packed CRC must not be ignored");
+        } catch (java.io.IOException expected) {
+            assertTrue(expected.getMessage().contains("checksum") || expected.getCause() != null);
+            if (existing) assertArrayEquals(original, Files.readAllBytes(out.toPath()));
+            else org.junit.Assert.assertFalse(out.exists());
+        }
+    }
+
     private File buildSplitChain(String prefix,
                                  String entryName,
                                  byte[] payload,
                                  char[] password) throws Exception {
+        return buildSplitChain(prefix, entryName, payload, password, false);
+    }
+
+    private File buildSplitChain(String prefix, String entryName, byte[] payload,
+                                 char[] password, boolean corruptIntermediate) throws Exception {
         int cut = Math.max(1, payload.length / 2);
         byte[] firstPart = Arrays.copyOfRange(payload, 0, cut);
         byte[] secondPart = Arrays.copyOfRange(payload, cut, payload.length);
         byte[] name = entryName.getBytes(StandardCharsets.UTF_8);
+        // Non-final volumes checksum their packed slice; the final volume
+        // checksums the complete decoded file. Header encryption does not change this.
         long crc = crc32(payload);
         File first = new File(tempFolder.getRoot(), prefix + ".rar");
         File second = new File(tempFolder.getRoot(), prefix + ".r00");
-        writeVolume(first, password, salt((byte) 0x11), name, firstPart, payload.length, crc, RAR4_FILE_SPLIT_AFTER);
+        writeVolume(first, password, salt((byte) 0x11), name, firstPart, payload.length, crc32(firstPart) ^ (corruptIntermediate ? 1L : 0L), RAR4_FILE_SPLIT_AFTER);
         writeVolume(second, password, salt((byte) 0x22), name, secondPart, payload.length, crc, RAR4_FILE_SPLIT_BEFORE);
         return first;
     }

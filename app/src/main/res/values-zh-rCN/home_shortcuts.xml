@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_shortcuts_title">固定文件夹</string>
+    <string name="home_shortcuts_expand">展开固定文件夹</string>
+    <string name="home_shortcuts_collapse">收起固定文件夹</string>
+    <string name="home_shortcuts_manage">管理</string>
+    <string name="home_shortcuts_empty">在文件夹菜单中选择“添加快捷方式”。</string>
+    <string name="home_shortcut_unavailable">不可用</string>
+    <string name="home_shortcut_unavailable_hint">文件夹不可用。请重新连接存储设备或检查访问权限。快捷方式已保留。</string>
+    <string name="home_shortcut_remove_description">移除快捷方式：%1$s</string>
+</resources>

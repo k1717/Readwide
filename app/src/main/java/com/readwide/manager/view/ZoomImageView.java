@@ -53,6 +53,7 @@ public class ZoomImageView extends AppCompatImageView {
     private boolean panGestureStarted;
     private boolean multiTouchGesture;
     private long immediateTapHandledDownTime = Long.MIN_VALUE;
+    private boolean zoomDoubleTapSequence;
     private int imageWidth;
     private int imageHeight;
     private Callbacks callbacks;
@@ -99,7 +100,8 @@ public class ZoomImageView extends AppCompatImageView {
 
             @Override
             public boolean onSingleTapConfirmed(@NonNull MotionEvent e) {
-                if (e.getDownTime() == immediateTapHandledDownTime) return true;
+                if (zoomDoubleTapSequence
+                        || e.getDownTime() == immediateTapHandledDownTime) return true;
                 if (callbacks != null) callbacks.onSingleTap(normalizedTapX(e));
                 return true;
             }
@@ -110,6 +112,9 @@ public class ZoomImageView extends AppCompatImageView {
                     handleImmediatePageTap(e);
                     return true;
                 }
+                // Resetting zoom changes the scale before the second finger-up.
+                // Keep that UP inside this gesture so it cannot become a page tap.
+                zoomDoubleTapSequence = true;
                 stopImageFling();
                 if (willDoubleTapZoomIn() && callbacks != null) callbacks.onZoomRequested();
                 toggleZoom(e.getX(), e.getY());
@@ -184,6 +189,8 @@ public class ZoomImageView extends AppCompatImageView {
 
     private boolean shouldHandleTapImmediately(@NonNull MotionEvent e) {
         return callbacks != null
+                && !zoomDoubleTapSequence
+                && getCurrentScale() <= defaultScale + getDoubleTapBaseEpsilon()
                 && !scaleDetector.isInProgress()
                 && e.getPointerCount() == 1
                 && callbacks.shouldHandleTapImmediately(normalizedTapX(e));
@@ -244,6 +251,10 @@ public class ZoomImageView extends AppCompatImageView {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            // GestureDetector can report a double tap during this DOWN dispatch.
+            zoomDoubleTapSequence = false;
+        }
         gestureDetector.onTouchEvent(event);
         scaleDetector.onTouchEvent(event);
 

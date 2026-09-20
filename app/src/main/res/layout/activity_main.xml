@@ -30,8 +30,9 @@
             <androidx.appcompat.widget.Toolbar
                 android:id="@+id/toolbar"
                 android:layout_width="match_parent"
-                android:layout_height="?attr/actionBarSize"
+                android:layout_height="48dp"
                 android:background="?attr/colorPrimary"
+                app:titleTextAppearance="@style/TextAppearance.TextView.MainToolbar.Title"
                 app:titleTextColor="?attr/colorOnPrimary" />
 
         </com.google.android.material.appbar.AppBarLayout>
@@ -88,17 +89,20 @@
             android:background="?attr/colorSurface"
             android:orientation="vertical">
 
+            <include layout="@layout/home_shortcuts_section" />
+
             <LinearLayout
                 android:id="@+id/recent_header_row"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:minHeight="42dp"
                 android:background="?attr/colorSurface"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
                 android:paddingStart="16dp"
-                android:paddingTop="10dp"
+                android:paddingTop="4dp"
                 android:paddingEnd="8dp"
-                android:paddingBottom="10dp">
+                android:paddingBottom="4dp">
 
                 <TextView
                     android:id="@+id/recent_section_title"
@@ -107,7 +111,7 @@
                     android:layout_weight="1"
                     android:text="@string/recently_read"
                     android:textColor="?attr/colorOnSurface"
-                    android:textSize="16sp"
+                    android:textSize="15sp"
                     android:textStyle="bold" />
 
                 <TextView

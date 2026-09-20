@@ -1,5 +1,59 @@
 # Changelog
 
+## Readwide 1.0.19 - 2026-09-19
+
+### Home and settings
+
+- The EPUB font selector in Settings uses the shared rounded dialog and current theme colors.
+- Added tap-to-expand pinned folders while keeping horizontal scrolling. Reduced the space used by Home headings and aligned the disclosure arrow with translated titles.
+- Fixed repeated flashing and unexpected section closure when switching themes.
+- Reset and backup restore now replace stale control values and color drafts. Canceling button-order edits preserves the saved order. Delayed dropdown callbacks no longer overwrite imported settings after rotation.
+- Theme drafts and PIN setup survive rotation. The PIN screen scrolls in short windows, and canceled setup restores the lock switch.
+- Theme save/delete failures remain open for retry. Opening View settings from a TXT reader preserves its file-specific settings.
+
+### EPUB and document reading
+
+- Markdown read-aloud locates its starting passage with less repeated scanning.
+- Document search creates fewer temporary objects. Markdown scrolling combines pending position updates and ignores results from an earlier page load.
+- Reduced repeated scanning when searching document text containing many ampersands.
+- Preserved reading positions through rotation, font/theme changes, spacing adjustments, and search cleanup.
+- Fixed missing opening characters in vertical Japanese bookmark previews and brought search matches in later columns into view. Rapid searches across chapters keep the result counter and displayed passage in sync.
+- Read-aloud follows vertical text and highlights the spoken occurrence of repeated sentences, including across chapter changes.
+- Corrected links and double-tap zoom reset in two-page EPUB view. A delayed error from a previous document no longer closes the current book.
+- Read-aloud media buttons no longer act twice per press. Play and Pause keep their requested state, and pausing cancels a pending restart.
+
+### PDF and image reading
+
+- PDF search highlights look up the current page without scanning every result in the document.
+- Kept unrestricted rapid PDF taps at fit size. Zoomed double taps reset the page, and outward edge swipes turn pages without interrupting normal panning. Page labels keep the selected target while the slider is held.
+- Prioritized visible and nearby PDF pages, reused pending renders, and discarded obsolete work. Lower-resolution cached images retain the intended page size and zoom range.
+- Continuous PDF bookmarks and reading positions retain the visible page and gaps. Search updates no longer recenter a manually panned page.
+- Image double-tap reset no longer turns a page, and loading preserves an active page-slider drag.
+- Document, PDF, and image viewers apply Keep screen on. TXT brightness refreshes after settings reset or import.
+
+### TXT, backups, and files
+
+- Selecting many files scans the list once. Sorting reuses the file details already loaded in the background.
+- Fixed TXT search count/navigation differences, previous-result wrapping, and dense-result handling.
+- TXT reloads use the current reading position instead of an old bookmark. Imported display rules refresh correctly, invalid replacements no longer block loading, and large files reuse prepared rules. Opening another TXT file no longer jumps to the previous file's position, and unfinished loads preserve saved positions.
+- TXT rule editing preserves per-file targets, validates expressions, and shows the existing 50-rule limit.
+- Backup import rejects settings with incorrect data types before replacement and reports save failures. Background backup operations retain confirmation and results across rotation; saved JSON can recover from its backup copy.
+- Copy, move, and delete handle cancellation and progress consistently without following symbolic-link targets. Natural sorting handles digits from different languages.
+
+### Archives
+
+- Archive filtering sorts only the matching entries while keeping the existing folder and image order. Long archive paths require less copying when preparing previews and image order.
+- Improved plain RAR4 extraction and image browsing for independent stored files alongside supported compressed runs, including empty folders.
+- Added 7z ARM64/RISC-V filters and reduced unnecessary dictionary allocation for small LZMA/LZMA2 streams.
+- Read concatenated GZIP, BZip2, XZ, and framed-LZ4 members, including TAR data spanning compressed members.
+- Strengthened size/checksum and temporary-file checks across RAR, 7z, ZIP/ZIPX, ALZ, EGG, and TAR. Failed writes protect the current output, and failed folder restoration retains the original backup and reports its path.
+- Existing limits remain: encrypted/split mixed RAR, stored files used as solid history, custom RAR VM programs, unsupported 7z filter combinations, and EGG LEA/encrypted-solid archives.
+
+### Maintenance
+
+- Updated AppCompat, ConstraintLayout, SwipeRefreshLayout, the HWP library, and the test-only Zstandard library.
+- Version metadata: `1.0.19` / `10019`.
+
 ## Readwide 1.0.18 - 2026-09-11
 
 ### Archive reader state and comic order
@@ -60,7 +114,7 @@
 ### Release boundary
 
 - Version metadata is `1.0.18` / `10018`. No permission or runtime dependency changed.
-- Complete archive-format compatibility and measured speedups are not claimed. Remaining support boundaries and validation status are recorded in [current source status](docs/CURRENT_SOURCE_STATUS_1_0_18.md) and [release readiness](docs/RELEASE_READINESS_1_0_18.md).
+- Complete archive-format compatibility and measured speedups are not claimed. Remaining support boundaries and validation status are recorded in [release notes](docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_18.md) and [release build instructions](RELEASE_BUILD.md).
 
 ## Readwide 1.0.17 - 2026-08-14
 

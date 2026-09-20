@@ -138,6 +138,12 @@ final class SevenZPpmd7Decoder {
                                     long unpackSize) throws IOException {
         if (packed == null) throw new NullPointerException("packed");
         if (unpackSize < 0) throw new IOException("7z PPMd output size out of range");
+        int[] options = validateProperties(properties);
+        return new DecodedStream(packed, options[0], options[1], unpackSize);
+    }
+
+    /** Validates the existing model guard without constructing or reading a decoder. */
+    static int[] validateProperties(@Nullable byte[] properties) throws IOException {
         if (properties == null || properties.length < 5) {
             throw new IOException("7z PPMd properties missing");
         }
@@ -151,7 +157,7 @@ final class SevenZPpmd7Decoder {
             throw new ArchiveSupport.UnsupportedArchiveFeatureException(
                     "7z PPMd memory size unsupported: " + mem);
         }
-        return new DecodedStream(packed, order, (int) mem, unpackSize);
+        return new int[]{order, (int) mem};
     }
 
     private static final class DecodedStream extends InputStream {

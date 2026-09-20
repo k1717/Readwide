@@ -10,7 +10,7 @@ import java.io.IOException;
 import java.util.List;
 
 /**
- * Archive-wide wrapper for the deliberately narrow first-party RAR3/RAR4 classic-LZ decoder.
+ * Scoped first-party RAR3/RAR4 extraction and shared execution of plain RAR4 decode plans.
  *
  * <p>libarchive remains the primary backend for normal compressed RAR. This class is used only
  * after the primary backend and the rewrite helpers cannot handle an archive. Keeping sequencing
@@ -21,7 +21,8 @@ final class Rar3FirstPartyArchiveExtractor {
 
     /**
      * Native remains primary. The extended plain, single-volume fallback requires known CRCs,
-     * a non-solid primer and explicit file boundaries. Stored-member solid runs stay excluded.
+     * a non-solid primer and explicit file boundaries for checked runs. Isolated classic-LZ
+     * files retain size/CRC termination. Stored files cannot prime a following solid entry.
      */
     static boolean tryExtractArchiveLimitedFallback(@NonNull List<RarArchiveReader.RarEntry> entries,
                                                     @NonNull File targetDir,
@@ -29,19 +30,22 @@ final class Rar3FirstPartyArchiveExtractor {
                                                     @Nullable FileOperationProgress progress,
                                                     @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
         if (password != null && password.length > 0) return false;
-        if (isArchiveLimitedFallbackAllowed(entries)) {
-            return tryExtractArchive(entries, targetDir, password, progress, entryProgress);
-        }
-        if (!isCheckedArchiveAllowed(entries)) return false;
-        Rar3SolidState state = new Rar3SolidState();
-        for (RarArchiveReader.RarEntry entry : entries) {
-            if (entry == null || entry.directory) continue;
-            if (!entry.solid) state.reset();
+        Rar3DecodePlan plan = Rar3DecodePlan.forArchive(entries);
+        if (plan == null) return false;
+        if (progress != null) progress.setTotalBytes(plan.totalUnpackedBytes);
+        PlannedDecoder decoder = new PlannedDecoder(plan);
+        for (int i = 0; i < plan.size(); i++) {
+            RarArchiveReader.RarEntry entry = plan.step(i).entry;
             if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
-            if (entryProgress != null) entryProgress.onFile(entry.path);
             File out = RarArchiveReader.resolveOutput(targetDir, entry.path);
             if (out == null) throw new IOException("Invalid RAR output path");
-            extractChecked(entry, state, out, progress);
+            if (entry.directory) {
+                if (entryProgress != null) entryProgress.onDirectory(entry.path);
+            } else {
+                if (entryProgress != null) entryProgress.onFile(entry.path);
+                else if (progress != null) progress.setDetail(entry.path);
+            }
+            decoder.extractNext(out, progress);
         }
         return true;
     }
@@ -50,68 +54,78 @@ final class Rar3FirstPartyArchiveExtractor {
                                                        @NonNull List<RarArchiveReader.RarEntry> entries,
                                                        @NonNull File outFile,
                                                        @Nullable FileOperationProgress progress) throws IOException {
-        if (isLimitedNonSolidClassicLzFallbackCandidate(target)) {
-            return tryExtractSingleEntry(target, entries, outFile, progress);
-        }
-        List<RarArchiveReader.RarEntry> sequence = checkedSequence(entries, target);
-        if (sequence == null) return false;
-        Rar3SolidState state = new Rar3SolidState();
-        for (RarArchiveReader.RarEntry entry : sequence) {
-            extractChecked(entry, state, entry == target ? outFile : null, progress);
+        Rar3DecodePlan plan = Rar3DecodePlan.forTarget(entries, target);
+        if (plan == null) return false;
+        PlannedDecoder decoder = new PlannedDecoder(plan);
+        for (int i = 0; i < plan.size(); i++) {
+            decoder.extractNext(i == plan.size() - 1 ? outFile : null, progress);
         }
         return true;
     }
 
-    private static boolean isCheckedCandidate(RarArchiveReader.RarEntry entry) {
-        return entry != null && entry.rarVersion == 4 && isFirstPartyCompressedCandidate(entry)
-                && entry.sourceArchive != null && entry.dataCrc >= 0
-                && entry.unpackedSize >= 0 && entry.packedSize > 0;
-    }
+    /** Shared ordered executor for bulk, target-only and forward-reading plans. */
+    static final class PlannedDecoder {
+        private final Rar3DecodePlan plan;
+        private Rar3SolidState state;
+        private int position;
+        private boolean retired;
+        PlannedDecoder(Rar3DecodePlan plan) { this.plan = plan; }
 
-    private static boolean independentStart(RarArchiveReader.RarEntry entry) {
-        if (!isCheckedCandidate(entry) || entry.solid) return false;
-        Rar3PpmdBlockProbe.Result probe = Rar3PpmdBlockProbe.probe(entry);
-        return probe.isClassicLz() || (probe.isPpmd() && (probe.rawFlags & 0x2000) != 0);
-    }
-
-    private static boolean isCheckedArchiveAllowed(List<RarArchiveReader.RarEntry> entries) {
-        boolean primed = false;
-        for (RarArchiveReader.RarEntry entry : entries) {
-            if (entry == null || entry.directory) continue;
-            if (!isCheckedCandidate(entry)) return false;
-            if (!entry.solid) { if (!independentStart(entry)) return false; primed = true; }
-            else if (!primed) return false;
+        void extractNext(File out, FileOperationProgress progress) throws IOException {
+            if (retired || position >= plan.size()) throw new IOException("RAR decode plan is exhausted or retired");
+            try {
+                if (Thread.currentThread().isInterrupted() || (progress != null && !progress.checkpoint())) {
+                    throw new IOException("RAR extraction cancelled");
+                }
+                Rar3DecodePlan.Step step = plan.step(position);
+                RarArchiveReader.RarEntry entry = step.entry;
+                Rar3UnpackContext context;
+                switch (step.action) {
+                    case DIRECTORY:
+                        if (out != null && !out.isDirectory() && !out.mkdirs()) throw new IOException("Cannot create RAR output directory");
+                        position++;
+                        return;
+                    case STORED:
+                        state = null;
+                        if (out == null) throw new IOException("Stored RAR verification requires a destination");
+                        RarArchiveReader.extractStoredEntry(entry, out, null, plan.entries(), progress);
+                        position++;
+                        return;
+                    case INDEPENDENT_LZ:
+                        state = null;
+                        context = Rar3UnpackContext.forEntry(entry.sourceArchive, entry.dataOffset,
+                                entry.packedSize, entry.unpackedSize, entry.method, false, false, false, false, entry.dataCrc);
+                        break;
+                    case START_CHECKED:
+                        state = new Rar3SolidState();
+                        context = solidSequenceContext(entry, state);
+                        context.requireFileBoundary();
+                        break;
+                    case CONTINUE_CHECKED:
+                        if (state == null) throw new IOException("Missing checked RAR solid primer");
+                        context = solidSequenceContext(entry, state);
+                        context.requireFileBoundary();
+                        break;
+                    default:
+                        throw new IOException("Unknown RAR plan action");
+                }
+                if (out == null) Rar3Unpacker.unpackToDiscard(context, progress);
+                else {
+                    try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(out)) {
+                        Rar3Unpacker.unpack(context, out, progress);
+                        guard.commit();
+                    }
+                }
+                position++;
+            } catch (IOException | RuntimeException | Error failure) {
+                retire();
+                throw failure;
+            }
         }
-        return primed;
+        void retire() { retired = true; state = null; }
     }
 
-    /** Never infer a missing primer or probe table-less Huffman data as a mode header. */
-    private static List<RarArchiveReader.RarEntry> checkedSequence(
-            List<RarArchiveReader.RarEntry> entries, RarArchiveReader.RarEntry target) {
-        int index = entries.indexOf(target);
-        if (index < 0 || !isCheckedCandidate(target)) return null;
-        java.util.LinkedList<RarArchiveReader.RarEntry> sequence = new java.util.LinkedList<>();
-        for (int i = index; i >= 0; i--) {
-            RarArchiveReader.RarEntry entry = entries.get(i);
-            if (entry == null || entry.directory) continue;
-            if (!isCheckedCandidate(entry)) return null;
-            sequence.addFirst(entry);
-            if (!entry.solid) return independentStart(entry) ? sequence : null;
-        }
-        return null;
-    }
-
-    private static void extractChecked(RarArchiveReader.RarEntry entry, Rar3SolidState state,
-            File out, FileOperationProgress progress) throws IOException {
-        Rar3UnpackContext context = solidSequenceContext(entry, state);
-        context.requireFileBoundary();
-        if (out == null) { Rar3Unpacker.unpackSolidPrimerToDiscard(context, progress); return; }
-        try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(out)) {
-            Rar3Unpacker.unpack(context, out, progress);
-            guard.commit();
-        }
-    }
-
+    /** Legacy diagnostic/test harness; production fallback uses the planned entry points above. */
     static boolean tryExtractArchive(@NonNull List<RarArchiveReader.RarEntry> entries,
                                      @NonNull File targetDir,
                                      @Nullable char[] password,
@@ -138,7 +152,9 @@ final class Rar3FirstPartyArchiveExtractor {
             if (out == null) return false;
             sawEntry = true;
             if (entry.directory || entry.path.endsWith("/")) {
-                if (!out.exists() && !out.mkdirs()) return false;
+                if (!out.isDirectory() && !out.mkdirs()) {
+                    throw new IOException("Cannot create RAR output directory");
+                }
                 continue;
             }
 
@@ -172,6 +188,7 @@ final class Rar3FirstPartyArchiveExtractor {
         return sawEntry;
     }
 
+    /** Legacy diagnostic probe; not the application's limited-fallback admission gate. */
     static boolean tryExtractSingleEntry(@NonNull RarArchiveReader.RarEntry target,
                                          @NonNull List<RarArchiveReader.RarEntry> entries,
                                          @NonNull File outFile,
@@ -206,43 +223,16 @@ final class Rar3FirstPartyArchiveExtractor {
     }
 
     static boolean isLimitedNonSolidClassicLzFallbackCandidate(@NonNull RarArchiveReader.RarEntry entry) {
-        if (!isCheckedCandidate(entry) || entry.solid) return false;
+        if (!Rar3DecodePlan.isCompressedCandidate(entry) || entry.solid) return false;
         // Preserve the existing size-terminated non-solid route. The extended route
         // below accepts PPMd starts/solid sequences only with explicit file boundaries.
         Rar3PpmdBlockProbe.Result probe = Rar3PpmdBlockProbe.probe(entry);
         return probe.isClassicLz();
     }
 
-    private static boolean hasLimitedNonSolidClassicLzFallbackCandidate(@NonNull List<RarArchiveReader.RarEntry> entries) {
-        for (RarArchiveReader.RarEntry entry : entries) {
-            if (entry != null && isLimitedNonSolidClassicLzFallbackCandidate(entry)) return true;
-        }
-        return false;
-    }
-
-    static boolean isArchiveLimitedFallbackAllowed(@NonNull List<RarArchiveReader.RarEntry> entries) {
-        boolean sawLimitedCompressedCandidate = false;
-        for (RarArchiveReader.RarEntry entry : entries) {
-            if (entry == null || entry.directory) continue;
-            if (isLimitedNonSolidClassicLzFallbackCandidate(entry)) {
-                sawLimitedCompressedCandidate = true;
-                continue;
-            }
-            if (isPlainRar3Or4StoredMemberForArchiveLimitedFallback(entry)) continue;
-            return false;
-        }
-        return sawLimitedCompressedCandidate;
-    }
-
-    private static boolean isPlainRar3Or4StoredMemberForArchiveLimitedFallback(
-            @NonNull RarArchiveReader.RarEntry entry) {
-        return entry.rarVersion < 5
-                && !entry.directory
-                && !entry.encrypted()
-                && !entry.solid
-                && !entry.splitBefore
-                && !entry.splitAfter
-                && RarFeatureClassifier.isRar3Or4StoredMethod(entry.method);
+    static boolean isArchiveLimitedFallbackAllowed(@NonNull List<RarArchiveReader.RarEntry> entries) throws IOException {
+        Rar3DecodePlan plan = Rar3DecodePlan.forArchive(entries);
+        return plan != null && plan.independentLzOnly;
     }
 
     private static boolean hasCandidate(@NonNull List<RarArchiveReader.RarEntry> entries) {

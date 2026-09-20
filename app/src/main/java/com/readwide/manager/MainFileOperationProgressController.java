@@ -18,11 +18,13 @@ import androidx.annotation.Nullable;
 
 import com.readwide.manager.util.FileOperationProgress;
 import com.readwide.manager.util.FileUtils;
+import com.readwide.manager.util.LatestValueDispatcher;
 
 final class MainFileOperationProgressController {
     private final MainActivity activity;
     @Nullable private android.app.Dialog dialog;
     @Nullable private FileOperationProgress activeProgress;
+    @Nullable private LatestValueDispatcher<FileOperationProgress.Snapshot> progressUpdates;
 
     MainFileOperationProgressController(@NonNull MainActivity activity) {
         this.activity = activity;
@@ -190,11 +192,19 @@ final class MainFileOperationProgressController {
         addAction(actions, background);
         addAction(actions, cancel);
 
-        progress.setListener(snapshot ->
-                activity.fileSearchHandler.post(() -> {
-                    if (activity.activityDestroyed) return;
-                    updateProgressViews(snapshot, detail, detailCount, folder, folderCount, percent, bytes, bar, pause);
-                }));
+        LatestValueDispatcher<FileOperationProgress.Snapshot> updates = new LatestValueDispatcher<>(
+                new LatestValueDispatcher.Scheduler() {
+                    @Override public boolean post(Runnable task) { return activity.fileSearchHandler.postDelayed(task, 50L); }
+                    @Override public void remove(Runnable task) { activity.fileSearchHandler.removeCallbacks(task); }
+                }, snapshot -> {
+                    if (activity.activityDestroyed || activeProgress != progress) return;
+                    // Worker and UI notifications can arrive out of order. Read
+                    // the current model at delivery so a late callback cannot
+                    // repaint older byte counts or undo the shown pause state.
+                    updateProgressViews(progress.snapshot(), detail, detailCount, folder, folderCount, percent, bytes, bar, pause);
+                });
+        progressUpdates = updates;
+        progress.setListener(updates::offer);
 
         pause.setOnClickListener(v -> progress.setPaused(!progress.isPaused()));
         background.setOnClickListener(v -> {
@@ -221,7 +231,14 @@ final class MainFileOperationProgressController {
             dismissActiveDialogOnly();
             activity.updateMainOverflowButtonVisibility();
         });
-        dialog.setOnDismissListener(d -> activity.updateMainOverflowButtonVisibility());
+        dialog.setOnDismissListener(d -> {
+            updates.close();
+            if (progressUpdates == updates) {
+                progressUpdates = null;
+                if (activeProgress == progress) progress.setListener(null);
+            }
+            if (!activity.activityDestroyed) activity.updateMainOverflowButtonVisibility();
+        });
         dialog.show();
         android.view.Window postShowWindow = dialog.getWindow();
         if (postShowWindow != null) {
@@ -410,6 +427,7 @@ final class MainFileOperationProgressController {
 
     private void dismissActiveDialogOnly() {
         if (activeProgress != null) activeProgress.setListener(null);
+        if (progressUpdates != null) { progressUpdates.close(); progressUpdates = null; }
         if (dialog != null) {
             try {
                 dialog.dismiss();

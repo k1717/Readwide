@@ -373,6 +373,7 @@ public class ImageReaderActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         if (isFinishing()) return;
+        ViewerWindowPreferences.applyKeepScreenOn(getWindow(), prefs.getKeepScreenOn());
         applyImageSystemBarVisibility();
     }
 

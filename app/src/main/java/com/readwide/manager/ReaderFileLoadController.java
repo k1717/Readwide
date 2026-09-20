@@ -25,6 +25,7 @@ final class ReaderFileLoadController {
     }
 
     void loadFileFromIntent(@NonNull Intent sourceIntent) {
+        activity.textContentReadyForPersistence = false;
         activity.clearPendingToolbarSeekJump();
         String path = sourceIntent.getStringExtra(ReaderActivity.EXTRA_FILE_PATH);
         String uriStr = sourceIntent.getStringExtra(ReaderActivity.EXTRA_FILE_URI);
@@ -41,6 +42,7 @@ final class ReaderFileLoadController {
         activity.loadingWindowPartitionJumpGeneration = -1;
         activity.clearLargeTextPartitionCache();
         activity.activityDestroyed = false;
+        activity.clearTextSearchWork();
         if (activity.readerView != null && !samePathReload) {
             activity.readerView.setAlpha(0f);
         }

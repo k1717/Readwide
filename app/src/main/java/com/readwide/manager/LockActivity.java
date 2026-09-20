@@ -4,6 +4,8 @@ import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -11,6 +13,7 @@ import android.widget.EditText;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.lifecycle.ViewModelProvider;
 
 import com.readwide.manager.util.PrefsManager;
 
@@ -28,7 +31,7 @@ public class LockActivity extends AppCompatActivity {
     private TextView messageText;
     private PrefsManager prefs;
     private int mode;
-    private String firstEntry; // for PIN confirmation during set
+    private LockEntryViewModel entryState;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -45,18 +48,7 @@ public class LockActivity extends AppCompatActivity {
         applyLockTheme();
 
         mode = getIntent().getIntExtra(EXTRA_MODE, MODE_UNLOCK);
-
-        switch (mode) {
-            case MODE_SET_PIN:
-                messageText.setText(R.string.lock_enter_new_pin);
-                break;
-            case MODE_CHANGE_PIN:
-                messageText.setText(R.string.lock_enter_current_pin);
-                break;
-            default:
-                messageText.setText(R.string.lock_enter_pin_to_unlock);
-                break;
-        }
+        bindEntryState();
 
         btnConfirm.setOnClickListener(v -> onConfirm());
 
@@ -91,6 +83,29 @@ public class LockActivity extends AppCompatActivity {
         }
     }
 
+    private void bindEntryState() {
+        entryState = new ViewModelProvider(this).get(LockEntryViewModel.class);
+        entryState.initialize(mode);
+        // PINs and verification steps must not enter the saved hierarchy. A new
+        // process starts fresh; only a retained in-memory model resumes the flow.
+        pinInput.setSaveFromParentEnabled(false);
+        messageText.setSaveFromParentEnabled(false);
+        renderEntryState();
+        pinInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable text) {
+                entryState.setInput(text == null ? "" : text.toString());
+            }
+        });
+    }
+
+    private void renderEntryState() {
+        pinInput.setText(entryState.getInput());
+        pinInput.setSelection(pinInput.length());
+        messageText.setText(entryState.getMessageResId());
+    }
+
     private void applyLockTheme() {
         if (prefs == null) return;
 
@@ -105,6 +120,8 @@ public class LockActivity extends AppCompatActivity {
         ViewGroup content = findViewById(android.R.id.content);
         View root = content != null && content.getChildCount() > 0 ? content.getChildAt(0) : null;
         if (root != null) root.setBackgroundColor(bg);
+        View lockContent = findViewById(R.id.lock_content);
+        if (lockContent != null) lockContent.setBackgroundColor(bg);
         if (messageText != null) messageText.setTextColor(text);
 
         if (pinInput != null) {
@@ -169,72 +186,29 @@ public class LockActivity extends AppCompatActivity {
     }
 
     private void onConfirm() {
-        String pin = pinInput.getText().toString();
-        if (pin.length() < 4) {
-            ShortToast.show(this, R.string.lock_pin_minimum_digits);
-            return;
-        }
-
         if (prefs == null) prefs = PrefsManager.getInstance(this);
-
-        switch (mode) {
-            case MODE_UNLOCK:
-                if (prefs.verifyLockPin(pin)) {
-                    setResult(RESULT_OK);
-                    finish();
-                } else {
-                    messageText.setText(R.string.lock_wrong_pin_retry);
-                    pinInput.setText("");
-                }
+        entryState.setInput(pinInput.getText().toString());
+        LockEntryViewModel.Result result = entryState.confirm(prefs);
+        renderEntryState();
+        switch (result) {
+            case TOO_SHORT:
+                ShortToast.show(this, R.string.lock_pin_minimum_digits);
                 break;
-
-            case MODE_SET_PIN:
-                if (firstEntry == null) {
-                    firstEntry = pin;
-                    messageText.setText(R.string.lock_confirm_pin);
-                    pinInput.setText("");
-                } else {
-                    if (pin.equals(firstEntry)) {
-                        prefs.setLockPin(pin);
-                        prefs.setLockEnabled(true);
-                        ShortToast.show(this, R.string.lock_pin_set_success);
-                        setResult(RESULT_OK);
-                        finish();
-                    } else {
-                        messageText.setText(R.string.lock_pin_mismatch_restart);
-                        firstEntry = null;
-                        pinInput.setText("");
-                    }
-                }
+            case PIN_SET:
+                ShortToast.show(this, R.string.lock_pin_set_success);
+                setResult(RESULT_OK);
+                finish();
                 break;
-
-            case MODE_CHANGE_PIN:
-                if (firstEntry == null) {
-                    // Verify current PIN
-                    if (prefs.verifyLockPin(pin)) {
-                        firstEntry = "VERIFIED";
-                        messageText.setText(R.string.lock_enter_new_pin);
-                        pinInput.setText("");
-                    } else {
-                        messageText.setText(R.string.lock_wrong_current_pin);
-                        pinInput.setText("");
-                    }
-                } else if (firstEntry.equals("VERIFIED")) {
-                    firstEntry = pin;
-                    messageText.setText(R.string.lock_confirm_new_pin);
-                    pinInput.setText("");
-                } else {
-                    if (pin.equals(firstEntry)) {
-                        prefs.setLockPin(pin);
-                        ShortToast.show(this, R.string.lock_pin_changed);
-                        setResult(RESULT_OK);
-                        finish();
-                    } else {
-                        messageText.setText(R.string.lock_pin_mismatch_enter_new);
-                        firstEntry = "VERIFIED";
-                        pinInput.setText("");
-                    }
-                }
+            case PIN_CHANGED:
+                ShortToast.show(this, R.string.lock_pin_changed);
+                setResult(RESULT_OK);
+                finish();
+                break;
+            case UNLOCKED:
+                setResult(RESULT_OK);
+                finish();
+                break;
+            default:
                 break;
         }
     }

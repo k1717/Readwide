@@ -125,7 +125,7 @@ final class LibarchiveNativeBridge {
         Reader reader = null;
         try {
             reader = openReader(validateArchivePaths(archivePaths), password);
-            StringBuilder out = new StringBuilder();
+            StringBuilder out = new StringBuilder(RarLibarchiveFallback.LISTING_HEADER);
             long entry;
             while ((entry = nextHeaderEntry(reader.archive)) != 0L) {
                 String path = normalizedEntryPath(entry);
@@ -134,7 +134,7 @@ final class LibarchiveNativeBridge {
                     long size = ArchiveEntry.sizeIsSet(entry) ? ArchiveEntry.size(entry) : -1L;
                     long timeMillis = ArchiveEntry.mtimeIsSet(entry) ? ArchiveEntry.mtime(entry) * 1000L : 0L;
                     out.append(directory ? 'D' : 'F')
-                            .append('\t').append(path)
+                            .append('\t').append(RarLibarchiveFallback.encodeListingPath(path))
                             .append('\t').append(size)
                             .append('\t').append(timeMillis)
                             .append('\n');
@@ -499,7 +499,7 @@ final class LibarchiveNativeBridge {
         String path = input.replace('\\', '/').trim();
         while (path.startsWith("/")) path = path.substring(1);
         while (path.startsWith("./")) path = path.substring(2);
-        return path.toLowerCase(Locale.ROOT);
+        return path;
     }
 
     private static boolean isDirectory(long entry) {

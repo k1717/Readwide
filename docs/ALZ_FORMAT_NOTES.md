@@ -17,7 +17,7 @@ volume paths/sizes/timestamps participate in invalidation; payload password/CRC
 checks still run independently. Retention is bounded, larger indexes work
 uncached, and no file handles or decrypted data are cached. This changes lookup,
 not container/codec support. Source regressions are unexecuted; see
-`ARCHIVE_VIEWER_PERFORMANCE_1_0_18.md` for limits and pending validation.
+`DEV_CHANGES_1_0_18.md` for implementation details.
 
 ```
 "ALZ\x01" (0x015a4c41)  version u16  segment-id u16
@@ -93,7 +93,7 @@ data; compression is applied before encryption.
 
 ## Split archives
 
-Current shared-stream safeguards (source-only batch fifteen): `SplitVolumeInput`
+Shared-stream safeguards: `SplitVolumeInput`
 validates physical segments and logical payload windows, retires handles after
 cancellation/physical I/O failure, and gives bounded views independent cursors
 and close state. Raw positional skipping does not verify skipped data; ALZ's

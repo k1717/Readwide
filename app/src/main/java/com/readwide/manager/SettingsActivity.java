@@ -33,15 +33,15 @@ import android.widget.*;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.drawable.DrawableCompat;
+import androidx.lifecycle.ViewModelProvider;
 
 import com.readwide.manager.model.Theme;
-import com.readwide.manager.util.BookmarkManager;
 import com.readwide.manager.util.EdgeToEdgeUtil;
-import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.PrefsManager;
 import com.readwide.manager.util.ThemeManager;
 import com.readwide.manager.util.TextDisplayRule;
@@ -50,13 +50,7 @@ import com.readwide.manager.util.TextDisplayRuleManager;
 import com.google.android.material.button.MaterialButton;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.OutputStreamWriter;
 import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.ArrayList;
@@ -69,8 +63,11 @@ public class SettingsActivity extends AppCompatActivity {
     private static final String DEVELOPER_CONTACT_EMAIL = "readwide.kj7w5@addy.io";
 
     PrefsManager prefs;
-    private BookmarkManager bookmarkManager;
     private ThemeManager themeManager;
+    private SettingsCollapsibleSectionController collapsibleSections;
+    private SettingsBackupViewModel backupModel;
+    private android.app.Dialog backupBusyDialog;
+    private android.app.Dialog backupConfirmDialog;
     String currentTxtFilePath;
 
     private final ActivityResultLauncher<String> exportLauncher =
@@ -81,10 +78,8 @@ public class SettingsActivity extends AppCompatActivity {
                     uri -> { if (uri != null) importBackupFrom(uri); });
     private final ActivityResultLauncher<Intent> lockSetLauncher =
             registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
-                if (result.getResultCode() == RESULT_OK) {
-                    Switch lockSwitch = findViewById(R.id.switch_lock);
-                    if (lockSwitch != null) lockSwitch.setChecked(prefs.isLockEnabled());
-                }
+                // Cancellation also needs to undo the switch's pending ON state.
+                refreshLockSwitch();
             });
 
     public static final String EXTRA_MODE = "settings_mode";
@@ -100,7 +95,9 @@ public class SettingsActivity extends AppCompatActivity {
         prefs.applyLanguage(prefs.getLanguageMode());
         prefs.applyDarkMode(prefs.getDarkMode());
         super.onCreate(savedInstanceState);
+        backupModel = new ViewModelProvider(this).get(SettingsBackupViewModel.class);
         setContentView(R.layout.activity_settings);
+        SettingsPreferenceViewState.useStoredValues(findViewById(R.id.settings_root));
 
         appearanceSettingsMode = MODE_APPEARANCE.equals(
                 getIntent() != null ? getIntent().getStringExtra(EXTRA_MODE) : null);
@@ -118,7 +115,6 @@ public class SettingsActivity extends AppCompatActivity {
         }
         tintToolbarNavigation(toolbar);
 
-        bookmarkManager = BookmarkManager.getInstance(this);
         themeManager = ThemeManager.getInstance(this);
 
         setupLanguage();
@@ -141,8 +137,9 @@ public class SettingsActivity extends AppCompatActivity {
         suppressLanguageRadioEffects();
         renderReadingThemeRows();
         refreshMainCustomHexFieldPreviews();
-        setupCollapsibleSections();
+        setupCollapsibleSections(savedInstanceState);
         setupOpenViewSettingsLink();
+        backupModel.state().observe(this, this::renderBackupState);
     }
 
     private void setupOpenViewSettingsLink() {
@@ -156,6 +153,9 @@ public class SettingsActivity extends AppCompatActivity {
         link.setOnClickListener(v -> {
             Intent intent = new Intent(this, SettingsActivity.class);
             intent.putExtra(EXTRA_MODE, MODE_APPEARANCE);
+            if (currentTxtFilePath != null && !currentTxtFilePath.isEmpty()) {
+                intent.putExtra("txt_file_path", currentTxtFilePath);
+            }
             startActivity(intent);
         });
     }
@@ -163,14 +163,13 @@ public class SettingsActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        refreshLockSwitch();
+        if (backupModel != null && backupModel.isWorking()) return;
         if (themeManager != null) {
             themeManager.reloadFromStorage();
         }
         if (prefs != null && themeManager != null) {
-            applySettingsReadableTheme();
-            suppressLanguageRadioEffects();
-            renderReadingThemeRows();
-            refreshMainCustomHexFieldPreviews();
+            refreshMainThemeAppearance();
         }
     }
 
@@ -362,27 +361,15 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void setupDarkMode() {
-        RadioGroup group = findViewById(R.id.dark_mode_group);
-        int current = prefs.getDarkMode();
-        if (current == PrefsManager.DARK_MODE_OFF) ((RadioButton) findViewById(R.id.radio_light)).setChecked(true);
-        else if (current == PrefsManager.DARK_MODE_ON) ((RadioButton) findViewById(R.id.radio_dark)).setChecked(true);
-        else if (current == PrefsManager.DARK_MODE_DARK_NAVY) ((RadioButton) findViewById(R.id.radio_dark_navy)).setChecked(true);
-        else if (current == PrefsManager.DARK_MODE_CUSTOM) ((RadioButton) findViewById(R.id.radio_custom_main)).setChecked(true);
-        else ((RadioButton) findViewById(R.id.radio_system)).setChecked(true);
+        new SettingsThemeSelectionController(this).bind();
+    }
 
-        group.setOnCheckedChangeListener((g, checkedId) -> {
-            int mode;
-            if (checkedId == R.id.radio_light) mode = PrefsManager.DARK_MODE_OFF;
-            else if (checkedId == R.id.radio_dark) mode = PrefsManager.DARK_MODE_ON;
-            else if (checkedId == R.id.radio_dark_navy) mode = PrefsManager.DARK_MODE_DARK_NAVY;
-            else if (checkedId == R.id.radio_custom_main) mode = PrefsManager.DARK_MODE_CUSTOM;
-            else mode = PrefsManager.DARK_MODE_FOLLOW_SYSTEM;
-            if (prefs.getDarkMode() != mode) {
-                prefs.setDarkMode(mode);
-                updateCustomMainThemeSectionVisibility();
-                recreate();
-            }
-        });
+    void refreshMainThemeAppearance() {
+        setupDarkMode();
+        updateCustomMainThemeSectionVisibility();
+        applySettingsReadableTheme();
+        renderReadingThemeRows();
+        refreshMainCustomHexFieldPreviews();
     }
 
     private SettingsMainCustomThemeController mainCustomThemeController() {
@@ -421,8 +408,9 @@ public class SettingsActivity extends AppCompatActivity {
         new SettingsReaderControlsController(this).setupReaderControls();
     }
 
-    private void setupCollapsibleSections() {
-        new SettingsCollapsibleSectionController(this).setup();
+    private void setupCollapsibleSections(@Nullable Bundle savedInstanceState) {
+        collapsibleSections = new SettingsCollapsibleSectionController(this);
+        collapsibleSections.setup(savedInstanceState);
     }
 
     private void setupButtonOrderSettings() {
@@ -659,9 +647,10 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void setupLock() {
         Switch switchLock = findViewById(R.id.switch_lock);
-        switchLock.setChecked(prefs.isLockEnabled());
-        switchLock.setOnCheckedChangeListener((v, checked) -> {
-            if (checked) {
+        refreshLockSwitch();
+        // Restoring or refreshing checked state must never open PIN setup or clear a PIN.
+        switchLock.setOnClickListener(v -> {
+            if (switchLock.isChecked()) {
                 Intent intent = new Intent(this, LockActivity.class);
                 intent.putExtra(LockActivity.EXTRA_MODE, LockActivity.MODE_SET_PIN);
                 lockSetLauncher.launch(intent);
@@ -680,6 +669,12 @@ public class SettingsActivity extends AppCompatActivity {
                 ShortToast.show(this, getString(R.string.enable_lock_first));
             }
         });
+    }
+
+    private void refreshLockSwitch() {
+        if (prefs == null) return;
+        Switch switchLock = findViewById(R.id.switch_lock);
+        if (switchLock != null) switchLock.setChecked(prefs.isLockEnabled());
     }
 
     private void setupCollapseBlankLines() {
@@ -715,6 +710,7 @@ public class SettingsActivity extends AppCompatActivity {
 
         MaterialButton reset = makeSettingsDialogButtonNoShade(getString(R.string.settings_reset), text, outline);
         reset.setOnClickListener(v -> {
+            discardCustomThemeDraftState();
             prefs.resetReaderAndAppSettings();
             ShortToast.show(this, R.string.settings_reset_done);
             dialog.dismiss();
@@ -928,8 +924,11 @@ public class SettingsActivity extends AppCompatActivity {
 
         MaterialButton delete = makeSettingsDialogButtonNoShade(getString(R.string.delete), text, outline);
         delete.setOnClickListener(v -> {
+            if (!themeManager.deleteCustomTheme(theme.getId())) {
+                ShortToast.show(this, R.string.delete_failed);
+                return;
+            }
             dialog.dismiss();
-            themeManager.deleteCustomTheme(theme.getId());
             themeManager.reloadFromStorage();
             applySettingsReadableTheme();
             renderReadingThemeRows();
@@ -1217,30 +1216,58 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void exportBackupTo(Uri uri) {
-        try {
-            String json = bookmarkManager.exportAll();
-            try (OutputStream os = getContentResolver().openOutputStream(uri)) {
-                if (os != null) {
-                    os.write(json.getBytes(StandardCharsets.UTF_8));
-                    ShortToast.show(this, getString(R.string.exported_successfully));
-                }
-            }
-        } catch (Exception e) {
-            ShortToast.show(this, getString(R.string.export_failed_prefix) + e.getMessage());
-        }
+        backupModel.exportBackup(this, uri);
     }
 
     private void importBackupFrom(Uri uri) {
-        try {
-            String json = FileUtils.readTextFromUri(this, uri);
-            showImportBackupConfirmDialog(json);
-        } catch (Exception e) {
-            ShortToast.show(this, getString(R.string.import_failed_prefix) + e.getMessage());
+        backupModel.readBackup(this, uri);
+    }
+
+    private void renderBackupState(SettingsBackupViewModel.State state) {
+        if (isFinishing() || isDestroyed() || state == null) return;
+        boolean working = state.phase == SettingsBackupViewModel.Phase.WORKING;
+        findViewById(R.id.btn_export).setEnabled(!working);
+        findViewById(R.id.btn_import).setEnabled(!working);
+        if (state.phase != SettingsBackupViewModel.Phase.CONFIRM && backupConfirmDialog != null) {
+            backupConfirmDialog.dismiss();
+            backupConfirmDialog = null;
+        }
+        if (working) {
+            if (backupBusyDialog == null) {
+                backupBusyDialog = createRoundedSettingsDialog();
+                LinearLayout panel = createRoundedSettingsDialogPanel();
+                panel.addView(makeSettingsDialogTitle(getString(R.string.operation_working), dialogTextColor()));
+                panel.addView(new ProgressBar(this));
+                backupBusyDialog.setCancelable(false);
+                showRoundedSettingsDialog(backupBusyDialog, panel, false);
+            }
+            return;
+        }
+        if (backupBusyDialog != null) {
+            backupBusyDialog.dismiss();
+            backupBusyDialog = null;
+        }
+        if (state.phase == SettingsBackupViewModel.Phase.CONFIRM) {
+            if (backupConfirmDialog == null) showImportBackupConfirmDialog();
+        } else if (state.phase == SettingsBackupViewModel.Phase.SUCCESS) {
+            backupModel.consumeResult(); // Consume before a settings-driven recreation.
+            if (state.operation == SettingsBackupViewModel.Operation.EXPORT) {
+                ShortToast.show(this, getString(R.string.exported_successfully));
+            } else {
+                finishImportBackup(getString(state.operation == SettingsBackupViewModel.Operation.MERGE
+                        ? R.string.imported_merged : R.string.imported_replaced));
+            }
+        } else if (state.phase == SettingsBackupViewModel.Phase.FAILURE) {
+            backupModel.consumeResult();
+            ShortToast.show(this, getString(state.operation == SettingsBackupViewModel.Operation.EXPORT
+                    ? R.string.export_failed_prefix : R.string.import_failed_prefix) + state.text);
         }
     }
 
-    private void showImportBackupConfirmDialog(@NonNull String json) {
+    private void showImportBackupConfirmDialog() {
         final android.app.Dialog dialog = createRoundedSettingsDialog();
+        backupConfirmDialog = dialog;
+        dialog.setOnCancelListener(ignored -> backupModel.consumeResult());
         LinearLayout panel = createRoundedSettingsDialogPanel();
 
         int text = dialogTextColor();
@@ -1255,29 +1282,46 @@ public class SettingsActivity extends AppCompatActivity {
 
         MaterialButton merge = makeSettingsDialogButtonNoShade(getString(R.string.merge), text, outline);
         merge.setOnClickListener(v -> {
-            dialog.dismiss();
-            bookmarkManager.importAll(json, true);
-            finishImportBackup(getString(R.string.imported_merged));
+            backupModel.importBackup(this, true);
         });
         panel.addView(merge);
 
         MaterialButton replace = makeSettingsDialogButtonNoShade(getString(R.string.replace), text, outline);
         replace.setOnClickListener(v -> {
-            dialog.dismiss();
-            bookmarkManager.importAll(json, false);
-            finishImportBackup(getString(R.string.imported_replaced));
+            backupModel.importBackup(this, false);
         });
         panel.addView(replace);
 
         MaterialButton cancel = makeSettingsDialogButtonNoShade(getString(R.string.cancel), text, outline);
-        cancel.setOnClickListener(v -> dialog.dismiss());
+        cancel.setOnClickListener(v -> backupModel.consumeResult());
         panel.addView(cancel);
 
         showRoundedSettingsDialog(dialog, panel, true);
     }
 
+    @Override protected void onSaveInstanceState(@NonNull Bundle outState) {
+        if (collapsibleSections != null) collapsibleSections.saveState(outState);
+        super.onSaveInstanceState(outState);
+    }
+
+    @Override protected void onDestroy() {
+        if (backupBusyDialog != null) backupBusyDialog.dismiss();
+        if (backupConfirmDialog != null) backupConfirmDialog.dismiss();
+        backupBusyDialog = null;
+        backupConfirmDialog = null;
+        super.onDestroy();
+    }
+
+
+    private void discardCustomThemeDraftState() {
+        // These HEX fields are unsaved drafts during normal rotation. A reset/import
+        // replaces their source values, so the old draft must not enter the next snapshot.
+        View customTheme = findViewById(R.id.main_custom_theme_section);
+        if (customTheme != null) customTheme.setSaveFromParentEnabled(false);
+    }
 
     private void finishImportBackup(String message) {
+        discardCustomThemeDraftState();
         if (prefs != null) {
             prefs.applyLanguage(prefs.getLanguageMode());
             prefs.applyDarkMode(prefs.getDarkMode());

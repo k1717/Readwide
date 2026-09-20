@@ -36,6 +36,7 @@ final class Rar5HistoryStore implements Closeable {
     private byte[] key;
     private Cipher cipher;
     private boolean closed;
+    private boolean cleanupComplete;
 
     Rar5HistoryStore(long capacity) {
         this(capacity, RESIDENT_PAGES, null, ArchiveSupport::runtimeExtractionBudgetBytes);
@@ -172,7 +173,7 @@ final class Rar5HistoryStore implements Closeable {
     int residentPagesForTest() { return pages.size(); }
 
     @Override public void close() throws IOException {
-        if (closed) return;
+        if (closed && cleanupComplete) return;
         closed = true;
         for (Page page : pages.values()) Arrays.fill(page.data, (byte) 0);
         pages.clear();
@@ -181,13 +182,18 @@ final class Rar5HistoryStore implements Closeable {
         key = null;
         cipher = null;
         IOException failure = null;
-        try { if (disk != null) disk.close(); } catch (IOException e) { failure = e; }
+        try {
+            if (disk != null) {
+                disk.close();
+                disk = null; // Retain a failed-close handle for a subsequent cleanup attempt.
+            }
+        } catch (IOException e) { failure = e; }
         finally {
-            disk = null;
             try {
                 if (spool != null && spool.exists() && !spool.delete()) {
                     throw new IOException("Cannot delete RAR temporary history");
                 }
+                cleanupComplete = disk == null; // Keep spoolForTest() diagnostic identity; retry failures.
             } catch (IOException | SecurityException e) {
                 IOException cleanup = new IOException("Cannot delete RAR temporary history", e);
                 if (failure == null) failure = cleanup; else failure.addSuppressed(cleanup);

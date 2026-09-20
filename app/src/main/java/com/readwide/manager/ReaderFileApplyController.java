@@ -36,6 +36,7 @@ final class ReaderFileApplyController {
                                   int partitionStartLine,
                                   int partitionEndLine,
                                   int partitionTotalLines) {
+        final int layoutGeneration = activity.loadGeneration.get();
         applyDocumentIdentity(previewContent, previewLineCount, loadedFilePath, loadedFileName);
         applyLargeTextPreviewState(
                 fullByteLength,
@@ -55,12 +56,15 @@ final class ReaderFileApplyController {
                 partitionTotalLines);
         renderLoadedContent(true);
 
-        activity.readerView.post(() -> finishLargeTextPreviewLayout(
+        activity.readerView.post(() -> {
+            if (activity.activityDestroyed || layoutGeneration != activity.loadGeneration.get()) return;
+            finishLargeTextPreviewLayout(
                 jumpPosition,
                 cachedDisplayPage,
                 cachedTotalPages,
                 jumpAnchorBefore,
-                jumpAnchorAfter));
+                jumpAnchorAfter);
+        });
     }
 
     void onFileLoaded(String content,
@@ -70,6 +74,7 @@ final class ReaderFileApplyController {
                       int jumpPosition,
                       String jumpAnchorBefore,
                       String jumpAnchorAfter) {
+        final int layoutGeneration = activity.loadGeneration.get();
         boolean replacingLargePreview = activity.largeTextEstimateActive;
         int preservePosition = replacingLargePreview ? activity.getCurrentCharPosition() : -1;
         int deferredRestorePosition = activity.pendingLargeTextRestorePosition;
@@ -78,13 +83,16 @@ final class ReaderFileApplyController {
         applyNormalTextState();
         renderLoadedContent(false);
 
-        activity.readerView.post(() -> finishNormalTextLayout(
+        activity.readerView.post(() -> {
+            if (activity.activityDestroyed || layoutGeneration != activity.loadGeneration.get()) return;
+            finishNormalTextLayout(
                 replacingLargePreview,
                 preservePosition,
                 deferredRestorePosition,
                 jumpPosition,
                 jumpAnchorBefore,
-                jumpAnchorAfter));
+                jumpAnchorAfter);
+        });
     }
 
     private void applyDocumentIdentity(String content,
@@ -242,6 +250,7 @@ final class ReaderFileApplyController {
         activity.updatePositionLabel();
         activity.scheduleLargeTextExactPageIndexingRestart();
         activity.prefetchNeighborLargeTextPartitions();
+        activity.textContentReadyForPersistence = true;
         activity.readerView.setAlpha(1f);
         activity.hideLoadingWindow();
     }
@@ -344,6 +353,7 @@ final class ReaderFileApplyController {
             }
         }
         activity.updatePositionLabel();
+        activity.textContentReadyForPersistence = true;
         activity.readerView.setAlpha(1f);
         activity.hideLoadingWindow();
     }

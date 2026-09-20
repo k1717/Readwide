@@ -163,6 +163,14 @@ public class Theme {
         return t;
     }
 
+    /** An editor must not mutate the manager's saved objects before committing. */
+    public Theme copy() {
+        Theme copy = new Theme(id, name, textColor, backgroundColor, linkColor, toolbarColor, isBuiltIn);
+        copy.backgroundImagePath = backgroundImagePath;
+        copy.backgroundImageAlpha = backgroundImageAlpha;
+        return copy;
+    }
+
     // Getters/Setters
     public String getId() { return id; }
     public String getName() { return name; }

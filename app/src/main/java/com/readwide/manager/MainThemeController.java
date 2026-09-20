@@ -148,6 +148,7 @@ final class MainThemeController {
         }
         if (activity.emptyText != null) activity.emptyText.setTextColor(sub);
         if (activity.recentEmptyText != null) activity.recentEmptyText.setTextColor(sub);
+        activity.refreshHomeShortcutsTheme();
         // Recent search banner mirrors the path bar surface (panel) so it follows
         // the runtime theme instead of the base ?attr/colorSurfaceVariant (which
         // is near-black under the navy theme).

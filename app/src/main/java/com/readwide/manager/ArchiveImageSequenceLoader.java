@@ -174,7 +174,7 @@ final class ArchiveImageSequenceLoader {
         ArrayList<String> displayNames = new ArrayList<>();
         ArrayList<String> entryPaths = new ArrayList<>();
         for (ArchiveSupport.EntryInfo imageEntry : sequence) {
-            File outFile = outputFileForEntry(context, archiveFile, imageEntry, sensitiveCache);
+            File outFile = ArchivePreviewCache.outputFileForEntry(context, sourceSnapshot, imageEntry.path, sensitiveCache);
             imagePaths.add(outFile.getAbsolutePath());
             displayNames.add(imageEntry.name());
             entryPaths.add(imageEntry.path);
@@ -185,7 +185,7 @@ final class ArchiveImageSequenceLoader {
         SequentialArchiveImageReader preparedReader = null;
         if (targetIndex >= 0 && targetIndex < sequence.size()) {
             ArchiveSupport.EntryInfo targetEntry = sequence.get(targetIndex);
-            File targetFile = outputFileForEntry(context, archiveFile, targetEntry, sensitiveCache);
+            File targetFile = ArchivePreviewCache.outputFileForEntry(context, sourceSnapshot, targetEntry.path, sensitiveCache);
             if (ArchiveSupport.isForwardImageReadableType(archiveFile)) {
                 // Sequential archives: extract only up to the target via a forward reader,
                 // avoiding whole-archive decompression for the first page. Falls back to
@@ -247,7 +247,7 @@ final class ArchiveImageSequenceLoader {
             for (int i = 0; i < sequence.size(); i++) {
                 if (i == targetIndex) continue;
                 ArchiveSupport.EntryInfo imageEntry = sequence.get(i);
-                File outFile = outputFileForEntry(context, archiveFile, imageEntry, sensitiveCache);
+                File outFile = ArchivePreviewCache.outputFileForEntry(context, sourceSnapshot, imageEntry.path, sensitiveCache);
                 ArchiveSupport.ExtractionResult fallbackResult = ensureEntryReady(
                         archiveFile,
                         imageEntry.path,
@@ -336,7 +336,7 @@ final class ArchiveImageSequenceLoader {
         ArchiveSupport.ExtractionResult selectedResult = null;
         for (int i = 0; i < sequence.size(); i++) {
             ArchiveSupport.EntryInfo imageEntry = sequence.get(i);
-            File outFile = outputFileForEntry(context, archiveFile, imageEntry, sensitiveCache);
+            File outFile = ArchivePreviewCache.outputFileForEntry(context, sourceSnapshot, imageEntry.path, sensitiveCache);
             ArchiveSupport.ExtractionResult result = ensureEntryReady(
                     archiveFile,
                     imageEntry.path,

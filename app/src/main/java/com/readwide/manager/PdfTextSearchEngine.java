@@ -278,10 +278,20 @@ final class PdfTextSearchEngine {
     List<RectF> matchesOnPage(int pageIndex) {
         List<RectF> out = new ArrayList<>();
         synchronized (matches) {
-            for (Match m : matches) {
-                if (m.pageIndex == pageIndex) {
-                    out.addAll(m.rectsPts);
-                }
+            // scan() appends complete pages in ascending order. Find this
+            // page's range without revisiting every other page's matches on
+            // each highlight refresh, including while a scan is still running.
+            int low = 0;
+            int high = matches.size();
+            while (low < high) {
+                int middle = low + (high - low) / 2;
+                if (matches.get(middle).pageIndex < pageIndex) low = middle + 1;
+                else high = middle;
+            }
+            for (int i = low; i < matches.size(); i++) {
+                Match match = matches.get(i);
+                if (match.pageIndex != pageIndex) break;
+                out.addAll(match.rectsPts);
             }
         }
         return out;

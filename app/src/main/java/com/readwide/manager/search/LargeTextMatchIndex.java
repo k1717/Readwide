@@ -36,7 +36,7 @@ final class LargeTextMatchIndex implements AutoCloseable {
     synchronized LargeTextSearchResult nearest(int startPosition, boolean forward) throws IOException {
         checkOpen();
         if (count == 0) return new LargeTextSearchResult(-1, 1, 0, 0);
-        int low = 0, high = count, target = Math.max(0, startPosition);
+        int low = 0, high = count, target = startPosition;
         while (low < high) {
             int mid = (low + high) >>> 1, position = positionAt(mid);
             if (position < target || (!forward && position == target)) low = mid + 1;

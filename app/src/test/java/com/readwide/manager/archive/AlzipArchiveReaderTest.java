@@ -24,6 +24,82 @@ import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
 
 public class AlzipArchiveReaderTest {
+    @Test public void decodedLengthMismatchIsRejectedEvenWithCorrectPayloadCrc() throws Exception {
+        byte[] payload = new byte[]{1, 2, 3};
+        for (int method : new int[]{0, 2}) {
+            for (boolean encrypted : new boolean[]{false, true}) {
+                for (int declared : new int[]{2, 4}) {
+                    char[] password = encrypted ? "pw".toCharArray() : null;
+                    File archive = buildAlzArchive("data.bin", payload, method, encrypted, password);
+                    byte[] bytes = Files.readAllBytes(archive.toPath());
+                    // Fixture has a four-byte size field, after CRC and packed size.
+                    for (int i = 0; i < 4; i++) bytes[31 + i] = (byte) (declared >>> (i * 8));
+                    Files.write(archive.toPath(), bytes);
+                    File out = tempFolder.newFile();
+                    Files.write(out.toPath(), new byte[]{42});
+                    try {
+                        AlzipArchiveReader.extractSingleEntry(archive, "data.bin", out, password);
+                        fail("A correct CRC cannot authorize the wrong decoded length");
+                    } catch (IOException expected) {
+                        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(out.toPath()));
+                    }
+                }
+            }
+        }
+    }
+
+    @Test public void bulkSizeMismatchPreservesExistingDestination() throws Exception {
+        File archive = buildAlzArchive("data.bin", new byte[]{1, 2, 3}, 2, false, null);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        bytes[31] = 2;
+        Files.write(archive.toPath(), bytes);
+        File target = tempFolder.newFolder();
+        File out = new File(target, "data.bin");
+        Files.write(out.toPath(), new byte[]{42});
+        try { AlzipArchiveReader.extractArchiveIntoDirectory(archive, target, null); fail("Size mismatch"); }
+        catch (IOException expected) {
+            org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(out.toPath()));
+            assertEquals(1, target.list().length);
+        }
+    }
+
+    @Test public void bulkCrcFailurePreservesExistingDestination() throws Exception {
+        File archive = buildAlzArchive("data.bin", new byte[]{1, 2, 3}, 0, false, null);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        bytes[bytes.length - 5] ^= 1;
+        Files.write(archive.toPath(), bytes);
+        File target = tempFolder.newFolder();
+        File out = new File(target, "data.bin");
+        Files.write(out.toPath(), new byte[]{42});
+        try { AlzipArchiveReader.extractArchiveIntoDirectory(archive, target, null); fail("CRC mismatch"); }
+        catch (IOException expected) {
+            org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(out.toPath()));
+            assertEquals(1, target.list().length);
+        }
+    }
+
+    @Test public void bulkWrongPasswordPreservesExistingDestination() throws Exception {
+        File archive = buildAlzArchive("data.bin", new byte[]{1, 2, 3}, 2, true, "pw".toCharArray());
+        File target = tempFolder.newFolder();
+        File out = new File(target, "data.bin");
+        Files.write(out.toPath(), new byte[]{42});
+        try { AlzipArchiveReader.extractArchiveIntoDirectory(archive, target, "wrong".toCharArray()); fail("Password mismatch"); }
+        catch (IOException expected) {
+            org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(out.toPath()));
+            assertEquals(1, target.list().length);
+        }
+    }
+
+    @Test public void emptyStoredAndDeflatedEntriesRemainReadable() throws Exception {
+        for (int method : new int[]{0, 2}) {
+            File archive = buildAlzArchive("empty", new byte[0], method, false, null);
+            File out = tempFolder.newFile();
+            Files.write(out.toPath(), new byte[]{42});
+            assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "empty", out, null));
+            assertEquals(0, out.length());
+        }
+    }
+
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
 

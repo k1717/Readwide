@@ -5,71 +5,103 @@ import androidx.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 
 /**
- * Immutable, metadata-only handoff guard for RAR and standard split 7z sources.
- * This is not a content hash or permission to bypass image/integrity validation.
- * Other families retain their caller's existing single-file snapshot checks.
+ * Immutable metadata snapshot and preview namespace for an archive source.
+ * RAR, ALZ, EGG, PKZIP and generic numeric splits include their declared validated volume set.
+ * Other families currently retain a single-file stamp; this is NOT a content hash or an integrity/authentication check.
+ * Capture once per loading/session boundary; reuse cacheFingerprint() per page.
  */
 public final class ArchiveSourceSnapshot {
-    private final String selectedPath;
-    private final String chainIdentity;
+    @Nullable private final String selectedPath;
+    private final String family;
     private final List<Stamp> volumes;
+    private final String fingerprint;
 
-    private ArchiveSourceSnapshot(String selectedPath, String chainIdentity, List<Stamp> volumes) {
+    private ArchiveSourceSnapshot(@Nullable String selectedPath, String family, List<Stamp> volumes) {
         this.selectedPath = selectedPath;
-        this.chainIdentity = chainIdentity;
+        this.family = family;
         this.volumes = Collections.unmodifiableList(new ArrayList<>(volumes));
+        // Failed capture must never alias a previously verified plaintext cache.
+        this.fingerprint = selectedPath == null
+                ? UUID.randomUUID().toString().replace("-", "").substring(0, 24)
+                : fingerprint(family, this.volumes);
     }
 
-    /** Null means outside this guard's scope; an unresolved in-scope set never matches. */
-    @Nullable
+    /** Failed capture returns a nonmatching snapshot, never a reusable singleton fallback. */
+    @NonNull
     public static ArchiveSourceSnapshot capture(@NonNull File selected) {
-        boolean rar = ArchiveTypeDetector.fromFileName(selected.getName()) == ArchiveSupport.Type.RAR
-                && !ArchiveSupport.isNumericSplitArchive(selected);
-        boolean sevenZ = SevenZSplitVolumeResolver.isSevenZSplitPart(selected);
-        if (!rar && !sevenZ) return null;
         try {
-            // The name resolvers can treat an unavailable directory as an empty catalog.
-            // Do not turn that into a valid one-volume handoff snapshot.
-            File parent = selected.getAbsoluteFile().getParentFile();
-            if (parent == null || parent.listFiles() == null) {
-                throw new IOException("Archive volume directory is unavailable");
-            }
-            String path = new Stamp(selected).path;
+            if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException();
+            Stamp selectedStamp = new Stamp(selected);
+            String numericStem = ArchiveTypeDetector.numericSplitStem(selected.getName());
+            boolean rar = numericStem == null
+                    && ArchiveTypeDetector.fromFileName(selected.getName()) == ArchiveSupport.Type.RAR;
             List<File> files;
-            String identity;
-            if (rar) {
-                RarVolumeChainResolution chain = RarArchiveLocator.resolveVolumeChain(selected);
-                files = chain.requireReadableChain();
-                // Includes discovered gaps/ordinals beyond the contiguous readable prefix.
-                identity = chain.diagnostic();
+            String family;
+            if (numericStem != null) {
+                files = SevenZSplitVolumeResolver.resolveNumeric(selected).parts;
+                family = "numeric";
+            } else if (rar) {
+                files = RarArchiveLocator.collectReadableVolumes(selected);
+                family = "rar";
+            } else if (selected.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".alz")
+                    || AlzVolumeResolver.CONTINUATION.matcher(selected.getName()).matches()) {
+                files = AlzVolumeResolver.resolve(selected).files;
+                family = "alz";
+            } else if (ArchiveTypeDetector.fromFileName(selected.getName()) == ArchiveSupport.Type.EGG) {
+                files = EggVolumeResolver.resolve(selected).files;
+                family = "egg";
+            } else if (ZipVolumeResolver.isCandidate(selected.getName())) {
+                files = ZipVolumeResolver.forSnapshot(selected);
+                family = files.size() > 1 ? "pkzip" : "single";
             } else {
-                SevenZSplitVolumeResolver.VolumeSet set = SevenZSplitVolumeResolver.resolve(selected);
-                if (set == null) throw new IOException("Split 7z source is unresolved");
-                files = set.parts;
-                identity = "7z";
+                files = Collections.singletonList(selected);
+                family = "single";
             }
             if (files.isEmpty()) throw new IOException("Archive volume set is empty");
-            List<Stamp> stamps = new ArrayList<>();
-            for (File file : files) stamps.add(new Stamp(file));
-            return new ArchiveSourceSnapshot(path, identity, stamps);
+            ArrayList<Stamp> stamps = new ArrayList<>(files.size());
+            boolean selectedFound = false;
+            for (File file : files) {
+                if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException();
+                Stamp stamp = new Stamp(file);
+                stamps.add(stamp);
+                if (stamp.path.equals(selectedStamp.path)) {
+                    if (!stamp.matches(selectedStamp)) throw new IOException("Selected volume changed during capture");
+                    selectedFound = true;
+                }
+            }
+            if (!selectedFound) throw new IOException("Selected volume is not in the resolved chain");
+            return new ArchiveSourceSnapshot(selectedStamp.path, family, stamps);
         } catch (IOException | SecurityException unavailable) {
-            // Deliberately distinct from null: failed capture must fail closed even
-            // if the files become available again before the handoff is consumed.
-            return new ArchiveSourceSnapshot(null, null, Collections.emptyList());
+            return new ArchiveSourceSnapshot(null, "unresolved", Collections.emptyList());
         }
     }
 
-    /** Re-resolve at handoff boundaries, never on the bitmap/paging hot path. */
+    /** The same validated chain yields the same key regardless of which part was selected. */
+    @NonNull
+    public String cacheFingerprint() { return fingerprint; }
+
+    /** Membership only; this does not certify current bytes or validate a failed snapshot. */
+    boolean containsFile(@NonNull File candidate) throws IOException {
+        if (selectedPath == null) return false;
+        String path = candidate.getCanonicalPath();
+        for (Stamp stamp : volumes) if (stamp.path.equals(path)) return true;
+        return false;
+    }
+
+    /** Re-resolve at handoff boundaries, not once for every cached bitmap or page. */
     public boolean matches(@NonNull File selected) {
         if (selectedPath == null) return false;
         ArchiveSourceSnapshot current = capture(selected);
-        if (current == null || !selectedPath.equals(current.selectedPath)
-                || !chainIdentity.equals(current.chainIdentity)
+        if (!selectedPath.equals(current.selectedPath) || !family.equals(current.family)
                 || volumes.size() != current.volumes.size()) return false;
         for (int i = 0; i < volumes.size(); i++) {
             if (!volumes.get(i).matches(current.volumes.get(i))) return false;
@@ -77,18 +109,50 @@ public final class ArchiveSourceSnapshot {
         return true;
     }
 
+    private static String fingerprint(String family, List<Stamp> volumes) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            putText(digest, "readwide-preview-v3");
+            putText(digest, family);
+            putLong(digest, volumes.size());
+            for (Stamp stamp : volumes) {
+                putText(digest, stamp.path);
+                putLong(digest, stamp.length);
+                putLong(digest, stamp.modified);
+            }
+            byte[] hash = digest.digest();
+            char[] chars = new char[24];
+            char[] hex = "0123456789abcdef".toCharArray();
+            for (int i = 0; i < 12; i++) {
+                chars[i * 2] = hex[(hash[i] & 255) >>> 4];
+                chars[i * 2 + 1] = hex[hash[i] & 15];
+            }
+            return new String(chars);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is required", impossible);
+        }
+    }
+
+    private static void putText(MessageDigest digest, String text) {
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        // Length framing avoids collisions caused by newline/path delimiter ambiguity.
+        putLong(digest, bytes.length);
+        digest.update(bytes);
+    }
+
+    private static void putLong(MessageDigest digest, long value) {
+        for (int shift = 56; shift >= 0; shift -= 8) digest.update((byte) (value >>> shift));
+    }
+
     private static final class Stamp {
         final String path;
-        final long length;
-        final long modified;
-
+        final long length, modified;
         Stamp(File file) throws IOException {
-            if (!file.isFile() || !file.canRead()) throw new IOException("Archive volume is unavailable");
+            if (!file.isFile() || !file.canRead()) throw new IOException("Archive volume unavailable");
             path = file.getCanonicalPath();
             length = file.length();
             modified = file.lastModified();
         }
-
         boolean matches(Stamp other) {
             return path.equals(other.path) && length == other.length && modified == other.modified;
         }

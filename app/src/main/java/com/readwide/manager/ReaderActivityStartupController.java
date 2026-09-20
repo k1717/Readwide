@@ -46,11 +46,7 @@ final class ReaderActivityStartupController {
             }
         });
 
-        if (activity.prefs.getBrightnessOverride()) {
-            activity.applyReaderBrightnessOverride(activity.prefs.getBrightnessValue());
-        } else {
-            activity.clearReaderBrightnessOverride();
-        }
+        applyBrightnessPreference();
 
         if (!activity.restoreLoadedTextSnapshotIfAvailable(activity.getIntent(), savedInstanceState)) {
             activity.loadFileFromIntent(activity.getIntent());
@@ -64,6 +60,7 @@ final class ReaderActivityStartupController {
             activity.themeManager.reloadFromStorage();
         }
         if (activity.readerView != null && activity.prefs != null && activity.themeManager != null) {
+            applyBrightnessPreference();
             activity.applyTheme();
             ButtonOrderManager.applyOrder(activity, activity.prefs, ButtonOrderManager.GROUP_TXT_READER);
             if (activity.restoreReaderAfterBackgroundMemoryTrimIfNeeded()) return;
@@ -71,6 +68,14 @@ final class ReaderActivityStartupController {
             if (activity.maybeReloadForLargeTextPartitionModeChange()) return;
             activity.maybeReloadForTextDisplayRuleChange();
             activity.updatePositionLabel();
+        }
+    }
+
+    private void applyBrightnessPreference() {
+        if (activity.prefs.getBrightnessOverride()) {
+            activity.applyReaderBrightnessOverride(activity.prefs.getBrightnessValue());
+        } else {
+            activity.clearReaderBrightnessOverride();
         }
     }
 

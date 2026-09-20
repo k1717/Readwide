@@ -123,15 +123,17 @@ final class RarLibarchiveFallback {
     static List<ArchiveSupport.EntryInfo> parseListingRows(@Nullable String listing) throws IOException {
         List<ArchiveSupport.EntryInfo> result = new ArrayList<>();
         if (listing == null || listing.isEmpty()) return result;
-        String[] lines = listing.split("\\n");
-        for (String raw : lines) {
-            if (raw == null) continue;
-            String line = raw.trim();
+        boolean escaped = listing.startsWith(LISTING_HEADER);
+        if (escaped) listing = listing.substring(LISTING_HEADER.length());
+        String[] lines = listing.split("\\n", -1);
+        for (String line : lines) {
             if (line.isEmpty()) continue;
-            String[] parts = line.split("\\t", 4);
-            if (parts.length < 4) throw new IOException("Invalid libarchive listing row");
-            boolean directory = "D".equalsIgnoreCase(parts[0]);
-            String path = sanitizeEntryPath(parts[1]);
+            String[] parts = line.split("\\t", -1);
+            if (parts.length != 4 || !("D".equals(parts[0]) || "F".equals(parts[0]))) {
+                throw new IOException("Invalid libarchive listing row");
+            }
+            boolean directory = "D".equals(parts[0]);
+            String path = sanitizeEntryPath(escaped ? decodeListingPath(parts[1]) : parts[1]);
             if (path == null) continue;
             if (directory && !path.endsWith("/")) path += "/";
             long size = parseLongOrDefault(parts[2], directory ? -1L : 0L);
@@ -139,6 +141,42 @@ final class RarLibarchiveFallback {
             result.add(new ArchiveSupport.EntryInfo(path, directory, size, timeMillis));
         }
         return withSyntheticDirectories(result);
+    }
+
+    // Version the Java bridge framing: archive paths may contain tabs/newlines.
+    // Legacy unescaped rows remain readable, but all new producer rows are escaped.
+    static final String LISTING_HEADER = "READWIDE-LISTING/1\n";
+
+    static String encodeListingPath(@NonNull String path) {
+        StringBuilder result = new StringBuilder(path.length());
+        for (int i = 0; i < path.length(); i++) {
+            char c = path.charAt(i);
+            switch (c) {
+                case '\\': result.append("\\\\"); break;
+                case '\t': result.append("\\t"); break;
+                case '\n': result.append("\\n"); break;
+                case '\r': result.append("\\r"); break;
+                default: result.append(c);
+            }
+        }
+        return result.toString();
+    }
+
+    private static String decodeListingPath(@NonNull String encoded) throws IOException {
+        StringBuilder result = new StringBuilder(encoded.length());
+        for (int i = 0; i < encoded.length(); i++) {
+            char c = encoded.charAt(i);
+            if (c != '\\') { result.append(c); continue; }
+            if (++i == encoded.length()) throw new IOException("Truncated libarchive listing escape");
+            switch (encoded.charAt(i)) {
+                case '\\': result.append('\\'); break;
+                case 't': result.append('\t'); break;
+                case 'n': result.append('\n'); break;
+                case 'r': result.append('\r'); break;
+                default: throw new IOException("Invalid libarchive listing escape");
+            }
+        }
+        return result.toString();
     }
 
     @Nullable
@@ -164,7 +202,7 @@ final class RarLibarchiveFallback {
         Map<String, ArchiveSupport.EntryInfo> out = new LinkedHashMap<>();
         for (ArchiveSupport.EntryInfo entry : input) {
             addParentDirectories(out, entry.path);
-            out.put(entry.path.toLowerCase(Locale.ROOT), entry);
+            out.put(entry.path, entry);
         }
         return new ArrayList<>(out.values());
     }
@@ -174,7 +212,7 @@ final class RarLibarchiveFallback {
         int slash = path.indexOf('/');
         while (slash >= 0) {
             String dir = path.substring(0, slash + 1);
-            String key = dir.toLowerCase(Locale.ROOT);
+            String key = dir;
             if (!out.containsKey(key)) out.put(key, new ArchiveSupport.EntryInfo(dir, true, -1L, 0L));
             slash = path.indexOf('/', slash + 1);
         }

@@ -70,10 +70,17 @@ final class SettingsTextDisplayRuleController {
         refresh[0].run();
 
         MaterialButton add = activity.makeTextRuleDialogButton(activity.getString(R.string.add), text);
-        add.setOnClickListener(v -> showEditTextDisplayRuleDialog(rules, -1, () -> {
-            TextDisplayRuleManager.saveRules(activity, rules);
-            refresh[0].run();
-        }));
+        add.setOnClickListener(v -> {
+            if (rules.size() >= TextDisplayRuleManager.MAX_RULES) {
+                ShortToast.show(activity, activity.getString(R.string.txt_display_rule_limit,
+                        TextDisplayRuleManager.MAX_RULES));
+                return;
+            }
+            showEditTextDisplayRuleDialog(rules, -1, () -> {
+                TextDisplayRuleManager.saveRules(activity, rules);
+                refresh[0].run();
+            });
+        });
         panel.addView(add);
 
         MaterialButton clear = activity.makeTextRuleDialogButton(activity.getString(R.string.clear_all), text);
@@ -410,11 +417,29 @@ final class SettingsTextDisplayRuleController {
             ShortToast.show(activity, R.string.txt_display_rule_find_required);
             return;
         }
+        if (editIndex < 0 && rules.size() >= TextDisplayRuleManager.MAX_RULES) {
+            ShortToast.show(activity, activity.getString(R.string.txt_display_rule_limit,
+                    TextDisplayRuleManager.MAX_RULES));
+            return;
+        }
+        TextDisplayRule draft = editing.copy();
+        draft.findText = find;
+        draft.replacementText = replaceInput.getText() != null ? replaceInput.getText().toString() : "";
+        draft.caseSensitive = caseBox.isChecked();
+        draft.useRegex = regexBox.isChecked();
+        if (!draft.isValid()) {
+            ShortToast.show(activity, R.string.txt_display_rule_single_line_required);
+            return;
+        }
+        if (!TextDisplayRuleManager.isValidExpression(draft)) {
+            ShortToast.show(activity, R.string.txt_display_rule_invalid_expression);
+            return;
+        }
         String oldScope = editIndex >= 0 ? editing.scope : TextDisplayRule.SCOPE_ALL_TXT;
         String oldFilePath = editIndex >= 0 && editing.filePath != null ? editing.filePath : "";
 
         editing.findText = find;
-        editing.replacementText = replaceInput.getText() != null ? replaceInput.getText().toString() : "";
+        editing.replacementText = draft.replacementText;
         editing.enabled = enabledBox.isChecked();
         editing.caseSensitive = caseBox.isChecked();
         editing.useRegex = regexBox.isChecked();
@@ -423,17 +448,14 @@ final class SettingsTextDisplayRuleController {
                 && !activity.currentTxtFilePath.isEmpty()) {
             editing.sourceFilePath = activity.currentTxtFilePath;
         }
-        if (fileOnlyBox.isChecked()
-                && activity.currentTxtFilePath != null
-                && !activity.currentTxtFilePath.isEmpty()) {
+        if (fileOnlyBox.isChecked()) {
             editing.scope = TextDisplayRule.SCOPE_FILE;
             if (editIndex >= 0
-                    && TextDisplayRule.SCOPE_FILE.equals(oldScope)
-                    && oldFilePath != null
-                    && !oldFilePath.isEmpty()) {
+                    && TextDisplayRule.SCOPE_FILE.equals(oldScope)) {
+                // Main Settings has no current TXT path. Keep the existing target there too.
                 editing.filePath = oldFilePath;
             } else {
-                editing.filePath = activity.currentTxtFilePath;
+                editing.filePath = activity.currentTxtFilePath != null ? activity.currentTxtFilePath : "";
             }
         } else {
             editing.scope = TextDisplayRule.SCOPE_ALL_TXT;

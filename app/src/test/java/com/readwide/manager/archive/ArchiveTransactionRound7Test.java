@@ -1,0 +1,34 @@
+package com.readwide.manager.archive;
+import static org.junit.Assert.*;
+import org.junit.*;import org.junit.rules.TemporaryFolder;
+import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.util.*;import java.util.zip.*;
+import com.readwide.manager.util.FileOperationProgress;
+/** Public dispatcher members are compiled exactly by the host harness; backend seams are documented. */
+public class ArchiveTransactionRound7Test {
+ @Rule public TemporaryFolder temp=new TemporaryFolder();
+ private final byte[] original="KEEP ORIGINAL CONTENT".getBytes(StandardCharsets.UTF_8);
+ private File output()throws Exception{File f=new File(temp.getRoot(),"output.bin");Files.write(f.toPath(),original);return f;}
+ private void kept(File f)throws Exception{assertArrayEquals(original,Files.readAllBytes(f.toPath()));}
+ private File egg(boolean corrupt)throws Exception{return Round5Fixtures.egg(temp.getRoot(),new String[]{"data.bin"},new byte[][]{Round4Fixtures.data(2000)},false,null,corrupt?0:-1,1);}
+ @Test public void missingEggEntryPreservesOriginal()throws Exception{File a=egg(false),o=output();assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"missing",o,null).success);kept(o);}
+ @Test public void corruptEggPreservesOriginal()throws Exception{File a=egg(true),o=output();assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",o,null).success);kept(o);}
+ @Test public void malformedEggPreservesOriginal()throws Exception{File a=Round4Fixtures.write(temp.getRoot(),"bad.egg",new byte[]{69,71,71,65}),o=output();assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",o,null).success);kept(o);}
+ @Test public void corruptEggLeavesNoNewOutput()throws Exception{File o=new File(temp.getRoot(),"new.bin");assertFalse(ArchiveSupport.extractSingleEntryDetailed(egg(true),"data.bin",o,null).success);assertFalse(o.exists());}
+ @Test public void validEggReplacesOriginalAfterVerification()throws Exception{File a=egg(false),o=output();assertTrue(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",o,null).success);assertArrayEquals(Round4Fixtures.data(2000),Files.readAllBytes(o.toPath()));}
+ @Test public void directoryDestinationIsNotRecursivelyDeleted()throws Exception{File a=egg(false),dir=temp.newFolder("target"),child=new File(dir,"precious.txt");Files.write(child.toPath(),original);assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",dir,null).success);kept(child);}
+ @Test public void invalidTraversalPreservesOriginal()throws Exception{File a=egg(false),o=output();assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"../data.bin",o,null).success);kept(o);}
+ @Test public void cancellationBeforeDispatchPreservesOriginal()throws Exception{File a=egg(false),o=output();Thread.currentThread().interrupt();try{assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",o,null).success);}finally{Thread.interrupted();}kept(o);}
+ @Test public void missingArchivePreservesOriginal()throws Exception{File o=output();assertFalse(ArchiveSupport.extractSingleEntryDetailed(new File(temp.getRoot(),"missing.egg"),"data.bin",o,null).success);kept(o);}
+ @Test public void archiveCannotBeItsOwnDestination()throws Exception{File a=egg(false);byte[] before=Files.readAllBytes(a.toPath());assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",a,null).success);assertArrayEquals(before,Files.readAllBytes(a.toPath()));}
+ @Test public void alternatePathToArchiveCannotOverwriteSource()throws Exception{File a=egg(false);byte[] before=Files.readAllBytes(a.toPath());File alias=new File(temp.getRoot(),"./"+a.getName());assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",alias,null).success);assertArrayEquals(before,Files.readAllBytes(a.toPath()));}
+ @Test public void missingAlzEntryPreservesOriginal()throws Exception{File a=Round4Fixtures.write(temp.getRoot(),"a.alz",Round4Fixtures.alz(Round4Fixtures.data(200),2,false)),o=output();assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"missing",o,null).success);kept(o);}
+ @Test public void wrongAlzPasswordPreservesOriginal()throws Exception{File a=Round4Fixtures.write(temp.getRoot(),"a.alz",Round4Fixtures.alz(Round4Fixtures.data(200),2,true)),o=output();assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",o,"wrong".toCharArray()).success);kept(o);}
+ @Test public void validAlzReplacesOriginal()throws Exception{byte[] data=Round4Fixtures.data(700);File a=Round4Fixtures.write(temp.getRoot(),"a.alz",Round4Fixtures.alz(data,2,false)),o=output();assertTrue(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",o,null).success);assertArrayEquals(data,Files.readAllBytes(o.toPath()));}
+ @Test public void alzContinuationCannotBeDestination()throws Exception{List<File> v=Round4Fixtures.splitAlz(temp.getRoot(),"book",Round4Fixtures.alz(Round4Fixtures.data(900),2,false),4);File out=v.get(2);byte[] before=Files.readAllBytes(out.toPath());assertFalse(ArchiveSupport.extractSingleEntryDetailed(v.get(0),"data.bin",out,null).success);assertArrayEquals(before,Files.readAllBytes(out.toPath()));}
+ @Test public void eggContinuationCannotBeDestination()throws Exception{List<File> v=Round4Fixtures.splitEgg(temp.getRoot(),"book",Round4Fixtures.egg(Round4Fixtures.data(900),1,false),4);File out=v.get(2);byte[] before=Files.readAllBytes(out.toPath());assertFalse(ArchiveSupport.extractSingleEntryDetailed(v.get(0),"data.bin",out,null).success);assertArrayEquals(before,Files.readAllBytes(out.toPath()));}
+ @Test public void missingSevenZEntryPreservesOriginal()throws Exception{File a=Round5Fixtures.compressedSevenZ(temp.getRoot(),Round4Fixtures.data(200),4,false,false,false,false),o=output();assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"missing",o,null).success);kept(o);}
+ @Test public void corruptSevenZPreservesOriginal()throws Exception{File a=Round5Fixtures.compressedSevenZ(temp.getRoot(),Round4Fixtures.data(200),4,false,false,false,true),o=output();assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",o,null).success);kept(o);}
+ @Test public void validSevenZReplacesOriginal()throws Exception{byte[] data=Round4Fixtures.data(901);File a=Round5Fixtures.compressedSevenZ(temp.getRoot(),data,4,false,false,false,false),o=output();assertTrue(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",o,null).success);assertArrayEquals(data,Files.readAllBytes(o.toPath()));}
+ @Test public void badEggPasswordPreservesOriginal()throws Exception{File a=Round6Fixtures.aesEgg(temp.getRoot(),128,1,90000,false,false),o=output();assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"data.bin",o,"wrong".toCharArray()).success);kept(o);}
+ @Test public void unknownFormatPreservesOriginal()throws Exception{File a=Round4Fixtures.write(temp.getRoot(),"unknown.weird",new byte[]{1,2,3}),o=output();assertFalse(ArchiveSupport.extractSingleEntryDetailed(a,"x",o,null).success);kept(o);}
+}

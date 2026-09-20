@@ -690,7 +690,7 @@
     <string name="archive_support_boundary_title">アーカイブ対応範囲</string>
     <string name="archive_support_boundary_rar">RARの対応範囲は、圧縮方式、暗号化方式、分割構成によって異なります。カスタムVMプログラムや、暗号化または分割されたLZ/PPMd混在データには対応していません。</string>
     <string name="archive_support_boundary_zip">ZIP/CBZ/ZIPX は通常の Store/Deflate と暗号化 ZIP を Zip4j で処理します。WinZip AES の ZIPX は Deflate64、BZip2、LZMA、XZ に加え、libarchive 3.8.9 経由で PPMd と Zstandard にも対応します。AES と JPEG または WavPack を組み合わせた ZIPX は同梱の FOSS ネイティブコーデックモジュールで対応します。</string>
-    <string name="archive_support_boundary_7z">7z/CB7の一般的な圧縮方式と一部のPPMd/BCJ2の組み合わせに対応し、対応範囲内の暗号化・分割アーカイブも開けます。一部の方式の組み合わせには未対応で、ソリッドアーカイブを開くには時間がかかることがあります。</string>
+    <string name="archive_support_boundary_7z">7z/CB7の一般的な圧縮方式と一部のPPMd/BCJ2/ARM64/RISC-Vの組み合わせに対応し、対応範囲内の暗号化・分割アーカイブも開けます。一部の方式の組み合わせには未対応で、ソリッドアーカイブを開くには時間がかかることがあります。</string>
     <string name="archive_support_boundary_alz">ALZ は Store、Deflate、BZip2、および一部の ZipCrypto 風エントリに対応します。より広範な分割、暗号化、descriptor-heavy、特殊な ESTsoft 形式はベストエフォートです。</string>
     <string name="archive_support_boundary_egg">EGGのStore、Deflate、BZip2、AZO、LZMA、分割アーカイブ、暗号化されていないソリッドアーカイブに対応しています。非ソリッド項目では一部のZipCrypto/AES暗号化にも対応します。LEA暗号化と暗号化されたソリッドアーカイブには未対応です。</string>
     <string name="archive_support_boundary_generic">このアーカイブは、現在対応している展開範囲外の機能を使用しています。</string>
@@ -805,4 +805,8 @@
     <string name="font_import_failed">フォントファイルをインポートできませんでした。</string>
     <string name="epub_original_layout_kept">このEPUBは元のページレイアウトを維持します。</string>
     <string name="rendered_page_current_layout">現在のレイアウトに基づいて生成されたページです。</string>
+    <string name="theme_editor_save_failed">テーマを保存できませんでした。編集内容は保持されています。もう一度お試しください。</string>
+    <string name="txt_display_rule_limit">ルールは最大%1$d件まで保存できます。追加する前に既存のルールを削除してください。</string>
+    <string name="txt_display_rule_single_line_required">ルールには改行のない1行のテキストを入力してください。</string>
+    <string name="txt_display_rule_invalid_expression">正規表現または置換文字列が正しくありません。</string>
 </resources>

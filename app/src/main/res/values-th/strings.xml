@@ -690,7 +690,7 @@
     <string name="archive_support_boundary_title">ขอบเขตการรองรับไฟล์บีบอัด</string>
     <string name="archive_support_boundary_rar">การรองรับ RAR มีข้อจำกัดและขึ้นอยู่กับวิธีบีบอัด การเข้ารหัส และการแบ่งส่วน ไม่รองรับโปรแกรม VM แบบกำหนดเองหรือข้อมูล LZ/PPMd แบบผสมที่เข้ารหัสหรือแบ่งส่วน</string>
     <string name="archive_support_boundary_zip">ZIP/CBZ/ZIPX รองรับ Store/Deflate ปกติและ ZIP ที่เข้ารหัสผ่าน Zip4j ส่วน ZIPX แบบ WinZip AES รองรับ Deflate64, BZip2, LZMA และ XZ รวมถึง PPMd และ Zstandard ผ่าน libarchive 3.8.9 และรองรับ AES ZIPX ที่ใช้ JPEG หรือ WavPack ผ่านโมดูลโคเดกเนทีฟ FOSS ที่รวมมาให้</string>
-    <string name="archive_support_boundary_7z">7z/CB7 รองรับวิธีบีบอัดทั่วไปและการใช้ PPMd/BCJ2 ร่วมกันบางรูปแบบ รวมถึงไฟล์ที่เข้ารหัสหรือแบ่งส่วนในรูปแบบที่รองรับ บางรูปแบบยังไม่รองรับ และไฟล์บีบอัดแบบ solid อาจใช้เวลาเปิดนาน</string>
+    <string name="archive_support_boundary_7z">7z/CB7 รองรับวิธีบีบอัดทั่วไปและการใช้ PPMd/BCJ2/ARM64/RISC-V ร่วมกันบางรูปแบบ รวมถึงไฟล์ที่เข้ารหัสหรือแบ่งส่วนในรูปแบบที่รองรับ บางรูปแบบยังไม่รองรับ และไฟล์บีบอัดแบบ solid อาจใช้เวลาเปิดนาน</string>
     <string name="archive_support_boundary_alz">ALZ รองรับ Store, Deflate, BZip2 และบางรายการแบบ ZipCrypto ส่วนรูปแบบ split, encrypted, descriptor-heavy หรือ ESTsoft ที่ไม่ปกติจะรองรับแบบ best-effort</string>
     <string name="archive_support_boundary_egg">EGG รองรับ Store, Deflate, BZip2, AZO และ LZMA ไฟล์บีบอัดแบบแบ่งส่วน ไฟล์แบบ solid ที่ไม่เข้ารหัส และรายการ ZipCrypto/AES ที่รองรับซึ่งไม่ใช่แบบ solid ไม่รองรับการเข้ารหัส LEA หรือไฟล์แบบ solid ที่เข้ารหัส</string>
     <string name="archive_support_boundary_generic">ไฟล์บีบอัดนี้ใช้คุณสมบัติที่อยู่นอกขอบเขตการแตกไฟล์ที่รองรับในขณะนี้</string>

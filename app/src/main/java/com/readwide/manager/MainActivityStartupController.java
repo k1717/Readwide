@@ -49,6 +49,7 @@ final class MainActivityStartupController {
         bindDrawer(toolbar);
         bindMainViews();
         bindFileLists();
+        activity.setupHomeShortcuts();
 
         activity.bookmarkManager = BookmarkManager.getInstance(activity);
         activity.setupRecentHeaderActions();

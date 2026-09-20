@@ -15,7 +15,27 @@ final class ArchiveFailureClassifier {
 
     @NonNull
     static ArchiveSupport.ExtractionFailure classify(@NonNull Exception e) {
-        String message = e.getMessage();
+        // A typed error is more reliable than words in a filename. Walk wrapper
+        // causes with identity-based cycle detection before considering messages.
+        java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (Throwable cause = e; cause != null && seen.add(cause); cause = cause.getCause()) {
+            if (cause instanceof java.io.InterruptedIOException) return ArchiveSupport.ExtractionFailure.FAILED;
+            if (cause instanceof ArchiveSupport.PasswordRequiredException) return ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED;
+            if (cause instanceof ArchiveSupport.UnsupportedArchiveFeatureException) return ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE;
+            if (cause instanceof java.io.EOFException
+                    || cause instanceof Rar5CompressedArchiveExtractor.ChecksumException) {
+                return ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE;
+            }
+        }
+        seen.clear();
+        for (Throwable cause = e; cause != null && seen.add(cause); cause = cause.getCause()) {
+            ArchiveSupport.ExtractionFailure result = classifyMessage(cause.getMessage());
+            if (result != ArchiveSupport.ExtractionFailure.FAILED) return result;
+        }
+        return ArchiveSupport.ExtractionFailure.FAILED;
+    }
+
+    private static ArchiveSupport.ExtractionFailure classifyMessage(String message) {
         String lower = message == null ? "" : message.toLowerCase(Locale.ROOT);
 
         if (containsAny(lower,
@@ -80,6 +100,11 @@ final class ArchiveFailureClassifier {
                 "truncated",
                 "corrupt",
                 "unexpected end",
+                "unexpected eof",
+                "unexpected egg eof",
+                "unexpected alz eof",
+                "unexpected rar eof",
+                "unexpected 7z eof",
                 "missing 7z split volume",
                 "missing numeric split archive part",
                 "first numeric split archive part is missing",
@@ -88,6 +113,8 @@ final class ArchiveFailureClassifier {
                 "missing volume",
                 "invalid signature",
                 "invalid egg signature",
+                "invalid egg volume signature",
+                "invalid alz volume signature",
                 "invalid alz signature",
                 "invalid rar signature",
                 "invalid zip signature",

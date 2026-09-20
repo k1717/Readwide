@@ -43,6 +43,10 @@
     </style>
 
 
+    <style name="TextAppearance.TextView.MainToolbar.Title" parent="TextAppearance.Widget.AppCompat.Toolbar.Title">
+        <item name="android:textSize">18sp</item>
+    </style>
+
     <style name="TextAppearance.TextView.ImageViewer.Title" parent="TextAppearance.Widget.AppCompat.Toolbar.Title">
         <item name="android:textSize">17sp</item>
         <item name="android:textColor">#FFFFFFFF</item>

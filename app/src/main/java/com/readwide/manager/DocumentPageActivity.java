@@ -184,14 +184,14 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     int readerPanel = Color.rgb(32, 33, 36);
     int readerLine = Color.rgb(84, 86, 90);
     String lastAppliedDocumentThemeSignature = null;
-    boolean restoreDocumentScrollAfterThemeRefresh = false;
-    int pendingThemeRefreshScrollX = 0;
-    int pendingThemeRefreshScrollY = 0;
+    private int documentReloadRequestGeneration;
+    private DocumentReloadPosition pendingDocumentReloadPosition;
     private int pendingEpubAnchorPage = -1;
     private String pendingEpubAnchorFragment = "";
     private EpubCfi pendingEpubCfi;
     private String localDocumentHost = LOCAL_HOST;
     int primaryDocumentPageLoadGeneration;
+    int primaryDocumentPageReadyGeneration = -1;
     int primaryDocumentPageLoadPage = -1;
     int rightDocumentPageLoadGeneration;
     int rightDocumentPageLoadPage = -1;
@@ -234,6 +234,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     String markdownSourceText = "";
     volatile int lastMarkdownSourceOffset = 0;
     volatile int lastMarkdownSourceLine = 1;
+    private MarkdownSourceAnchorUpdate pendingMarkdownSourceAnchorUpdate;
     volatile String lastMarkdownAnchorText = "";
     String pendingDocumentRestoreAnchorJson = "";
     volatile String lastDocumentContentAnchorJson = "";
@@ -480,6 +481,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     @Override
     protected void onResume() {
         super.onResume();
+        ViewerWindowPreferences.applyKeepScreenOn(getWindow(), prefs.getKeepScreenOn());
         epubPlaybackForeground = true;
         if (epubMediaOverlayController != null) epubMediaOverlayController.onForeground();
         // If read-aloud is running (or paused) in this viewer, coming back to
@@ -553,27 +555,173 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }
         lastAppliedDocumentThemeSignature = currentThemeSignature;
         if (webView == null || pages.isEmpty() || currentPage < 0 || currentPage >= pages.size()) return;
-        pendingThemeRefreshScrollX = webView.getScrollX();
-        pendingThemeRefreshScrollY = webView.getScrollY();
-        restoreDocumentScrollAfterThemeRefresh = true;
         clearDocumentEdgeArm();
-        showPage(currentPage, 0);
+        reloadCurrentDocumentPreservingPosition();
     }
 
     void restoreDocumentScrollAfterThemeRefreshIfNeeded(@NonNull WebView view) {
-        if (!restoreDocumentScrollAfterThemeRefresh) return;
-        if (isDocumentSearchActiveOnCurrentPage()) {
-            restoreDocumentScrollAfterThemeRefresh = false;
+        final DocumentReloadPosition position = pendingDocumentReloadPosition;
+        if (position == null || view != position.view
+                || !documentReloadContextMatches(position)
+                || isDocumentSearchActiveOnCurrentPage()) {
+            pendingDocumentReloadPosition = null;
             return;
         }
-        final int restoreX = pendingThemeRefreshScrollX;
-        final int restoreY = pendingThemeRefreshScrollY;
-        restoreDocumentScrollAfterThemeRefresh = false;
+        if (!position.anchorJson.isEmpty() && isRenderedContentAnchorDocument()) {
+            // The normal anchor restore runs later in this same onPageFinished.
+            // Keep this private until the exact replacement load has completed;
+            // a different navigation must never inherit the old page's anchor.
+            pendingDocumentRestoreAnchorJson = position.anchorJson;
+            return;
+        }
         view.postDelayed(() -> {
-            if (!activityDestroyed && webView != null) {
-                webView.scrollTo(restoreX, restoreY);
+            if (documentReloadContextMatches(position)) {
+                position.view.scrollTo(position.scrollX, position.scrollY);
             }
+            if (pendingDocumentReloadPosition == position) pendingDocumentReloadPosition = null;
         }, 60);
+    }
+
+    private void completeDocumentReloadAnchor(String anchorJson, int pageGeneration) {
+        DocumentReloadPosition position = pendingDocumentReloadPosition;
+        if (position != null && position.pageGeneration == pageGeneration
+                && position.anchorJson.equals(anchorJson)
+                && documentReloadContextMatches(position)) {
+            pendingDocumentReloadPosition = null;
+        }
+    }
+
+    /** Reloads presentation changes without discarding the current reading location. */
+    void reloadCurrentDocumentPreservingPosition() {
+        reloadCurrentDocumentPreservingPosition("");
+    }
+
+    private void reloadCurrentDocumentPreservingPosition(String preferredAnchor) {
+        reloadCurrentDocumentPreservingPosition(preferredAnchor, 1);
+    }
+
+    private void reloadCurrentDocumentPreservingPosition(String preferredAnchor, int captureRetriesRemaining) {
+        if (activityDestroyed || webView == null || !hasValidCurrentDocumentPage()) return;
+        final int request = ++documentReloadRequestGeneration;
+        final boolean contentReady = primaryDocumentPageReadyGeneration
+                == primaryDocumentPageLoadGeneration;
+        final DocumentReloadPosition before = documentReloadPosition("",
+                contentReady ? webView.getScrollX() : 0,
+                contentReady ? webView.getScrollY() : 0);
+        final DocumentReloadPosition alreadyPending = pendingDocumentReloadPosition;
+        final boolean[] completed = {false};
+        final Runnable[] timeout = new Runnable[1];
+        DocumentContentAnchorCaptureCallback finish = captured -> {
+            if (completed[0]) return;
+            completed[0] = true;
+            if (timeout[0] != null) before.view.removeCallbacks(timeout[0]);
+            if (request != documentReloadRequestGeneration
+                    || !documentReloadLoadContextMatches(before)) return;
+            String anchor = captured != null ? captured : "";
+            int scrollX = before.scrollX;
+            int scrollY = before.scrollY;
+            if (documentInteractionGeneration != before.interactionGeneration) {
+                if (captureRetriesRemaining > 0) {
+                    reloadCurrentDocumentPreservingPosition("", captureRetriesRemaining - 1);
+                    return;
+                }
+                // Continued touches must not permanently suppress a saved theme
+                // change. After one fresh retry, use the latest native position.
+                anchor = "";
+                scrollX = webView.getScrollX();
+                scrollY = webView.getScrollY();
+            }
+            if (alreadyPending != null && documentReloadContextMatches(alreadyPending)) {
+                // A second preference change can arrive before the first reload
+                // finishes. Reuse its location instead of capturing a blank DOM.
+                anchor = alreadyPending.anchorJson;
+                scrollX = alreadyPending.scrollX;
+                scrollY = alreadyPending.scrollY;
+            }
+            pendingDocumentReloadPosition = null;
+            pendingDocumentRestoreAnchorJson = "";
+            showPage(before.page, 0);
+            pendingDocumentReloadPosition = documentReloadPosition(anchor, scrollX, scrollY);
+        };
+        if (alreadyPending != null && documentReloadContextMatches(alreadyPending)) {
+            finish.onCaptured(alreadyPending.anchorJson);
+        } else if (isRenderedContentAnchorDocument()
+                && pendingDocumentRestoreAnchorJson != null
+                && !pendingDocumentRestoreAnchorJson.isEmpty()) {
+            // A bookmark/reading-state restore may still be waiting for its load.
+            finish.onCaptured(pendingDocumentRestoreAnchorJson);
+        } else if (isRenderedContentAnchorDocument() && !preferredAnchor.isEmpty()) {
+            finish.onCaptured(preferredAnchor);
+        } else if (!contentReady) {
+            // The previous chapter's DOM may still be visible while loading.
+            // It cannot describe a location in the requested chapter.
+            finish.onCaptured(null);
+        } else if (isRenderedContentAnchorDocument()) {
+            // A paused or failing WebView may never deliver its JS callback.
+            // Native coordinates are a bounded fallback, not an override of a
+            // successfully captured sentence/block after text reflow.
+            timeout[0] = () -> finish.onCaptured(null);
+            before.view.postDelayed(timeout[0], 350L);
+            captureDocumentContentAnchorFromWebView(finish);
+        } else {
+            finish.onCaptured(null);
+        }
+    }
+
+    private String cachedDocumentSemanticAnchorForCurrentPage() {
+        try {
+            JSONObject anchor = new JSONObject(lastDocumentContentAnchorJson);
+            if (currentPage == anchor.optInt("pageIndex", -1)
+                    && docType.equals(anchor.optString("docType", ""))
+                    && !anchor.optString("text", "").trim().isEmpty()
+                    && !isVerticalPositionDocumentContentAnchor(lastDocumentContentAnchorJson)) {
+                return lastDocumentContentAnchorJson;
+            }
+        } catch (Exception ignored) {}
+        return "";
+    }
+
+    private DocumentReloadPosition documentReloadPosition(String anchorJson, int scrollX, int scrollY) {
+        return new DocumentReloadPosition(webView, filePath, currentPage, loadGeneration,
+                primaryDocumentPageLoadGeneration, documentAnchorPageGeneration,
+                documentInteractionGeneration,
+                anchorJson, scrollX, scrollY);
+    }
+
+    private boolean documentReloadContextMatches(DocumentReloadPosition position) {
+        return documentReloadLoadContextMatches(position)
+                && documentInteractionGeneration == position.interactionGeneration;
+    }
+
+    private boolean documentReloadLoadContextMatches(DocumentReloadPosition position) {
+        return !activityDestroyed && webView == position.view
+                && currentPage == position.page && loadGeneration == position.loadGeneration
+                && primaryDocumentPageLoadGeneration == position.primaryLoadGeneration
+                && documentAnchorPageGeneration == position.pageGeneration
+                && java.util.Objects.equals(filePath, position.filePath);
+    }
+
+    private static final class DocumentReloadPosition {
+        final WebView view;
+        final String filePath;
+        final int page, loadGeneration, primaryLoadGeneration, pageGeneration, interactionGeneration;
+        final String anchorJson;
+        final int scrollX, scrollY;
+
+        DocumentReloadPosition(WebView view, String filePath, int page, int loadGeneration,
+                               int primaryLoadGeneration, int pageGeneration, int interactionGeneration,
+                               String anchorJson, int scrollX, int scrollY) {
+            this.view = view;
+            this.filePath = filePath;
+            this.page = page;
+            this.loadGeneration = loadGeneration;
+            this.primaryLoadGeneration = primaryLoadGeneration;
+            this.pageGeneration = pageGeneration;
+            this.interactionGeneration = interactionGeneration;
+            this.anchorJson = anchorJson;
+            this.scrollX = scrollX;
+            this.scrollY = scrollY;
+        }
     }
 
     void applyDocumentSystemBarColors() {
@@ -739,6 +887,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             prefs.getPrefs().unregisterOnSharedPreferenceChangeListener(epubBoundaryPreferenceListener);
         }
         activityDestroyed = true;
+        cancelMarkdownSourceAnchorUpdate();
         loadGeneration++;
         if (documentFastScrollController != null) {
             documentFastScrollController.destroy();
@@ -815,7 +964,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         return handled && action != MotionEvent.ACTION_DOWN;
     }
 
-    private boolean handleFastDocumentTapPaging(@NonNull MotionEvent e) {
+    private boolean handleFastDocumentTapPaging(@NonNull WebView source, @NonNull MotionEvent e) {
         int eventAction = e.getActionMasked();
         if (eventAction == MotionEvent.ACTION_CANCEL) {
             documentTapPagingSequence = false;
@@ -824,6 +973,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }
         if (!isPagedWebDocument() || webView == null || prefs == null
                 || ("EPUB".equals(docType) && currentEpubPageKeepsOriginalLayout())
+                || ("EPUB".equals(docType) && source.canZoomOut())
                 || !prefs.getDocumentTapPagingEnabled(docType)
                 || documentPageCount() <= 1 || pageTurnInFlight) {
             documentTapPagingSequence = false;
@@ -1260,7 +1410,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             lastStableMarkdownViewportHeightPx = 0;
         }
         if (!pages.isEmpty() && webView != null) {
-            showPage(currentPage, 0);
+            // Configuration dispatch may already have resized/reflowed the DOM.
+            // Prefer the last same-page semantic location from before rotation.
+            reloadCurrentDocumentPreservingPosition(cachedDocumentSemanticAnchorForCurrentPage());
         }
         View documentRoot = findViewById(R.id.document_root);
         if (documentRoot != null) androidx.core.view.ViewCompat.requestApplyInsets(documentRoot);
@@ -1360,16 +1512,15 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
 
             @Override
             public boolean onDoubleTap(@NonNull MotionEvent e) {
-                // Inside a page-turn zone a double tap must page, not zoom: a
-                // quick double tap to flip pages must not be captured as a zoom
-                // toggle. Mirrors the PDF viewer. Non-fixed-layout documents
-                // never reach here for side taps (their fast tap-paging path
-                // consumes the sequence first and bypasses this detector), so in
-                // practice this covers fixed-layout EPUB, whose side taps fall
-                // through to the gesture detector. Outside the page-turn zones
-                // the double tap still toggles zoom below.
+                WebView zoomTarget = documentGestureSourceView != null
+                        ? documentGestureSourceView : webView;
+                // A zoomed EPUB owns the double tap even in a page-turn zone.
+                // At fit size, side-zone double taps keep their paging behavior.
                 int tapAction = getDocumentTapPagingAction(e);
-                if (tapAction == TapZoneMath.ACTION_PREVIOUS || tapAction == TapZoneMath.ACTION_NEXT) {
+                boolean resetZoom = "EPUB".equals(docType)
+                        && zoomTarget != null && zoomTarget.canZoomOut();
+                if (!resetZoom && (tapAction == TapZoneMath.ACTION_PREVIOUS
+                        || tapAction == TapZoneMath.ACTION_NEXT)) {
                     // Consume the rest of this tap sequence so the WebView's own
                     // double-tap zoom does not also fire.
                     documentDoubleTapResetSequence = true;
@@ -1383,8 +1534,6 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                     return true;
                 }
                 documentDoubleTapResetSequence = true;
-                WebView zoomTarget = documentGestureSourceView != null
-                        ? documentGestureSourceView : webView;
                 if (zoomTarget != null && zoomTarget.canZoomOut()) {
                     // Already zoomed in (pinch or a previous double-tap): reset only
                     // the page that was actually touched.
@@ -1418,7 +1567,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
             documentInteractionGeneration++;
         }
-        if (handleFastDocumentTapPaging(event)) {
+        if (handleFastDocumentTapPaging(source, event)) {
             resetWordSwipeTracking(source);
             clearDocumentEdgeArm();
             return true;
@@ -1799,25 +1948,25 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     void applyAndReloadEpubBoundaryImmediately() {
-        applyEpubBoundaryMarginsIfNeeded();
         if (webView == null || pages.isEmpty()
                 || currentPage < 0 || currentPage >= pages.size()
                 || !"EPUB".equals(docType)
                 || !epubPageUsesReaderBoundary(currentPage)) {
+            applyEpubBoundaryMarginsIfNeeded();
             return;
         }
         String currentSignature = currentEpubBoundarySignature();
-        if (currentSignature.equals(loadedEpubBoundarySignature)) return;
+        if (currentSignature.equals(loadedEpubBoundarySignature)) {
+            applyEpubBoundaryMarginsIfNeeded();
+            return;
+        }
 
         // Reflowable EPUB keeps page JavaScript disabled. DOM style injection is
         // attempted for the fastest visual update, but a same-page HTML reload is
         // the authoritative path: it guarantees the new boundary CSS is parsed
         // even on System WebView versions that reject evaluateJavascript while
         // JavaScript is disabled. Preserve the current within-page position.
-        pendingThemeRefreshScrollX = webView.getScrollX();
-        pendingThemeRefreshScrollY = webView.getScrollY();
-        restoreDocumentScrollAfterThemeRefresh = true;
-        showPage(currentPage, 0);
+        reloadCurrentDocumentPreservingPosition();
     }
 
     void installDocumentFastScroll() {
@@ -2017,10 +2166,20 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     private void stabilizeDocumentAfterZoomReset(@NonNull WebView target) {
         if (!"EPUB".equals(docType)) return;
 
+        final int expectedPage = documentPageIndexForWebView(target);
+        final int expectedLoad = target == rightWebView
+                ? rightDocumentPageLoadGeneration : primaryDocumentPageLoadGeneration;
+        final long expectedInteraction = documentInteractionGeneration;
+
         Runnable stabilize = () -> {
-            if (activityDestroyed || !"EPUB".equals(docType)) return;
-            if (currentEpubPageKeepsOriginalLayout()) {
-                if (currentEpubPageIsFixedLayout() && target == webView) {
+            if (activityDestroyed || !"EPUB".equals(docType)
+                    || (target != webView && target != rightWebView)
+                    || documentPageIndexForWebView(target) != expectedPage
+                    || (target == rightWebView ? rightDocumentPageLoadGeneration
+                    : primaryDocumentPageLoadGeneration) != expectedLoad
+                    || documentInteractionGeneration != expectedInteraction) return;
+            if (epubPageKeepsOriginalLayout(expectedPage)) {
+                if (epubPageIsFixedLayout(expectedPage) && target == webView) {
                     applyFixedLayoutFindOffsetCssIfNeeded();
                 }
                 target.scrollTo(0, 0);
@@ -2063,14 +2222,14 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             ShortToast.show(this, R.string.epub_original_layout_kept);
             return;
         }
-        applyDocumentTextZoom();
         if (isMarkdownDocument()) {
             lastStableMarkdownContentHeightPx = 0;
             lastStableMarkdownViewportHeightPx = 0;
         }
         clearDocumentEdgeArm();
         if (!pages.isEmpty() && currentPage >= 0 && currentPage < pages.size()) {
-            showPage(currentPage, 0);
+            // configureForCurrentPage applies the new text zoom after capture.
+            reloadCurrentDocumentPreservingPosition();
         }
     }
 
@@ -3335,6 +3494,15 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
         }
         final String anchorJson = pendingDocumentRestoreAnchorJson;
         pendingDocumentRestoreAnchorJson = "";
+        if (anchorJson != null && !anchorJson.trim().isEmpty()
+                && (pendingDocumentReloadPosition == null
+                || !documentReloadContextMatches(pendingDocumentReloadPosition)
+                || !anchorJson.equals(pendingDocumentReloadPosition.anchorJson))) {
+            // Initial bookmark/reading-state restoration has the same delayed
+            // application window as a presentation reload; retain its location.
+            pendingDocumentReloadPosition = documentReloadPosition(anchorJson,
+                    view.getScrollX(), view.getScrollY());
+        }
         final WebView expectedView = view;
         final int expectedPage = currentPage;
         final int expectedPageGeneration = documentAnchorPageGeneration;
@@ -3359,6 +3527,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                                 requestedInteractionGeneration)) {
                             restoreDocumentContentAnchorFallback(expectedView, anchorJson);
                             updateDocumentContentAnchorFromWebView();
+                            completeDocumentReloadAnchor(anchorJson, expectedPageGeneration);
                         }
                     }, 180L);
                     return;
@@ -3379,7 +3548,13 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                             boolean ok = "true".equals(value);
                             if (!ok) {
                                 restoreDocumentContentAnchorFallback(expectedView, anchorJson);
-                                expectedView.postDelayed(this::updateDocumentContentAnchorFromWebView, 60);
+                                expectedView.postDelayed(() -> {
+                                    if (documentAnchorRestoreContextMatches(expectedView, expectedPage,
+                                            expectedPageGeneration, requestedInteractionGeneration)) {
+                                        updateDocumentContentAnchorFromWebView(() ->
+                                                completeDocumentReloadAnchor(anchorJson, expectedPageGeneration));
+                                    }
+                                }, 60);
                                 return;
                             }
                             if (verticalSentenceAnchor) {
@@ -3417,6 +3592,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                                             });
                                 }, 180);
                             } else {
+                                completeDocumentReloadAnchor(anchorJson, expectedPageGeneration);
                                 expectedView.postDelayed(this::updateDocumentContentAnchorFromWebView, 80);
                             }
                         });
@@ -3541,6 +3717,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                                 60));
                 return;
             }
+            completeDocumentReloadAnchor(anchorJson, expectedPageGeneration);
             expectedView.postDelayed(this::updateDocumentContentAnchorFromWebView, 60);
         });
     }
@@ -3562,6 +3739,9 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 + "');return !!(window.__rwDocVerticalAnchorIsVisible"
                 + "&&window.__rwDocVerticalAnchorIsVisible(a));}catch(e){return false;}})()";
         evaluateDocumentAnchorJavascript(verifyScript, value -> {
+            if (!documentAnchorRestoreContextMatches(expectedView, expectedPage,
+                    expectedPageGeneration, expectedInteractionGeneration)) return;
+            completeDocumentReloadAnchor(anchorJson, expectedPageGeneration);
             if ("true".equals(value)
                     && documentAnchorRestoreContextMatches(
                     expectedView,
@@ -3947,19 +4127,31 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     void updateMarkdownSourceAnchorFromWebView(Runnable afterUpdate) {
-        if (!isMarkdownDocument() || webView == null) {
+        if (activityDestroyed || !isMarkdownDocument() || webView == null) {
             if (afterUpdate != null) afterUpdate.run();
             return;
         }
+        final WebView requestedView = webView;
+        final int requestedLoad = loadGeneration;
+        final int requestedPageLoad = primaryDocumentPageLoadGeneration;
         evaluateMarkdownAnchorJavascript(
                 "(function(){try{var a=window.__rwMdAnchorAtTop?window.__rwMdAnchorAtTop():{offset:0,line:1,text:''};"
                         + "a.vtext=window.__rwMdTextAtTop?window.__rwMdTextAtTop():'';return a;}catch(e){return {offset:0,line:1,text:'',vtext:''};}})()",
                 value -> {
                     try {
+                        if (activityDestroyed || webView != requestedView || !isMarkdownDocument()
+                                || loadGeneration != requestedLoad
+                                || primaryDocumentPageLoadGeneration != requestedPageLoad) return;
                         if (value != null && !value.trim().isEmpty() && !"null".equals(value)) {
                             JSONObject obj = new JSONObject(value);
                             lastMarkdownSourceOffset = clampMarkdownSourceOffset(obj.optInt("offset", 0));
-                            lastMarkdownSourceLine = Math.max(1, obj.optInt("line", markdownSourceLineForOffset(lastMarkdownSourceOffset)));
+                            // Most anchors already include the line. Do not scan
+                            // the source prefix merely to evaluate an unused default.
+                            int sourceLine = obj.optInt("line", Integer.MIN_VALUE);
+                            if (sourceLine == Integer.MIN_VALUE) {
+                                sourceLine = obj.optInt("line", markdownSourceLineForOffset(lastMarkdownSourceOffset));
+                            }
+                            lastMarkdownSourceLine = Math.max(1, sourceLine);
                             // Prefer the character-precise viewport-top text
                             // (caret-based); fall back to the block's text.
                             String vtext = obj.optString("vtext", "");
@@ -3973,8 +4165,36 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     void scheduleMarkdownSourceAnchorUpdate() {
-        if (!isMarkdownDocument() || webView == null) return;
-        webView.postDelayed(this::updateMarkdownSourceAnchorFromWebView, 40);
+        if (activityDestroyed || !isMarkdownDocument() || webView == null) return;
+        if (pendingMarkdownSourceAnchorUpdate != null
+                && pendingMarkdownSourceAnchorUpdate.isCurrent()) return;
+        cancelMarkdownSourceAnchorUpdate();
+        MarkdownSourceAnchorUpdate update = new MarkdownSourceAnchorUpdate();
+        pendingMarkdownSourceAnchorUpdate = update;
+        if (!update.view.postDelayed(update, 40)) pendingMarkdownSourceAnchorUpdate = null;
+    }
+
+    private void cancelMarkdownSourceAnchorUpdate() {
+        if (pendingMarkdownSourceAnchorUpdate == null) return;
+        pendingMarkdownSourceAnchorUpdate.view.removeCallbacks(pendingMarkdownSourceAnchorUpdate);
+        pendingMarkdownSourceAnchorUpdate = null;
+    }
+
+    private final class MarkdownSourceAnchorUpdate implements Runnable {
+        final WebView view = webView;
+        final int documentLoad = loadGeneration;
+        final int pageLoad = primaryDocumentPageLoadGeneration;
+
+        boolean isCurrent() {
+            return !activityDestroyed && isMarkdownDocument() && webView == view
+                    && loadGeneration == documentLoad && primaryDocumentPageLoadGeneration == pageLoad;
+        }
+
+        @Override public void run() {
+            if (pendingMarkdownSourceAnchorUpdate != this) return;
+            pendingMarkdownSourceAnchorUpdate = null;
+            if (isCurrent()) updateMarkdownSourceAnchorFromWebView();
+        }
     }
 
     void scrollMarkdownToSourceOffset(int sourceOffset, boolean fallbackToVisualPage, int fallbackVisualPage) {
@@ -5615,12 +5835,13 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
             Page page = pages.get(i);
             if (page == null || page.sourcePath == null) continue;
             if (normalizeZipPath(page.sourcePath).equals(zipPath)) {
-                if (i == currentPage
-                        || (i == documentRightSpreadPageIndex() && sourceView == rightWebView)) {
+                WebView visibleTarget = i == currentPage ? webView
+                        : (i == documentRightSpreadPageIndex() ? rightWebView : null);
+                if (visibleTarget != null) {
                     // Keep the themed loadData document in place and scroll the
-                    // actual source pane. Letting WebView navigate to the raw ZIP
+                    // actual destination pane. Letting WebView navigate to the raw ZIP
                     // entry would discard injected theme/search markup.
-                    scrollEpubAnchor(sourceView, uri.getFragment());
+                    scrollEpubAnchor(visibleTarget, uri.getFragment());
                     return true;
                 }
                 pendingEpubAnchorPage = i;
@@ -5656,7 +5877,21 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
     }
 
     private void scrollEpubAnchor(@NonNull WebView targetView, @Nullable String fragment) {
-        if (fragment == null || fragment.isEmpty()) return;
+        if (fragment == null || fragment.isEmpty()) {
+            int page = documentPageIndexForWebView(targetView);
+            if (!epubPageUsesVerticalWriting(page)) {
+                targetView.scrollTo(0, 0);
+            } else {
+                // A chapter URL without a fragment (or with '#') means its start.
+                // Vertical-rl's start is the logical block edge, not native X=0.
+                evaluateEpubJavascript(targetView, page,
+                        "(function(){var b=document.body;var first=b&&b.firstElementChild;"
+                                + "if(first){try{first.scrollIntoView({block:'start',inline:'start',behavior:'auto'});}"
+                                + "catch(e){first.scrollIntoView(true);}}"
+                                + "window.scrollTo(window.scrollX||0,0);return true;})()");
+            }
+            return;
+        }
         String quoted = JSONObject.quote(fragment);
         evaluateEpubJavascript(
                 targetView,

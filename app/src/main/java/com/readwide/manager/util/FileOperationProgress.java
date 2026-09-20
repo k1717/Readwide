@@ -164,7 +164,7 @@ public final class FileOperationProgress {
     public void addDoneBytes(long bytes) {
         if (bytes <= 0L) return;
         synchronized (lock) {
-            doneBytes += bytes;
+            doneBytes = bytes > Long.MAX_VALUE - doneBytes ? Long.MAX_VALUE : doneBytes + bytes;
             if (totalBytes > 0L && doneBytes > totalBytes) doneBytes = totalBytes;
         }
         notifyListener();
@@ -181,12 +181,20 @@ public final class FileOperationProgress {
 
     public boolean checkpoint() {
         synchronized (lock) {
+            if (Thread.currentThread().isInterrupted()) {
+                cancelled = true;
+                paused = false;
+                complete = true;
+                lock.notifyAll();
+            }
             while (paused && !cancelled) {
                 try {
                     lock.wait();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     cancelled = true;
+                    paused = false;
+                    complete = true;
                     break;
                 }
             }

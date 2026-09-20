@@ -41,6 +41,13 @@ final class Rar3Unpacker {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
                     "RAR3/RAR4 discard primer requires a solid-sequence context");
         }
+        return unpackToDiscard(context, progress);
+    }
+
+    /** Verified discard also serves independent files that do not retain solid history. */
+    @NonNull
+    static Rar3UnpackFileResult unpackToDiscard(@NonNull Rar3UnpackContext context,
+                                               @Nullable FileOperationProgress progress) throws IOException {
         return unpackToDecodedOutput(context, RarCrcDecodedOutput.discarding(), progress, true);
     }
 

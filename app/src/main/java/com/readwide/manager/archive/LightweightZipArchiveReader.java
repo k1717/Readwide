@@ -7,13 +7,21 @@ import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Callable;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.CRC32;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -51,9 +59,12 @@ final class LightweightZipArchiveReader {
     static boolean extractArchiveIntoDirectory(@NonNull File archive,
                                                @NonNull File targetDir) throws IOException {
         List<ZipEntryInfo> entries = readEntries(archive);
+        checkCancelled();
+        validateOutputTargets(targetDir, entries);
         boolean sawEntry = false;
         List<ZipEntryInfo> files = new ArrayList<>();
         for (ZipEntryInfo entry : entries) {
+            checkCancelled();
             File out = resolveOutput(targetDir, entry.path);
             if (out == null) return false;
             sawEntry = true;
@@ -81,25 +92,34 @@ final class LightweightZipArchiveReader {
                                       @NonNull File outFile) throws IOException {
         String normalized = sanitizeEntryPath(entryPath);
         if (normalized == null || normalized.endsWith("/")) return false;
+        List<ZipEntryInfo> entries = readEntries(archive);
         try (ZipFile zip = new ZipFile(archive)) {
-            ZipEntry entry = zip.getEntry(normalized);
-            if (entry == null || entry.isDirectory()) return false;
-            if (!isSupportedMethod(entry.getMethod())) return false;
-            ZipEntryInfo info = fromZipEntry(entry);
-            return info != null && extractEntry(zip, info, outFile);
+            for (ZipEntryInfo info : entries) {
+                checkCancelled();
+                if (!info.directory && info.path.equals(normalized)) {
+                    if (!isSupportedMethod(info.method)) return false;
+                    return extractEntry(zip, info, outFile);
+                }
+            }
         }
+        return false;
     }
 
     @NonNull
     private static List<ZipEntryInfo> readEntries(@NonNull File archive) throws IOException {
+        checkCancelled();
         List<ZipEntryInfo> result = new ArrayList<>();
+        Set<String> paths = new HashSet<>();
         try (ZipFile zip = new ZipFile(archive)) {
             Enumeration<? extends ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements()) {
+                checkCancelled();
                 ZipEntry entry = entries.nextElement();
                 if (entry == null) continue;
                 ZipEntryInfo info = fromZipEntry(entry);
-                if (info == null) continue;
+                if (info == null) throw new IOException("Unsafe ZIP entry path");
+                String key = info.directory ? info.path.substring(0, info.path.length() - 1) : info.path;
+                if (!paths.add(key)) throw new IOException("Conflicting ZIP entry paths");
                 result.add(info);
             }
         } catch (ZipException e) {
@@ -114,7 +134,7 @@ final class LightweightZipArchiveReader {
         if (path == null) return null;
         boolean directory = entry.isDirectory() || path.endsWith("/");
         return new ZipEntryInfo(
-                path,
+                entry.getName(), entry.getCrc(), path,
                 directory,
                 entry.getSize(),
                 entry.getCompressedSize(),
@@ -127,50 +147,107 @@ final class LightweightZipArchiveReader {
                                                   @NonNull List<ZipEntryInfo> files) throws IOException {
         int workers = Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(), 4));
         ExecutorService executor = Executors.newFixedThreadPool(workers);
-        List<Future<Boolean>> futures = new ArrayList<>();
+        CompletionService<Void> completed = new ExecutorCompletionService<>(executor);
+        List<Future<Void>> futures = new ArrayList<>(workers);
+        AtomicInteger next = new AtomicInteger();
+        IOException failure = null;
+        boolean interrupted = false;
         try {
-            for (ZipEntryInfo entry : files) {
-                File out = resolveOutput(targetDir, entry.path);
-                if (out == null) return false;
-                Callable<Boolean> task = () -> {
+            // O(workers) tasks, one parsed ZIP handle per worker, not per entry.
+            for (int worker = 0; worker < workers; worker++) {
+                futures.add(completed.submit(() -> {
                     try (ZipFile zip = new ZipFile(archive)) {
-                        return extractEntry(zip, entry, out);
+                        for (;;) {
+                            checkCancelled();
+                            int index = next.getAndIncrement();
+                            if (index >= files.size()) return null;
+                            ZipEntryInfo entry = files.get(index);
+                            if (!extractEntry(zip, entry, resolveOutput(targetDir, entry.path))) {
+                                throw new IOException("ZIP entry extraction failed");
+                            }
+                        }
                     }
-                };
-                futures.add(executor.submit(task));
+                }));
             }
-            for (Future<Boolean> future : futures) {
-                try {
-                    if (!future.get()) return false;
-                } catch (Exception e) {
-                    return false;
-                }
-            }
-            return true;
+            for (int worker = 0; worker < workers; worker++) completed.take().get();
+        } catch (InterruptedException cancelled) {
+            interrupted = true;
+            failure = new InterruptedIOException("ZIP extraction cancelled");
+        } catch (ExecutionException failed) {
+            Throwable cause = failed.getCause();
+            failure = cause instanceof IOException ? (IOException) cause : new IOException("ZIP worker failed", cause);
         } finally {
+            for (Future<Void> future : futures) future.cancel(true);
             executor.shutdownNow();
+            // Never return while another worker can still write/rollback output.
+            while (!executor.isTerminated()) {
+                try { executor.awaitTermination(100, TimeUnit.MILLISECONDS); }
+                catch (InterruptedException cancelled) { interrupted = true; }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
         }
+        if (failure != null) throw failure;
+        checkCancelled();
+        return true;
     }
 
     private static boolean extractEntry(@NonNull ZipFile zip,
                                         @NonNull ZipEntryInfo info,
                                         @Nullable File outFile) throws IOException {
+        checkCancelled();
         if (outFile == null) return false;
-        ZipEntry entry = zip.getEntry(info.path);
+        // The raw archive name is a lookup key, not the normalized output path.
+        ZipEntry entry = zip.getEntry(info.rawName);
         if (entry == null || entry.isDirectory()) return false;
-        File parent = outFile.getParentFile();
-        if (parent == null) return false;
-        if (!parent.exists() && !parent.mkdirs() && !parent.exists()) return false;
-        try (InputStream in = new BufferedInputStream(zip.getInputStream(entry));
-             OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
-            byte[] buffer = new byte[BUFFER_SIZE];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                out.write(buffer, 0, read);
+        if (info.size < 0 || info.crc < 0 || entry.getSize() != info.size
+                || entry.getCrc() != info.crc || entry.getMethod() != info.method) {
+            throw new IOException("ZIP entry metadata changed or is incomplete");
+        }
+        try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
+            CRC32 crc = new CRC32();
+            long written = 0;
+            try (InputStream in = new BufferedInputStream(zip.getInputStream(entry));
+                 OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
+                byte[] buffer = new byte[BUFFER_SIZE];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    checkCancelled();
+                    if (read > info.size - written) throw new IOException("ZIP entry exceeds declared size");
+                    out.write(buffer, 0, read);
+                    crc.update(buffer, 0, read);
+                    written += read;
+                }
+                if (written != info.size || crc.getValue() != info.crc) {
+                    throw new IOException("ZIP entry size or CRC mismatch");
+                }
+                out.flush();
             }
-            out.flush();
+            checkCancelled();
+            guard.commit();
         }
         return true;
+    }
+
+    private static void checkCancelled() throws InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("ZIP extraction cancelled");
+    }
+
+    private static void validateOutputTargets(File targetDir, List<ZipEntryInfo> entries) throws IOException {
+        Map<String, Boolean> targets = new LinkedHashMap<>();
+        for (ZipEntryInfo entry : entries) {
+            checkCancelled();
+            File output = resolveOutput(targetDir, entry.path);
+            if (output == null) throw new IOException("Unsafe ZIP output path");
+            String canonical = output.getCanonicalPath();
+            if (targets.put(canonical, entry.directory) != null) throw new IOException("Conflicting ZIP output paths");
+        }
+        for (String path : targets.keySet()) {
+            for (File parent = new File(path).getParentFile(); parent != null; parent = parent.getParentFile()) {
+                if (Boolean.FALSE.equals(targets.get(parent.getPath()))) {
+                    throw new IOException("ZIP file conflicts with an output directory");
+                }
+            }
+        }
     }
 
     private static boolean isSupportedMethod(int method) {
@@ -191,7 +268,7 @@ final class LightweightZipArchiveReader {
         String entryName = rawEntryName.trim().replace('\\', '/');
         while (entryName.startsWith("./")) entryName = entryName.substring(2);
         while (entryName.contains("//")) entryName = entryName.replace("//", "/");
-        if (entryName.length() == 0) return null;
+        if (entryName.length() == 0 || entryName.indexOf('\0') >= 0) return null;
         if (entryName.startsWith("/")
                 || entryName.equals("..")
                 || entryName.startsWith("../")
@@ -230,6 +307,8 @@ final class LightweightZipArchiveReader {
     }
 
     private static final class ZipEntryInfo {
+        final String rawName;
+        final long crc;
         final String path;
         final boolean directory;
         final long size;
@@ -237,12 +316,14 @@ final class LightweightZipArchiveReader {
         final long timeMillis;
         final int method;
 
-        ZipEntryInfo(@NonNull String path,
+        ZipEntryInfo(@NonNull String rawName, long crc, @NonNull String path,
                      boolean directory,
                      long size,
                      long compressedSize,
                      long timeMillis,
                      int method) {
+            this.rawName = rawName;
+            this.crc = crc;
             this.path = directory && !path.endsWith("/") ? path + "/" : path;
             this.directory = directory;
             this.size = size;

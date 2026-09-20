@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_shortcuts_title">Pinned folders</string>
+    <string name="home_shortcuts_expand">Expand pinned folders</string>
+    <string name="home_shortcuts_collapse">Collapse pinned folders</string>
+    <string name="home_shortcuts_manage">Manage</string>
+    <string name="home_shortcuts_empty">Add a folder using “Add shortcut” in its folder menu.</string>
+    <string name="home_shortcut_unavailable">Unavailable</string>
+    <string name="home_shortcut_unavailable_hint">Folder unavailable. Reconnect storage or check access. The shortcut has been kept.</string>
+    <string name="home_shortcut_remove_description">Remove shortcut: %1$s</string>
+</resources>

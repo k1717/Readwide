@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="224dp" android:layout_height="wrap_content"
+    android:layout_marginEnd="8dp" android:orientation="vertical"
+    android:paddingStart="12dp" android:paddingEnd="8dp" android:paddingBottom="10dp"
+    android:minHeight="96dp" android:clickable="true" android:focusable="true"
+    android:foreground="?attr/selectableItemBackground">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical">
+        <ImageView android:id="@+id/home_shortcut_icon" android:layout_width="24dp"
+            android:layout_height="24dp" android:layout_marginEnd="8dp"
+            android:src="@drawable/ic_folder" android:contentDescription="@null" />
+        <TextView android:id="@+id/home_shortcut_name"
+            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:maxLines="2" android:ellipsize="end" android:textSize="15sp" android:textStyle="bold"
+            android:textColor="?attr/colorOnSurface" />
+        <ImageView android:id="@+id/home_shortcut_remove"
+            android:layout_width="48dp" android:layout_height="48dp" android:padding="14dp"
+            android:src="@drawable/ic_more_vert" android:contentDescription="@string/remove_shortcut"
+            android:background="?attr/selectableItemBackgroundBorderless" android:clickable="true" android:focusable="true" />
+    </LinearLayout>
+    <TextView android:id="@+id/home_shortcut_path" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:maxLines="2" android:ellipsize="middle"
+        android:textDirection="ltr" android:textSize="11sp" android:textColor="?attr/colorOnSurfaceVariant" />
+    <TextView android:id="@+id/home_shortcut_status" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:textSize="12sp"
+        android:text="@string/home_shortcut_unavailable" android:textColor="?attr/colorOnSurfaceVariant"
+        android:visibility="gone" />
+</LinearLayout>

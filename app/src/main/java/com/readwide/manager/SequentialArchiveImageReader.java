@@ -46,7 +46,7 @@ final class SequentialArchiveImageReader implements Closeable {
 
     @NonNull private final Context appContext;
     @NonNull private final File archiveFile;
-    @Nullable private final ArchiveSourceSnapshot sourceSnapshot;
+    @NonNull private final ArchiveSourceSnapshot sourceSnapshot;
     @NonNull private final String archivePathSnapshot;
     private final long archiveLengthSnapshot;
     private final long archiveLastModifiedSnapshot;
@@ -176,7 +176,7 @@ final class SequentialArchiveImageReader implements Closeable {
     boolean ensureExtracted(@NonNull String entryPath,
                             boolean extractBehindFrontier,
                             @Nullable BooleanSupplier keepAdvancing) {
-        File outFile = ArchivePreviewCache.outputFileForEntry(appContext, archiveFile, entryPath, sensitiveCache);
+        File outFile = ArchivePreviewCache.outputFileForEntry(appContext, sourceSnapshot, entryPath, sensitiveCache);
         if (ArchiveImageEntryCache.shouldReuseReadyImageFile(
                 entryPath, outFile, sensitiveCache, verifiedSensitivePaths)) {
             return true;
@@ -249,7 +249,7 @@ final class SequentialArchiveImageReader implements Closeable {
         Throwable openFailure = null;
         try {
             File spoolDirectory = ArchivePreviewCache.outputFileForEntry(
-                    appContext, archiveFile, "__readwide_forward_spool__", sensitiveCache).getParentFile();
+                    appContext, sourceSnapshot, "__readwide_forward_spool__", sensitiveCache).getParentFile();
             reader = ArchiveSupport.openForwardReader(archiveFile, password, spoolDirectory);
         } catch (Throwable t) {
             reader = null;
@@ -287,7 +287,7 @@ final class SequentialArchiveImageReader implements Closeable {
                     skipOrDrainCurrentLocked(activeReader, buffer);
                     continue;
                 }
-                File outFile = ArchivePreviewCache.outputFileForEntry(appContext, archiveFile, path, sensitiveCache);
+                File outFile = ArchivePreviewCache.outputFileForEntry(appContext, sourceSnapshot, path, sensitiveCache);
                 boolean extracted;
                 if (ArchiveImageEntryCache.shouldReuseReadyImageFile(
                         path, outFile, sensitiveCache, verifiedSensitivePaths)) {
@@ -341,7 +341,10 @@ final class SequentialArchiveImageReader implements Closeable {
 
         long total = 0L;
         int read;
-        while ((read = activeReader.read(buffer)) > 0) {
+        while ((read = activeReader.read(buffer)) != -1) {
+            if (read <= 0 || read > buffer.length) {
+                throw new IOException("Archive decoder made no valid read progress");
+            }
             if (Thread.currentThread().isInterrupted()) throw new IOException("Archive image request interrupted");
             if (total > Long.MAX_VALUE - read) throw new IOException("Sequential archive size overflow");
             total += read;
@@ -355,7 +358,10 @@ final class SequentialArchiveImageReader implements Closeable {
                                     @NonNull byte[] buffer) throws IOException {
         long total = 0L;
         int read;
-        while ((read = activeReader.read(buffer)) > 0) {
+        while ((read = activeReader.read(buffer)) != -1) {
+            if (read <= 0 || read > buffer.length) {
+                throw new IOException("Archive decoder made no valid read progress");
+            }
             if (Thread.currentThread().isInterrupted()) throw new IOException("Archive image request interrupted");
             if (total > Long.MAX_VALUE - read) throw new IOException("Sequential archive size overflow");
             total += read;
@@ -374,7 +380,7 @@ final class SequentialArchiveImageReader implements Closeable {
             drainCurrentLocked(activeReader, buffer);
             return false;
         }
-        if (!parent.exists() && !parent.mkdirs()) {
+        if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
             drainCurrentLocked(activeReader, buffer);
             return false;
         }
@@ -384,7 +390,10 @@ final class SequentialArchiveImageReader implements Closeable {
             long total = 0L;
             try (OutputStream out = ArchiveSupport.openExtractionOutputStream(tmpFile)) {
                 int read;
-                while ((read = activeReader.read(buffer)) > 0) {
+                while ((read = activeReader.read(buffer)) != -1) {
+                    if (read <= 0 || read > buffer.length) {
+                        throw new IOException("Archive decoder made no valid read progress");
+                    }
                     if (total > Long.MAX_VALUE - read) throw new IOException("Sequential archive size overflow");
                     total += read;
                     out.write(buffer, 0, read);
@@ -408,7 +417,7 @@ final class SequentialArchiveImageReader implements Closeable {
     private boolean extractPassedEntryLocked(@NonNull String entryPath, @NonNull File outFile) {
         File parent = outFile.getParentFile();
         if (parent == null) return false;
-        if (!parent.exists() && !parent.mkdirs()) return false;
+        if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) return false;
         File tmpFile;
         try {
             tmpFile = File.createTempFile("seq_archive_back_", ".extracting", parent);

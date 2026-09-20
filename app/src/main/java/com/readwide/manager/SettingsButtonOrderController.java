@@ -96,7 +96,7 @@ final class SettingsButtonOrderController {
 
         MaterialButton reset = activity.makeTextRuleDialogButton(activity.getString(R.string.reset_to_default), text);
         reset.setOnClickListener(v -> {
-            ButtonOrderManager.resetOrder(activity.prefs, group);
+            // Reset is a draft change, just like moving a row. Only Save commits it.
             working.clear();
             working.addAll(ButtonOrderManager.defaultItems(group));
             render[0].run();

@@ -10,14 +10,11 @@ import java.util.regex.PatternSyntaxException;
  * large-file search paths route through this class so case-folding, whole-word,
  * regex, and Unicode-normalization behavior is identical everywhere.
  *
- * <p><b>Index stability.</b> Returned match start/end offsets are always
- * relative to the original {@code text} passed in, so callers can keep using
- * them for bookmarks and page anchors. To make that safe, literal matching
- * compares against a <em>length-preserving</em> view of the text: case folding
- * is done per-char and Unicode normalization is only applied when it does not
- * change the string length (the overwhelmingly common case for NFC). When a
- * normalization would change length, the matcher falls back to the un-normalized
- * (still length-stable) comparison so offsets never drift.
+ * <p><b>Index coordinates.</b> Match spans always use original UTF-16 offsets.
+ * Literal NFC search retains a normalization map; transformed/reordered source
+ * segments are highlighted as complete covering spans. Regex operates on the
+ * original text: Android does not implement Pattern.CANON_EQ, so the Unicode
+ * normalization option intentionally applies to literal search only.
  */
 public final class SearchMatcher {
 
@@ -36,13 +33,17 @@ public final class SearchMatcher {
     private final Pattern regexPattern; // non-null only in regex mode
 
     private final String comparableQuery;
+    private final int[] literalFallback;
 
     private SearchMatcher(SearchOptions options, String query, Pattern regexPattern) {
         this.options = options;
         this.query = query;
         this.regexPattern = regexPattern;
         // Precompute once; reused across all match stepping for literal mode.
-        this.comparableQuery = regexPattern == null ? comparable(query) : query;
+        this.comparableQuery = regexPattern == null
+                ? foldCase(options.normalizeUnicode ? Normalizer.normalize(query, Normalizer.Form.NFC) : query)
+                : query;
+        this.literalFallback = regexPattern == null ? buildLiteralFallback(comparableQuery) : null;
     }
 
     /**
@@ -56,7 +57,8 @@ public final class SearchMatcher {
         if (opt.regex) {
             int flags = Pattern.UNICODE_CASE | Pattern.MULTILINE;
             if (!opt.caseSensitive) flags |= Pattern.CASE_INSENSITIVE;
-            if (opt.normalizeUnicode) flags |= Pattern.CANON_EQ;
+            // CANON_EQ is unsupported on Android. Never normalize regex syntax:
+            // doing so can change character classes, quantifiers and escapes.
             try {
                 return new SearchMatcher(opt, query, Pattern.compile(query, flags));
             } catch (PatternSyntaxException e) {
@@ -77,22 +79,26 @@ public final class SearchMatcher {
      */
     public Match firstFrom(String text, int from) {
         if (text == null || text.isEmpty()) return null;
-        return firstPrepared(prepare(text), text, from);
+        Object ctx = prepare(text);
+        if (regexPattern == null) return firstPrepared(ctx, text, from);
+        // Keep the same non-overlapping sequence as count/nth/highlighting.
+        // Starting find() inside an earlier hit would invent a suffix match.
+        Match hit = firstPrepared(ctx, text, 0);
+        while (hit != null && hit.start < from && !Thread.currentThread().isInterrupted()) {
+            hit = firstPrepared(ctx, text, nextStart(hit));
+        }
+        return hit;
     }
 
     /** Finds the last match at or before {@code from}, or {@code null}. */
     public Match lastUpTo(String text, int from) {
-        if (text == null || text.isEmpty()) return null;
-        int cap = Math.max(0, Math.min(text.length() - 1, from));
-        Match best = null;
-        // Build the comparison view / matcher once, then scan.
-        Object ctx = prepare(text);
-        Match m = firstPrepared(ctx, text, 0);
-        while (m != null && m.start <= cap) {
-            best = m;
-            m = firstPrepared(ctx, text, nextStart(m));
-        }
-        return best;
+        if (text == null || text.isEmpty() || from < 0) return null;
+        int cap = Math.min(text.length() - 1, from);
+        int[] best = {-1, -1};
+        prepareText(text).forEachInRange(0, cap + 1, (start, end) -> {
+            best[0] = start; best[1] = end; return true;
+        });
+        return best[0] < 0 ? null : new Match(best[0], best[1]);
     }
 
     /**
@@ -109,43 +115,29 @@ public final class SearchMatcher {
     /** Total number of matches in the text. */
     public int count(String text) {
         if (text == null || text.isEmpty()) return 0;
-        int count = 0;
-        Object ctx = prepare(text);
-        Match m = firstPrepared(ctx, text, 0);
-        while (m != null && !Thread.currentThread().isInterrupted()) {
-            count++;
-            m = firstPrepared(ctx, text, nextStart(m));
-        }
-        return count;
+        int[] count = {0};
+        forEachMatch(text, (start, end) -> { count[0]++; return true; });
+        return count[0];
     }
 
     /** Start offset of the 1-based nth match, or -1. */
     public int nthStart(String text, int occurrence) {
         if (text == null || text.isEmpty()) return -1;
         int target = Math.max(1, occurrence);
-        int n = 0;
-        Object ctx = prepare(text);
-        Match m = firstPrepared(ctx, text, 0);
-        while (m != null) {
-            n++;
-            if (n == target) return m.start;
-            m = firstPrepared(ctx, text, nextStart(m));
-        }
-        return -1;
+        int[] n = {0}, result = {-1};
+        forEachMatch(text, (start, end) -> {
+            if (++n[0] != target) return true;
+            result[0] = start; return false;
+        });
+        return result[0];
     }
 
     /** 1-based ordinal of the match whose start is the first &gt;= position. */
     public int ordinalForPosition(String text, int position) {
         if (text == null || text.isEmpty()) return 0;
-        int n = 0;
-        Object ctx = prepare(text);
-        Match m = firstPrepared(ctx, text, 0);
-        while (m != null) {
-            n++;
-            if (m.start >= position) return n;
-            m = firstPrepared(ctx, text, nextStart(m));
-        }
-        return n;
+        int[] n = {0};
+        forEachMatch(text, (start, end) -> { n[0]++; return start < position; });
+        return n[0];
     }
 
     // --- prepared (single normalization/compile) scanning -------------------
@@ -163,12 +155,7 @@ public final class SearchMatcher {
      */
     public void forEachMatch(String text, MatchConsumer consumer) {
         if (text == null || text.isEmpty() || consumer == null) return;
-        Object ctx = prepare(text);
-        Match m = firstPrepared(ctx, text, 0);
-        while (m != null && !Thread.currentThread().isInterrupted()) {
-            if (!consumer.accept(m.start, m.end)) return;
-            m = firstPrepared(ctx, text, nextStart(m));
-        }
+        prepareText(text).forEachInRange(0, text.length(), consumer);
     }
 
     /**
@@ -194,15 +181,32 @@ public final class SearchMatcher {
             int start = Math.max(0, from), end = Math.min(text.length(), toExclusive);
             if (consumer == null || start >= end) return;
             if (regexPattern == null) {
-                // Include the query tail so matches crossing the visible band's
-                // end retain their full length. Word boundaries use original text.
-                String band = ((String) context).substring(start,
-                        (int) Math.min(text.length(), (long) end + comparableQuery.length() - 1L));
-                int at = band.indexOf(comparableQuery);
-                while (at >= 0 && start + at < end && !Thread.currentThread().isInterrupted()) {
-                    int hit = start + at, hitEnd = hit + comparableQuery.length();
-                    if (passesWholeWord(text, hit, hitEnd) && !consumer.accept(hit, hitEnd)) return;
-                    at = band.indexOf(comparableQuery, at + 1);
+                // Bounded KMP scan over the prepared view: no band substring or
+                // per-hit Match object. The tail preserves cross-band matches;
+                // whole-word boundaries still come from the original input.
+                NormalizedSearchText view = (NormalizedSearchText) context;
+                String hay = view.value;
+                int length = comparableQuery.length(), matched = 0;
+                int scanStart = view.comparisonStart(start);
+                int scanEnd = view.comparisonStart(end);
+                int limit = (int) Math.min(hay.length(), (long) scanEnd + length - 1L);
+                int lastStart = -1, lastEnd = -1;
+                for (int i = scanStart; i < limit; i++) {
+                    if (((i - scanStart) & 1023) == 0 && Thread.currentThread().isInterrupted()) return;
+                    char c = hay.charAt(i);
+                    while (matched > 0 && c != comparableQuery.charAt(matched)) matched = literalFallback[matched - 1];
+                    if (c == comparableQuery.charAt(matched)) matched++;
+                    if (matched == length) {
+                        int hit = view.originalStart(i - length + 1);
+                        int stop = view.originalEnd(i + 1);
+                        if (Thread.currentThread().isInterrupted()) return;
+                        if (hit >= start && hit < end && (hit != lastStart || stop != lastEnd)
+                                && passesWholeWord(text, hit, stop)) {
+                            lastStart = hit; lastEnd = stop;
+                            if (!consumer.accept(hit, stop)) return;
+                        }
+                        matched = literalFallback[length - 1]; // preserve overlapping literal matches
+                    }
                 }
                 return;
             }
@@ -221,12 +225,25 @@ public final class SearchMatcher {
     /**
      * Precomputes the per-text scan context once so repeated match stepping does
      * not re-normalize the whole text (literal) or rebuild the engine (regex).
-     * Returns the comparison-view String for literal mode, or a java Matcher for
+     * Returns a mapped comparison view for literal mode, or a java Matcher for
      * regex mode.
      */
     private Object prepare(String text) {
         if (regexPattern != null) return regexPattern.matcher(text);
-        return comparable(text);
+        NormalizedSearchText view = options.normalizeUnicode
+                ? NormalizedSearchText.nfc(text) : NormalizedSearchText.identity(text);
+        return view.withValue(foldCase(view.value));
+    }
+
+    private static int[] buildLiteralFallback(String needle) {
+        int[] fallback = new int[needle.length()];
+        int matched = 0;
+        for (int i = 1; i < needle.length(); i++) {
+            while (matched > 0 && needle.charAt(i) != needle.charAt(matched)) matched = fallback[matched - 1];
+            if (needle.charAt(i) == needle.charAt(matched)) matched++;
+            fallback[i] = matched;
+        }
+        return fallback;
     }
 
     private Match firstPrepared(Object ctx, String text, int from) {
@@ -235,19 +252,21 @@ public final class SearchMatcher {
         if (regexPattern != null) {
             Matcher m = (Matcher) ctx;
             int at = start;
-            while (at <= text.length() && m.find(at)) {
+            while (at <= text.length() && !Thread.currentThread().isInterrupted() && m.find(at)) {
                 if (m.end() == m.start()) { at = m.start() + 1; continue; }
                 if (passesWholeWord(text, m.start(), m.end())) return new Match(m.start(), m.end());
                 at = m.start() + 1;
             }
             return null;
         }
-        String hay = (String) ctx;
+        NormalizedSearchText view = (NormalizedSearchText) ctx;
+        String hay = view.value;
         String needle = comparableQuery;
-        int idx = hay.indexOf(needle, start);
-        while (idx >= 0) {
-            int end = idx + needle.length();
-            if (passesWholeWord(text, idx, end)) return new Match(idx, end);
+        int idx = hay.indexOf(needle, view.comparisonStart(start));
+        while (idx >= 0 && !Thread.currentThread().isInterrupted()) {
+            int hit = view.originalStart(idx);
+            int end = view.originalEnd(idx + needle.length());
+            if (hit >= start && passesWholeWord(text, hit, end)) return new Match(hit, end);
             idx = hay.indexOf(needle, idx + 1);
         }
         return null;
@@ -255,33 +274,42 @@ public final class SearchMatcher {
 
     private boolean passesWholeWord(String text, int start, int end) {
         if (!options.wholeWord) return true;
-        boolean leftOk = start == 0 || !isWordChar(text.charAt(start - 1));
-        boolean rightOk = end >= text.length() || !isWordChar(text.charAt(end));
+        boolean leftOk = start == 0 || !isWordChar(text.codePointBefore(start));
+        boolean rightOk = end >= text.length() || !isWordChar(text.codePointAt(end));
         return leftOk && rightOk;
     }
 
-    private static boolean isWordChar(char c) {
-        return Character.isLetterOrDigit(c) || c == '_';
+    private static boolean isWordChar(int codePoint) {
+        int type = Character.getType(codePoint);
+        return Character.isLetterOrDigit(codePoint) || codePoint == '_'
+                || type == Character.NON_SPACING_MARK
+                || type == Character.COMBINING_SPACING_MARK
+                || type == Character.ENCLOSING_MARK;
     }
 
-    // --- length-preserving comparison view -----------------------------------
+    // --- width-preserving case comparison -----------------------------------
 
-    private String comparable(String s) {
+    private String foldCase(String s) {
         String out = s;
-        if (options.normalizeUnicode) {
-            String n = Normalizer.normalize(out, Normalizer.Form.NFC);
-            // Only adopt normalization if it preserves length so match offsets
-            // still map onto the original text.
-            if (n.length() == out.length()) out = n;
-        }
         if (!options.caseSensitive) {
-            // Per-char lowercasing keeps length stable (unlike String.toLowerCase
-            // under some locales/characters, e.g. Turkish dotted I or ß).
-            char[] cs = out.toCharArray();
-            for (int i = 0; i < cs.length; i++) {
-                cs[i] = Character.toLowerCase(cs[i]);
+            // Locale-independent case comparison: upper-then-lower unifies final
+            // sigma and long-s. Never expand a character or move UTF-16 offsets.
+            char[] cs = null;
+            for (int i = 0; i < out.length(); ) {
+                int original = out.codePointAt(i);
+                int width = Character.charCount(original);
+                int folded = Character.toLowerCase(Character.toUpperCase(original));
+                if (folded != original && Character.charCount(folded) == width) {
+                    if (cs == null) cs = out.toCharArray();
+                    if (width == 1) cs[i] = (char) folded;
+                    else {
+                        cs[i] = Character.highSurrogate(folded);
+                        cs[i + 1] = Character.lowSurrogate(folded);
+                    }
+                }
+                i += width;
             }
-            out = new String(cs);
+            if (cs != null) out = new String(cs);
         }
         return out;
     }

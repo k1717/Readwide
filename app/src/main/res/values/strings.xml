@@ -127,7 +127,7 @@
     <string name="archive_support_boundary_title">Archive support limits</string>
     <string name="archive_support_boundary_rar">RAR support is limited and depends on the compression, encryption and volume layout. Custom VM programs and encrypted or split mixed LZ/PPMd streams remain unsupported.</string>
     <string name="archive_support_boundary_zip">ZIP/CBZ/ZIPX supports normal Store/Deflate and encrypted ZIP through Zip4j. WinZip-AES ZIPX also supports Deflate64, BZip2, LZMA, and XZ, plus PPMd and Zstandard through libarchive 3.8.9. AES ZIPX using JPEG or WavPack is supported by the bundled FOSS native codec module.</string>
-    <string name="archive_support_boundary_7z">7z/CB7 supports common compression methods and selected PPMd/BCJ2 combinations, including supported encrypted and split archives. Some method combinations remain unsupported, and solid archives may open slowly.</string>
+    <string name="archive_support_boundary_7z">7z/CB7 supports common compression methods and selected PPMd/BCJ2/ARM64/RISC-V/Swap2/Swap4 combinations, including supported encrypted and split archives. Some method combinations remain unsupported, and solid archives may open slowly.</string>
     <string name="archive_support_boundary_alz">ALZ support covers Store, Deflate, BZip2, and covered ZipCrypto-style entries. Broader split, encrypted, descriptor-heavy, or unusual ESTsoft variants remain best-effort.</string>
     <string name="archive_support_boundary_egg">EGG supports Store, Deflate, BZip2, AZO and LZMA, split archives, unencrypted solid archives, and supported non-solid ZipCrypto/AES entries. LEA encryption and encrypted solid archives remain unsupported.</string>
     <string name="archive_support_boundary_generic">This archive uses a feature outside the current supported extraction boundary.</string>
@@ -829,4 +829,8 @@ Rules: %2$d enabled rules</string>
     <string name="text_rule_preview_format" translatable="false">%1$s %2$s → %3$s</string>
     <string name="metadata_triplet_format" translatable="false">%1$s · %2$s · %3$s</string>
     <string name="section_marker_title_format" translatable="false">%1$s%2$s</string>
+    <string name="theme_editor_save_failed">Could not save the theme. Your edits are still here. Please try again.</string>
+    <string name="txt_display_rule_limit">You can save up to %1$d rules. Remove a rule before adding another.</string>
+    <string name="txt_display_rule_single_line_required">Rules must use single-line text.</string>
+    <string name="txt_display_rule_invalid_expression">The regular expression or replacement is invalid.</string>
 </resources>

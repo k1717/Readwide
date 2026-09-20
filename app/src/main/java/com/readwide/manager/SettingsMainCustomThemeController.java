@@ -107,7 +107,7 @@ final class SettingsMainCustomThemeController {
                 activity.prefs.applyDarkMode(PrefsManager.DARK_MODE_CUSTOM);
             }
             ShortToast.show(activity, R.string.custom_main_theme_applied);
-            activity.recreate();
+            activity.refreshMainThemeAppearance();
         });
 
         updateCustomMainThemeSectionVisibility();
@@ -389,8 +389,10 @@ final class SettingsMainCustomThemeController {
 
     void updateCustomMainThemeSectionVisibility() {
         View section = activity.findViewById(R.id.main_custom_theme_section);
+        View options = activity.findViewById(R.id.dark_mode_group);
         if (section != null) {
-            section.setVisibility(activity.prefs != null && activity.prefs.getDarkMode() == PrefsManager.DARK_MODE_CUSTOM
+            section.setVisibility(options != null && options.getVisibility() == View.VISIBLE
+                    && activity.prefs != null && activity.prefs.getDarkMode() == PrefsManager.DARK_MODE_CUSTOM
                     ? View.VISIBLE
                     : View.GONE);
         }

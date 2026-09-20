@@ -40,6 +40,16 @@ public class TextDisplayRule {
                 || (replacementText.indexOf('\n') < 0 && replacementText.indexOf('\r') < 0));
     }
 
+    /** Editors and workers own their rules; they must not mutate the cached snapshot. */
+    public TextDisplayRule copy() {
+        TextDisplayRule copy = new TextDisplayRule();
+        copy.id = id; copy.enabled = enabled; copy.findText = findText;
+        copy.replacementText = replacementText; copy.caseSensitive = caseSensitive;
+        copy.useRegex = useRegex; copy.scope = scope; copy.filePath = filePath;
+        copy.sourceFilePath = sourceFilePath;
+        return copy;
+    }
+
     public boolean appliesTo(String targetFilePath) {
         if (!enabled || !isValid()) return false;
         if (SCOPE_FILE.equals(scope)) {

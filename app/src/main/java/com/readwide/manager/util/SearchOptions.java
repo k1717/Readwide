@@ -5,11 +5,10 @@ package com.readwide.manager.util;
  * ({@link TextSearchMath}) and large-file ({@code LargeTextSearchEngine})
  * search paths so both honor exactly the same matching rules.
  *
- * <p>All matching ultimately runs through {@link SearchMatcher}. The flags are
- * intentionally length-preserving in effect: case folding and Unicode
- * normalization are applied to a comparison view of the text whose character
- * indices still line up 1:1 with the original content, so returned positions
- * remain valid for bookmarks and page anchors.
+ * <p>All matching runs through SearchMatcher. Literal NFC normalization carries
+ * original-coordinate span mappings. Regex syntax and input are not normalized;
+ * normalizeUnicode is a literal-only option because Android does not implement
+ * the canonical-equivalence regex flag.
  */
 public final class SearchOptions {
     public final boolean caseSensitive;

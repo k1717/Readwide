@@ -113,8 +113,9 @@ public final class DocumentAnchorMath {
     }
 
     /**
-     * Bookmark labels for vertical writing prefer the first fully visible
-     * glyph of the selected physical column. The focused glyph remains a
+     * Bookmark labels for vertical writing prefer the first glyph inside the
+     * selected column's reading viewport, including text temporarily covered
+     * by app chrome while saving. The focused glyph remains a
      * fallback for old anchors and remains authoritative for restoration.
      */
     public static String bookmarkPreview(String columnStartText,

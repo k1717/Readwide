@@ -46,7 +46,7 @@ When behavior changes, update the relevant docs:
 - `README.md` for user-visible features and build instructions.
 - `CHANGELOG.md` for release changes.
 - `PATCHNOTES.md` for subsystem-grouped implementation details of the final release.
-- Keep chronological batches, superseded limitations and per-stage test logs in development history, not the public changelog or current code map. Preserve older release records.
+- Organize all documentation by feature or subsystem, not numbered work sessions. State the current implementation and its limits directly; preserve genuine older release records and distinguish test evidence from pending checks.
 - Keep each release's license report/SBOM identity, store changelogs and build/support pointers consistent without claiming unreported validation.
 - `PRIVACY.md` for data, permissions, TXT display-rule storage, or file-writing behavior.
 - `GITHUB_UPLOAD_NOTES.md` for packaging/upload workflow changes.

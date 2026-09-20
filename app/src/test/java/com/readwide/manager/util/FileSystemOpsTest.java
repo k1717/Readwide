@@ -221,7 +221,7 @@ public class FileSystemOpsTest {
     }
 
     @Test
-    public void moveWithSharedBatchProgress_copiesBytesAndDoesNotMarkWholeProgressComplete() throws Exception {
+    public void moveWithSharedBatchProgress_accountsBytesAndDoesNotMarkWholeProgressComplete() throws Exception {
         File source = tempFolder.newFile("source.bin");
         writeBytes(source, 128 * 1024);
         File destination = new File(tempFolder.getRoot(), "destination.bin");
@@ -237,6 +237,53 @@ public class FileSystemOpsTest {
         assertEquals(destination.length(), progress.snapshot().doneBytes);
     }
 
+    @Test public void progressEnabledMoveUsesRenameWithoutStagingCopy() throws Exception {
+        File original = tempFolder.newFile("source.txt");
+        writeText(original, "data");
+        java.util.concurrent.atomic.AtomicInteger renames = new java.util.concurrent.atomic.AtomicInteger();
+        File source = new File(original.getPath()) {
+            @Override public boolean renameTo(File destination) {
+                renames.incrementAndGet(); return super.renameTo(destination);
+            }
+        };
+        File destination = new File(tempFolder.getRoot(), "moved.txt");
+        FileOperationProgress progress = new FileOperationProgress("move", null);
+        assertTrue(FileSystemOps.move(source, destination, false, progress));
+        assertEquals(1, renames.get());
+        assertText(destination, "data");
+        assertEquals(4L, progress.snapshot().doneBytes);
+        assertNoTransactions();
+    }
+
+    @Test public void lateCancellationCannotUndoACommittedRenameResult() throws Exception {
+        File source = tempFolder.newFile("source.txt");
+        writeText(source, "data");
+        File destination = new File(tempFolder.getRoot(), "moved.txt");
+        FileOperationProgress progress = new FileOperationProgress("move", null);
+        progress.setListener(snapshot -> {
+            if (snapshot.doneBytes > 0 && !snapshot.cancelled) progress.cancel();
+        });
+        assertTrue(FileSystemOps.move(source, destination, false, progress));
+        assertTrue(progress.isCancelled());
+        assertFalse(source.exists());
+        assertText(destination, "data");
+    }
+
+    @Test public void failedRenameFallsBackToStagedCopyWithOneInventory() throws Exception {
+        File actual = tempFolder.newFolder("source");
+        writeText(new File(actual, "file"), "data");
+        java.util.concurrent.atomic.AtomicInteger lists = new java.util.concurrent.atomic.AtomicInteger();
+        File source = new File(actual.getPath()) {
+            @Override public boolean renameTo(File target) { return false; }
+            @Override public File[] listFiles() { lists.incrementAndGet(); return super.listFiles(); }
+        };
+        File destination = new File(tempFolder.getRoot(), "moved");
+        assertTrue(FileSystemOps.move(source, destination, false, new FileOperationProgress("move", null)));
+        assertEquals(3, lists.get()); // inventory + copy + delete, no separate byte scan
+        assertText(new File(destination, "file"), "data");
+        assertFalse(source.exists());
+    }
+
     private static void writeBytes(File file, int size) throws Exception {
         byte[] buffer = new byte[8192];
         try (FileOutputStream out = new FileOutputStream(file)) {
@@ -247,5 +294,34 @@ public class FileSystemOpsTest {
                 remaining -= count;
             }
         }
+    }
+
+    @Test public void sharedCopyBufferDoesNotLeakPreviousFileTailIntoShorterFiles() throws Exception {
+        File source = tempFolder.newFolder("source");
+        File destination = new File(tempFolder.getRoot(), "copied");
+        for (int i = 0; i < 20; i++) {
+            byte[] data = new byte[i % 2 == 0 ? 70_000 : i];
+            java.util.Arrays.fill(data, (byte) (i + 1));
+            Files.write(new File(source, "entry" + i).toPath(), data);
+        }
+        assertTrue(FileSystemOps.copy(source, destination, false));
+        for (int i = 0; i < 20; i++) org.junit.Assert.assertArrayEquals(
+                Files.readAllBytes(new File(source, "entry" + i).toPath()),
+                Files.readAllBytes(new File(destination, "entry" + i).toPath()));
+    }
+
+    @Test public void cancelledMultiFileCopyStillKeepsTheExistingDestination() throws Exception {
+        File source = tempFolder.newFolder("source");
+        File destination = tempFolder.newFolder("destination");
+        writeBytes(new File(source, "a"), 80_000);
+        writeText(new File(source, "b"), "tail");
+        writeText(new File(destination, "keep"), "original");
+        FileOperationProgress progress = new FileOperationProgress("copy", null);
+        progress.setListener(snapshot -> {
+            if (snapshot.doneBytes >= 65_536 && !snapshot.cancelled) progress.cancel();
+        });
+        assertFalse(FileSystemOps.copy(source, destination, true, progress));
+        assertText(new File(destination, "keep"), "original");
+        assertNoTransactions();
     }
 }

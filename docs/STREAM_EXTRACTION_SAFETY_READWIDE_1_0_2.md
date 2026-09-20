@@ -39,4 +39,4 @@ Earlier 7z solid members and native solid primers may still need decoding to
 reach a selected entry. Discarded bytes no longer have a fixed size ceiling;
 their counters check overflow and their loops retain cancellation checks.
 Bytes actually written still pass through storage-budgeted output streams.
-See `ARCHIVE_SIZE_POLICY_1_0_18.md` for remaining decoder-memory boundaries.
+See `DEV_CHANGES_1_0_18.md` for remaining decoder-memory boundaries.

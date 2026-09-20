@@ -113,6 +113,84 @@ public class TarEntryIndexTest {
         assertEquals("existing", Files.readString(out.toPath()));
     }
 
+    @Test public void bulkExtractionSkipsLinksAndSpecialMembers() throws Exception {
+        for (boolean compressed : new boolean[]{false, true}) {
+            File archive = fixture(compressed ? "bulk-links.tar.gz" : "bulk-links.tar", compressed,
+                    true, "chapter/2.jpg", "two");
+            File output = new File(temp.getRoot(), "bulk-" + compressed);
+            assertTrue(ArchiveSupport.extractArchive(archive, output, false, null));
+            assertEquals("one", Files.readString(new File(output, "chapter/1.jpg").toPath()));
+            assertEquals("two", Files.readString(new File(output, "chapter/2.jpg").toPath()));
+            assertFalse(new File(output, "link.jpg").exists());
+            assertFalse(new File(output, "pipe").exists());
+        }
+    }
+
+    @Test public void corruptHeaderIsTerminalForIndexedAndCompressedListing() throws Exception {
+        for (boolean compressed : new boolean[]{false, true}) {
+            File archive = damagedFixture(compressed, false);
+            try { ArchiveSupport.listEntries(archive, null); fail("Expected header failure"); }
+            catch (ArchiveSupport.TarIntegrityException expected) { }
+        }
+    }
+
+    @Test public void corruptHeaderIsRejectedBeforeForwardEntryPublication() throws Exception {
+        for (boolean compressed : new boolean[]{false, true}) {
+            try (ArchiveSupport.ForwardArchiveReader reader = ArchiveSupport.openForwardReader(
+                    damagedFixture(compressed, false), null)) {
+                assertNotNull(reader);
+                try { reader.nextEntry(); fail("Expected header failure"); }
+                catch (ArchiveSupport.TarIntegrityException expected) { }
+            }
+        }
+    }
+
+    @Test public void truncatedStreamingPayloadPreservesExistingTarget() throws Exception {
+        File archive = damagedFixture(true, true);
+        File output = temp.newFile();
+        Files.writeString(output.toPath(), "existing");
+        try { extractStreaming(archive, output); fail("Expected truncated member"); }
+        catch (TarEntryIndex.ExtractionException expected) { }
+        assertEquals("existing", Files.readString(output.toPath()));
+    }
+
+    @Test public void streamingBudgetFailurePreservesExistingTarget() throws Exception {
+        File archive = fixture("stream-budget.tar.gz", true, false, "chapter/2.jpg", "two");
+        File output = temp.newFile();
+        Files.writeString(output.toPath(), "existing");
+        try (ArchiveExtractionByteBudget.Scope ignored = ArchiveExtractionByteBudget.begin(1)) {
+            try { extractStreaming(archive, output); fail("Expected budget failure"); }
+            catch (TarEntryIndex.ExtractionException expected) { }
+        }
+        assertEquals("existing", Files.readString(output.toPath()));
+    }
+
+    // Exercise the writer, not the public preview wrapper's disposable-output deletion policy.
+    private static void extractStreaming(File archive, File output) throws Exception {
+        java.lang.reflect.Method method = ArchiveSupport.class.getDeclaredMethod("extractSingleTarEntry",
+                File.class, String.class, File.class, ArchiveSupport.Type.class);
+        method.setAccessible(true);
+        try { assertEquals(Boolean.TRUE, method.invoke(null, archive, "chapter/1.jpg", output,
+                ArchiveSupport.Type.TAR_GZ)); }
+        catch (java.lang.reflect.InvocationTargetException failure) {
+            if (failure.getCause() instanceof Exception) throw (Exception) failure.getCause();
+            throw failure;
+        }
+    }
+
+    private File damagedFixture(boolean gzip, boolean truncated) throws Exception {
+        File plain = fixture("original-" + System.nanoTime() + ".tar", false, false, "other", "two");
+        byte[] bytes = Files.readAllBytes(plain.toPath());
+        if (truncated) bytes = java.util.Arrays.copyOf(bytes, 513); // Header plus one of three payload bytes.
+        else bytes[0] ^= 1; // Change a pathname byte without updating the header checksum.
+        File archive = temp.newFile("damaged-" + System.nanoTime() + (gzip ? ".tar.gz" : ".tar"));
+        try (OutputStream file = new FileOutputStream(archive);
+             OutputStream output = gzip ? new GZIPOutputStream(file) : file) {
+            output.write(bytes);
+        }
+        return archive;
+    }
+
     private File fixture(String name, boolean gzip, boolean links, String finalName, String finalData) throws Exception {
         File archive = temp.newFile(name);
         try (OutputStream file = new FileOutputStream(archive);
@@ -125,6 +203,8 @@ public class TarEntryIndexTest {
                     link.setLinkName("outside.jpg");
                     tar.putArchiveEntry(link); tar.closeArchiveEntry();
                 }
+                tar.putArchiveEntry(new TarArchiveEntry("pipe", TarConstants.LF_FIFO));
+                tar.closeArchiveEntry();
             }
             member(tar, "chapter/1.jpg", "one");
             member(tar, finalName, finalData);

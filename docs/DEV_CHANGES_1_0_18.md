@@ -1,6 +1,6 @@
 # Readwide 1.0.18 development changes
 
-This note records the implementation delta from 1.0.17, grouped by subsystem. Per-stage records remain in [archive performance history](ARCHIVE_VIEWER_PERFORMANCE_1_0_18.md); the sections below describe the final implementation.
+This note records the implementation delta from 1.0.17, grouped by subsystem. Format-specific performance details are in archive performance notes; both documents describe the current implementation.
 
 ## Adjustable archive viewer background timeout
 
@@ -101,11 +101,11 @@ This note records the implementation delta from 1.0.17, grouped by subsystem. Pe
 ## Resource and release changes
 
 - Android metadata is `1.0.18` / `10018`; permissions, runtime dependencies and signing configuration are unchanged.
-- Release notes, changelog, patch notes, code map, support summaries and EN/KR store changelogs describe final behavior rather than intermediate batches.
+- Release notes, changelog, patch notes, code map, support summaries and EN/KR store changelogs describe current behavior by feature.
 - The 1.0.18 license report and source/direct-dependency SBOM use the unchanged declared dependency baseline with current app identity; historical reports remain unchanged.
 - Source-ZIP scripts preserve portable paths/modes and vendored CMake source, exclude generated/private material, and refuse existing destinations.
 
 ## Validation boundary
 
 - The maintainer reported a successful 1.0.18 build before the timeout-field and localization follow-up. The latest UI/resource snapshot has not been rebuilt; unit-test, signing and device results have not been reported.
-- Regression sources cover the changed paths; their presence is not a passing result. See [release readiness](RELEASE_READINESS_1_0_18.md) for remaining checks and [current source status](CURRENT_SOURCE_STATUS_1_0_18.md) for support boundaries.
+- Regression sources cover the changed paths; their presence is not a passing result. See [release build instructions](../RELEASE_BUILD.md) for remaining checks and [release notes](GITHUB_RELEASE_NOTES_READWIDE_1_0_18.md) for support boundaries.

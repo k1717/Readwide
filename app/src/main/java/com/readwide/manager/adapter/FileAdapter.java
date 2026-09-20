@@ -267,20 +267,22 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
 
         LinkedHashSet<String> changed = new LinkedHashSet<>(oldSelection);
         changed.addAll(selectedPaths);
-        for (String path : changed) {
-            boolean wasSelected = oldSelection.contains(path);
-            boolean isSelected = selectedPaths.contains(path);
-            if (wasSelected != isSelected) notifyPathChanged(path, SELECTION_PAYLOAD);
-        }
-    }
+        changed.removeIf(path -> oldSelection.contains(path) == selectedPaths.contains(path));
+        if (changed.isEmpty()) return;
 
-    private void notifyPathChanged(@NonNull String path, @Nullable Object payload) {
-        for (int i = 0; i < items.size(); i++) {
+        // Resolve changed paths in one row pass. Select-all otherwise scans the
+        // whole list once per newly selected file. Keep the first matching row
+        // and the prior selection order for identical notification behavior.
+        Map<String, Integer> positions = new HashMap<>();
+        for (int i = 0; i < items.size() && positions.size() < changed.size(); i++) {
             FileListItem item = items.get(i);
-            if (item != null && path.equals(item.getAbsolutePath())) {
-                if (payload == null) notifyItemChanged(i); else notifyItemChanged(i, payload);
-                return;
-            }
+            if (item == null) continue;
+            String path = item.getAbsolutePath();
+            if (changed.contains(path)) positions.putIfAbsent(path, i);
+        }
+        for (String path : changed) {
+            Integer position = positions.get(path);
+            if (position != null) notifyItemChanged(position, SELECTION_PAYLOAD);
         }
     }
 
@@ -477,21 +479,9 @@ public class FileAdapter extends RecyclerView.Adapter<FileAdapter.ViewHolder> {
     }
 
     private void sortItems(@NonNull List<FileListItem> target) {
-        // Reuse the shared File sorter, then map the items back into the sorted
-        // order. Items wrap Files 1:1 (keyed by absolute path), so we sort the
-        // unwrapped Files and rebuild the item list from a path->item index.
-        ArrayList<File> fileView = new ArrayList<>(target.size());
-        Map<String, FileListItem> byPath = new HashMap<>(target.size() * 2);
-        for (FileListItem item : target) {
-            fileView.add(item.getFile());
-            byPath.put(item.getAbsolutePath(), item);
-        }
-        FileSortUtils.sortMainFiles(context, fileView, sortMode);
-        target.clear();
-        for (File f : fileView) {
-            FileListItem item = byPath.get(f.getAbsolutePath());
-            target.add(item != null ? item : FileListItem.from(f));
-        }
+        // Rows already carry the metadata captured by the background loader.
+        // Sorting the same objects avoids filesystem reads on the UI thread.
+        FileSortUtils.sortMainItems(target, sortMode);
     }
 
     @NonNull

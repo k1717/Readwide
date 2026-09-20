@@ -501,7 +501,10 @@ final class DocumentSearchController {
         if (direction == 0 && !queryChanged) {
             applySamePageDocumentSearchSelectionOrReload(matchStatus);
         } else {
-            activity.showPage(target.pageIndex, direction);
+            // Search chooses an explicit result and owns its final scroll position.
+            // The gesture page-turn lock must not discard it after the counter
+            // and selected match have already moved to the requested chapter.
+            activity.showPage(target.pageIndex, 0);
         }
     }
 
@@ -512,6 +515,8 @@ final class DocumentSearchController {
         }
         final WebView targetView = activity.webView;
         final int targetPage = activity.currentPage;
+        final int targetGeneration = activity.documentAnchorPageGeneration;
+        final String targetQuery = activity.activeDocumentSearchQuery;
         WebSettings settings = targetView.getSettings();
         boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
         if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
@@ -534,6 +539,10 @@ final class DocumentSearchController {
                     if (activity.activityDestroyed || activity.webView == null) return;
                     activity.restoreDocumentJavaScriptPolicy(
                             targetView, targetPage, restoreJavascriptOff);
+                    if (activity.webView != targetView || activity.currentPage != targetPage
+                            || activity.documentAnchorPageGeneration != targetGeneration
+                            || !targetQuery.equals(activity.activeDocumentSearchQuery)
+                            || selectedOrdinal != activity.activeDocumentSearchOrdinal) return;
                     if ("true".equals(value)) {
                         scrollDocumentSearchCurrentIntoView();
                     } else {
@@ -732,7 +741,7 @@ final class DocumentSearchController {
                                                SearchMatcher matcher, SearchMatcher.MatchConsumer consumer) {
         int[] cursor = {start};
         matcher.forEachMatch(segment.text.toString(), (s, e) -> {
-            if (s < 0 || e <= s || e > segment.rawStartByChar.size()) return true;
+            if (s < 0 || e <= s || e > segment.text.length()) return true;
             int rawStart = segment.rawStartForChar(s);
             int rawEnd = segment.rawEndForMatchEnd(e, end);
             if (rawStart < cursor[0] || rawEnd <= rawStart || rawEnd > end) return true;
@@ -747,23 +756,28 @@ final class DocumentSearchController {
         while (i < end) {
             char ch = html.charAt(i);
             if (ch == '&') {
-                int semi = html.indexOf(';', i + 1);
+                // Longer entities already remain literal. Keep the scan within
+                // that accepted length and this text segment, so stray '&'
+                // characters cannot repeatedly scan the rest of the chapter.
+                int semi = -1;
+                for (int candidate = i + 1; candidate < end && candidate - i <= 12; candidate++) {
+                    if (html.charAt(candidate) == ';') {
+                        semi = candidate;
+                        break;
+                    }
+                }
                 if (semi > i && semi < end && semi - i <= 12) {
                     String decoded = decodeHtmlEntity(html.substring(i + 1, semi));
                     if (decoded != null && !decoded.isEmpty()) {
                         for (int c = 0; c < decoded.length(); c++) {
-                            out.text.append(decoded.charAt(c));
-                            out.rawStartByChar.add(i);
-                            out.rawEndByChar.add(semi + 1);
+                            out.append(decoded.charAt(c), i, semi + 1);
                         }
                         i = semi + 1;
                         continue;
                     }
                 }
             }
-            out.text.append(ch);
-            out.rawStartByChar.add(i);
-            out.rawEndByChar.add(i + 1);
+            out.append(ch, i, i + 1);
             i++;
         }
         return out;
@@ -900,8 +914,7 @@ final class DocumentSearchController {
 
     private void reloadCurrentPageToRefreshSearchMarkup() {
         if (activity.activityDestroyed || activity.webView == null || documentSearchPageCount() <= 0) return;
-        int page = Math.max(0, Math.min(documentSearchPageCount() - 1, activity.currentPage));
-        activity.showPage(page, 0);
+        activity.reloadCurrentDocumentPreservingPosition();
     }
 
     private void scrollDocumentSearchCurrentIntoView() {
@@ -916,30 +929,7 @@ final class DocumentSearchController {
         boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
         if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
         targetView.evaluateJavascript(
-                "(function(){try{"
-                        + "function addStyle(){if(document.getElementById('rw-document-search-spacer-style'))return;"
-                        + "var st=document.createElement('style');st.id='rw-document-search-spacer-style';"
-                        + "st.textContent='#rw-document-search-top-spacer{display:block!important;height:12vh!important;min-height:72px!important;pointer-events:none!important;}#rw-document-search-bottom-spacer{display:block!important;height:88vh!important;min-height:420px!important;pointer-events:none!important;}';"
-                        + "(document.head||document.documentElement).appendChild(st);}"
-                        + "function ensureSpacers(){if(!document.body)return;addStyle();"
-                        + "if(!document.getElementById('rw-document-search-top-spacer')){var t=document.createElement('div');t.id='rw-document-search-top-spacer';t.setAttribute('aria-hidden','true');document.body.insertBefore(t,document.body.firstChild);}"
-                        + "if(!document.getElementById('rw-document-search-bottom-spacer')){var b=document.createElement('div');b.id='rw-document-search-bottom-spacer';b.setAttribute('aria-hidden','true');document.body.appendChild(b);}}"
-                        + "ensureSpacers();"
-                        + "void(document.body&&document.body.offsetHeight);"
-                        + "var safeBottom=" + safeBottomPx + ";"
-                        + "function placeHit(){var e=document.getElementById('" + CURRENT_SEARCH_ID + "');"
-                        + "if(!e)return false;"
-                        + "var r=e.getBoundingClientRect();"
-                        + "var h=window.innerHeight||document.documentElement.clientHeight||0;"
-                        + "var targetTop=Math.max(54,Math.round(h*0.12));"
-                        + "var current=window.scrollY||document.documentElement.scrollTop||0;"
-                        + "var y=Math.max(0,current+r.top-targetTop);"
-                        + "if(Math.abs(y-current)>3)window.scrollTo(0,y);"
-                        + "if(safeBottom>0){var rr=e.getBoundingClientRect();"
-                        + "if(rr.bottom>safeBottom){var cy=window.scrollY||document.documentElement.scrollTop||0;window.scrollTo(0,Math.max(0,cy+rr.bottom-safeBottom+12));}}"
-                        + "return true;}"
-                        + "var ok=placeHit();setTimeout(placeHit,60);setTimeout(placeHit,160);"
-                        + "return ok;}catch(ex){return false;}})()",
+                DocumentSearchJavascript.revealCurrentMatch(safeBottomPx, targetView.getHeight()),
                 value -> {
                     activity.restoreDocumentJavaScriptPolicy(
                             targetView, targetPage, restoreJavascriptOff);
@@ -1098,19 +1088,32 @@ final class DocumentSearchController {
 
     private static final class TextSegment {
         final StringBuilder text = new StringBuilder();
-        final ArrayList<Integer> rawStartByChar = new ArrayList<>();
-        final ArrayList<Integer> rawEndByChar = new ArrayList<>();
+        // Primitive offsets avoid two boxed Integer objects per decoded character.
+        private int[] rawStartByChar = new int[0];
+        private int[] rawEndByChar = new int[0];
+
+        void append(char value, int rawStart, int rawEnd) {
+            int index = text.length();
+            if (index == rawStartByChar.length) {
+                int capacity = (int) Math.min(Integer.MAX_VALUE, Math.max(16L, index * 2L));
+                rawStartByChar = java.util.Arrays.copyOf(rawStartByChar, capacity);
+                rawEndByChar = java.util.Arrays.copyOf(rawEndByChar, capacity);
+            }
+            text.append(value);
+            rawStartByChar[index] = rawStart;
+            rawEndByChar[index] = rawEnd;
+        }
 
         int rawStartForChar(int index) {
-            if (rawStartByChar.isEmpty()) return 0;
-            int safe = Math.max(0, Math.min(rawStartByChar.size() - 1, index));
-            return rawStartByChar.get(safe);
+            if (text.length() == 0) return 0;
+            int safe = Math.max(0, Math.min(text.length() - 1, index));
+            return rawStartByChar[safe];
         }
 
         int rawEndForMatchEnd(int matchEnd, int segmentEnd) {
-            if (rawEndByChar.isEmpty()) return segmentEnd;
-            int safe = Math.max(0, Math.min(rawEndByChar.size() - 1, matchEnd - 1));
-            return rawEndByChar.get(safe);
+            if (text.length() == 0) return segmentEnd;
+            int safe = Math.max(0, Math.min(text.length() - 1, matchEnd - 1));
+            return rawEndByChar[safe];
         }
     }
 }

@@ -690,7 +690,7 @@
     <string name="archive_support_boundary_title">壓縮檔支援範圍</string>
     <string name="archive_support_boundary_rar">RAR 支援範圍取決於壓縮方式、加密方式和分割結構。不支援自訂 VM 程式，也不支援經過加密或分割的 LZ/PPMd 混合資料流。</string>
     <string name="archive_support_boundary_zip">ZIP/CBZ/ZIPX 支援一般 Store/Deflate，並透過 Zip4j 支援加密 ZIP。WinZip AES ZIPX 也支援 Deflate64、BZip2、LZMA 和 XZ，並透過 libarchive 3.8.9 支援 PPMd 和 Zstandard。使用 JPEG 或 WavPack 的 AES ZIPX 由內建的 FOSS 原生編解碼器模組支援。</string>
-    <string name="archive_support_boundary_7z">7z/CB7 支援常見壓縮方式和部分 PPMd/BCJ2 組合，包括支援範圍內的加密和分割壓縮檔。部分方式組合仍不受支援，固實壓縮檔開啟時可能較慢。</string>
+    <string name="archive_support_boundary_7z">7z/CB7 支援常見壓縮方式和部分 PPMd/BCJ2/ARM64/RISC-V 組合，包括支援範圍內的加密和分割壓縮檔。部分方式組合仍不受支援，固實壓縮檔開啟時可能較慢。</string>
     <string name="archive_support_boundary_alz">ALZ 支援 Store、Deflate、BZip2 與部分 ZipCrypto 風格項目。更複雜的分割、加密、描述符較多或異常 ESTsoft 變體仍屬盡力支援。</string>
     <string name="archive_support_boundary_egg">EGG 支援 Store、Deflate、BZip2、AZO、LZMA、分割壓縮檔、未加密的固實壓縮檔，以及支援範圍內的非固實 ZipCrypto/AES 加密項目。不支援 LEA 加密或加密的固實壓縮檔。</string>
     <string name="archive_support_boundary_generic">此壓縮檔使用了目前解壓支援範圍之外的功能。</string>
@@ -805,4 +805,8 @@
     <string name="font_import_failed">無法匯入字型檔案。</string>
     <string name="epub_original_layout_kept">此 EPUB 保留原始頁面配置。</string>
     <string name="rendered_page_current_layout">依照目前配置轉譯的頁面。</string>
+    <string name="theme_editor_save_failed">無法儲存主題。編輯內容已保留，請重試。</string>
+    <string name="txt_display_rule_limit">最多可儲存%1$d條規則。請先刪除一條規則再新增。</string>
+    <string name="txt_display_rule_single_line_required">規則必須使用不含換行的單行文字。</string>
+    <string name="txt_display_rule_invalid_expression">正規表示式或替換文字格式無效。</string>
 </resources>

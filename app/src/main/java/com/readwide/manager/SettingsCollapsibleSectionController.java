@@ -1,16 +1,20 @@
 package com.readwide.manager;
 
+import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import com.readwide.manager.util.PrefsManager;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Turns the flat list of settings sections into collapsible groups.
@@ -20,8 +24,8 @@ import java.util.List;
  * controls, repeated for each section. This controller walks the container once,
  * groups each header with the sibling views that follow it (up to the next header),
  * makes the header a tappable row with a disclosure marker, and toggles the group
- * visibility. Sections always start collapsed; expansion state is per-session only
- * so returning to Settings never reopens a section on its own.
+ * visibility. New Settings sessions start collapsed; saved instance state restores
+ * open sections when the same screen is recreated for a theme or configuration change.
  *
  * The Updates section is intentionally left raw: always visible, no toggle.
  *
@@ -31,6 +35,8 @@ import java.util.List;
  * expanded theme group it is shown only when the custom theme is also selected.
  */
 final class SettingsCollapsibleSectionController {
+
+    private static final String STATE_EXPANDED_SECTIONS = "settings_expanded_sections";
 
     private static final int[] HEADER_IDS = {
             R.id.section_header_language,
@@ -59,13 +65,18 @@ final class SettingsCollapsibleSectionController {
 
     private final SettingsActivity activity;
     private final PrefsManager prefs;
+    private final Set<String> expandedSections = new HashSet<>();
 
     SettingsCollapsibleSectionController(@NonNull SettingsActivity activity) {
         this.activity = activity;
         this.prefs = activity.prefs;
     }
 
-    void setup() {
+    void setup(@Nullable Bundle savedInstanceState) {
+        if (savedInstanceState != null) {
+            ArrayList<String> saved = savedInstanceState.getStringArrayList(STATE_EXPANDED_SECTIONS);
+            if (saved != null) expandedSections.addAll(saved);
+        }
         ViewGroup container = activity.findViewById(R.id.settings_content_container);
         if (container == null) return;
 
@@ -127,14 +138,20 @@ final class SettingsCollapsibleSectionController {
             header.setClickable(true);
             header.setFocusable(true);
 
-            final boolean[] expandedState = { false };
+            final boolean[] expandedState = { expandedSections.contains(key) };
             applyState(header, content, baseTitle, expandedState[0], key);
 
             header.setOnClickListener(v -> {
                 expandedState[0] = !expandedState[0];
+                if (expandedState[0]) expandedSections.add(key);
+                else expandedSections.remove(key);
                 applyState(header, content, baseTitle, expandedState[0], key);
             });
         }
+    }
+
+    void saveState(@NonNull Bundle outState) {
+        outState.putStringArrayList(STATE_EXPANDED_SECTIONS, new ArrayList<>(expandedSections));
     }
 
     private void applyState(View header, List<View> content,

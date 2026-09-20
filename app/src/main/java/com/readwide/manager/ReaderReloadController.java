@@ -46,6 +46,10 @@ final class ReaderReloadController {
         reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION, true);
         reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE);
         reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_BYTE);
+        // The launch Intent may still contain the bookmark used to open this
+        // reader. Empty current context must clear that old anchor as well.
+        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE);
+        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER);
         if (anchorBefore != null && !anchorBefore.isEmpty()) {
             reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE, anchorBefore);
         }
@@ -116,6 +120,8 @@ final class ReaderReloadController {
         reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION, true);
         reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE);
         reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_BYTE);
+        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE);
+        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER);
         if (anchorBefore != null && !anchorBefore.isEmpty()) {
             reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE, anchorBefore);
         }

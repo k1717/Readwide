@@ -34,6 +34,7 @@
  *    (so the randomised code paths and CRC bookkeeping are removed; the ALZ
  *    container stores a per-entry CRC32 that the caller verifies instead),
  *  - the 32-bit combined CRC after the end-of-stream magic is absent, and
+ *  - buffered checked input, cancellation and sticky I/O failures (Readwide review),
  *  - concatenated-stream support and the commons-compress base classes are
  *    dropped; this is a plain read-only java.io.InputStream.
  */
@@ -43,6 +44,7 @@ import androidx.annotation.NonNull;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.util.Arrays;
 
 /**
@@ -100,6 +102,8 @@ final class AlzBzip2InputStream extends InputStream {
         private final InputStream in;
         private long bitCache;
         private int bitCount;
+        private final byte[] buffer = new byte[64 * 1024];
+        private int position, limit, calls;
 
         BitReader(@NonNull InputStream in) {
             this.in = in;
@@ -107,9 +111,17 @@ final class AlzBzip2InputStream extends InputStream {
 
         /** Reads {@code n} (1..24) bits; throws at end of stream. */
         int readBits(final int n) throws IOException {
+            if ((calls++ & 4095) == 0) checkpoint();
             while (bitCount < n) {
-                final int b = in.read();
-                if (b < 0) throw new IOException("Unexpected end of stream");
+                if (position == limit) {
+                    checkpoint();
+                    int count = in.read(buffer, 0, buffer.length);
+                    if (count == -1) throw new IOException("Unexpected end of stream");
+                    if (count <= 0 || count > buffer.length) throw new IOException("ALZ bzip2 input made invalid progress");
+                    position = 0;
+                    limit = count;
+                }
+                final int b = buffer[position++] & 0xff;
                 bitCache = bitCache << 8 | b & 0xff;
                 bitCount += 8;
             }
@@ -133,6 +145,17 @@ final class AlzBzip2InputStream extends InputStream {
     private int su_tPos;
     private char su_z;
     private Data data;
+    private IOException failure;
+
+    private static void checkpoint() throws InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("ALZ bzip2 decoding cancelled");
+    }
+
+    private void requireReadable() throws IOException {
+        if (source == null) throw new IOException("Stream closed");
+        if (failure != null) throw failure;
+        checkpoint();
+    }
 
     AlzBzip2InputStream(@NonNull final InputStream in) throws IOException {
         this.source = in;
@@ -441,38 +464,36 @@ final class AlzBzip2InputStream extends InputStream {
 
     @Override
     public int read() throws IOException {
-        if (this.bin != null) {
+        try {
+            requireReadable();
             return read0();
+        } catch (IOException error) {
+            if (failure == null) failure = error;
+            throw failure;
         }
-        throw new IOException("Stream closed");
     }
 
     @Override
     public int read(final byte[] dest, final int offs, final int len) throws IOException {
-        if (offs < 0) {
-            throw new IndexOutOfBoundsException("offs(" + offs + ") < 0.");
+        if (dest == null) throw new NullPointerException("dest");
+        // Subtraction, not offs + len: the latter can wrap for invalid arguments.
+        if (offs < 0 || len < 0 || offs > dest.length - len) throw new IndexOutOfBoundsException();
+        try {
+            requireReadable();
+            if (len == 0) return 0;
+            final int hi = offs + len;
+            int destOffs = offs;
+            while (destOffs < hi) {
+                if (((destOffs - offs) & 4095) == 0) checkpoint();
+                int value = read0();
+                if (value < 0) break;
+                dest[destOffs++] = (byte) value;
+            }
+            return destOffs == offs ? -1 : destOffs - offs;
+        } catch (IOException error) {
+            if (failure == null) failure = error;
+            throw failure;
         }
-        if (len < 0) {
-            throw new IndexOutOfBoundsException("len(" + len + ") < 0.");
-        }
-        if (offs + len > dest.length) {
-            throw new IndexOutOfBoundsException("offs(" + offs + ") + len(" + len + ") > dest.length(" + dest.length + ").");
-        }
-        if (this.bin == null) {
-            throw new IOException("Stream closed");
-        }
-        if (len == 0) {
-            return 0;
-        }
-
-        final int hi = offs + len;
-        int destOffs = offs;
-        int b;
-        while (destOffs < hi && (b = read0()) >= 0) {
-            dest[destOffs++] = (byte) b;
-        }
-
-        return destOffs == offs ? -1 : destOffs - offs;
     }
 
     private int read0() throws IOException {

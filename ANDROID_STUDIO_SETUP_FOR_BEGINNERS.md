@@ -91,7 +91,7 @@ Do not randomly change files before capturing the first error.
 
 ## Historical 2.2.6 manual QA
 
-These checks describe that release, not the current format/size boundaries. Use the [1.0.18 release checklist](docs/RELEASE_READINESS_1_0_18.md) for current validation.
+These checks describe that release, not the current format/size boundaries. Use the [release build instructions](RELEASE_BUILD.md) for current validation.
 
 - Multi-select delete progress: select multiple files/folders, delete, pause, send the progress window to Background, and confirm the toolbar progress button immediately reopens it.
 

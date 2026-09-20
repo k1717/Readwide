@@ -300,7 +300,7 @@ public final class TextSearchMath {
     public static int findTextBackward(String content, String query, int startPosition, SearchOptions options) {
         SearchMatcher m = SearchMatcher.compile(query, options);
         if (m == null || content == null || content.isEmpty()) return -1;
-        int start = Math.max(0, Math.min(content.length() - 1, startPosition));
+        int start = Math.min(content.length() - 1, startPosition);
         SearchMatcher.Match hit = m.lastUpTo(content, start);
         if (hit != null) return hit.start;
         // Wrap-around to the last match in the file.

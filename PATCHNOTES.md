@@ -1,5 +1,65 @@
 # Patch Notes
 
+## Readwide 1.0.19 - 2026-09-19
+
+### Home and settings
+
+- The EPUB font selector in Settings uses the shared rounded dialog and current theme colors.
+- The Pinned folders list starts collapsed. Tapping its title opens or closes the horizontal list without animation and preserves its scroll position. The compact header matches the toolbar, with a smaller arrow placed after the localized title.
+- Home title, pinned-folder, and Recent headings use less space while allowing larger fonts and translated labels to fit.
+- Theme changes no longer trigger repeated recreation or close the expanded Settings section. Reset/import also replaces old switch, slider, selection, and custom-color values. Initial dropdown notifications after rotation do not write old values over an imported backup.
+- Theme editing preserves unfinished names, images, colors, and HEX input through rotation. Failed saves or deletions keep the dialog available for retry.
+- PIN setup/change retains its step and input through rotation, and the screen scrolls when space is limited. Canceling setup leaves the lock switch consistent with the saved PIN.
+- Button-order Reset changes only the draft until Save. View settings and TXT rule editing preserve the originating file, and invalid rules or the 50-rule limit are explained before saving.
+
+### EPUB positions, search, and read-aloud
+
+- Markdown read-aloud locates its starting passage with less repeated scanning.
+- Document search creates fewer temporary objects. Markdown scrolling combines pending position updates and ignores results from an earlier page load.
+- Reduced repeated scanning when searching document text containing many ampersands.
+- Rotation, font/theme changes, spacing adjustments, and search cleanup preserve the reading passage. Delayed results from an earlier page cannot replace a newer navigation.
+- Vertical Japanese bookmark previews retain visible opening characters, including text covered by the toolbar. The saved bookmark position remains unchanged.
+- Search reveals matches along the horizontal axis of vertical text and accounts for the search panel. Closing search returns to the found passage without retaining temporary highlight anchors. Rapid Next, Previous and numbered-result navigation across chapters displays the selected result.
+- Links in a two-page spread resolve against the page that contains them. Double-tap reset applies to the enlarged pane that was touched. Errors queued by a previous document cannot close a newly opened book.
+- Narration follows sentences outside either edge of vertical text. Highlights use the spoken page and position, so repeated sentences and page-load replay stay on the correct occurrence; ambiguous text differences leave the highlight unset without stopping speech.
+- Read-aloud handles each headset media-button press once. Explicit Play and Pause commands no longer toggle to the opposite state. Pausing from a media control or the floating card also cancels a pending start after a page change or saved-position jump.
+
+### PDF and image controls
+
+- PDF search highlights look up the current page without scanning every result in the document.
+- Fit-size PDF page taps have no interval limit. In zoomed view, double taps reset to fit and single taps toggle controls; outward swipes beginning at a page edge can turn pages while interior drags remain pans. Asynchronous rendering preserves page labels and navigation-button states while the page slider is held.
+- PDF page loading prioritizes the visible page and nearby pages, reuses active preloads, and drops obsolete rendering work. History writes no longer delay each page turn, while pause and close still save progress.
+- Cached PDF images keep their logical size when rendered at lower resolution. Memory is shared with nearby pages, and zoom sharpening avoids work already covered by a detailed image.
+- Continuous PDF restoration keeps the page crossing the top of the reading area, including its offset in a page gap and horizontal pan. Repeated search updates leave a manual pan alone.
+- Enlarged-image double taps reset zoom without also turning the page. Image refreshes leave the slider thumb under the user's control until release.
+- Document, PDF, and image readers honor Keep screen on. TXT readers refresh brightness after a settings reset or import.
+
+### TXT search, backups, and file operations
+
+- Selecting many files scans the list once. Sorting reuses the file details already loaded in the background.
+- TXT match counts and navigation share the same results, including regular expressions, dense searches, and Previous wrapping. Search and display-rule processing avoid repeating work for each line or result.
+- Reloading an edited TXT file or changing its display rules discards old launch-bookmark anchors and restores the current location. Invalid replacements and Unicode case differences no longer disrupt rule processing. Delayed layout callbacks cannot move a newer file or close its loading overlay. Progress and memory snapshots wait until the current position is restored, preserving prior progress when a load fails or is interrupted.
+- Backup import validates supplied data and known setting types before replacing saved values, including settings that still use their defaults. It reports write failures and attempts to restore prior values. Backup work runs in the background and retains confirmation/results through rotation. Export errors no longer report success, and saved JSON can recover from its backup copy.
+- Folder operations share cancellable progress preparation. Eligible moves rename directly, completed moves remain recorded after cancellation, and copy/delete do not follow symbolic-link targets.
+- Natural sorting handles digits from different scripts consistently. Archive sorting preserves chapter paths, and copy/progress handling avoids repeated allocation and redraws.
+
+### Archive compatibility and recovery
+
+- Archive filtering sorts only the matching entries while keeping the existing folder and image order. Long archive paths require less copying when preparing previews and image order.
+- Plain RAR4 fallback extraction and image browsing handle independent stored entries beside supported compressed runs, preserve empty folders, and check requested output before exposing it.
+- 7z adds ARM64/RISC-V filters, checks decoder connections and properties before reading payloads, and avoids allocating a large declared LZMA/LZMA2 dictionary when the stream is small. Empty-file and directory/file collision handling is corrected.
+- GZIP, BZip2, XZ, and framed LZ4 read concatenated members, including one TAR stream spanning several members. This does not combine separate TAR archives.
+- RAR, 7z, and EGG readers reject truncated or size-changed temporary data and can retry failed cleanup. RAR checksum errors are reported as corruption.
+- ZIP/ZIPX and ALZ check decoded output before accepting it; TAR rejects invalid headers and skips links and special entries. Failure protects the current destination rather than rolling back an entire archive.
+- If folder replacement and restoration both fail, extraction retains the original backup and reports its path.
+- RAR still excludes encrypted/split mixed-compression input, stored files used as solid history, and custom VM programs. 7z retains limits on filter combinations and split naming; EGG LEA and encrypted-solid archives remain unsupported.
+
+### Maintenance
+
+- Updated AppCompat to 1.8.0, ConstraintLayout to 2.2.2, SwipeRefreshLayout to 1.2.0, hwplib to 1.1.11, and test-only zstd-jni to 1.5.7-17.
+- Corrected split-volume cleanup that prevented the earlier build from compiling.
+- Version metadata: `1.0.19` / `10019`.
+
 ## Readwide 1.0.18 - 2026-09-11
 
 ### Adjustable archive viewer background timeout
@@ -101,7 +161,7 @@
 ### Release boundary
 
 - Version metadata is `1.0.18` / `10018`. No permission or runtime dependency changed.
-- Regression sources and implementation history remain in the versioned development/format notes. Current build and remaining test/device checks are tracked in [release readiness](docs/RELEASE_READINESS_1_0_18.md); support exclusions are summarized in [current source status](docs/CURRENT_SOURCE_STATUS_1_0_18.md).
+- Regression sources and subsystem details are documented in the versioned development/format notes. Current build and remaining test/device checks are tracked in [release build instructions](RELEASE_BUILD.md); support exclusions are summarized in [release notes](docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_18.md).
 
 ## Readwide 1.0.17 - 2026-08-14
 

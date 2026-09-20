@@ -1,24 +1,16 @@
 # Public release build checklist
 
-This file is the practical build and verification checklist for Readwide 1.0.18.
-
-These are maintainer instructions, not a report that this snapshot passed them.
-See [current source status](docs/CURRENT_SOURCE_STATUS_1_0_18.md) for the recorded
-maintainer-reported successful earlier 1.0.18 build. The later timeout-field and
-translation changes have not been rebuilt. Build logs, artifact identity and test
-results have not been independently inspected. The final
-[release handoff checklist](docs/RELEASE_READINESS_1_0_18.md) records pending device
-and archive-format checks; do not infer that this documentation executed them.
+This file is the practical build and verification checklist for Readwide 1.0.19.
 
 ## Version metadata
 
 ```text
 applicationId com.readwide.manager
-versionCode 10018
-versionName 1.0.18
+versionCode 10019
+versionName 1.0.19
 ```
 
-The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.18 keeps that key, so it installs in place over 1.0.17 through 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.18, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
+The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.19 keeps that key, so it installs in place over 1.0.18 through 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.19, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
 
 ## Keystore policy
 
@@ -65,17 +57,16 @@ Keep these files with source and binary release materials:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_18.md` (unchanged dependency baseline)
-- `docs/SBOM_READWIDE_1_0_18.spdx.json` (unchanged dependency baseline)
+- `docs/LICENSE_REPORT_READWIDE_1_0_19.md`
+- `docs/SBOM_READWIDE_1_0_19.spdx.json`
+
+The 1.0.19 reports include the five declared dependency version updates. They cover direct dependencies and bundled source; a resolved transitive report is still needed for submission.
 
 The source-controlled native notice file at `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt` must also remain in the APK.
 
 ## APK verification
 
-The intended public asset is `Readwide_1.0.18.apk`; local output filenames are
-unrestricted. Rename/copy only the final verified **signed** APK for publication.
-A source ZIP or an older successful build does not validate that APK.
-
+Publish the verified signed APK as `Readwide_1.0.19.apk`. Local build output names may differ.
 
 ```bash
 APK=app/build/outputs/apk/release/app-release.apk
@@ -139,7 +130,7 @@ The distribution hash is pinned with `distributionSha256Sum` in `gradle/wrapper/
 
 Before opening an F-Droid Data merge request:
 
-1. Publish a final Git tag, e.g. `v1.0.18`.
+1. Publish a final Git tag, e.g. `v1.0.19`.
 2. Start from current fdroiddata upstream. The checked-in historical mirror stops at 1.0.13 and must not replace upstream metadata. Add only the version actually submitted and pin it to the final tag's full 40-character commit hash.
 3. Keep the verified official Gradle 9.4.1 wrapper; F-Droid checks known wrapper hashes, so no `rm` rule is needed.
 4. Confirm a no-private-keystore `assembleRelease` build works.
@@ -167,4 +158,4 @@ TEXTVIEW_EXTERNAL_ARCHIVE_FIXTURE_DIR=/path/to/archive-fixtures
 ./gradlew testDebugUnitTest
 ```
 
-This source handoff does not claim that these Gradle, unit-test, lint, APK, or device checks have run against the exact tree that will be tagged. Record their results only after running them on that tree.
+Run the build, lint, signing and device checks against the release commit before publishing the APK. Record the source ZIP and APK checksums separately.

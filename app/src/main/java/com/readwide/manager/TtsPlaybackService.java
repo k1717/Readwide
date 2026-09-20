@@ -11,7 +11,6 @@ import android.media.session.PlaybackState;
 import android.media.session.MediaSession;
 import android.os.Build;
 import android.os.IBinder;
-import android.view.KeyEvent;
 
 import androidx.annotation.Nullable;
 
@@ -19,6 +18,8 @@ public class TtsPlaybackService extends Service {
     static final String ACTION_START = "com.readwide.manager.tts.START";
     static final String ACTION_REFRESH = "com.readwide.manager.tts.REFRESH";
     static final String ACTION_PLAY_PAUSE = "com.readwide.manager.tts.PLAY_PAUSE";
+    static final String ACTION_PLAY = "com.readwide.manager.tts.PLAY";
+    static final String ACTION_PAUSE = "com.readwide.manager.tts.PAUSE";
     static final String ACTION_STOP = "com.readwide.manager.tts.STOP";
     static final String ACTION_NEXT = "com.readwide.manager.tts.NEXT";
     static final String ACTION_PREVIOUS = "com.readwide.manager.tts.PREVIOUS";
@@ -55,39 +56,13 @@ public class TtsPlaybackService extends Service {
         mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                 | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
         mediaSession.setCallback(new MediaSession.Callback() {
-            @Override public void onPlay() { dispatch(ACTION_PLAY_PAUSE); }
-            @Override public void onPause() { dispatch(ACTION_PLAY_PAUSE); }
+            @Override public void onPlay() { dispatch(ACTION_PLAY); }
+            @Override public void onPause() { dispatch(ACTION_PAUSE); }
             @Override public void onStop() { dispatch(ACTION_STOP); }
             @Override public void onSkipToNext() { dispatch(ACTION_NEXT); }
             @Override public void onSkipToPrevious() { dispatch(ACTION_PREVIOUS); }
-            @Override public boolean onMediaButtonEvent(Intent mediaButtonIntent) {
-                KeyEvent event = mediaButtonIntent != null
-                        ? mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
-                        : null;
-                if (event == null || event.getAction() != KeyEvent.ACTION_UP) {
-                    return super.onMediaButtonEvent(mediaButtonIntent);
-                }
-                if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_NEXT) {
-                    dispatch(ACTION_NEXT);
-                    return true;
-                }
-                if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
-                    dispatch(ACTION_PREVIOUS);
-                    return true;
-                }
-                if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
-                        || event.getKeyCode() == KeyEvent.KEYCODE_HEADSETHOOK
-                        || event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_PLAY
-                        || event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_PAUSE) {
-                    dispatch(ACTION_PLAY_PAUSE);
-                    return true;
-                }
-                if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_STOP) {
-                    dispatch(ACTION_STOP);
-                    return true;
-                }
-                return super.onMediaButtonEvent(mediaButtonIntent);
-            }
+            // MediaSession handles hardware key sequences and calls these
+            // callbacks. Handling their key-up again would duplicate commands.
         });
         mediaSession.setActive(true);
         updateMediaSessionState();
@@ -97,6 +72,7 @@ public class TtsPlaybackService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent != null && intent.getAction() != null ? intent.getAction() : ACTION_START;
         if (ACTION_STOP.equals(action) || ACTION_PLAY_PAUSE.equals(action)
+                || ACTION_PLAY.equals(action) || ACTION_PAUSE.equals(action)
                 || ACTION_NEXT.equals(action) || ACTION_PREVIOUS.equals(action)) {
             boolean delivered = TtsPlaybackBridge.dispatch(action);
             if (!delivered) {

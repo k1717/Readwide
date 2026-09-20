@@ -11,6 +11,24 @@ import java.io.IOException;
 import java.nio.file.Files;
 
 public class Rar3PpmdBlockProbeTest {
+    @Test public void refusesTruncatedRangeEvenWhenModeBytesExist() throws Exception {
+        File archive = writePayload((byte)0xa0, (byte)0);
+        RarArchiveReader.RarEntry entry = compressedEntry(archive, false, false, false);
+        Rar3PpmdBlockProbe.Result result = Rar3PpmdBlockProbe.probe(entry); // Claims three packed bytes.
+        assertEquals(Rar3PpmdBlockProbe.KIND_UNKNOWN, result.kind);
+        assertTrue(result.detail.contains("range"));
+    }
+
+    @Test public void rejectsOverflowingOffsetWithoutProbing() throws Exception {
+        File archive = writePayload((byte)0, (byte)0, (byte)0);
+        RarArchiveReader.RarEntry entry = new RarArchiveReader.RarEntry("overflow", false, 1,
+                3, Long.MAX_VALUE, 4, 0x33, false, false, false, null, 0, 0);
+        entry.sourceArchive = archive;
+        Rar3PpmdBlockProbe.Result result = Rar3PpmdBlockProbe.probe(entry);
+        assertEquals(Rar3PpmdBlockProbe.KIND_UNKNOWN, result.kind);
+        assertTrue(result.detail.contains("range"));
+    }
+
     @Test
     public void detectsPpmdControlBitFromVisiblePayload() throws Exception {
         File archive = writePayload((byte) 0xa0, (byte) 0x00, (byte) 0x12);

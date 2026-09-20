@@ -23,6 +23,11 @@ final class DocumentPageLoadController {
 
     void loadFromIntent(Intent intent) {
         final int generation = ++activity.loadGeneration;
+        // Invalidate old document captures/settling before the new book is parsed.
+        activity.documentAnchorPageGeneration++;
+        activity.invalidateDocumentPageLoad(activity.webView);
+        activity.invalidateDocumentPageLoad(activity.rightWebView);
+        activity.primaryDocumentPageReadyGeneration = -1;
         activity.showLoadingWindow();
         activity.webView.setVisibility(View.INVISIBLE);
         activity.closeResourceZip();
@@ -97,7 +102,9 @@ final class DocumentPageLoadController {
             } catch (Exception e) {
                 if (activity.activityDestroyed || generation != activity.loadGeneration) return;
                 activity.runOnUiThread(() -> {
-                    if (!activity.activityDestroyed) showLoadError(e);
+                    if (!activity.activityDestroyed && generation == activity.loadGeneration) {
+                        showLoadError(e);
+                    }
                 });
             }
         });

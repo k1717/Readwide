@@ -4,7 +4,7 @@
 
 - Stream extraction safety: the historical fixed-size guards are superseded in 1.0.18 by an operation-wide budget based on usable storage minus a 64 MiB reserve, without the former 128 GiB ceiling. Unknown-size output and native libarchive writes share the same accounting; decoder memory/format limits remain separate.
 
-This historical matrix is not the current wording source for archive support claims. For Readwide 1.0.18, use `../README.md` and `CURRENT_SOURCE_STATUS_1_0_18.md`; the tables below remain a 1.0.2 baseline for terminology and conservative support-label definitions.
+This historical matrix is not the current wording source for archive support claims. For Readwide 1.0.18, use `../README.md` and `DEV_CHANGES_1_0_18.md`; the tables below remain a 1.0.2 baseline for terminology and conservative support-label definitions.
 
 ## Support labels
 

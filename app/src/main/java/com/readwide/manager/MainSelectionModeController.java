@@ -271,19 +271,11 @@ final class MainSelectionModeController {
                     : activity.currentDirectory.getAbsolutePath());
         }
         activity.executeFolderBackgroundTask(() -> {
-            long totalBytes = 0L;
-            for (File file : selected) {
-                if (file == null) continue;
-                totalBytes += FileSystemOps.measureBytes(file);
-                if (totalBytes < 0L) {
-                    totalBytes = Long.MAX_VALUE;
-                    break;
-                }
-            }
-            progress.setTotalBytes(totalBytes);
             FileTreeProgressTracker treeProgress = FileTreeProgressTracker.create(progress, selected);
+            progress.setTotalBytes(treeProgress.totalBytes());
             int deletedCount = 0;
             for (File file : selected) {
+                if (!treeProgress.isReady() || !progress.checkpoint()) break;
                 if (file == null || !file.exists()) continue;
                 String path = file.getAbsolutePath();
                 boolean wasDirectory = file.isDirectory();

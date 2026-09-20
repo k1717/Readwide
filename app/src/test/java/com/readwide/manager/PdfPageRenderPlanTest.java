@@ -38,4 +38,27 @@ public class PdfPageRenderPlanTest {
         assertTrue(plan.bitmapWidthPx > 0);
         assertTrue(plan.bitmapHeightPx > 0);
     }
+
+    @Test
+    public void continuousCacheBudgetDoesNotShrinkZoomedDisplayFrame() {
+        long pixels = PdfContinuousRenderQueue.pagePixelBudget(24L * 1024L * 1024L, 12_000_000L);
+        PdfPageRenderPlan.Plan plan = PdfPageRenderPlan.create(
+                600, 800, 1200, 1, 3f, 1.4f, 24, 0, false, pixels);
+        assertEquals(3528, plan.intendedDisplayWidthPx);
+        assertEquals(4704, plan.intendedDisplayHeightPx);
+        assertTrue((long) plan.bitmapWidthPx * plan.bitmapHeightPx <= pixels);
+        assertTrue(plan.bitmapWidthPx < plan.intendedDisplayWidthPx);
+    }
+
+    @Test
+    public void reducedContinuousRetryKeepsIdenticalLogicalGeometry() {
+        PdfPageRenderPlan.Plan full = PdfPageRenderPlan.create(
+                600, 800, 1200, 1, 2f, 1.4f, 24, 0, false, 2_000_000L);
+        PdfPageRenderPlan.Plan retry = PdfPageRenderPlan.create(
+                600, 800, 1200, 1, 2f, 1.4f, 24, 0, false, 1_000_000L);
+        assertEquals(full.intendedDisplayWidthPx, retry.intendedDisplayWidthPx);
+        assertEquals(full.intendedDisplayHeightPx, retry.intendedDisplayHeightPx);
+        assertTrue(retry.bitmapWidthPx < full.bitmapWidthPx);
+        assertTrue(retry.bitmapHeightPx < full.bitmapHeightPx);
+    }
 }

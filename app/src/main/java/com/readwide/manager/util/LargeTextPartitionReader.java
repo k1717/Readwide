@@ -67,8 +67,8 @@ public final class LargeTextPartitionReader {
         int targetLine = -1;
         boolean sawAnyLine = false;
 
-        List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
-                context.getApplicationContext(), file.getAbsolutePath());
+        TextDisplayRuleManager.CompiledRules activeRules = TextDisplayRuleManager.captureActive(
+                context.getApplicationContext(), file.getAbsolutePath()).compiled;
         TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
         try (BufferedReader reader = openReader(file, encoding)) {
             String lineText;
@@ -133,8 +133,8 @@ public final class LargeTextPartitionReader {
             if (needle == null) return -1;
         }
 
-        List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
-                context.getApplicationContext(), file.getAbsolutePath());
+        TextDisplayRuleManager.CompiledRules activeRules = TextDisplayRuleManager.captureActive(
+                context.getApplicationContext(), file.getAbsolutePath()).compiled;
         TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
         long charCount = 0L;
         try (BufferedReader reader = openReader(file, encoding)) {
@@ -315,9 +315,8 @@ public final class LargeTextPartitionReader {
                                                                          int lookbehindLines,
                                                                          boolean includeLookbehind,
                                                                          ForwardCursor cursor) throws IOException {
-        List<TextDisplayRule> activeRules = TextDisplayRuleManager.getActiveRules(
+        TextDisplayRuleManager.ActiveSnapshot rules = TextDisplayRuleManager.captureActive(
                 context.getApplicationContext(), file.getAbsolutePath());
-        int rulesVersion = TextDisplayRuleManager.getRulesVersion();
         return readPartitionAtStartLineTransformed(
                 file,
                 encoding,
@@ -329,9 +328,9 @@ public final class LargeTextPartitionReader {
                 lookaheadLines,
                 lookbehindLines,
                 includeLookbehind,
-                rulesVersion,
+                rules.version,
                 lineText -> TextDisplayRuleManager.apply(
-                        FileUtils.enforceTextPresentationSelectors(lineText), activeRules),
+                        FileUtils.enforceTextPresentationSelectors(lineText), rules.compiled),
                 cursor);
     }
 

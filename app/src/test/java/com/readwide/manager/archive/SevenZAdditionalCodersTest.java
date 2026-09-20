@@ -10,6 +10,52 @@ import static org.junit.Assert.*;
 public class SevenZAdditionalCodersTest {
     private static final byte[] DATA = {1,2,3,4,5,6,7,8,9,10,11,12};
 
+    @Test public void modernBcjFiltersTransformAndRoundTripWithStartOffsets() throws Exception {
+        for (int method : new int[]{0x0a, 0x0b}) {
+            byte[] bytes = new byte[4096];
+            new java.util.Random(123).nextBytes(bytes);
+            for (int at = 0; at < bytes.length; at += 16) {
+                int instruction = method == 0x0a ? 0x94000001 : 0x000000ef;
+                for (int b = 0; b < 4; b++) bytes[at + b] = (byte)(instruction >>> (8 * b));
+            }
+            for (int start : new int[]{0, 256, -256}) {
+                FilterOptions options;
+                if (method == 0x0a) {
+                    ARM64Options arm = new ARM64Options(); arm.setStartOffset(start); options = arm;
+                } else {
+                    RISCVOptions riscv = new RISCVOptions(); riscv.setStartOffset(start); options = riscv;
+                }
+                ByteArrayOutputStream packed = new ByteArrayOutputStream();
+                try (FinishableOutputStream out = options.getOutputStream(new FinishableWrapperOutputStream(packed))) {
+                    out.write(bytes);
+                }
+                assertFalse("Fixture must exercise address conversion", java.util.Arrays.equals(bytes, packed.toByteArray()));
+                byte[] props = start == 0 ? null
+                        : new byte[]{(byte)start, (byte)(start >>> 8), (byte)(start >>> 16), (byte)(start >>> 24)};
+                assertDecoded(new byte[]{(byte)method}, props, packed.toByteArray(), bytes);
+            }
+        }
+    }
+
+    @Test public void modernBcjPropertiesFailBeforeInputIsRead() throws Exception {
+        InputStream unread = new InputStream() { @Override public int read() { throw new AssertionError("Unexpected read"); } };
+        for (int method : new int[]{0x0a, 0x0b}) {
+            for (byte[] props : new byte[][]{new byte[1], new byte[3], new byte[5], {1,0,0,0}}) {
+                try { SevenZAdditionalCoders.open(new byte[]{(byte)method}, props, unread); fail("Invalid BCJ properties"); }
+                catch (IOException expected) { }
+            }
+        }
+    }
+
+    @Test public void modernBcjClassificationUsesExactMethodIds() throws Exception {
+        assertTrue(SevenZAdditionalCoders.isModernBcj(new byte[]{0x0a}));
+        assertTrue(SevenZAdditionalCoders.isModernBcj(new byte[]{0x0b}));
+        for (byte[] id : new byte[][]{null, new byte[0], {0x0a,0}, {0x0c}, {3,3,5,1}}) {
+            assertFalse(SevenZAdditionalCoders.isModernBcj(id));
+        }
+        assertNull(SevenZAdditionalCoders.open(new byte[]{0x0a,0}, null, new ByteArrayInputStream(DATA)));
+    }
+
     @Test public void rawDeflateAndBzip2RoundTrip() throws Exception {
         ByteArrayOutputStream deflated = new ByteArrayOutputStream();
         Deflater deflater = new Deflater(6, true);

@@ -17,6 +17,9 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -63,12 +66,12 @@ final class ArchiveImageEntryCache {
                 if (parent == null) {
                     return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, null);
                 }
-                if (!parent.exists() && !parent.mkdirs()) {
+                if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
                     return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, null);
                 }
 
                 boolean bulkAttempted = false;
-                if (shouldPreferWholeArchiveImageCache(archiveFile, entryPath)) {
+                if (shouldPreferWholeArchiveImageCache(archiveFile, entryPath, outFile)) {
                     bulkAttempted = true;
                     ArchiveSupport.ExtractionResult bulkResult = ensureReadyByWholeArchiveExtraction(
                             archiveFile,
@@ -87,7 +90,7 @@ final class ArchiveImageEntryCache {
 
                 tmpFile = File.createTempFile("archive_image_", ".extracting", parent);
                 ArchiveSupport.ExtractionResult result;
-                synchronized (lockForArchive(archiveFile)) {
+                synchronized (lockForArchive(outFile)) {
                     result = ArchiveSupport.extractSingleEntryDetailed(
                             archiveFile,
                             entryPath,
@@ -160,13 +163,13 @@ final class ArchiveImageEntryCache {
         }
         File extractRoot = null;
         try {
-            if (!parent.exists() && !parent.mkdirs()) {
+            if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
                 return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, null);
             }
             extractRoot = buildWholeArchiveExtractRoot(parent);
             ArchiveSupport.ExtractionResult result;
             int copied;
-            synchronized (lockForArchive(archiveFile)) {
+            synchronized (lockForArchive(outFile)) {
                 if (shouldReuseReadyImageFile(entryPath, outFile, sensitiveCache, verifiedSensitivePaths)) {
                     return ArchiveSupport.ExtractionResult.success();
                 }
@@ -193,7 +196,7 @@ final class ArchiveImageEntryCache {
             }
             // The whole archive was extracted and its images copied into the preview
             // cache; remember this so a later miss extracts only the missing member.
-            WHOLE_ARCHIVE_BULK_DONE.add(archiveBulkKey(archiveFile));
+            WHOLE_ARCHIVE_BULK_DONE.put(parent.getAbsolutePath(), Boolean.TRUE);
             return isReadyImageFile(entryPath, outFile)
                     ? ArchiveSupport.ExtractionResult.success()
                     : ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED,
@@ -238,7 +241,7 @@ final class ArchiveImageEntryCache {
     private static boolean copyReadyFile(@NonNull File source, @NonNull File target) throws IOException {
         File parent = target.getParentFile();
         if (parent == null) return false;
-        if (!parent.exists() && !parent.mkdirs()) return false;
+        if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) return false;
         // Bulk extraction and preview files normally share a filesystem. The
         // validated extraction is disposable: consume it by rename instead of
         // writing every image a second time. Keep guarded copy as a fallback.
@@ -301,19 +304,18 @@ final class ArchiveImageEntryCache {
         return true;
     }
 
-    // Archives whose whole-archive image bulk extraction has already succeeded this
-    // process session, keyed by path+size+mtime. Used so a RAR cache miss after the
-    // initial bulk extracts just the missing member instead of re-extracting the
-    // whole archive again.
-    private static final Set<String> WHOLE_ARCHIVE_BULK_DONE =
-            ConcurrentHashMap.newKeySet();
-
-    private static String archiveBulkKey(@NonNull File archiveFile) {
-        return archiveFile.getAbsolutePath() + ":" + archiveFile.length() + ":" + archiveFile.lastModified();
-    }
+    // A hint, not an authority: keep at most 64 successfully bulk-populated namespaces.
+    // The key includes sensitive/non-sensitive cache roots and the full volume fingerprint.
+    private static final Map<String, Boolean> WHOLE_ARCHIVE_BULK_DONE = Collections.synchronizedMap(
+            new LinkedHashMap<String, Boolean>(64, 0.75f, true) {
+                @Override protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > 64;
+                }
+            });
 
     private static boolean shouldPreferWholeArchiveImageCache(@NonNull File archiveFile,
-                                                              @NonNull String entryPath) {
+                                                              @NonNull String entryPath,
+                                                              @NonNull File outFile) {
         if (!FileUtils.isImageFile(entryPath)) return false;
         ArchiveSupport.Type type = ArchiveSupport.getSupportedArchiveType(archiveFile);
         // Numeric split archives (name.zip.001 style) of random-access types have
@@ -338,7 +340,8 @@ final class ArchiveImageEntryCache {
         // whole-archive as their fallback because their forward reader is the
         // primary, prune-tolerant path.
         if ((type == ArchiveSupport.Type.RAR || numericSplitRandomAccess)
-                && WHOLE_ARCHIVE_BULK_DONE.contains(archiveBulkKey(archiveFile))) {
+                && Boolean.TRUE.equals(WHOLE_ARCHIVE_BULK_DONE.get(
+                        outFile.getAbsoluteFile().getParent()))) {
             return false;
         }
         return true;
@@ -555,14 +558,9 @@ final class ArchiveImageEntryCache {
     }
 
     @NonNull
-    private static Object lockForArchive(@NonNull File archiveFile) {
-        String key;
-        try {
-            key = archiveFile.getCanonicalPath();
-        } catch (IOException | SecurityException ignored) {
-            key = archiveFile.getAbsolutePath();
-        }
-        key = key + "\n" + archiveFile.length() + "\n" + archiveFile.lastModified();
+    private static Object lockForArchive(@NonNull File outFile) {
+        String key = outFile.getAbsoluteFile().getParent();
+        if (key == null) key = outFile.getAbsolutePath();
         int index = (key.hashCode() & 0x7fffffff) % ARCHIVE_LOCK_STRIPES.length;
         return ARCHIVE_LOCK_STRIPES[index];
     }
@@ -583,7 +581,7 @@ final class ArchiveImageEntryCache {
     private static void writeReadyMarker(@NonNull File outFile) throws IOException {
         File marker = readyMarkerFor(outFile);
         File parent = marker.getParentFile();
-        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
             throw new IOException("Cannot create cache marker directory");
         }
         if (!marker.exists() && !marker.createNewFile()) {

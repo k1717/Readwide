@@ -36,6 +36,24 @@ final class ArchiveEntryListController {
     static List<ArchiveSupport.EntryInfo> directChildren(@NonNull List<ArchiveSupport.EntryInfo> allEntries,
                                                          @NonNull String prefix,
                                                          int sortMode) {
+        List<ArchiveSupport.EntryInfo> result = collectDirectChildren(allEntries, prefix);
+        sort(result, sortMode);
+        return result;
+    }
+
+    @NonNull
+    static List<ArchiveSupport.EntryInfo> visibleChildren(@NonNull List<ArchiveSupport.EntryInfo> allEntries,
+                                                          @NonNull String prefix,
+                                                          @Nullable String queryText,
+                                                          int activeFilter,
+                                                          int sortMode) {
+        // Filtering preserves relative order, so only the survivors need sorting.
+        return filter(collectDirectChildren(allEntries, prefix), queryText, activeFilter, sortMode);
+    }
+
+    @NonNull
+    private static List<ArchiveSupport.EntryInfo> collectDirectChildren(
+            @NonNull List<ArchiveSupport.EntryInfo> allEntries, @NonNull String prefix) {
         Map<String, ArchiveSupport.EntryInfo> children = new LinkedHashMap<>();
         for (ArchiveSupport.EntryInfo entry : allEntries) {
             if (entry == null) continue;
@@ -54,9 +72,7 @@ final class ArchiveEntryListController {
                 children.put(path, entry);
             }
         }
-        List<ArchiveSupport.EntryInfo> result = new ArrayList<>(children.values());
-        sort(result, sortMode);
-        return result;
+        return new ArrayList<>(children.values());
     }
 
     @NonNull

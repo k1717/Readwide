@@ -42,6 +42,123 @@ public class SevenZBcj2ArchiveReaderTest {
     private static final char[] PASSWORD = "pw1717".toCharArray();
 
     @Test
+    public void shortenedVerifiedFolderFailsBeforeReturningSurvivingPrefix() throws Exception {
+        assertChangedVerifiedFolder(false, false, false);
+    }
+
+    @Test
+    public void grownVerifiedFolderFailsWhenReusedByNextEntry() throws Exception {
+        assertChangedVerifiedFolder(false, true, true);
+    }
+
+    @Test
+    public void shortenedSplitVerifiedFolderRetiresReaderAndReleasesVolumes() throws Exception {
+        assertChangedVerifiedFolder(true, false, false);
+    }
+
+    private void assertChangedVerifiedFolder(boolean split, boolean grow, boolean advance) throws Exception {
+        File archive = tinyBcj2(false, false, false, false);
+        File[] parts = split ? splitBytes(Files.readAllBytes(archive.toPath()), 10, 33) : null;
+        File spoolDirectory = tempFolder.newFolder();
+        // A non-null password also exercises retirement of the reader's owned copy.
+        char[] suppliedPassword = PASSWORD.clone();
+        try (ArchiveSupport.ForwardArchiveReader reader = SevenZBcj2ArchiveReader.openSpecialForwardReader(
+                split ? parts[1] : archive, suppliedPassword, spoolDirectory)) {
+            assertEquals("1.bin", reader.nextEntry().path);
+            byte[] first = new byte[1];
+            assertEquals(1, reader.read(first));
+            assertEquals(1, first[0]);
+            if (advance) assertEquals("2.bin", reader.nextEntry().path);
+            File spool = spoolDirectory.listFiles()[0];
+            assertEquals(4, spool.length());
+            try (java.io.RandomAccessFile changed = new java.io.RandomAccessFile(spool, "rw")) {
+                changed.setLength(grow ? 5 : 2);
+            }
+            byte[] untouched = {0x55};
+            try { reader.read(untouched); fail("Expected changed verified folder to fail before reading"); }
+            catch (IOException expected) { assertTrue(expected.getMessage().contains("7z spool")); }
+            assertEquals(0x55, untouched[0]);
+            assertEquals(0, spoolDirectory.list().length);
+            assertRetired(reader);
+            java.lang.reflect.Field passwordField = reader.getClass().getDeclaredField("password");
+            passwordField.setAccessible(true);
+            for (char value : (char[]) passwordField.get(reader)) assertEquals(0, value);
+            org.junit.Assert.assertArrayEquals(PASSWORD, suppliedPassword);
+            if (parts != null) deleteParts(parts);
+        }
+    }
+
+    @Test
+    public void ordinarySourceChangeBeforeDecodeRetiresReader() throws Exception {
+        for (boolean lengthChange : new boolean[]{false, true}) {
+            File archive = tinyBcj2(false, false, false, false);
+            File spool = tempFolder.newFolder();
+            try (ArchiveSupport.ForwardArchiveReader reader = SevenZBcj2ArchiveReader.openSpecialForwardReader(
+                    archive, null, spool)) {
+                assertEquals("1.bin", reader.nextEntry().path);
+                if (lengthChange) {
+                    try (FileOutputStream append = new FileOutputStream(archive, true)) { append.write(0); }
+                } else {
+                    assertTrue(archive.setLastModified(archive.lastModified() + 5000));
+                }
+                byte[] output = {(byte) 0x55};
+                try { reader.read(output); fail("Expected source change"); }
+                catch (IOException expected) { assertTrue(expected.getMessage().contains("source changed")); }
+                assertEquals(0x55, output[0]);
+                assertEquals(0, spool.list().length);
+                assertRetired(reader);
+            }
+        }
+    }
+
+    @Test
+    public void ordinaryForwardStillReusesVerifiedFolder() throws Exception {
+        File archive = tinyBcj2(false, false, false, false);
+        File spool = tempFolder.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = SevenZBcj2ArchiveReader.openSpecialForwardReader(
+                archive, null, spool)) {
+            assertEquals("1.bin", reader.nextEntry().path);
+            assertForwardBytes(reader, new byte[]{1, 2});
+            File first = spool.listFiles()[0];
+            assertEquals("2.bin", reader.nextEntry().path);
+            assertForwardBytes(reader, new byte[]{3, 4});
+            assertEquals(first, spool.listFiles()[0]);
+            org.junit.Assert.assertNull(reader.nextEntry());
+            assertEquals(0, spool.list().length);
+        }
+    }
+
+    @Test
+    public void failedSpoolDeletionIsReportedAndCloseCanRetry() throws Exception {
+        File archive = tinyBcj2(false, false, false, false);
+        File spool = tempFolder.newFolder();
+        ArchiveSupport.ForwardArchiveReader reader = SevenZBcj2ArchiveReader.openSpecialForwardReader(
+                archive, null, spool);
+        java.lang.reflect.Field field = reader.getClass().getDeclaredField("spool");
+        field.setAccessible(true);
+        File original = null;
+        try {
+            reader.nextEntry();
+            assertForwardBytes(reader, new byte[]{1, 2});
+            original = (File) field.get(reader);
+            field.set(reader, new File(original.getAbsolutePath()) {
+                @Override public boolean delete() { return false; }
+            });
+            try { reader.close(); fail("Expected cleanup failure"); }
+            catch (IOException expected) { assertTrue(expected.getMessage().contains("spool")); }
+            assertTrue(original.exists());
+            org.junit.Assert.assertNotNull(field.get(reader));
+            field.set(reader, original);
+            reader.close();
+            assertFalse(original.exists());
+            assertRetired(reader);
+        } finally {
+            if (original != null && original.exists()) field.set(reader, original);
+            reader.close();
+        }
+    }
+
+    @Test
     public void splitAesBcj2PublicForwardRouteCrossesHeadersAndPackedStreams() throws Exception {
         byte[] bytes = Base64.getDecoder().decode(Sevenz7Bcj2Fixtures.AES_B64);
         File[] parts = splitBytes(bytes, 5, 31, 34, bytes.length - 19);

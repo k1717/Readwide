@@ -335,6 +335,20 @@ final class ZipxAesArchiveReader {
             @NonNull File outFile,
             @NonNull char[] password,
             @Nullable FileOperationProgress progress) throws IOException {
+        // Integrity/authentication and decoder close all precede destination commit.
+        try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
+            if (!extractDescriptorPayload(zip, descriptor, outFile, password, progress)) return false;
+            guard.commit();
+            return true;
+        }
+    }
+
+    private static boolean extractDescriptorPayload(
+            @NonNull org.apache.commons.compress.archivers.zip.ZipFile zip,
+            @NonNull EntryDescriptor descriptor,
+            @NonNull File outFile,
+            @NonNull char[] password,
+            @Nullable FileOperationProgress progress) throws IOException {
         ZipArchiveEntry entry = descriptor.entry;
         if (descriptor.aes == null) {
             if (entry.getMethod() == METHOD_LZMA) {
@@ -355,9 +369,7 @@ final class ZipxAesArchiveReader {
                 throw new ArchiveSupport.UnsupportedArchiveFeatureException(
                         "ZIPX entry uses an unsupported compression/encryption combination");
             }
-            try (InputStream in = zip.getInputStream(entry)) {
-                return ArchiveSupport.writeArchiveEntryStream(in, outFile, progress);
-            }
+            return extractPlainEntry(zip, entry, outFile, progress);
         }
 
         AesMetadata aes = descriptor.aes;
@@ -378,6 +390,21 @@ final class ZipxAesArchiveReader {
             if (!written) return false;
             decrypted.verifyAuthentication();
             verifyDecodedEntry(entry, aes, checked);
+            return true;
+        }
+    }
+
+    /** Shared by ZIPX companions and the ordinary Commons ZIP fallback. */
+    static boolean extractPlainEntry(
+            org.apache.commons.compress.archivers.zip.ZipFile zip, ZipArchiveEntry entry,
+            File outFile, FileOperationProgress progress) throws IOException {
+        try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
+            try (InputStream in = zip.getInputStream(entry)) {
+                IntegrityInputStream checked = new IntegrityInputStream(in);
+                if (!ArchiveSupport.writeArchiveEntryStream(checked, outFile, progress)) return false;
+                verifyPlainEntry(entry, checked);
+            }
+            guard.commit();
             return true;
         }
     }

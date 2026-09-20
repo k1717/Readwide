@@ -118,10 +118,7 @@ public final class FileSystemOps {
                                boolean overwrite,
                                @Nullable FileOperationProgress progress,
                                boolean assignTotalBytes) {
-        FileTreeProgressTracker tracker = assignTotalBytes
-                ? FileTreeProgressTracker.create(progress, source)
-                : null;
-        return move(source, destination, overwrite, progress, assignTotalBytes, tracker);
+        return move(source, destination, overwrite, progress, assignTotalBytes, null);
     }
 
     public static boolean move(@NonNull File source,
@@ -133,23 +130,25 @@ public final class FileSystemOps {
         if (!canTransfer(source, destination, overwrite)
                 || (progress != null && !progress.checkpoint())) return false;
 
-        long totalBytes = measureBytes(source);
         if (progress != null) {
-            if (assignTotalBytes) {
-                progress.setTotalBytes(totalBytes);
-                if (tracker == null) tracker = FileTreeProgressTracker.create(progress, source);
-            }
+            if (tracker == null) tracker = FileTreeProgressTracker.create(progress, source);
+            if (!tracker.isReady()) return false;
+            if (assignTotalBytes) progress.setTotalBytes(tracker.totalBytes());
             if (!progress.checkpoint()) return false;
         }
 
         try {
-            if (progress == null && !destination.exists() && source.renameTo(destination)) {
+            if (!FileTreeWalk.existsNoFollow(destination) && source.renameTo(destination)) {
+                // The rename is the commit point. Late cancellation must not turn
+                // a successful move into failure and lose its metadata updates.
+                if (tracker != null) tracker.onMoved(source);
+                if (progress != null && assignTotalBytes) progress.markComplete();
                 return true;
             }
-        } catch (SecurityException ignored) {
+        } catch (IOException | SecurityException ignored) {
         }
 
-        boolean copied = copy(source, destination, overwrite, progress, totalBytes, false, tracker);
+        boolean copied = copy(source, destination, overwrite, progress, false, tracker);
         if (!copied) return false;
 
         // The replacement is committed. A late cancellation keeps the source
@@ -171,7 +170,7 @@ public final class FileSystemOps {
                                @NonNull File destination,
                                boolean overwrite,
                                @Nullable FileOperationProgress progress) {
-        return copy(source, destination, overwrite, progress, -1L, true);
+        return copy(source, destination, overwrite, progress, true, null);
     }
 
     public static boolean copy(@NonNull File source,
@@ -179,7 +178,7 @@ public final class FileSystemOps {
                                boolean overwrite,
                                @Nullable FileOperationProgress progress,
                                boolean assignTotalBytes) {
-        return copy(source, destination, overwrite, progress, -1L, assignTotalBytes);
+        return copy(source, destination, overwrite, progress, assignTotalBytes, null);
     }
 
     public static boolean copy(@NonNull File source,
@@ -188,35 +187,12 @@ public final class FileSystemOps {
                                @Nullable FileOperationProgress progress,
                                boolean assignTotalBytes,
                                @Nullable FileTreeProgressTracker tracker) {
-        return copy(source, destination, overwrite, progress, -1L, assignTotalBytes, tracker);
-    }
-
-    private static boolean copy(@NonNull File source,
-                                @NonNull File destination,
-                                boolean overwrite,
-                                @Nullable FileOperationProgress progress,
-                                long knownTotalBytes,
-                                boolean assignTotalBytes) {
-        FileTreeProgressTracker tracker = assignTotalBytes
-                ? FileTreeProgressTracker.create(progress, source)
-                : null;
-        return copy(source, destination, overwrite, progress, knownTotalBytes, assignTotalBytes, tracker);
-    }
-
-    private static boolean copy(@NonNull File source,
-                                @NonNull File destination,
-                                boolean overwrite,
-                                @Nullable FileOperationProgress progress,
-                                long knownTotalBytes,
-                                boolean assignTotalBytes,
-                                @Nullable FileTreeProgressTracker tracker) {
         if (!canTransfer(source, destination, overwrite)
                 || (progress != null && !progress.checkpoint())) return false;
         if (progress != null) {
-            if (assignTotalBytes) {
-                progress.setTotalBytes(knownTotalBytes >= 0L ? knownTotalBytes : measureBytes(source));
-                if (tracker == null) tracker = FileTreeProgressTracker.create(progress, source);
-            }
+            if (tracker == null) tracker = FileTreeProgressTracker.create(progress, source);
+            if (!tracker.isReady()) return false;
+            if (assignTotalBytes) progress.setTotalBytes(tracker.totalBytes());
             if (!progress.checkpoint()) return false;
         }
         return stageAndCommit(source, destination, overwrite, progress, tracker);
@@ -225,12 +201,16 @@ public final class FileSystemOps {
     /** Reject either containment direction before creating or replacing anything. */
     static boolean canTransfer(@NonNull File source, @NonNull File destination, boolean overwrite) {
         try {
-            if (!source.exists() || (!source.isFile() && !source.isDirectory())) return false;
+            FileTreeWalk.Kind sourceKind = FileTreeWalk.kind(source);
+            FileTreeWalk.Kind destinationKind = FileTreeWalk.kind(destination);
+            if (sourceKind != FileTreeWalk.Kind.FILE && sourceKind != FileTreeWalk.Kind.DIRECTORY) return false;
+            if (destinationKind == FileTreeWalk.Kind.LINK || destinationKind == FileTreeWalk.Kind.OTHER) return false;
             File src = source.getCanonicalFile();
             File dst = destination.getCanonicalFile();
             if (isSameOrDescendant(src, dst) || isSameOrDescendant(dst, src)) return false;
             File parent = destination.getAbsoluteFile().getParentFile();
-            return parent != null && parent.isDirectory() && (!destination.exists() || overwrite);
+            return parent != null && parent.isDirectory()
+                    && (destinationKind == FileTreeWalk.Kind.MISSING || overwrite);
         } catch (IOException | SecurityException ignored) {
             return false; // Do not use an unresolved path for an overwrite.
         }
@@ -249,23 +229,21 @@ public final class FileSystemOps {
             if (progress != null && !progress.checkpoint()) return false;
             if (!transaction.mkdir()) return false;
             ownsTransaction = true;
-            boolean copied = source.isDirectory()
-                    ? copyDirectoryRecursively(source, staged, progress, tracker)
-                    : copyRegularFile(source, staged, progress, tracker);
+            boolean copied = copyTree(source, staged, progress, tracker);
             if (!copied || (progress != null && !progress.checkpoint())) return false;
             if (!canTransfer(source, destination, overwrite)) return false;
 
             // Only rename after all streams have closed and staging succeeded.
             // Cancellation is intentionally not observed between these renames:
             // complete the short commit/rollback sequence first.
-            if (destination.exists()) {
+            if (FileTreeWalk.existsNoFollow(destination)) {
                 if (!destination.renameTo(previous)) return false;
                 backedUp = true;
             }
-            if (destination.exists() || !staged.renameTo(destination)) return false;
+            if (FileTreeWalk.existsNoFollow(destination) || !staged.renameTo(destination)) return false;
             committed = true;
             return true;
-        } catch (SecurityException ignored) {
+        } catch (IOException | SecurityException ignored) {
             return false;
         } finally {
             if (ownsTransaction) {
@@ -273,8 +251,8 @@ public final class FileSystemOps {
                     // If rollback itself is denied, preserve previous in the
                     // transaction directory for recovery; never clean it away.
                     try {
-                        if (!destination.exists()) previous.renameTo(destination);
-                    } catch (SecurityException ignored) { }
+                        if (!FileTreeWalk.existsNoFollow(destination)) previous.renameTo(destination);
+                    } catch (IOException | SecurityException ignored) { }
                 }
                 delete(staged);
                 if (committed) delete(previous);
@@ -295,10 +273,7 @@ public final class FileSystemOps {
     public static boolean delete(@NonNull File target,
                                  @Nullable FileOperationProgress progress,
                                  boolean assignTotalBytes) {
-        FileTreeProgressTracker tracker = assignTotalBytes
-                ? FileTreeProgressTracker.create(progress, target)
-                : null;
-        return delete(target, progress, assignTotalBytes, tracker);
+        return delete(target, progress, assignTotalBytes, null);
     }
 
     public static boolean delete(@NonNull File target,
@@ -306,90 +281,63 @@ public final class FileSystemOps {
                                  boolean assignTotalBytes,
                                  @Nullable FileTreeProgressTracker tracker) {
         if (progress != null && assignTotalBytes) {
-            progress.setTotalBytes(measureBytes(target));
             if (tracker == null) tracker = FileTreeProgressTracker.create(progress, target);
+            if (!tracker.isReady()) return false;
+            progress.setTotalBytes(tracker.totalBytes());
         }
+        if (tracker != null && !tracker.isReady()) return false;
         return deleteRecursively(target, progress, tracker);
     }
 
     public static boolean deleteAll(@NonNull List<File> targets, @Nullable FileOperationProgress progress) {
         FileTreeProgressTracker tracker = null;
         if (progress != null) {
-            long totalBytes = 0L;
-            for (File target : targets) {
-                if (target == null) continue;
-                totalBytes += measureBytes(target);
-                if (totalBytes < 0L) {
-                    totalBytes = Long.MAX_VALUE;
-                    break;
-                }
-            }
-            progress.setTotalBytes(totalBytes);
             tracker = FileTreeProgressTracker.create(progress, targets);
+            if (!tracker.isReady()) return false;
+            progress.setTotalBytes(tracker.totalBytes());
         }
         boolean allDeleted = true;
         for (File target : targets) {
-            if (target == null || !target.exists()) continue;
+            if (target == null) continue;
             if (!deleteRecursively(target, progress, tracker)) allDeleted = false;
             if (progress != null && progress.isCancelled()) return false;
         }
         return allDeleted;
     }
 
-    private static boolean deleteRecursively(@NonNull File target, @Nullable FileOperationProgress progress) {
-        return deleteRecursively(target, progress, null);
-    }
-
     private static boolean deleteRecursively(@NonNull File target,
                                              @Nullable FileOperationProgress progress,
                                              @Nullable FileTreeProgressTracker tracker) {
-        if (!target.exists()) return true;
-        if (progress != null) {
-            if (tracker != null) {
-                if (target.isDirectory()) tracker.onDirectory(target);
-                else tracker.onFile(target);
-            } else {
-                progress.setDetail(target.getName());
-                progress.setFolder(parentDisplayName(target));
-            }
-            if (!progress.checkpoint()) return false;
-        }
-        if (target.isDirectory()) {
-            File[] children;
-            try {
-                children = target.listFiles();
-            } catch (SecurityException ignored) {
-                return false;
-            }
-            if (children == null) return false;
-            for (File child : children) {
-                if (!deleteRecursively(child, progress, tracker)) return false;
-            }
-        }
-        long bytes = target.isFile() ? Math.max(0L, target.length()) : 0L;
         try {
-            boolean deleted = target.delete();
-            if (deleted && progress != null) progress.addDoneBytes(bytes);
-            return deleted;
-        } catch (SecurityException ignored) {
+            return FileTreeWalk.walk(target, () -> progress == null || progress.checkpoint(),
+                    new FileTreeWalk.Visitor() {
+                        @Override public boolean enter(FileTreeWalk.Entry entry) throws IOException {
+                            if (entry.kind == FileTreeWalk.Kind.MISSING) return true;
+                            if (progress != null) {
+                                if (tracker != null) {
+                                    if (entry.kind == FileTreeWalk.Kind.DIRECTORY) tracker.onDirectory(entry.file);
+                                    else tracker.onFile(entry.file);
+                                } else {
+                                    progress.setDetail(entry.file.getName());
+                                    progress.setFolder(parentDisplayName(entry.file));
+                                }
+                                if (!progress.checkpoint()) return false;
+                            }
+                            entry.recheck();
+                            if (entry.kind == FileTreeWalk.Kind.DIRECTORY) return true;
+                            // A symbolic link is a leaf, including a dangling link.
+                            boolean deleted = entry.file.delete();
+                            if (deleted && progress != null) progress.addDoneBytes(entry.bytes);
+                            return deleted;
+                        }
+
+                        @Override public boolean leave(FileTreeWalk.Entry directory) {
+                            return directory.file.delete();
+                        }
+                    });
+        } catch (IOException | SecurityException ignored) {
             return false;
         }
-    }
-
-    private static int countExistingTargets(@NonNull List<File> targets) {
-        int count = 0;
-        for (File target : targets) {
-            if (target != null && target.exists()) count++;
-        }
-        return count;
-    }
-
-    private static int countTopLevelDirectories(@NonNull List<File> targets) {
-        int count = 0;
-        for (File target : targets) {
-            if (target != null && target.isDirectory()) count++;
-        }
-        return count;
     }
 
     public static boolean isSameOrDescendant(@NonNull File ancestor,
@@ -418,57 +366,39 @@ public final class FileSystemOps {
         }
     }
 
-    private static boolean copyDirectoryRecursively(@NonNull File sourceDir,
-                                                    @NonNull File destinationDir,
-                                                    @Nullable FileOperationProgress progress,
-                                                    @Nullable FileTreeProgressTracker tracker) {
-        if (!sourceDir.exists() || !sourceDir.isDirectory()) return false;
-        if (isSameOrDescendant(sourceDir, destinationDir)) return false;
-        if (progress != null) {
-            if (tracker != null) tracker.onDirectory(sourceDir);
-            if (!progress.checkpoint()) return false;
-        }
-        if (!destinationDir.exists()) {
-            try {
-                if (!destinationDir.mkdirs()) return false;
-            } catch (SecurityException ignored) {
-                return false;
-            }
-        }
-        File[] children;
+    private static boolean copyTree(@NonNull File source,
+                                    @NonNull File destination,
+                                    @Nullable FileOperationProgress progress,
+                                    @Nullable FileTreeProgressTracker tracker) {
+        // One scratch buffer per operation, shared sequentially by all its files.
+        // Independent copy operations never share mutable buffers.
+        byte[] buffer = new byte[COPY_BUFFER_BYTES];
         try {
-            children = sourceDir.listFiles();
-        } catch (SecurityException ignored) {
+            return FileTreeWalk.walk(source, () -> progress == null || progress.checkpoint(), entry -> {
+                entry.recheck();
+                File output = entry.relative.isEmpty() ? destination : new File(destination, entry.relative);
+                if (entry.kind == FileTreeWalk.Kind.DIRECTORY) {
+                    if (tracker != null) tracker.onDirectory(entry.file);
+                    return output.mkdir(); // Every output belongs to the new staging tree.
+                }
+                if (entry.kind == FileTreeWalk.Kind.FILE) {
+                    return copyRegularFile(entry, output, progress, tracker, buffer);
+                }
+                // Do not dereference links or treat devices/FIFOs as regular files.
+                // Failure rolls back the staged copy, leaving the destination intact.
+                return false;
+            });
+        } catch (IOException | SecurityException ignored) {
             return false;
         }
-        if (children == null) return false;
-        for (File child : children) {
-            if (progress != null && !progress.checkpoint()) {
-                delete(destinationDir);
-                return false;
-            }
-            File childDestination = new File(destinationDir, child.getName());
-            boolean ok = child.isDirectory()
-                    ? copyDirectoryRecursively(child, childDestination, progress, tracker)
-                    : copyRegularFile(child, childDestination, progress, tracker);
-            if (!ok) {
-                delete(destinationDir);
-                return false;
-            }
-        }
-        return true;
     }
 
-    private static boolean copyRegularFile(@NonNull File source,
-                                           @NonNull File destination,
-                                           @Nullable FileOperationProgress progress) {
-        return copyRegularFile(source, destination, progress, null);
-    }
-
-    private static boolean copyRegularFile(@NonNull File source,
+    private static boolean copyRegularFile(@NonNull FileTreeWalk.Entry entry,
                                            @NonNull File destination,
                                            @Nullable FileOperationProgress progress,
-                                           @Nullable FileTreeProgressTracker tracker) {
+                                           @Nullable FileTreeProgressTracker tracker,
+                                           @NonNull byte[] buffer) throws IOException {
+        File source = entry.file;
         File parent = destination.getParentFile();
         if (parent == null || !parent.exists() || !parent.isDirectory()) return false;
         if (progress != null) {
@@ -479,10 +409,10 @@ public final class FileSystemOps {
             }
             if (!progress.checkpoint()) return false;
         }
-        byte[] buffer = new byte[COPY_BUFFER_BYTES];
         boolean copied = false;
         boolean cancelled = false;
-        long expectedBytes = source.length();
+        entry.recheck();
+        long expectedBytes = entry.bytes;
         long writtenBytes = 0L;
         try (FileInputStream in = new FileInputStream(source);
              FileOutputStream out = new FileOutputStream(destination)) {
@@ -497,6 +427,7 @@ public final class FileSystemOps {
                 if (progress != null) progress.addDoneBytes(read);
             }
             out.flush();
+            entry.recheck();
             copied = !cancelled && (progress == null || progress.checkpoint())
                     && writtenBytes == expectedBytes && destination.length() == expectedBytes
                     && source.length() == expectedBytes;
@@ -514,22 +445,14 @@ public final class FileSystemOps {
     }
 
     public static long measureBytes(@NonNull File target) {
-        if (!target.exists()) return 0L;
-        if (target.isFile()) return Math.max(0L, target.length());
-        if (!target.isDirectory()) return 0L;
-        File[] children;
+        long[] total = {0L};
         try {
-            children = target.listFiles();
-        } catch (SecurityException ignored) {
-            return 0L;
-        }
-        if (children == null) return 0L;
-        long total = 0L;
-        for (File child : children) {
-            total += measureBytes(child);
-            if (total < 0L) return Long.MAX_VALUE;
-        }
-        return total;
+            FileTreeWalk.walk(target, () -> !Thread.currentThread().isInterrupted(), entry -> {
+                total[0] = entry.bytes > Long.MAX_VALUE - total[0] ? Long.MAX_VALUE : total[0] + entry.bytes;
+                return true;
+            });
+        } catch (IOException | SecurityException ignored) { }
+        return total[0]; // Best-effort file-info size; operations use a checked inventory.
     }
 
     @NonNull

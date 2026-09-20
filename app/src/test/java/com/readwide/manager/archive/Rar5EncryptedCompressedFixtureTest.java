@@ -55,6 +55,7 @@ public class Rar5EncryptedCompressedFixtureTest {
                 (int)(original.dataOffset+original.packedSize));
         Rar5Crypto.Secrets secrets = Rar5Crypto.deriveSecrets(PASSWORD,
                 original.encryption.kdfCount,original.encryption.salt);
+        for (boolean existing : new boolean[]{false, true}) {
         for (boolean corrupt : new boolean[]{false,true}) {
             List<RarArchiveReader.RarEntry> chain = new java.util.ArrayList<>();
             for (int i=0;i<2;i++) {
@@ -79,7 +80,9 @@ public class Rar5EncryptedCompressedFixtureTest {
                         i == 1,i == 0,original.encryption,crc,0,original.rar5CompressionInfo,hash);
                 part.sourceArchive = volume; chain.add(part);
             }
-            File out = tempFolder.newFile();
+            File out = new File(tempFolder.getRoot(), "checked-" + java.util.UUID.randomUUID());
+            byte[] sentinel = "existing user content".getBytes(StandardCharsets.UTF_8);
+            if (existing) Files.write(out.toPath(), sentinel);
             try {
                 assertTrue(Rar5CompressedArchiveExtractor.tryExtractEntry(chain.get(0),chain,out,PASSWORD,null));
                 if (corrupt) org.junit.Assert.fail("Corrupt intermediate hash must fail");
@@ -87,8 +90,10 @@ public class Rar5EncryptedCompressedFixtureTest {
             } catch (java.io.IOException expected) {
                 if (!corrupt) throw expected;
                 assertTrue(expected.getMessage().contains("packed-volume"));
-                org.junit.Assert.assertFalse(out.exists());
+                if (existing) assertArrayEquals(sentinel, Files.readAllBytes(out.toPath()));
+                else org.junit.Assert.assertFalse(out.exists());
             }
+        }
         }
     }
 
@@ -101,6 +106,7 @@ public class Rar5EncryptedCompressedFixtureTest {
                 original.encryption.kdfCount,original.encryption.salt);
         byte[] digest = blake.digest();
         if (!RarStoredPayloadIO.hasPlaintextCrc(original)) digest = Rar5Crypto.tweakBlake2sp(digest,secrets);
+        for (boolean existing : new boolean[]{false, true}) {
         for (boolean corrupt : new boolean[]{false,true}) {
             byte[] stored = digest.clone(); if (corrupt) stored[0] ^= 1;
             RarArchiveReader.RarEntry entry = new RarArchiveReader.RarEntry(original.path,false,
@@ -108,7 +114,9 @@ public class Rar5EncryptedCompressedFixtureTest {
                     original.solid,false,false,original.encryption,original.dataCrc,original.timeMillis,
                     original.rar5CompressionInfo,stored);
             entry.sourceArchive = archive;
-            File out = tempFolder.newFile();
+            File out = new File(tempFolder.getRoot(), "checked-" + java.util.UUID.randomUUID());
+            byte[] sentinel = "existing user content".getBytes(StandardCharsets.UTF_8);
+            if (existing) Files.write(out.toPath(), sentinel);
             try {
                 assertTrue(Rar5CompressedArchiveExtractor.tryExtractEntry(entry,
                         java.util.Collections.singletonList(entry),out,PASSWORD,null));
@@ -116,8 +124,10 @@ public class Rar5EncryptedCompressedFixtureTest {
                 assertArrayEquals(plain,Files.readAllBytes(out.toPath()));
             } catch (java.io.IOException expected) {
                 if (!corrupt) throw expected;
-                org.junit.Assert.assertFalse(out.exists());
+                if (existing) assertArrayEquals(sentinel, Files.readAllBytes(out.toPath()));
+                else org.junit.Assert.assertFalse(out.exists());
             }
+        }
         }
     }
 
@@ -292,7 +302,17 @@ public class Rar5EncryptedCompressedFixtureTest {
         File lastFile = tempFolder.newFile("hashmac.part2.rar");
         Files.write(firstFile.toPath(), java.util.Arrays.copyOfRange(packed, 0, 17));
         Files.write(lastFile.toPath(), java.util.Arrays.copyOfRange(packed, 17, packed.length));
-        RarArchiveReader.RarEntry first = copyEntry(original, original.encryption, 123,
+        // Non-final RAR5 CRC is over ciphertext in this physical volume,
+        // transformed by the hash-MAC flag just like the final checksum.
+        java.util.zip.CRC32 packedCrc = new java.util.zip.CRC32();
+        packedCrc.update(packed, 0, 17);
+        long intermediateCrc = packedCrc.getValue();
+        if (!RarStoredPayloadIO.hasPlaintextCrc(original)) {
+            Rar5Crypto.Secrets secrets = Rar5Crypto.deriveSecrets(PASSWORD,
+                    original.encryption.kdfCount, original.encryption.salt);
+            intermediateCrc = Rar5Crypto.tweakCrc32(intermediateCrc, secrets);
+        }
+        RarArchiveReader.RarEntry first = copyEntry(original, original.encryption, intermediateCrc,
                 firstFile, 0, 17, false, true);
         RarArchiveReader.RarEntry last = copyEntry(original, original.encryption, original.dataCrc,
                 lastFile, 0, packed.length - 17, true, false);

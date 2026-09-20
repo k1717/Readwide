@@ -127,7 +127,7 @@
     <string name="archive_support_boundary_title">압축파일 지원 범위</string>
     <string name="archive_support_boundary_rar">RAR 지원 범위는 압축 방식, 암호화 방식, 분할 구성에 따라 다릅니다. 사용자 정의 VM 프로그램과 암호화되거나 분할된 혼합 LZ/PPMd 데이터는 지원하지 않습니다.</string>
     <string name="archive_support_boundary_zip">ZIP/CBZ/ZIPX의 일반 Store/Deflate와 암호 ZIP은 Zip4j로 처리합니다. WinZip AES ZIPX는 Deflate64, BZip2, LZMA, XZ와 libarchive 3.8.9을 통한 PPMd, Zstandard도 추출합니다. AES와 JPEG 또는 WavPack이 결합된 ZIPX는 번들 FOSS 네이티브 코덱 모듈로 지원합니다.</string>
-    <string name="archive_support_boundary_7z">7z/CB7의 일반 압축 방식과 일부 PPMd/BCJ2 조합을 지원하며, 지원 범위에 해당하는 암호화·분할 압축파일도 열 수 있습니다. 일부 압축 방식 조합은 지원하지 않으며, 솔리드 압축파일은 여는 데 시간이 걸릴 수 있습니다.</string>
+    <string name="archive_support_boundary_7z">7z/CB7의 일반 압축 방식과 일부 PPMd/BCJ2/ARM64/RISC-V/Swap2/Swap4 조합을 지원하며, 지원 범위에 해당하는 암호화·분할 압축파일도 열 수 있습니다. 일부 압축 방식 조합은 지원하지 않으며, 솔리드 압축파일은 여는 데 시간이 걸릴 수 있습니다.</string>
     <string name="archive_support_boundary_alz">ALZ의 Store, Deflate, BZip2 방식과 일부 ZipCrypto 암호화를 지원합니다. 일부 분할·암호화 구성, 복잡한 데이터 설명자 또는 특수 ESTsoft 변형은 지원하지 않을 수 있습니다.</string>
     <string name="archive_support_boundary_egg">EGG의 Store, Deflate, BZip2, AZO, LZMA 방식과 분할 압축파일, 암호화되지 않은 솔리드 압축파일을 지원합니다. 비솔리드 항목은 일부 ZipCrypto/AES 암호화도 지원합니다. LEA 암호화와 암호화된 솔리드 압축파일은 지원하지 않습니다.</string>
     <string name="archive_support_boundary_generic">이 압축파일은 현재 지원 범위를 벗어난 기능을 사용합니다.</string>
@@ -816,4 +816,8 @@
     <string name="font_import_failed">글꼴 파일을 가져오지 못했습니다.</string>
     <string name="epub_original_layout_kept">이 EPUB은 원본 페이지 배치를 유지합니다.</string>
     <string name="rendered_page_current_layout">현재 표시 레이아웃을 기준으로 만든 페이지입니다.</string>
+    <string name="theme_editor_save_failed">테마를 저장하지 못했습니다. 수정 내용은 유지됩니다. 다시 시도해 주세요.</string>
+    <string name="txt_display_rule_limit">규칙은 최대 %1$d개까지 저장할 수 있습니다. 기존 규칙을 삭제한 후 추가해 주세요.</string>
+    <string name="txt_display_rule_single_line_required">규칙에는 줄바꿈이 없는 한 줄 텍스트를 입력해 주세요.</string>
+    <string name="txt_display_rule_invalid_expression">정규식 또는 바꿀 내용의 형식이 올바르지 않습니다.</string>
 </resources>

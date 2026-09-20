@@ -4,6 +4,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import net.lingala.zip4j.crypto.AESEncrypter;
 import net.lingala.zip4j.model.enums.AesKeyStrength;
@@ -28,6 +29,104 @@ import java.util.List;
 public class ZipxAesArchiveReaderTest {
     private static final char[] PASSWORD = "readwide-zipx".toCharArray();
     private static final byte[] CONTENT = buildContent();
+
+    @Test public void directSupplementalAuthFailureRestoresExistingTarget() throws Exception {
+        File archive = buildAesZipx("guard-auth.zipx", 12);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        bytes[findSignature(bytes, 0x02014b50) - 1] ^= 0x40;
+        Files.write(archive.toPath(), bytes);
+        File out = temp.newFile();
+        Files.write(out.toPath(), new byte[]{42});
+        try { ZipxAesArchiveReader.tryExtractSingleEntry(archive, "folder/page.txt", out, PASSWORD); fail("Authentication must fail"); }
+        catch (IOException expected) { assertArrayEquals(new byte[]{42}, Files.readAllBytes(out.toPath())); }
+    }
+
+    @Test public void supplementalSizeFailureRestoresExistingBulkTarget() throws Exception {
+        File archive = buildAesZipx("guard-size.zipx", 12);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        int central = findSignature(bytes, 0x02014b50);
+        for (int i = 0; i < 4; i++) {
+            bytes[22 + i] = (byte) ((CONTENT.length + 1) >>> (8 * i));
+            bytes[central + 24 + i] = bytes[22 + i];
+        }
+        Files.write(archive.toPath(), bytes);
+        File target = temp.newFolder();
+        File folder = new File(target, "folder");
+        assertTrue(folder.mkdir());
+        File out = new File(folder, "page.txt");
+        Files.write(out.toPath(), new byte[]{42});
+        try { ZipxAesArchiveReader.extractArchiveIntoDirectory(archive, target, PASSWORD, null, null); fail("Size must fail"); }
+        catch (IOException expected) {
+            assertArrayEquals(new byte[]{42}, Files.readAllBytes(out.toPath()));
+            assertEquals(1, folder.list().length);
+        }
+    }
+
+    @Test public void plainCompanionCrcIsCheckedAndDestinationRestored() throws Exception {
+        File archive = temp.newFile("plain-guard.zipx");
+        try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(archive))) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("plain.txt"));
+            zip.write(CONTENT);
+            zip.closeEntry();
+        }
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        bytes[findSignature(bytes, 0x02014b50) + 16] ^= 1;
+        Files.write(archive.toPath(), bytes);
+        File target = temp.newFolder();
+        File out = new File(target, "plain.txt");
+        Files.write(out.toPath(), new byte[]{42});
+        // Exercise the same non-AES descriptor used by plain companions in a ZIPX.
+        try { ZipxAesArchiveReader.extractArchiveIntoDirectory(archive, target, PASSWORD, null, null); fail("CRC must fail"); }
+        catch (IOException expected) {
+            assertArrayEquals(new byte[]{42}, Files.readAllBytes(out.toPath()));
+            assertEquals(1, target.list().length);
+        }
+    }
+
+    @Test public void validSupplementalEntryReplacesExistingDestination() throws Exception {
+        File archive = buildAesZipx("guard-success.zipx", 12);
+        File out = temp.newFile();
+        Files.write(out.toPath(), new byte[]{42});
+        assertEquals(Boolean.TRUE, ZipxAesArchiveReader.tryExtractSingleEntry(archive, "folder/page.txt", out, PASSWORD));
+        assertArrayEquals(CONTENT, Files.readAllBytes(out.toPath()));
+    }
+
+    @Test public void sharedCommonsWriterChecksDecodedSizeBeforeCommit() throws Exception {
+        File archive = temp.newFile("commons-size.zip");
+        try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(archive))) {
+            zip.putNextEntry(new java.util.zip.ZipEntry("plain.txt"));
+            zip.write(CONTENT);
+            zip.closeEntry();
+        }
+        File out = temp.newFile();
+        Files.write(out.toPath(), new byte[]{42});
+        try (org.apache.commons.compress.archivers.zip.ZipFile zip =
+                     org.apache.commons.compress.archivers.zip.ZipFile.builder().setFile(archive).get()) {
+            org.apache.commons.compress.archivers.zip.ZipArchiveEntry entry = zip.getEntry("plain.txt");
+            entry.setSize(CONTENT.length + 1L);
+            try { ZipxAesArchiveReader.extractPlainEntry(zip, entry, out, null); fail("Size must fail"); }
+            catch (IOException expected) { assertArrayEquals(new byte[]{42}, Files.readAllBytes(out.toPath())); }
+        }
+    }
+
+    @Test public void sharedCommonsWriterAcceptsValidEmptyAndNonemptyEntries() throws Exception {
+        File archive = temp.newFile("commons-valid.zip");
+        try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(archive))) {
+            for (String name : new String[]{"empty", "page"}) {
+                zip.putNextEntry(new java.util.zip.ZipEntry(name));
+                if (name.equals("page")) zip.write(CONTENT);
+                zip.closeEntry();
+            }
+        }
+        File out = temp.newFile();
+        try (org.apache.commons.compress.archivers.zip.ZipFile zip =
+                     org.apache.commons.compress.archivers.zip.ZipFile.builder().setFile(archive).get()) {
+            assertTrue(ZipxAesArchiveReader.extractPlainEntry(zip, zip.getEntry("page"), out, null));
+            assertArrayEquals(CONTENT, Files.readAllBytes(out.toPath()));
+            assertTrue(ZipxAesArchiveReader.extractPlainEntry(zip, zip.getEntry("empty"), out, null));
+            assertEquals(0, out.length());
+        }
+    }
 
     @Rule
     public TemporaryFolder temp = new TemporaryFolder();
