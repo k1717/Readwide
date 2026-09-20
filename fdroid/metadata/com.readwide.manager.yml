@@ -99,7 +99,7 @@ Builds:
 
   - versionName: 1.0.19
     versionCode: 10019
-    commit: 6c2eff924845b9855ffe88ca10c2e876829a4be6
+    commit: e5096029ba63d5fd84fea0f564f858826624d19f
     subdir: app
     gradle:
       - yes
