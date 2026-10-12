@@ -104,8 +104,8 @@ Builds:
     gradle:
       - yes
 
-  - versionName: 1.0.19
-    versionCode: 10019
+  - versionName: 1.0.20
+    versionCode: 10020
     commit: 3c31c7f03cd877efb6de8ac981cd048c1a1663dc
     subdir: app
     gradle:
