@@ -1,6 +1,6 @@
 # General code audit and refactoring (Readwide 1.0.15)
 
-This pass followed the spread, TTS, archive, prefetch, and fullscreen fixes. It prioritized user-visible state changes, untrusted document parsing, persistence integrity, allocation math, and duplicated ownership rules over cosmetic lint cleanup.
+This review covers spread, TTS, archive, prefetch, and fullscreen fixes. Its scope includes visible state changes, untrusted document parsing, persistence integrity, allocation math, and duplicated ownership rules.
 
 ## Confirmed bugs fixed
 
@@ -70,7 +70,7 @@ Remaining device checks are image chrome toggling at fit and zoomed states, EPUB
 - Fixed-layout centering/find CSS used the `background` shorthand and could erase publisher `background-image` page art. It now changes only `background-color`.
 - Image-page detection treated `background-image:none` and unrelated image filename text near a non-image object as image evidence. `EpubImagePageClassifier` now scopes signals to real `url()`/`image-set()` declarations and image object/embed attributes.
 
-## Refactoring added in this pass
+## Refactoring
 
 - Added pure helpers: `PdfPageRenderPlan`, `DocumentTextDecoder`, `EpubViewportParser`, `EpubImagePageClassifier`, and `UriPathCodec`.
 - Added JVM tests for PDF render plans, document text decoding, viewport parse/replacement order, URI plus/percent decoding, and EPUB image-classification false positives.

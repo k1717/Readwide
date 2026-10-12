@@ -5,7 +5,7 @@ Use these instructions to submit Readwide 1.0.20 to F-Droid. Build and signing c
 ## Release identity
 
 Readwide 1.0.20 uses version code `10020` and release date `2026-10-11`.
-The maintainer confirmed a successful local build on that date. This does not
+The local release build completed successfully on that date. This does not
 establish an F-Droid build or publication. For changes from 1.0.19, see the
 [development notes](DEV_CHANGES_1_0_20.md); the bundled metadata remains a historical
 mirror, not a completed 1.0.20 submission.
@@ -66,7 +66,7 @@ gradle-wrapper.jar SHA-256: 55243ef57851f12b070ad14f7f5bb8302daceeebc5bce5ece5fa
 gradle-9.4.1-bin.zip SHA-256: 2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb
 ```
 
-Both values are the official Gradle 9.4.1 checksums. F-Droid also verifies wrapper JARs against known-good official hashes and builds with trusted tooling, so the metadata does not need an `rm` rule for the wrapper. The release maintainer should still verify these values before tagging.
+Both values are the official Gradle 9.4.1 checksums. F-Droid also verifies wrapper JARs against known-good official hashes and builds with trusted tooling, so the metadata does not need an `rm` rule for the wrapper. Verify these values before tagging.
 
 ## Build command
 

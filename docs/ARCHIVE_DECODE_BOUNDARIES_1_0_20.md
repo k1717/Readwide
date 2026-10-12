@@ -1,6 +1,6 @@
 # Archive support boundaries — Readwide 1.0.20
 
-Release date: 2026-10-11. The maintainer confirmed a successful build.
+Release date: 2026-10-11. The local release build completed successfully.
 This document distinguishes implemented decoding paths from unsupported combinations
 and from runtime evidence. It is not a compatibility percentage or a performance result.
 

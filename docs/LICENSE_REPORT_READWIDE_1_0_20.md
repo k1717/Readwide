@@ -37,7 +37,7 @@ It is a **direct-dependency/source-declared report**, not a fully resolved trans
 | `kr.dogfoot:hwpxlib:1.0.9` | HWPX text extraction backend | Apache-2.0 |
 | `com.tom-roush:pdfbox-android:2.0.27.0` | PDF text extraction with glyph positions for in-document find, and per-page plain text for PDF read-aloud (rendering still uses the platform PdfRenderer) | Apache-2.0 |
 
-## Native wrapper dependency
+### Native wrapper dependency
 
 | Maven coordinate | Purpose | Declared license |
 | --- | --- | --- |
@@ -80,8 +80,8 @@ the license was checked against its [Google Maven metadata](https://dl.google.co
 
 TXT contents custom rules add `com.google.re2j:re2j:1.8`, BSD-3-Clause, with the
 complete upstream license retained in the APK asset
-`open_source_licenses/re2j_bsd_3_clause.txt`. The maintainer confirmed a successful
-build on 2026-10-11; a resolved-graph license audit is a separate check.
+`open_source_licenses/re2j_bsd_3_clause.txt`. The local release build completed
+successfully on 2026-10-11; a resolved-graph license audit is a separate check.
 
 Other dependency pins are retained from the updated 1.0.19 source. The 1.0.20
 archive work replaces the initial `org.brotli:dec:0.1.2` dependency with MIT Google
@@ -108,7 +108,7 @@ four marked local changes. Its Apache-2.0 Java/JNI adapter builds the independen
 The target privately links the NDK 29.0.14206865 static C++ runtime; retained LLVM
 libc++/libc++abi/libunwind notices use Apache-2.0 WITH LLVM-exception and applicable
 legacy MIT terms. Keep `open_source_licenses/lzham_mit.txt` and
-`open_source_licenses/llvm_cxx_runtime.txt` in binaries. The maintainer confirmed a successful build; binary notice/linkage inspection
+`open_source_licenses/llvm_cxx_runtime.txt` in binaries. The local release build completed successfully; binary notice/linkage inspection
 and compressed-producer device interoperability remain separate checks.
 See [source provenance](../third_party/lzham/README.md).
 

@@ -16,8 +16,8 @@ and SBOM carry the same packages as 1.0.9 with only the version stamp changed.
 Note: the F-Droid metadata carries real commit hashes for the 1.0.7, 1.0.8, and
 1.0.9 build entries; the 1.0.10 entry's `commit` field is still
 24de699a8f763e4de768ccaecb8418fbeb3ff498 and must be set to the full 40-character
-commit hash that the tag points to (this app's F-Droid maintainer requires a full
-hash, not the tag name) once the 1.0.10 tag exists.
+commit hash that the tag points to once the 1.0.10 tag exists.
+The F-Droid submission for this release requires the full hash, not the tag name.
 
 Theme: archive image viewer performance + correctness for solid/sequential
 archives. Fixes the CB7/7z paging bug where the previous image stayed on screen
@@ -54,10 +54,12 @@ its whole-archive path; random-access types keep direct per-entry extraction.
 ## Changes in the tree
 
 ### app/build.gradle
+
 - versionCode 10009 -> 10010, versionName "1.0.9" -> "1.0.10". No dependency
   change.
 
 ### archive/ArchiveSupport.java
+
 - New public forward-reader API, inserted before `extractSingleEntryDetailed`:
   - `interface ForwardArchiveReader extends Closeable { ForwardEntry nextEntry();
     int read(byte[]); }` and `final class ForwardEntry { String path; boolean
@@ -86,6 +88,7 @@ its whole-archive path; random-access types keep direct per-entry extraction.
   correctness fallback.
 
 ### archive/LibarchiveNativeBridge.java
+
 - New `openForwardStream(String[] paths, char[] password)` plus a package
   `ForwardStream` and `ForwardStreamEntry`. `ForwardStream` wraps one open
   libarchive `Reader` (reusing the existing `openReader` / volume-input / SFX-offset
@@ -105,6 +108,7 @@ its whole-archive path; random-access types keep direct per-entry extraction.
   instead of leaking the handle. Success-path behaviour is unchanged.
 
 ### archive/LibarchiveForwardReader.java (new)
+
 - `final class LibarchiveForwardReader implements ArchiveSupport.ForwardArchiveReader`
   over a `LibarchiveNativeBridge.ForwardStream`. `nextEntry()` maps a
   `ForwardStreamEntry` to a `ForwardEntry` (hasData = regular file with a non-null
@@ -113,6 +117,7 @@ its whole-archive path; random-access types keep direct per-entry extraction.
   whole-archive extraction; the forward reader is a pure performance path.
 
 ### ArchiveImageEntryCache.java
+
 - New package-static `commitReadyImageFile(entryPath, tmpFile, outFile,
   sensitiveCache, verifiedSensitivePaths)`: validates an already-extracted temp
   image (`isUsableFile` + `looksLikeExpectedImage`), `replaceReadyFile`,
@@ -138,6 +143,7 @@ its whole-archive path; random-access types keep direct per-entry extraction.
   regression.
 
 ### SequentialArchiveImageReader.java (new, manager package, Closeable)
+
 - Session-scoped forward reader. `openIfSupported(...)` returns null for
   non-forward-readable archives. The unified entry point
   `ensureImageReady(context, archive, entryPath, outFile, password, sensitive,
@@ -179,6 +185,7 @@ its whole-archive path; random-access types keep direct per-entry extraction.
   buffer. `close()` clears the password and closes the reader.
 
 ### ImageReaderActivity.java
+
 - Fields: `sequentialReaderLock`, `sequentialImageReader`,
   `sequentialReaderClosed`. Added `import ...archive.ArchiveSupport`.
 - `ensureSequentialReader(File)`: returns null if closed or not
@@ -213,6 +220,7 @@ its whole-archive path; random-access types keep direct per-entry extraction.
   detaches and closes the reader (after the executors are shut down).
 
 ### ArchiveImageSequenceLoader.java
+
 - `loadLazy` target extraction: for a forward-readable archive it calls
   `SequentialArchiveImageReader.ensureImageReady(context, archive, targetPath,
   targetFile, password, sensitive, null, null)` (one-shot, bounded 0..target) and
@@ -227,6 +235,7 @@ its whole-archive path; random-access types keep direct per-entry extraction.
   extraction, so sensitive=false / verified=null is safe there.
 
 ### PdfReaderActivity.java (separate viewer, same release)
+
 - Single-page (horizontal) prefetch was symmetric `{+1, -1, +2, -2}`, so only two
   pages ahead were pre-rendered; a rapid forward tap-through exhausted the forward
   buffer after two pages, paused for the on-demand render, then refilled - the

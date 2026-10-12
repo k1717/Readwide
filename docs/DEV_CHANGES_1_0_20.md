@@ -206,7 +206,7 @@ This note records the implementation delta from 1.0.19, grouped by subsystem. Fo
 - Bulk replacement protects all source volumes and rejects unsafe ancestor destinations. Partial success and post-commit cancellation are reported without discarding committed results.
 - Running filesystem operations are not restored after process death; no durable multi-file transaction is introduced.
 
-## Resources, dependencies, and release metadata
+## Resource and release changes
 
 - The libarchive binding now uses Java 17 source/target like the app, without new Java APIs or a minimum-Android change. Android Gradle properties use explicit assignment, and removed-source cleanup resolves files during configuration instead of accessing Project from a task action. Release helpers request only `:app:assembleRelease` and show Gradle warning details; app javac reports deprecated call sites without suppressing them.
 - External native staging uses short `cxx/archive` and `cxx/zipx` directories; WavPack's binary subdirectory is `wv` to leave room for its nested architecture probe. LZ5's compression-only constant follows its existing decode-only guard. LZHAM's no-exit branch excludes the unused exit flag, marks unused location parameters, and labels the intentional decoder-only portable build so it does not warn about compressor threading. Decoding, exception behavior and fallback platforms remain unchanged.
@@ -218,13 +218,13 @@ This note records the implementation delta from 1.0.19, grouped by subsystem. Fo
 - CAB uses a separate libmspack shared module under LGPL-2.1 terms. Existing ZIPX JPEG/WavPack components retain their respective LGPL/BSD boundaries. Corresponding sources/notices remain included; the app's first-party source remains Apache License 2.0.
 - No full proprietary UnRAR engine is introduced. Dependency declarations and source inventories are not a resolved-transitive license audit or F-Droid approval.
 - No new ads, analytics, account, cloud sync, or `INTERNET` permission. Android Auto Backup remains disabled; archive previews may create local plaintext temporary files, and encrypted RAR history does not encrypt every cache.
-- Bundled F-Droid metadata still refers to earlier released versions. The maintainer's successful build does not establish an F-Droid build, approval, or publication.
+- Bundled F-Droid metadata still refers to earlier released versions. A successful local build does not establish an F-Droid build, approval, or publication.
 
 ## Validation boundary
 
-- The maintainer's follow-up log on 2026-10-11 completed Release APK assembly, local-test Java compilation and Android-test APK assembly: 225 tasks executed, BUILD SUCCESSFUL. This covers the Home edits and the test I/O/`TextStyle.Builder` corrections, but does not execute any test suite or establish device behavior.
-- A later maintainer signed-release log completed after the build-setting/native warning cleanup: BUILD SUCCESSFUL, 132 actionable tasks (50 executed), with v2 signature verification. It displayed 100 deprecated-API warnings, not a zero-warning build or test-suite result.
-- Subsequent system-bar/WebView fixes have static review only. Eight instrumentation regression methods cover scale observation ownership, fallback and invalid values; they have not been compiled or executed by this audit. No Gradle/CMake/Java build, device run or benchmark was performed. Necessary legacy-Android/abstract API implementations and gesture zoom probes remain; warnings are not globally suppressed.
-- Earlier host/device/build results apply only to their recorded checkpoints. The user's confirmed large-TXT saved-count improvement does not validate all subsequent partition, lifecycle, or cache changes.
+- Release APK assembly, local-test Java compilation and Android-test APK assembly completed successfully on 2026-10-11. This covers the Home edits and the test I/O/`TextStyle.Builder` corrections, but no test suite was executed and device behavior remains unverified.
+- A subsequent signed release build completed after the build-setting/native warning cleanup, with v2 signature verification. It displayed 100 deprecated-API warnings; this was not a zero-warning build or a test-suite result.
+- Subsequent system-bar/WebView fixes have static review only. Eight instrumentation regression methods cover scale observation ownership, fallback and invalid values; they have not been compiled or executed. These changes have no follow-up build, device or benchmark results. Necessary legacy-Android/abstract API implementations and gesture zoom probes remain; warnings are not globally suppressed.
+- Earlier host/device/build results apply only to their recorded checkpoints. The confirmed large-TXT saved-count fix does not validate subsequent partition, lifecycle or cache changes.
 - Runtime checks remain for TXT seams, rapid navigation, font/settings changes, recreation, low memory, backup merge/replace/rollback and cross-device paths, and long-background archive image recovery.
 - Producer-generated encrypted/split/solid archive combinations, native decoder behavior, PDF speed, and office/EPUB visual fidelity still require representative runtime checks. Complete archive compatibility and measured performance gains are not claimed.

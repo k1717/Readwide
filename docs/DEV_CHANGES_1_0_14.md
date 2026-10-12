@@ -133,31 +133,24 @@ when the view actually holds content, tracked by a flag.
   classes with JVM harnesses). Areas not explored class-by-class (archive/,
   document/render, ...) are explicitly marked as package-level summaries.
 
-## Refactoring (continued) + user-feedback verification
+## Text-anchor refactoring and TXT title investigation
 
 - NEW `util/TtsAnchorTextMath`: `indexOfCollapsed` (whitespace-insensitive
   buffer search) and `snapToNaturalStart` (line/sentence/word start snapping)
   moved out of DocumentTtsTextSource into a pure *Math class per the CODE_MAP
   convention; the text source keeps 1-line delegates. JVM harness re-run
   after the move: 10 cases ALL PASS.
-- Reddit feedback (user cositas_, .txt title styling + "some .txt files do
-  not display the title") verified against the sources: `.md` routes to the
-  document viewer whose Markdown renderer styles the first heading
-  (1.78em/bold/underline, theme currentColor - the app itself paints nothing
-  green; the green in the user's screenshot is their own annotation);
-  `.txt` routes to the plain-text reader, which has NO title detection or
-  styling of any kind, and there is no txt-as-markdown setting. So "some
-  .txt titles don't display" cannot be a styling bug in the current code -
-  the likeliest candidates are resume-position restore (title scrolled
-  off-screen) or an encoding issue on the first line, both needing the
-  user's sample to confirm. A clarification reply was drafted
-  (reddit_reply_txt_titles.md, outside the repo); no speculative code change
-  was made.
+- Initial title-display investigation distinguished Markdown headings from
+  the TXT toolbar title. In 1.0.14, `.md` routes to the document viewer,
+  whose first heading uses 1.78em, bold, underline, and the current theme
+  color. `.txt` routes to the plain-text reader without Markdown heading
+  styling. The toolbar-title corrections below address missing file names
+  and the initial visibility of reader controls.
 
-## TXT reader title fix (user report)
+## TXT reader title fallback
 
-A Reddit user reported that some .txt files open with no title shown. Root
-cause: `FileUtils.normalizeDisplayFileName(null)` returns "" (empty), so a
+Some .txt files opened with no toolbar title. Root cause:
+`FileUtils.normalizeDisplayFileName(null)` returns "" (empty), so a
 content provider that reports no display name yields an EMPTY name - which
 slips past every `!= null` fallback and lands as a blank toolbar title. The
 image, PDF, and document viewers already guard with trim-empty checks; the
@@ -167,23 +160,23 @@ file name; `applyDocumentIdentity` prefers the path's basename before the app
 name; and the background-snapshot restore applies the same guard for old
 sessions. The reader's themed in-chrome title (`readerFileTitle`, colored by
 `applyReaderSystemBarColors`) displays the same corrected name, which also
-addresses the "title color like .md" half of the report.
+keeps title coloring consistent with the document viewer.
 
-### TXT title report, part 2 (with the user's screenshot)
+### TXT title visibility on first open
 
-The screenshot showed the real primary cause: the TXT reader was the only
-viewer that opened fully immersive (`toolbarVisible = false` initial, no
-startup reveal), so a fresh .txt open showed no title at all while .md (the
-document viewer) opens with its title bar - "some show the title and others
-do not" was chrome state, not the file. The reader now reveals the controls
+The TXT reader was the only viewer that opened fully immersive
+(`toolbarVisible = false` initial, no startup reveal), so a fresh .txt open
+showed no title while the Markdown document viewer opened with its title
+bar. This difference came from control visibility, not file content.
+The reader now reveals the controls
 (bottom bar + the theme-colored `readerFileTitle`) once when the first load
 applies, matching the other viewers' open state; a per-activity flag keeps
 reloads/encoding changes from re-forcing it, and the background-snapshot
 restore pre-sets the flag so a resumed read keeps whatever state it had.
-The blank-display-name fallback from part 1 remains as hardening for the
+The blank-display-name fallback remains as hardening for the
 provider-name case.
 
-## Second refactor + bug-hunt round
+## Display-name resolution and initial reader controls
 
 - `util/FileUtils.displayNameOrBasename(name, path, fallback)`: the blank-safe
   display-name resolution added for the TXT title report existed as two
@@ -255,7 +248,7 @@ sizing.
 
 ### TXT title strip, final form: body-font title
 
-Per follow-up direction, the title's baseline is no longer a fixed 14sp: it
+The title's baseline is no longer a fixed 14sp: it
 uses the BODY text's typeface and pixel size (new CustomReaderView accessors
 `getContentTypeface`/`getContentTextSizePx`, reading the view's actual paint
 state rather than re-resolving prefs), so the title's line height tracks the
@@ -284,22 +277,22 @@ are unchanged.
 ### TXT title strip: bottom edge tightened
 
 The strip's bottom previously extended 2dp past the masked row's bottom into
-the inter-row gap; per follow-up direction it now ends exactly at
+the inter-row gap; it now ends exactly at
 `rowBottom`, so the mask covers precisely the first row and nothing below it.
 
 ### TXT title strip: body font minus one step
 
-Per follow-up direction: the masking region is untouched (the first-line pad
+The masking region is unchanged (the first-line pad
 compensation is now measured with the BODY paint via a no-arg overload, so
 the strip is fixed by the row's own metrics), and the title renders one app
 font-size step (1sp) below the body size. With TOP gravity, the smaller
 line's shorter first-line offset floats the text slightly upward inside the
-unchanged strip - exactly the requested top/bottom rebalance, with no extra
+unchanged strip, adjusting the vertical balance without extra
 shift mechanics.
 
-## TXT viewer hunt round
+## TXT scrolling and title-mask performance
 
-- Performance regression fixed (self-inflicted): `updateReaderFileTitleMaskBounds`
+- Fixed a performance regression: `updateReaderFileTitleMaskBounds`
   runs on EVERY scroll event, and the recent title work made each run set the
   typeface/text size (view invalidation) and build a probe StaticLayout for
   the first-line compensation - per scroll frame. Added: an early no-op while
@@ -389,7 +382,7 @@ ALL PASS. Benchmark (100 sequential partitions over a 400k-line file):
 full-scan 4055 ms vs cursor 320 ms, 12.7x here and growing with partition
 count.
 
-### Forward cursor, part 2: lookbehind and the real partition models
+### Forward cursor: lookbehind and partition models
 
 Follow-up verification against the app's ACTUAL parameters exposed a second
 overlap the first design missed: `includeLookbehind=true` requests come from
@@ -418,11 +411,10 @@ Benchmark: the lookbehind handoff chain now runs in 303 ms where the
 full-scan behavior took ~4.2 s (the plain sequential chain: 337 ms), i.e. the
 scroll path got the same O(N) win as page taps.
 
-### Forward cursor, part 3: adversarial verification (skip/dup + the page-count question)
+### Forward cursor: skip/duplicate checks and page-count equivalence
 
-An external review (GPT) proposed reverting the controller to the pre-cursor
-static reader ("legacy-partition-safe") out of field-compatibility concern,
-without a specific root cause. Adjudicated with evidence instead:
+The forward cursor was compared against the earlier static reader to check
+partition compatibility and detect skipped or duplicated content:
 
 - Randomized differential battery: 2,400 trials across 4 seeds (~17,800
   requests) - random files (blank runs, empty lines, trailing/no-trailing
@@ -443,34 +435,28 @@ without a specific root cause. Adjudicated with evidence instead:
 - The two-arg initial-load rewrite was also line-diffed against the original
   stats+clamp overload: identical semantics.
 
-Conclusion: the cursor cannot change partition fields, so it cannot change
-the total page count; the proposed revert would trade a verified ~13x
-sequential win for a non-bug. If a device page-count difference between
-(9) and (11) is reproduced, the comparison conditions (same file, same
-partition mode 4000/12000, same blank-line-collapse and font settings) and
-the two displayed totals are the next diagnostic inputs - the codebase's own
-history notes total-page sensitivity to viewport height, which the canonical
-padding already pins and which none of the (11) changes touch.
+The recorded comparisons found identical partition fields and content.
+Device comparisons still need identical files, partition mode (4000/12000),
+blank-line-collapse, font settings and viewport height. These host results
+do not establish equivalence for every runtime condition.
 
-### Forward cursor, part 4: the page-count question closed (input-closure audit)
+### Forward cursor: exact-page inputs and estimation timing
 
-Deep audit of the total-page pipeline (ReaderLargeTextExactPageIndexController,
-LargeTextExactPageIndexState, ReaderPagePositionController,
-LargeTextPageModelMath), adjudicating the external review's refined
-hypothesis. Findings:
+The total-page pipeline review covered ReaderLargeTextExactPageIndexController,
+LargeTextExactPageIndexState, ReaderPagePositionController and
+LargeTextPageModelMath. Findings for the compared source snapshots:
 
-- The reviewer's #1 suspect - (11)'s new `applyPreferences()` tail calling
-  `updateReaderFileTitleVisibility()` and thereby refreshing content padding
-  before the exact-index build captures the viewport - is DISPROVEN by (9)'s
-  own code: `ReaderPreferencesController.applyPreferences()` lines 85/92
-  already set the stable top-padding extra and call
-  `updateReaderContentTopPadding()` in BOTH versions, so the (11) tail is a
-  same-value re-apply for padding (its purpose is the title strip). A stale
+- The new `applyPreferences()` tail calls `updateReaderFileTitleVisibility()`
+  and refreshes content padding before the exact-index build captures the
+  viewport. `ReaderPreferencesController.applyPreferences()` already sets
+  the stable top-padding extra and calls `updateReaderContentTopPadding()`
+  in both snapshots, so the added title-strip update reapplies the same
+  padding value. A stale
   viewport also cannot be captured structurally: `handleRestartIndexingTick`
   only starts a build after the layout-only signature is STABLE across the
   200 ms debounce, and any late padding change alters the signature and
   re-debounces into a rebuild.
-- Input closure for the exact total between (9) and (11): the builder code
+- Exact-total inputs in the compared snapshots: the builder code
   (ExactAnchorBuild controller + LargeTextExactAnchorBuilder) is
   diff-identical; the layout inputs use identical formulas behind the
   stability gate; the collapse basis, partition mode/lines/buffer (PrefsManager
@@ -478,29 +464,29 @@ hypothesis. Findings:
   signature (`getSignature` untouched; the memo returns identical content),
   and expectedTotalLines/Chars (initial load path line-diffed equivalent) are
   all the same. With the same file, settings, and session state, the exact
-  total CANNOT differ between (9) and (11).
+  total is expected to match between those snapshots.
 - The displayed number is a convergence pipeline
   (`displayedTotalPages`: pending -> exact -> estimated -> local), and the UI
   marks the estimating phase with a "~" prefix on both current and total
   (`setPageLabels`). The estimate derives from the CURRENT partition's local
   pagination scaled by totalLines/partitionLines, so it legitimately shifts as
   partitions change - and the cursor makes partition turnover ~13x faster, so
-  the moment-by-moment "~" number differs between (9) and (11) by timing
+  the moment-by-moment "~" number can differ between the snapshots by timing
   alone before converging to the same exact value.
 - The exact signature deliberately includes the partition mode (chunked
   building), so a 4000/400 vs 12000/600 settings difference changes the exact
   total by design - a control variable for any device comparison.
 
-Device protocol for the reported difference: same file, verify identical
+Device comparison protocol: use the same file and verify identical
 settings (partition mode, blank-line collapse, font family/size, line
 spacing), wait until the page label loses the "~" prefix on both builds, then
-compare. A difference in the un-tilded totals would contradict the closure
-argument above and warrants the audit-log build; a difference only while "~"
-is showing is the expected estimate-timing effect, not a skip.
+compare. A difference in the un-tilded totals requires further diagnosis;
+a difference only while "~" is showing can reflect estimate timing rather
+than skipped text.
 
 ### TXT title strip: bottom trim rolled back
 
-The 2dp bottom trim from the follow-up round is reverted per direction: the
+The 2dp bottom trim is reverted: the
 strip once again ends exactly at the masked row's bottom (`rowBottom`). The
 body-2sp title size and everything else from the strip work stay.
 
@@ -518,7 +504,7 @@ large-text utils + prefs):
   invariants (already present in 1.0.12, comments included), the 1.18f line
   height formula, and every exact-index input file. Combined with the cursor
   equivalence proofs, an upgrading user's page counts do not change.
-- Every changed file (11) is exactly this cycle's work, nothing else:
+- The comparison identified eleven changed files:
   the forward-cursor set (reader, read controller, collapser state ctor,
   rules memo/version, lifecycle close - engine-equivalence proven), the
   open-with-controls + blank-display-name fixes (apply 15 / load 10 /
@@ -526,19 +512,18 @@ large-text utils + prefs):
   `chromeRevealedForPath`), the title strip work (chrome controller), and
   CustomReaderView's three accessors (39 diff lines; the view's layout and
   pagination core untouched).
-- Notably, no 1.0.13-cycle change touched the TXT viewer at all: the released
-  1.0.12 TXT code survived unchanged until this cycle.
+- No 1.0.13 change touched the TXT viewer: the released
+  1.0.12 TXT code remained unchanged until the 1.0.14 changes.
 - One measurement correction made during the audit: an initial grep-context
   comparison flagged the padding formulas as differing; reading the actual
   bodies showed they are identical (the context windows had sliced different
   neighboring lines). Recorded so the earlier false positive doesn't resurface.
 
-### Forward cursor, part 5: linearity proven by exact decode counts
+### Forward cursor: sequential decode counts
 
-Is the current algorithm actually O(N)? Answered with an instruction-count
-proof rather than wall-clock (which JIT noise polluted): the harness counts
-every physical line decode (one per readLine). Sequential full-file reads at
-the real 4000/400 model:
+The harness counts every physical line decode (one per readLine) to evaluate
+sequential work independently of JIT-related timing variation.
+Recorded full-file reads with the 4000/400 model:
 
 | N lines | legacy decodes | cursor decodes | cursor+lookbehind |
 |---------|----------------|----------------|-------------------|
@@ -558,7 +543,7 @@ cursor), and post-reset first reads remain O(position) per operation - making
 those cheap too would require byte-offset checkpoints, a separate future
 step. Cache hits stay O(1).
 
-### Forward cursor, part 6: guard re-audit + exact-build latency (honest zero)
+### Forward cursor: state guards and exact-index latency
 
 Skip/dup guard re-audit: all eleven structural guards verified present by
 direct assertion (file identity length+mtime, encoding, collapse flag, rules
@@ -570,28 +555,28 @@ between requests - 1,800 fresh trials ALL PASS. One more harness-reference
 defect was found and fixed along the way (appending "\n..." to a file that
 ended WITH a newline creates a blank line the model missed; the reader then
 correctly clamped to the stale knownTotalLines the test supplied - the reader
-honored its contract, the test lied to it). The real app cannot hit this:
-scanLineStats recounts whenever the file changes.
+honored its contract, but the test supplied an incorrect total).
+The app's scanLineStats recounts when it detects a changed file.
 
-Exact ("final") page computation speed: measured and reasoned - it does NOT
-get faster, and saying so plainly: the builder is a single O(N) streaming
-scan (one openReader call, diff-identical to v9) that never touches the
-cursor. The two imagined indirect speedups both dissolve on inspection:
+Exact ("final") page computation does not become faster from this change:
+the builder is a single O(N) streaming scan (one openReader call, unchanged
+from the reference snapshot) that never uses the cursor. Two indirect
+paths also retain their existing behavior:
 (a) font-change re-pagination pulls the partition from the LRU cache in both
 versions (text unchanged - no reader involved), and (b) the invalidation
 scenarios that DO force a re-read (collapse toggle, backward re-read of the
-current partition) reset the cursor by design, so v11's re-read equals v9's.
-Simulation on a 400k-line file confirmed it: v11's "resume" for a
-current-partition reload measured 115 ms vs v9's 142 ms full scan -
+current partition) reset the cursor by design, so the re-read remains a full scan.
+In a 400k-line simulation, the revised current-partition reload measured
+115 ms versus the reference full scan's 142 ms -
 i.e., a reset, not a resume, exactly as the guards dictate. The cursor's win
 is partition loads (page turns, scroll handoffs, prefetch); the exact build's
 own ~137 ms/400k-line scan floor (real builds add layout work on top) is
 unchanged, and it shares `activity.executor` with loads without taking the
-cursor lock, so v11 adds no new contention either.
+cursor lock, so the change adds no cursor-lock contention to exact indexing.
 
 ### TXT title strip: opaque gradient mask
 
-Per request, the strip's flat background became a document-viewer-like
+The strip's flat background became a document-viewer-like
 gradient. Investigation first: the MD viewer has NO actual color gradient -
 its GradientDrawables are solid dialog/sheet shapes, and the perceived fade
 is the app bar's 11-12dp elevation shadow. Reproducing elevation on the strip
@@ -604,7 +589,7 @@ first row's glyphs show through the title.
 
 ### TXT title strip: solid toolbar-colored top band (gradient superseded)
 
-Per follow-up direction the gradient was replaced by a toolbar-state band:
+The gradient was replaced by a toolbar-state band:
 `applyTopBandColors()` paints the window status-bar color (covers the
 camera-cutout region), the status-bar icon appearance, the page-status bar,
 and the title strip in `currentReaderToolbarColor` while the toolbar is ON,
@@ -618,9 +603,9 @@ changed. Known cosmetic edge: with the page-status alignment preference set
 to HIDDEN the (INVISIBLE) indicator draws no background, leaving that slice
 of the band in the page color. Solid colors only, by masking necessity. A status-bar-color stomp was also caught and fixed in the right place: the loading window's SHOW path legitimately paints the plain background for the loading screen, but nothing restored the band afterwards - hideLoadingWindow now reapplies the toolbar-state band as the loading UI goes (an earlier attempt patched the show path itself; reverted once the context showed it was the wrong site).
 
-### TXT title strip: mid-leading bottom + slight title drop (+ a real bug)
+### TXT title strip: row spacing and theme-padding correction
 
-Per direction: (1) the strip's bottom now ends at the MIDDLE of the row's
+(1) The strip's bottom now ends at the MIDDLE of the row's
 trailing leading (the row box carries its inter-line space below the glyphs,
 so ending exactly at rowBottom hugged line two) - measured with a body-paint
 probe, clamped so tight line-spacing settings degrade to rowBottom, then raised one further dp per visual tuning; (2) the
@@ -636,18 +621,18 @@ POSITIONS the text within the strip, so any theme apply between mask updates
 made the title jump up to the band top. The theme path now preserves the
 current top padding and owns only the horizontal insets.
 
-## TXT hunt round (post-band) + release docs pass
+## TXT system-bar ownership and release documentation
 
-Hunt verdicts: the status-bar visibility preference only shows/hides the
+The status-bar visibility preference only shows/hides the
 system bar (no color writes - band-safe); rotation reapplies the band via
 onConfigurationChanged -> applyTheme -> band tail; no remaining stompers of
-the page-status background. One structural cleanup from the hunt: the theme
+the page-status background. The theme
 path still wrote the status-bar color, its light/dark appearance, and the
 page-status background directly before the band tail overrode them - color
 ownership is now solely `applyTopBandColors` (three redundant writes
 removed), so no code path can ever paint a non-band-aware top color.
 
-Docs pass: fastlane 10014 changelogs (en-US/ko-KR) rewritten - they still
+The fastlane 10014 changelogs (en-US/ko-KR) were rewritten - they previously
 described only the two-page spread; now they cover the spread, the large-TXT
 speedup, the TXT open-with-title behavior and toolbar-colored top band, the
 no-name share fixes, and the image revisit caching, within the F-Droid

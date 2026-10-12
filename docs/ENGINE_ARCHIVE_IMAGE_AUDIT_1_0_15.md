@@ -40,7 +40,7 @@ Libarchive can move to the next header without returning unread data, but that i
 - Common RAR4/RAR5 files use the bundled libarchive reader; comic mode keeps that forward stream and the resolved volume chain for the session.
 - Existing first-party stored, covered RAR3/RAR4 PPMd, covered RAR5 v5.0 compressed/solid/filter, visible-header AES, and header-encrypted RAR5 paths remain available through normal extraction fallback.
 - A forward-stream failure does not reduce compatibility: the loader retains whole-archive and single-entry fallbacks and returns the original password/unsupported classification.
-- The five user `sample-*.rar` files list and extract their first regular file in the JVM fixture smoke test when the bundled backend is available.
+- The five `sample-*.rar` fixtures list and extract their first regular file in the JVM fixture smoke test when the bundled backend is available.
 
 This is not a claim of complete RAR compatibility. Uncommon RAR3/RAR4 classic-LZ or PPMd table transitions, non-standard VM programs, damaged/recovery-record behavior, RAR7-era algorithm changes, and broad unverified split/encryption combinations remain backend-dependent or fail cleanly. Replacing those boundaries requires a substantially larger decoder project or an additional engine with separate licensing/distribution review.
 
@@ -72,6 +72,6 @@ This is not a claim of complete RAR compatibility. Uncommon RAR3/RAR4 classic-LZ
 - `SevenZMethodCoverageTest`
 - `SevenZPpmdArchiveTest`
 - `SevenZBcj2ArchiveReaderTest`
-- `ExternalArchiveFixtureSmokeTest` user RAR and password-7z cases
+- `ExternalArchiveFixtureSmokeTest` RAR and password-protected 7z cases
 
 No dependency, permission, archive-creation feature, or network behavior was added.

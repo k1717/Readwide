@@ -103,7 +103,7 @@ producer stored/MSZIP/LZX/Quantum multipart coverage remain pending. Expand fixt
 for compressed split blocks/folders, locale-specific names and reserved headers;
 check checksum failures, cancellation, actual low-disk/output failures, rollback and
 viewer ordering. Source wiring and synthetic failure cases are not measured device
-coverage. No builds/tests run under the current user instruction. Do not enable
+coverage. These changes have source review only, without build or test results. Do not enable
 salvage, repair or checksum suppression to make incomplete sets appear successful.
 Upstream folder/block/2 GiB decoder boundaries remain. The separate
 [LHA changes](LHA_LH4_INTEGRATION_1_0_20.md) add LH4 and the documented Amiga byte-split

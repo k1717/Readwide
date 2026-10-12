@@ -107,5 +107,5 @@ This note records the implementation delta from 1.0.17, grouped by subsystem. Fo
 
 ## Validation boundary
 
-- The maintainer reported a successful 1.0.18 build before the timeout-field and localization follow-up. The latest UI/resource snapshot has not been rebuilt; unit-test, signing and device results have not been reported.
+- The 1.0.18 build completed successfully before the timeout-field and localization follow-up. That build does not validate the subsequent UI/resource changes; no unit-test, signing or device results are recorded for that snapshot.
 - Regression sources cover the changed paths; their presence is not a passing result. See [release build instructions](../RELEASE_BUILD.md) for remaining checks and [release notes](GITHUB_RELEASE_NOTES_READWIDE_1_0_18.md) for support boundaries.

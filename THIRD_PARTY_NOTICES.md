@@ -292,7 +292,7 @@ RAR fixture archives embedded in unit tests or referenced by optional external f
 
 ## Assets
 
-The Readwide launcher artwork source and checked-in launcher/adaptive icon assets are project-owned artwork supplied by the project maintainer for this release line. See `docs/ASSET_PROVENANCE.md`.
+The Readwide launcher artwork source and checked-in launcher/adaptive icon assets are project-owned artwork for this release line. See `docs/ASSET_PROVENANCE.md`.
 
 Local vector UI icons are ordinary app UI assets. Several file-type and action icons — including the per-type file icons (`ic_file_*`) — are vector drawable glyph paths adapted from Google's Material Symbols / Material Icons:
 

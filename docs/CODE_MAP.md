@@ -312,8 +312,8 @@ Selection hit testing distinguishes insertion endpoints from word-hit characters
   native dialog action buttons, avoiding automatic ButtonBarLayout stacking/reversal.
   Save/reset enabled states and error recovery use explicit references to these controls.
   The scanner/repository/adapter impose no fixed heading-count or chapter-number cap;
-  large scans reach EOF. The user traced the 760 report to the wrapped-title format
-  now handled by the detector; runtime validation remains pending.
+  large scans reach EOF. A change to wrapped-title syntax after chapter 760 caused
+  headings to be missed. The detector now handles that syntax; runtime validation remains pending.
   `util/TxtContentsBackup` includes durable options/manual/hidden records in JSON
   backup with validated hash-only private targets and per-record transaction rollback.
   It shares EDIT_LOCK through commit/undo; caches are excluded. Rename rebinding and

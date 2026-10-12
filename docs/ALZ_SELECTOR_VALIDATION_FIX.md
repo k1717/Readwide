@@ -131,7 +131,7 @@ including the original dispatch/rollback integration tests, was **not completed*
 ## Release boundary
 
 The historical Gradle test attempt stopped at a download DNS failure before
-compilation. The maintainer subsequently confirmed a successful release build
+compilation. A subsequent release build completed successfully
 on 2026-10-11; that success does not establish execution of these test suites or
 native/device interoperability.
 

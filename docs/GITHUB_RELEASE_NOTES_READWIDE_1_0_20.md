@@ -1,5 +1,7 @@
 # Readwide 1.0.20
 
+Release date: 2026-10-11.
+
 Readwide 1.0.20 improves large-TXT reading, adds configurable TXT Contents, expands archive decoding, and strengthens viewer restoration and local backup recovery.
 
 ## TXT page counting and navigation
@@ -84,13 +86,7 @@ Readwide 1.0.20 improves large-TXT reading, adds configurable TXT Contents, expa
 - No ads, analytics, account, cloud sync, or `INTERNET` permission. Android Auto Backup remains disabled.
 - Documents are processed locally. Archive previews may create plaintext temporary files; encrypted RAR history does not encrypt every cache or extracted file.
 - First-party source remains Apache License 2.0. Added RE2/J and source-built decoder components retain their respective notices; CAB/ZIPX components retain their LGPL boundaries and corresponding source.
-- See the [license report](LICENSE_REPORT_READWIDE_1_0_20.md) for dependency details. These notes are not F-Droid approval.
-
-## Validation boundary
-
-- The maintainer confirmed a successful build on 2026-10-11. Static review and regression test sources do not establish test-suite or device-validation results.
-- TXT partition/restore behavior, backup rollback/cross-device use, long-background image recovery, visual document fidelity, rapid PDF movement, and producer-generated archive combinations remain runtime checks.
-- Earlier checkpoint results do not establish complete format coverage or current performance.
+- See the [license report](LICENSE_REPORT_READWIDE_1_0_20.md) for dependency details. F-Droid approval and publication are separate from the local release build.
 
 ## Install
 
@@ -100,4 +96,6 @@ Readwide 1.0.20 improves large-TXT reading, adds configurable TXT Contents, expa
 - Source license: Apache License 2.0
 - Source: https://github.com/k1717/Readwide
 - APK releases: https://github.com/k1717/Readwide/releases
-- With the same project release key, the 1.0.20 APK can update the GitHub 1.0.19 build in place. Local build filenames are unrestricted.
+- Public APK filename: `Readwide_1.0.20.apk`. Local build filenames may differ.
+- With the same project release key, this version updates the GitHub 1.0.19 build in place.
+- The local release build completed successfully on 2026-10-11. Subsequent system-bar/WebView changes have static review only. See [verification status](CURRENT_SOURCE_STATUS_1_0_20.md) and [remaining runtime checks](RELEASE_READINESS_1_0_20.md); earlier results do not establish complete compatibility or current performance.

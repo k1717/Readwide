@@ -106,7 +106,7 @@ Builds:
 
   - versionName: 1.0.20
     versionCode: 10020
-    commit: 05f2615e6d269819a20c736717945cf7f65aabbe
+    commit: xxxxxxx
     subdir: app
     gradle:
       - yes

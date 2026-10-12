@@ -146,4 +146,4 @@ The structural pass proves that the supplied archives, reading-order resources,
 binding handlers, linked SMIL references, and scoped CFI syntax are reachable by
 the Java loader. It does not prove CSS pixel-perfect layout, OEM media codec
 behavior, every publisher script, font shaping, or Android System WebView behavior.
-Those still require explicit device or emulator QA chosen by the maintainer.
+Those still require device or emulator validation.

@@ -2,14 +2,14 @@
 
 ## Identity and verification
 
-- The latest maintainer log completed signed Release APK assembly after build-setting/native warning cleanup: BUILD SUCCESSFUL, 132 actionable tasks (50 executed), with v2 signature verification. It displayed 100 deprecated-API warnings. An earlier successful log also compiled local tests and assembled the Android-test APK; neither log reports test-suite execution.
+- Signed Release APK assembly completed after build-setting/native warning cleanup, with v2 signature verification. The build displayed 100 deprecated-API warnings. An earlier successful build also compiled local tests and assembled the Android-test APK; neither build executed the test suites.
 - Release date: **2026-10-11**.
 - Android application ID: `com.readwide.manager`; version `1.0.20 / 10020`.
 - The successful 2026-10-11 release build includes the Home edits and Java/Gradle/native-warning cleanup, but precedes the system-bar/WebView changes described below.
 - Successful assembly and signature verification do not establish test-suite execution, device behavior, F-Droid acceptance, or remote publication.
 - Subsequent source edits remove mixed system-bar appearance control and prefer owned scale callbacks for WebView scroll geometry. Their eight instrumentation regression methods are source additions, not executed tests; verification is static only. Initial-scale fallback, gesture zoom probes and required legacy APIs remain. TXT paging/viewport geometry and existing bookmarks are unchanged. Detailed deprecated-API/plugin diagnostics remain enabled.
 - First-party code remains Apache-2.0. Component provenance and licensing are recorded in the [license report](LICENSE_REPORT_READWIDE_1_0_20.md), [FOSS status](FOSS_STATUS.md), and source/direct-dependency SBOM.
-- Local archive fixture I/O uses a strict UTF-8 compatibility helper and `Paths.get`; document tests use the actual builder constructor. Their compilation is confirmed by the maintainer log, not their execution. Earlier focused host results apply only to their recorded source and fixtures.
+- Local archive fixture I/O uses a strict UTF-8 compatibility helper and `Paths.get`; document tests use the actual builder constructor. These test sources compiled successfully but have not been executed. Earlier focused host results apply only to their recorded source and fixtures.
 
 ## TXT reading and saved state
 

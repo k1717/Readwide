@@ -6,7 +6,7 @@ This is the retained focused host-validation record for the imported ALZ repair.
 Its baseline was `Readwide-1.0.20-alz-selector-fixed-source.zip`, SHA-256
 `75170a98a21bdc006f56b38d73823355983aed66e28abe15905f3da8b2035735`.
 Results below describe that source/fixture checkpoint, not a new run of the current
-release. The maintainer subsequently confirmed a successful build on 2026-10-11.
+release. A subsequent release build completed successfully on 2026-10-11.
 Use the current complete source package, not an old incremental patch.
 
 The repair concerns `AlzBzip2InputStream`, `AlzipArchiveReader` and
@@ -209,8 +209,8 @@ out of release source packages.
 ## Release and support boundary
 
 The historical Android test/build attempt stopped at Gradle-download DNS failure
-before producing an APK. That checkpoint does not override the maintainer's
-successful release build confirmation on 2026-10-11.
+before producing an APK. A subsequent release build completed successfully on
+2026-10-11; it did not establish execution of these test suites.
 
 These host checks do not execute real Commons BZip2 decoding, the complete EGG/7z
 dispatcher, JNI or Android storage/UI paths. Current EGG LEA/encrypted-solid scope

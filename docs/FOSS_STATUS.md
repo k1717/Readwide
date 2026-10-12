@@ -19,7 +19,7 @@ This is a declared-source review, not a resolved build or F-Droid approval. See 
 Custom TXT contents rules add the pure-Java Maven dependency RE2/J 1.8 under
 BSD-3-Clause. The full upstream license is retained in APK assets, the direct
 license report and source SBOM record the declaration, and no network permission
-or runtime service is added. The maintainer confirmed a successful build on
+or runtime service is added. The local release build completed successfully on
 2026-10-11; resolved-dependency licensing and final APK review remain separate
 checks. This is not a new F-Droid approval claim.
 

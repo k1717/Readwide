@@ -2,7 +2,7 @@
 
 ## Readwide Launcher Artwork
 
-The Readwide launcher artwork source and checked-in Android launcher icon resources are project-owned artwork supplied by the project maintainer for the Readwide 1.0.x release line.
+The Readwide launcher artwork source and checked-in Android launcher icon resources are project-owned artwork for the Readwide 1.0.x release line.
 
 - Source reference: `docs/readwide_launcher_icon_source.png` (project-supplied Readwide book icon artwork; updated for the 1.0.5 public documentation package)
 - Checked-in Android assets: existing `app/src/main/res/mipmap-*` launcher/adaptive PNG resources and `app/src/main/ic_launcher-playstore.png`

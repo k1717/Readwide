@@ -14,8 +14,8 @@ report and SBOM carry the same packages as 1.0.10 with only the version stamp
 and two descriptions changed. "Current public version" is 1.0.11.
 
 Note: the F-Droid metadata's 1.0.11 build entry `commit` field must be set to the
-full 40-character commit hash the `v1.0.11` tag points to (this app's F-Droid
-maintainer requires a full hash, not the tag name) once the 1.0.11 tag exists. The
+full 40-character commit hash the `v1.0.11` tag points to once the 1.0.11 tag exists.
+The F-Droid submission for this release requires the full hash, not the tag name. The
 earlier release entries (1.0.7 through 1.0.10) already carry their real commit
 hashes in the maintained repository; if this source snapshot still shows a
 placeholder for 1.0.10, that is only the snapshot being behind the repository.

@@ -1,20 +1,20 @@
 # Readwide 1.0.20 release readiness
 
 Release date: **2026-10-11**; version `1.0.20 / 10020`.
-The maintainer confirmed Release APK, local-test compilation and Android-test APK
-build success on that date. A later signed-release log also passed after
+Release APK assembly, local-test compilation and Android-test APK assembly
+completed successfully on that date. A subsequent signed release build passed after
 build-setting/native warning cleanup, including v2 signature verification.
 Subsequent system-bar/WebView edits have static review only. Tests were not executed.
 
-## What is ready for the maintainer
+## Completed release preparation
 
 - Version/application identity and release documentation identify Readwide 1.0.20.
 - CHANGELOG, PATCHNOTES, development notes and GitHub release notes use feature/subsystem sections. English/Korean store summaries retain the short release-summary format.
 - Source and component notices are included. First-party code remains Apache-2.0; separate component licenses and corresponding-source requirements remain in force.
 - Source packaging excludes generated/private files, preserves portable paths and executable modes, and refuses to overwrite existing ZIPs.
-- The latest successful maintainer build includes the Home edits and the test I/O/builder corrections. No test suite was executed; compiling test code or building a test APK is not a passing assertion result.
-- The later signed-release log includes Java/Gradle settings, shortened native staging paths and decoder-only declarations (132 actionable tasks, 50 executed). It still displays deprecated API warnings; successful assembly is not zero-warning evidence.
-- Subsequent document/PDF system-bar and WebView scale fixes add eight instrumentation regression methods. No follow-up build or test was run by this audit. TXT canonical viewport/page geometry remains unchanged; required legacy APIs and gesture minimum-zoom probes remain rather than being blindly replaced or globally suppressed.
+- The successful build includes the Home edits and the test I/O/builder corrections. No test suite was executed; compiling test code or building a test APK is not a passing assertion result.
+- The subsequent signed release build includes Java/Gradle settings, shortened native staging paths and decoder-only declarations. It still displays deprecated API warnings; successful assembly is not zero-warning evidence.
+- Subsequent document/PDF system-bar and WebView scale fixes add eight instrumentation regression methods. These changes have static review only, without follow-up build or test results. TXT canonical viewport/page geometry remains unchanged; required legacy APIs and gesture minimum-zoom probes are retained, without global warning suppression.
 
 ## Before publishing an installable APK
 
@@ -69,7 +69,7 @@ Subsequent system-bar/WebView edits have static review only. Tests were not exec
 - Preserve pinned corresponding sources and notices; no proprietary UnRAR engine or optional local jars are part of the default source package.
 - The direct-source license report/SBOM is not a resolved-transitive license audit. Review the resolved dependency graph and packaged notices for repository submission.
 - The checked-in metadata stops at 1.0.19. Start from current upstream metadata and add 1.0.20 only against the real final 40-character commit hash. Do not invent a commit or overwrite upstream with the historical mirror.
-- Maintainer build success is not F-Droid build acceptance, signing, approval or publication. See [submission notes](FDROID_SUBMISSION.md).
+- Local build success is not F-Droid build acceptance, signing, approval or publication. See [submission notes](FDROID_SUBMISSION.md).
 
 ## Deliberately deferred boundaries
 

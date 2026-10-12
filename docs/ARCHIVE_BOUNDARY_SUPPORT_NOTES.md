@@ -15,7 +15,7 @@ reports describe their own source/fixture scope, not the whole current release.
 
 ## Release boundary
 
-The maintainer confirmed a successful 1.0.20 build on 2026-10-11. This does not
+The local 1.0.20 release build completed successfully on 2026-10-11. This does not
 establish full producer/native/device interoperability. See the
 [release checklist](RELEASE_READINESS_1_0_20.md) for remaining runtime checks.
 Complete source packages use the current packaging policy; old incremental-patch
