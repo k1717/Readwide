@@ -1,7 +1,5 @@
 # Readwide 1.0.20
 
-Release date: 2026-10-11.
-
 Readwide 1.0.20 improves large-TXT reading, adds configurable TXT Contents, expands archive decoding, and strengthens viewer restoration and local backup recovery.
 
 ## TXT page counting and navigation
