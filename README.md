@@ -12,7 +12,6 @@ their bookmarks, reading positions, themes and settings through JSON backup
 export/import.
 
 - Current source version: **1.0.20**
-- Release date: **2026-10-11**
 - Android metadata: `versionCode 10020`, `versionName "1.0.20"`
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
