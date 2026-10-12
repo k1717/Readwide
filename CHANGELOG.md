@@ -87,7 +87,7 @@
 
 - Make archive test-fixture text I/O compatible with the Android local-test compilation API surface, retaining strict UTF-8 and existing assertions.
 - Add supported-launcher themed icons, localized reader/Contents text, and notices for the added source-built archive decoders and RE2/J.
-- Release date: `2026-10-11`; version `1.0.20 / 10020`. No ads, analytics, account, cloud sync, or `INTERNET` permission; documents remain locally processed.
+- version `1.0.20 / 10020`. No ads, analytics, account, cloud sync, or `INTERNET` permission; documents remain locally processed.
 - Latest changes have static review and regression test sources, not a current full build/device-validation result. Earlier checkpoint results do not establish current device behavior, complete format coverage, or measured speedups.
 - Detailed implementation and remaining boundaries: [development changes](docs/DEV_CHANGES_1_0_20.md), [archive support notes](docs/ARCHIVE_BOUNDARY_SUPPORT_NOTES.md), and [license report](docs/LICENSE_REPORT_READWIDE_1_0_20.md).
 
