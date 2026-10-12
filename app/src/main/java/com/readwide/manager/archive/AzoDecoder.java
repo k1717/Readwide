@@ -2,10 +2,8 @@ package com.readwide.manager.archive;
 
 import androidx.annotation.NonNull;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.zip.CRC32;
 
 /**
  * Java AZO decoder for EGG method-3 payloads.
@@ -34,30 +32,48 @@ import java.util.zip.CRC32;
  * </pre>
  */
 final class AzoDecoder {
-    private static final int MAX_OUTPUT_BYTES = 512 * 1024 * 1024;
-
     private AzoDecoder() {
     }
 
     @NonNull
     static byte[] decode(@NonNull byte[] data, long expectedSize) throws IOException {
-        if (expectedSize < 0 || expectedSize > MAX_OUTPUT_BYTES) {
-            throw unsupported("AZO output size is outside decoder limits");
+        ArchiveCancellation.checkpoint(null);
+        int outputSize = checkedArraySize(expectedSize);
+        try {
+            return decodeArray(data, outputSize);
+        } catch (OutOfMemoryError error) {
+            // A valid array length is not a promise that this device has enough heap.
+            // Do not retry the raw decoder after an allocation failure.
+            throw new IOException("Not enough memory to decode the EGG AZO block", error);
         }
+    }
+
+    /** Representation bound only: AZO currently materializes each block in arrays. */
+    static int checkedArraySize(long size) throws IOException {
+        if (size < 0 || size > Integer.MAX_VALUE) {
+            throw unsupported("EGG AZO block cannot be represented by the byte-array decoder");
+        }
+        return (int) size;
+    }
+
+    @NonNull
+    private static byte[] decodeArray(@NonNull byte[] data, int expectedSize) throws IOException {
         IOException framedFailure = null;
         if (looksLikeFramedAzo(data)) {
             try {
-                byte[] framed = new FramedDecoder(data, (int) expectedSize).decode();
-                if (expectedSize <= 0 || framed.length == expectedSize) return framed;
+                byte[] framed = new FramedDecoder(data, expectedSize).decode();
+                if (framed.length == expectedSize) return framed;
                 throw unsupported("AZO framed output size mismatch");
             } catch (IOException e) {
+                ArchiveCancellation.rethrowIfCancelled(e, null);
                 framedFailure = e;
             }
         }
         try {
             if (expectedSize == 0 && data.length == 0) return new byte[0];
-            return decodeRawBlock(data, (int) expectedSize);
+            return decodeRawBlock(data, expectedSize);
         } catch (IOException rawFailure) {
+            ArchiveCancellation.rethrowIfCancelled(rawFailure, null);
             if (framedFailure != null) throw framedFailure;
             throw rawFailure;
         }
@@ -69,7 +85,8 @@ final class AzoDecoder {
 
     @NonNull
     private static byte[] decodeRawBlock(@NonNull byte[] data, int expectedSize) throws IOException {
-        if (expectedSize < 0 || expectedSize > MAX_OUTPUT_BYTES) {
+        ArchiveCancellation.checkpoint(null);
+        if (expectedSize < 0) {
             throw unsupported("AZO raw block output size is outside decoder limits");
         }
         if (expectedSize == data.length) return Arrays.copyOf(data, data.length);
@@ -88,15 +105,16 @@ final class AzoDecoder {
 
     private static final class FramedDecoder {
         private final byte[] input;
-        private final ByteArrayOutputStream output;
+        private final int expectedSize;
+        private byte[] output;
+        private int outputPos;
         private int readPos;
         private boolean x86Filter;
         private boolean endOfBlocks;
-        private int crc;
 
         FramedDecoder(@NonNull byte[] input, int expectedSize) {
             this.input = input;
-            this.output = new ByteArrayOutputStream(Math.max(32, expectedSize));
+            this.expectedSize = expectedSize;
         }
 
         @NonNull
@@ -105,11 +123,41 @@ final class AzoDecoder {
             int filter = readByte();
             if (filter != 0 && filter != 1) throw unsupported("Unsupported AZO filter flag");
             x86Filter = filter == 1;
+            // Check the complete layout before allocating decoded storage. Framing
+            // can otherwise grow an intermediate buffer beyond the EGG declaration.
+            validateLayout();
+            output = new byte[expectedSize];
+            readPos = 2;
             while (!endOfBlocks) decodeOneBlock();
-            return output.toByteArray();
+            return output;
+        }
+
+        private void validateLayout() throws IOException {
+            long total = 0;
+            while (true) {
+                ArchiveCancellation.checkpoint(null);
+                int uncomp = readUInt32BE(), comp = readUInt32BE(), check = readUInt32BE();
+                if (uncomp == 0 && comp == 0 && check == 0) break;
+                validateBlock(uncomp, comp, check, expectedSize - total);
+                total += uncomp;
+                readPos += comp;
+            }
+            if (total != expectedSize) throw unsupported("AZO framed output size mismatch");
+            // Existing EGG compatibility permits packed bytes after the terminal
+            // block; the container still authenticates its complete ciphertext.
+        }
+
+        private void validateBlock(int uncomp, int comp, int check, long remaining) throws IOException {
+            if (((uncomp ^ comp) != check) && check != 0)
+                throw unsupported("AZO block size check mismatch");
+            if (uncomp < 0 || comp < 0
+                    || comp > input.length - readPos)
+                throw unsupported("AZO block size is outside decoder limits");
+            if (uncomp > remaining) throw unsupported("AZO block exceeds declared output size");
         }
 
         private void decodeOneBlock() throws IOException {
+            ArchiveCancellation.checkpoint(null);
             int uncomp = readUInt32BE();
             int comp = readUInt32BE();
             int check = readUInt32BE();
@@ -117,24 +165,26 @@ final class AzoDecoder {
                 endOfBlocks = true;
                 return;
             }
-            if (((uncomp ^ comp) != check) && check != 0) {
-                throw unsupported("AZO block size check mismatch");
-            }
-            if (uncomp < 0 || comp < 0 || uncomp > MAX_OUTPUT_BYTES || comp > input.length - readPos) {
-                throw unsupported("AZO block size is outside decoder limits");
-            }
-            byte[] plain;
+            validateBlock(uncomp, comp, check, expectedSize - outputPos);
             if (comp == uncomp) {
-                plain = Arrays.copyOfRange(input, readPos, readPos + comp);
+                // Stored blocks copy directly into their final range: no per-block
+                // temporary array and no ByteArrayOutputStream growth/final copy.
+                int copied = 0;
+                while (copied < comp) {
+                    ArchiveCancellation.checkpoint(null);
+                    int count = Math.min(64 * 1024, comp - copied);
+                    System.arraycopy(input, readPos + copied, output, outputPos + copied, count);
+                    copied += count;
+                }
                 readPos += comp;
             } else {
                 byte[] compressed = Arrays.copyOfRange(input, readPos, readPos + comp);
                 readPos += comp;
-                plain = decodeRawBlock(compressed, uncomp);
+                byte[] plain = decodeRawBlock(compressed, uncomp);
+                System.arraycopy(plain, 0, output, outputPos, uncomp);
             }
-            if (x86Filter) applyX86Filter(plain);
-            crc = crc32(crc, plain);
-            output.write(plain, 0, plain.length);
+            if (x86Filter) applyX86Filter(output, outputPos, uncomp);
+            outputPos += uncomp;
         }
 
         private int readByte() throws IOException {
@@ -151,27 +201,23 @@ final class AzoDecoder {
         }
     }
 
-    private static int crc32(int previous, @NonNull byte[] data) {
-        CRC32 crc = new CRC32();
-        // java.util.zip.CRC32 does not expose a public seed setter. The running
-        // CRC is informational in xunazo and EGG block CRC is verified by
-        // EggArchiveReader after decoding, so the stream CRC value is not used.
-        crc.update(data);
-        return (int) crc.getValue();
-    }
-
-    private static void applyX86Filter(@NonNull byte[] buf) {
-        if (buf.length < 5) return;
-        for (int i = 0; i < buf.length - 4; i++) {
-            int op = buf[i] & 0xff;
+    private static void applyX86Filter(@NonNull byte[] buf, int offset, int length) throws IOException {
+        int untilCheckpoint = 0;
+        for (int i = 0; i < length - 4; i++) {
+            if (--untilCheckpoint <= 0) {
+                ArchiveCancellation.checkpoint(null);
+                untilCheckpoint = 64 * 1024;
+            }
+            int position = offset + i;
+            int op = buf[position] & 0xff;
             if (op == 0xe8 || op == 0xe9) {
-                int high = buf[i + 4] & 0xff;
+                int high = buf[position + 4] & 0xff;
                 if (high == 0 || high == 0xff) {
-                    int val = readIntLE(buf, i + 1) - i;
+                    int val = readIntLE(buf, position + 1) - i;
                     if ((val & 0xff000000) != 0xff000000) {
                         val &= 0x00ffffff;
                     }
-                    writeIntLE(buf, i + 1, val);
+                    writeIntLE(buf, position + 1, val);
                 }
                 i += 4;
             }
@@ -217,6 +263,7 @@ final class AzoDecoder {
         private final History historyLen = new History(HISTORY_LEN_POS);
         private final History historyPos = new History(HISTORY_LEN_POS);
         private final AzoTable table = new AzoTable();
+        private final int[] extraBits = new int[1];
         private int writePos;
 
         RawBlockDecoder(@NonNull byte[] input, int outputSize) {
@@ -267,6 +314,7 @@ final class AzoDecoder {
         }
 
         private void write(int value) throws IOException {
+            if ((writePos & 0xffff) == 0) ArchiveCancellation.checkpoint(null);
             if (writePos >= output.length) throw unsupported("AZO decoder wrote beyond output size");
             output[writePos++] = (byte) value;
         }
@@ -284,9 +332,9 @@ final class AzoDecoder {
                 symbol = arith.decodeTree(prob2, LiteralProb.BIT_LEN, LiteralProb.PROB_BITS, LiteralProb.PROB_MOVE_BITS);
                 arith.updateProb(prob1, symbol, LiteralProb.BIT_LEN, LiteralProb.PROB_BITS, LiteralProb.PROB_MOVE_BITS);
             }
-            long[] sums = arith.calcProbSum(prob1, prob2, symbol, LiteralProb.BIT_LEN, LiteralProb.PROB_BITS);
-            if (sums[0] > sums[1]) literal.state[prevByte]++;
-            else if (sums[0] < sums[1]) literal.state[prevByte]--;
+            int comparison = arith.compareProbSums(prob1, prob2, symbol, LiteralProb.BIT_LEN, LiteralProb.PROB_BITS);
+            if (comparison > 0) literal.state[prevByte]++;
+            else if (comparison < 0) literal.state[prevByte]--;
             write(symbol);
         }
 
@@ -308,7 +356,6 @@ final class AzoDecoder {
             } else {
                 int distIndex = arith.decodeTree(probDistIndex, DIST_INDEX_BIT_LEN,
                         Prob.DEFAULT_BITS, Prob.DEFAULT_SHIFT);
-                int[] extraBits = new int[1];
                 dist = table.distIndex2Dist(distIndex, extraBits);
                 if (extraBits[0] != 0) {
                     dist += arith.decodeDirect(extraBits[0]);
@@ -321,7 +368,6 @@ final class AzoDecoder {
         private int decodeLen(int dist) throws IOException {
             int distIndex = table.getDistIndex(dist);
             int lenIndex = decodeLenIndex(distIndex);
-            int[] extraBits = new int[1];
             int len = table.lenIndex2Len(lenIndex, extraBits);
             if (extraBits[0] != 0) {
                 len += arith.decodeDirect(extraBits[0]);
@@ -340,9 +386,9 @@ final class AzoDecoder {
                 lenIndex = arith.decodeTree(prob2, LenProb.BIT_LEN, LenProb.PROB_BITS, LenProb.PROB_MOVE_BITS);
                 arith.updateProb(prob1, lenIndex, LenProb.BIT_LEN, LenProb.PROB_BITS, LenProb.PROB_MOVE_BITS);
             }
-            long[] sums = arith.calcProbSum(prob1, prob2, lenIndex, LenProb.BIT_LEN, LenProb.PROB_BITS);
-            if (sums[0] > sums[1]) lenProb.state[distIndex]++;
-            else if (sums[0] < sums[1]) lenProb.state[distIndex]--;
+            int comparison = arith.compareProbSums(prob1, prob2, lenIndex, LenProb.BIT_LEN, LenProb.PROB_BITS);
+            if (comparison > 0) lenProb.state[distIndex]++;
+            else if (comparison < 0) lenProb.state[distIndex]--;
             return lenIndex;
         }
 
@@ -593,8 +639,7 @@ final class AzoDecoder {
             }
         }
 
-        @NonNull
-        long[] calcProbSum(@NonNull Prob[] prob1, @NonNull Prob[] prob2, int symbolValue,
+        int compareProbSums(@NonNull Prob[] prob1, @NonNull Prob[] prob2, int symbolValue,
                            int bitsLen, int probBits) {
             int prev = 1;
             int msb = 1 << (bitsLen - 1);
@@ -614,7 +659,7 @@ final class AzoDecoder {
                 total2 *= bit != 0 ? (maxProb - p2) : p2;
                 prev = (prev << 1) + bit;
             }
-            return new long[]{total1, total2};
+            return Long.compare(total1, total2);
         }
 
         private int decodeBit(@NonNull Prob prob, int probBits, int probMoveBits) throws IOException {

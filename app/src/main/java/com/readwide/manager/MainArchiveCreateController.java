@@ -6,6 +6,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.readwide.manager.archive.ArchiveSupport;
+import com.readwide.manager.archive.ArchiveCancellation;
 import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.File;
@@ -45,7 +46,6 @@ final class MainArchiveCreateController {
             return;
         }
         addPendingArchiveCreation(new MainPendingArchiveCreation(ready, placeholderDestination, sourceParent));
-        activity.archiveCreateInProgress = false;
         activity.updateMainOverflowButtonVisibility();
         Toast.makeText(activity, R.string.archive_create_queued, Toast.LENGTH_LONG).show();
 
@@ -67,12 +67,12 @@ final class MainArchiveCreateController {
 
     void cancelPendingArchiveCreation(@Nullable MainPendingArchiveCreation task) {
         removePendingArchiveCreation(task);
-        activity.archiveCreateInProgress = false;
         activity.updateMainOverflowButtonVisibility();
         ShortToast.show(activity, R.string.file_operation_cancelled);
     }
 
     void confirmPendingArchiveCreation() {
+        if (activity.activityDestroyed || activity.archiveCreateInProgress) return;
         MainPendingArchiveCreation task = activity.pendingArchiveCreation;
         if (task == null) return;
         ArrayList<File> ready = MainArchiveCreationPlanner.collectReadySources(task.sources);
@@ -108,7 +108,7 @@ final class MainArchiveCreateController {
     }
 
     void confirmAllPendingArchiveCreations() {
-        if (activity.archiveCreateInProgress) return;
+        if (activity.activityDestroyed || activity.archiveCreateInProgress) return;
         ArrayList<MainPendingArchiveCreation> tasks = new ArrayList<>(activity.pendingArchiveCreations);
         if (tasks.isEmpty()) return;
         File destinationRoot = activity.currentDirectory;
@@ -161,20 +161,23 @@ final class MainArchiveCreateController {
                                @NonNull ArrayList<File> sources,
                                @NonNull File destination,
                                @NonNull File destinationDir) {
-        if (activity.archiveCreateInProgress) return;
+        if (activity.activityDestroyed || activity.archiveCreateInProgress
+                || !activity.pendingArchiveCreations.contains(task)) return;
         activity.archiveCreateInProgress = true;
         activity.updateMainOverflowButtonVisibility();
         FileOperationProgress progress = activity.showFileOperationProgress(
                 activity.getString(R.string.archive_creating),
                 destination.getName());
         progress.setFolder(destinationDir.getName().length() > 0 ? destinationDir.getName() : destinationDir.getAbsolutePath());
-        activity.executeFolderBackgroundTask(() -> {
-            boolean done = ArchiveSupport.createZipArchive(sources, destination, progress);
+        boolean accepted = activity.executeFolderBackgroundTask(() -> {
+            boolean done = createForUi(sources, destination, progress);
             activity.fileSearchHandler.post(() -> {
                 activity.finishFileOperationProgress(progress);
                 activity.archiveCreateInProgress = false;
                 if (activity.activityDestroyed) return;
-                if (progress.isCancelled()) {
+                // A cancellation after the writer committed must not leave a
+                // successful task pending for an accidental duplicate creation.
+                if (!done && progress.isCancelled()) {
                     ShortToast.show(activity, R.string.file_operation_cancelled);
                     activity.updateMainOverflowButtonVisibility();
                     return;
@@ -192,37 +195,49 @@ final class MainArchiveCreateController {
                 ShortToast.show(activity, R.string.archive_created);
             });
         });
+        if (!accepted) {
+            activity.archiveCreateInProgress = false;
+            activity.finishFileOperationProgress(progress);
+        }
     }
 
     private void continueAllArchiveCreations(@NonNull ArrayList<MainPendingArchiveCreation> tasks,
                                              @NonNull File destinationRoot) {
-        if (activity.archiveCreateInProgress) return;
+        if (activity.activityDestroyed || activity.archiveCreateInProgress) return;
+        tasks.retainAll(activity.pendingArchiveCreations);
+        if (tasks.isEmpty()) return;
         activity.archiveCreateInProgress = true;
         activity.updateMainOverflowButtonVisibility();
         FileOperationProgress progress = activity.showFileOperationProgress(
                 activity.getString(R.string.archive_creating),
                 activity.getString(R.string.archive_create_all));
         progress.setFolder(destinationRoot.getName().length() > 0 ? destinationRoot.getName() : destinationRoot.getAbsolutePath());
-        activity.executeFolderBackgroundTask(() -> {
+        boolean accepted = activity.executeFolderBackgroundTask(() -> {
             int doneCount = 0;
             File lastParent = null;
             File lastDestination = null;
             ArrayList<MainPendingArchiveCreation> succeededTasks = new ArrayList<>();
-            for (MainPendingArchiveCreation task : tasks) {
-                if (progress.isCancelled()) break;
-                ArrayList<File> ready = MainArchiveCreationPlanner.collectReadySources(task.sources);
-                if (ready.isEmpty()) continue;
-                File preferredDestination = new File(destinationRoot, task.destination.getName());
-                File destination = MainArchiveCreationPlanner.freshDestinationFor(destinationRoot, ready, preferredDestination, activity.getString(R.string.archive_create_default_name));
-                if (destination == null) continue;
-                progress.setDetail(destination.getName());
-                boolean done = ArchiveSupport.createZipArchive(ready, destination, progress);
-                if (done) {
-                    doneCount++;
-                    succeededTasks.add(task);
-                    lastParent = destinationRoot;
-                    lastDestination = destination;
+            try {
+                for (MainPendingArchiveCreation task : tasks) {
+                    if (!progress.checkpoint()) break;
+                    ArrayList<File> ready = MainArchiveCreationPlanner.collectReadySources(task.sources);
+                    if (ready.isEmpty()) continue;
+                    File preferredDestination = new File(destinationRoot, task.destination.getName());
+                    File destination = MainArchiveCreationPlanner.freshDestinationFor(destinationRoot, ready, preferredDestination, activity.getString(R.string.archive_create_default_name));
+                    if (destination == null) continue;
+                    progress.setDetail(destination.getName());
+                    boolean done = createForUi(ready, destination, progress);
+                    if (done) {
+                        doneCount++;
+                        succeededTasks.add(task);
+                        lastParent = destinationRoot;
+                        lastDestination = destination;
+                    }
                 }
+            } catch (RuntimeException failure) {
+                // Planning can fail too (for example revoked file access).
+                // Retain committed results and release the queue in the UI callback.
+                ArchiveCancellation.restoreIfCancelled(failure, progress);
             }
             final int finalDoneCount = doneCount;
             final File finalLastParent = lastParent;
@@ -251,7 +266,20 @@ final class MainArchiveCreateController {
                 }
             });
         });
+        if (!accepted) {
+            activity.archiveCreateInProgress = false;
+            activity.finishFileOperationProgress(progress);
+        }
     }
 
+    /** The writer's finally block owns partial-output cleanup; fatal errors still propagate. */
+    static boolean createForUi(List<File> sources, File destination, FileOperationProgress progress) {
+        try {
+            return ArchiveSupport.createZipArchive(sources, destination, progress);
+        } catch (RuntimeException failure) {
+            ArchiveCancellation.restoreIfCancelled(failure, progress);
+            return false;
+        }
+    }
 
 }

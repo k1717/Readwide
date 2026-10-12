@@ -75,6 +75,17 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         }
     }
 
+    /** A rendered row and its baseline relative to the text viewport, not a page anchor. */
+    public static final class ScrollViewportAnchor {
+        public final int charPosition;
+        public final int baselineOffsetPx;
+
+        public ScrollViewportAnchor(int charPosition, int baselineOffsetPx) {
+            this.charPosition = charPosition;
+            this.baselineOffsetPx = baselineOffsetPx;
+        }
+    }
+
     /** Local rendered-text range used for persistent, app-owned annotations. */
     public static final class AnnotationHighlightRange {
         public final int start;
@@ -150,13 +161,45 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                                                                   float lineSpacingMultiplier) {
         ArrayList<PageTextAnchor> result = new ArrayList<>();
         String fullText = value != null ? value : "";
+        for (int charPos : buildPageStartOffsets(layoutValue, fullText, sourcePaint,
+                layoutWidth, viewportHeight, marginVerticalPx, overlapLines, lineSpacingMultiplier)) {
+            result.add(new PageTextAnchor(charPos,
+                    FileUtils.safeSubstring(fullText, Math.max(0, charPos - 80), charPos),
+                    FileUtils.safeSubstring(fullText, charPos, Math.min(fullText.length(), charPos + 120))));
+        }
+        return result;
+    }
+
+    /** Same layout/page arithmetic, without allocating context strings for temporary anchors. */
+    public static int[] buildPageStartOffsets(CharSequence layoutValue,
+                                              String value,
+                                              TextPaint sourcePaint,
+                                              int layoutWidth,
+                                              int viewportHeight,
+                                              int marginVerticalPx,
+                                              int overlapLines,
+                                              float lineSpacingMultiplier) {
+        return buildPageStartOffsets(layoutValue, value, sourcePaint, layoutWidth,
+                viewportHeight, marginVerticalPx, overlapLines, lineSpacingMultiplier, true);
+    }
+
+    /** A bounded partition window is not EOF while more source text follows it. */
+    public static int[] buildPageStartOffsets(CharSequence layoutValue,
+                                              String value,
+                                              TextPaint sourcePaint,
+                                              int layoutWidth,
+                                              int viewportHeight,
+                                              int marginVerticalPx,
+                                              int overlapLines,
+                                              float lineSpacingMultiplier,
+                                              boolean reachesDocumentEnd) {
+        String fullText = value != null ? value : "";
         CharSequence fullLayoutText = layoutValue != null ? layoutValue : fullText;
         if (fullLayoutText.length() != fullText.length()) {
             fullLayoutText = fullText;
         }
         if (fullText.isEmpty()) {
-            result.add(new PageTextAnchor(0, "", ""));
-            return result;
+            return new int[]{0};
         }
 
         TextPaint localPaint = new TextPaint(TextPaint.ANTI_ALIAS_FLAG | TextPaint.SUBPIXEL_TEXT_FLAG);
@@ -175,9 +218,11 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
 
         int lineCount = localLayout.getLineCount();
         if (lineCount <= 0) {
-            result.add(new PageTextAnchor(0, "", ""));
-            return result;
+            return new int[]{0};
         }
+
+        int[] offsets = new int[Math.min(256, lineCount)];
+        int offsetCount = 0;
 
         int firstPadCompensation = 0;
         if (lineCount >= 2) {
@@ -205,12 +250,11 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
             int charPos = Math.max(0, Math.min(fullText.length(), localLayout.getLineStart(startLine)));
             charPos = FileUtils.clampToSurrogateSafeStart(fullText, charPos);
             if (charPos != lastChar) {
-                int beforeStart = Math.max(0, charPos - 80);
-                int afterEnd = Math.min(fullText.length(), charPos + 120);
-                result.add(new PageTextAnchor(
-                        charPos,
-                        FileUtils.safeSubstring(fullText, beforeStart, charPos),
-                        FileUtils.safeSubstring(fullText, charPos, afterEnd)));
+                if (offsetCount == offsets.length) {
+                    int capacity = (int) Math.min((long) lineCount, (long) offsets.length * 2);
+                    offsets = java.util.Arrays.copyOf(offsets, capacity);
+                }
+                offsets[offsetCount++] = charPos;
                 lastChar = charPos;
             }
 
@@ -228,6 +272,9 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                 }
             }
 
+            // Overlap carries context onto a page with new content. Once every
+            // final row fits, another overlap-only page has nothing new to show.
+            if (reachesDocumentEnd && lastFullLine == lineCount - 1) break;
             int nextStartLine = Math.max(startLine + 1, lastFullLine + 1 - overlap);
             if (nextStartLine <= startLine || nextStartLine >= lineCount) {
                 break;
@@ -235,10 +282,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
             startLine = nextStartLine;
         }
 
-        if (result.isEmpty()) {
-            result.add(new PageTextAnchor(0, "", FileUtils.safeSubstring(fullText, 0, Math.min(fullText.length(), 120))));
-        }
-        return result;
+        return offsetCount == 0 ? new int[]{0} : java.util.Arrays.copyOf(offsets, offsetCount);
     }
 
     private final TextPaint paint = new TextPaint(TextPaint.ANTI_ALIAS_FLAG | TextPaint.SUBPIXEL_TEXT_FLAG);
@@ -252,6 +296,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     private final Path searchHighlightPath = new Path();
     private final Path ttsHighlightPath = new Path();
     private final Path annotationHighlightPath = new Path();
+    private final Rect annotationClipBounds = new Rect();
     private final Path textSelectionPath = new Path();
     private final OverScroller scroller;
     private final int touchSlop;
@@ -271,8 +316,12 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     private ReaderListener listener;
 
     private String text = "";
+    private boolean textReachesDocumentEnd = true;
     private CharSequence layoutText = "";
     private StaticLayout layout;
+    private String layoutSourceText;
+    private int layoutMarginVerticalPx;
+    private ScrollViewportAnchor pendingGeometryViewportAnchor;
     private int textColor = Color.rgb(224, 224, 224);
     private int backgroundColor = Color.BLACK;
     private float fontSizeSp = 18f;
@@ -417,6 +466,9 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     }
 
     @Override protected void onDetachedFromWindow() {
+        // A detached view may never receive the last UP/CANCEL of its old stream.
+        touchActive = false;
+        stopScrollMotion();
         ++highlightGeneration;
         if (highlightTask != null) highlightTask.cancel(true);
         if (highlightWorker != null) highlightWorker.shutdownNow();
@@ -437,6 +489,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     private int textSelectionAnchorEnd = -1;
     private boolean textSelectionDragging = false;
     private int activeSelectionHandle = SELECTION_HANDLE_NONE;
+    private boolean selectionHandleMoved;
     private float activeSelectionHandleTouchOffsetX = 0f;
     private float activeSelectionHandleTouchOffsetY = 0f;
     private boolean markdownHighlightingEnabled = false;
@@ -447,7 +500,10 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     private float downX;
     private float downY;
     private float lastY;
+    private float dragScrollRemainder;
     private boolean dragging;
+    private boolean touchActive;
+    private boolean ignoreTouchUntilDown;
     private boolean longPressTriggered;
     private Runnable pendingLongPressRunnable;
 
@@ -491,16 +547,15 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     }
 
     public void releaseTextResources() {
-        if (!scroller.isFinished()) {
-            scroller.abortAnimation();
-        }
-        recycleVelocityTracker();
-        cancelPendingLongPress();
+        stopScrollMotion();
+        touchActive = false;
 
         listener = null;
         text = "";
         layoutText = "";
         layout = null;
+        layoutSourceText = null;
+        pendingGeometryViewportAnchor = null;
         pageAnchors.clear();
         searchHighlightPath.reset();
         ttsHighlightPath.reset();
@@ -523,23 +578,31 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     }
 
     public void setTextContent(String value) {
+        setTextContent(value, true);
+    }
+
+    public void setTextContent(String value, boolean reachesDocumentEnd) {
+        stopScrollMotion();
         clearSearchWork();
         text = value != null ? value : "";
+        textReachesDocumentEnd = reachesDocumentEnd;
         clearTtsHighlight();
         clearTextSelection();
         readerScrollY = 0;
-        rebuildLayout();
+        rebuildLayout(false);
         invalidate();
         notifyScrollChanged();
     }
 
     public void setTextContentAtVisualEnd(String value) {
+        stopScrollMotion();
         clearSearchWork();
         text = value != null ? value : "";
+        textReachesDocumentEnd = true;
         clearTtsHighlight();
         clearTextSelection();
         readerScrollY = 0;
-        rebuildLayout();
+        rebuildLayout(false);
         ensurePageAnchors();
         readerScrollY = Math.max(0, maxScrollY);
         invalidate();
@@ -608,7 +671,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
 
         boolean markdownColorChange = markdownHighlightingEnabled && colorChange;
         if (layoutAffectingChange || markdownColorChange) {
-            rebuildLayout();
+            rebuildLayout(true, layoutAffectingChange);
             notifyScrollChanged();
         }
 
@@ -632,9 +695,11 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     public void setOverlapLines(int overlapLines) {
         int next = Math.max(0, Math.min(8, overlapLines));
         if (this.overlapLines == next) return;
+        stopScrollMotion();
         this.overlapLines = next;
-        rebuildPageAnchors();
-        readerScrollY = clampScrollY(readerScrollY);
+        // Rebuild from the natural content bound, not the previous overlap's
+        // virtual tail. Keep the current pixels unless the new bound clamps them.
+        recalcMaxScroll();
         invalidate();
         notifyScrollChanged();
     }
@@ -781,9 +846,31 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     }
 
     private void rebuildLayout() {
+        rebuildLayout(true);
+    }
+
+    private void rebuildLayout(boolean preserveViewport) {
+        rebuildLayout(preserveViewport, true);
+    }
+
+    private void rebuildLayout(boolean preserveViewport, boolean geometryChanged) {
         int width = getWidth() - getPaddingLeft() - getPaddingRight()
                 - marginHorizontalPx * 2 - leftTextInsetPx - rightTextInsetPx;
-        if (width <= 0) return;
+        // Color-only Markdown spans keep the current pixels and fling. A pending
+        // unsized reflow still owns its character anchor, even if only colors change.
+        boolean needsReflowAnchor = geometryChanged || pendingGeometryViewportAnchor != null
+                || width <= 0 || getHeight() <= 0;
+        ScrollViewportAnchor viewport = preserveViewport && needsReflowAnchor
+                ? (pendingGeometryViewportAnchor != null ? pendingGeometryViewportAnchor
+                        : captureLayoutViewportAnchor(layoutMarginVerticalPx))
+                : null;
+        pendingGeometryViewportAnchor = null;
+        if (!preserveViewport) layoutSourceText = null;
+        if (viewport != null) stopScrollMotion();
+        if (width <= 0 || getHeight() <= 0) {
+            pendingGeometryViewportAnchor = viewport;
+            return;
+        }
 
         layoutText = markdownHighlightingEnabled
                 ? MarkdownSyntaxHighlighter.apply(text, textColor, backgroundColor)
@@ -798,7 +885,14 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                 .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
                 .build();
 
+        layoutSourceText = text;
+        layoutMarginVerticalPx = marginVerticalPx;
         recalcMaxScroll();
+        if (viewport != null) {
+            // Reflow can change ascent/line height. Keep the same text row in view,
+            // rather than importing an old-font pixel offset into the new geometry.
+            scrollToCharPosition(viewport.charPosition);
+        }
     }
 
     private void recalcMaxScroll() {
@@ -866,9 +960,19 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     private void drawAnnotationHighlights(Canvas canvas) {
         if (layout == null || annotationHighlights.isEmpty()) return;
         int length = text != null ? text.length() : 0;
+        if (length == 0 || !canvas.getClipBounds(annotationClipBounds)
+                || annotationClipBounds.bottom <= 0 || annotationClipBounds.top >= layout.getHeight()) return;
+        // The canvas is already translated into layout coordinates. Keep one
+        // line of slack for edge geometry, but never build paths for an entire
+        // off-screen annotation (which may span thousands of lines).
+        int firstLine = Math.max(0, layout.getLineForVertical(Math.max(0, annotationClipBounds.top)) - 1);
+        int lastLine = Math.min(layout.getLineCount() - 1,
+                layout.getLineForVertical(Math.max(0, annotationClipBounds.bottom - 1)) + 1);
+        int visibleStart = layout.getLineStart(firstLine);
+        int visibleEnd = Math.min(length, layout.getLineEnd(lastLine));
         for (AnnotationHighlightRange range : annotationHighlights) {
-            int start = Math.max(0, Math.min(length, range.start));
-            int end = Math.max(start, Math.min(length, range.end));
+            int start = Math.max(visibleStart, Math.max(0, Math.min(length, range.start)));
+            int end = Math.min(visibleEnd, Math.max(0, Math.min(length, range.end)));
             if (end <= start) continue;
             annotationHighlightPath.reset();
             layout.getSelectionPath(start, end, annotationHighlightPath);
@@ -956,6 +1060,24 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            touchActive = true;
+            ignoreTouchUntilDown = false;
+        } else if (event.getActionMasked() == MotionEvent.ACTION_UP
+                || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+            touchActive = false;
+        }
+        if (ignoreTouchUntilDown) {
+            // The remaining events belong to the text/position that was replaced.
+            return true;
+        }
+        if (event.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN
+                || event.getActionMasked() == MotionEvent.ACTION_POINTER_UP) {
+            // TXT has no multi-touch gesture. Retire this gesture before pointer
+            // index 0 can change, rather than treating another finger as a jump.
+            stopScrollMotion();
+            return true;
+        }
         if (velocityTracker == null) velocityTracker = VelocityTracker.obtain();
         velocityTracker.addMovement(event);
 
@@ -965,10 +1087,12 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                 downX = event.getX();
                 downY = event.getY();
                 lastY = downY;
+                dragScrollRemainder = 0f;
                 dragging = false;
                 longPressTriggered = false;
                 textSelectionDragging = false;
                 activeSelectionHandle = hitTextSelectionHandle(downX, downY);
+                selectionHandleMoved = false;
                 if (activeSelectionHandle != SELECTION_HANDLE_NONE) {
                     prepareSelectionHandleDrag(activeSelectionHandle, downX, downY);
                     cancelPendingLongPress();
@@ -981,7 +1105,9 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                 float y = event.getY();
                 if (activeSelectionHandle != SELECTION_HANDLE_NONE) {
                     cancelPendingLongPress();
-                    updateSelectionFromActiveHandleDrag(event.getX(), event.getY());
+                    selectionHandleMoved |= Math.abs(event.getX() - downX) > touchSlop
+                            || Math.abs(event.getY() - downY) > touchSlop;
+                    if (selectionHandleMoved) updateSelectionFromActiveHandleDrag(event.getX(), event.getY());
                     return true;
                 }
                 if (longPressTriggered && hasActiveTextSelection()) {
@@ -1014,15 +1140,18 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                     if (listener != null && dy < 0 && readerScrollY <= getMinPageScrollY() + 2) {
                         listener.onReaderManualOverscroll(-1);
                     }
-                    scrollByPixels((int) dy);
+                    scrollByTouchPixels(dy);
                     lastY = y;
                 }
                 return true;
 
             case MotionEvent.ACTION_UP:
+                boolean wasDragging = dragging;
+                dragging = false;
+                dragScrollRemainder = 0f;
                 cancelPendingLongPress();
                 if (activeSelectionHandle != SELECTION_HANDLE_NONE) {
-                    updateSelectionFromActiveHandleDrag(event.getX(), event.getY());
+                    if (selectionHandleMoved) updateSelectionFromActiveHandleDrag(event.getX(), event.getY());
                     activeSelectionHandle = SELECTION_HANDLE_NONE;
                     activeSelectionHandleTouchOffsetX = 0f;
                     activeSelectionHandleTouchOffsetY = 0f;
@@ -1035,7 +1164,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                     recycleVelocityTracker();
                     return true;
                 }
-                if (!dragging && Math.abs(event.getX() - downX) < touchSlop && Math.abs(event.getY() - downY) < touchSlop) {
+                if (!wasDragging && Math.abs(event.getX() - downX) < touchSlop && Math.abs(event.getY() - downY) < touchSlop) {
                     if (hasActiveTextSelection()) {
                         clearTextSelection();
                         if (listener != null) listener.onTextLongPress("", -1, -1, event.getX(), event.getY());
@@ -1046,7 +1175,8 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                     velocityTracker.computeCurrentVelocity(1000, maxFlingVelocity);
                     float velocityY = velocityTracker.getYVelocity();
                     if (Math.abs(velocityY) > minFlingVelocity) {
-                        scroller.fling(0, readerScrollY, 0, (int) -velocityY, 0, 0, 0, maxScrollY);
+                        scroller.fling(0, readerScrollY, 0, (int) -velocityY, 0, 0, 0,
+                                Math.max(maxScrollY, readerScrollY));
                         postInvalidateOnAnimation();
                     }
                 }
@@ -1054,12 +1184,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                 return true;
 
             case MotionEvent.ACTION_CANCEL:
-                cancelPendingLongPress();
-                textSelectionDragging = false;
-                activeSelectionHandle = SELECTION_HANDLE_NONE;
-                activeSelectionHandleTouchOffsetX = 0f;
-                activeSelectionHandleTouchOffsetY = 0f;
-                recycleVelocityTracker();
+                stopScrollMotion();
                 return true;
         }
         return true;
@@ -1240,21 +1365,24 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         if (layout == null || text == null || text.isEmpty() || textSelectionStart < 0 || textSelectionEnd <= textSelectionStart) {
             return;
         }
-        int offset = getCharOffsetAt(x, y);
+        int offset = getSelectionOffsetAt(x, y);
         if (offset < 0) return;
         offset = Math.max(0, Math.min(text.length(), offset));
         if (handle == SELECTION_HANDLE_START) {
             int end = Math.max(0, Math.min(text.length(), textSelectionEnd));
-            if (offset >= end) {
+            if (offset == end) return; // Keep ownership until a strict crossing.
+            if (offset > end) {
                 textSelectionStart = end;
                 textSelectionEnd = FileUtils.clampToSurrogateSafeEnd(text, offset);
                 activeSelectionHandle = SELECTION_HANDLE_END;
+                invalidate();
             } else {
                 setTextSelection(offset, end);
             }
         } else if (handle == SELECTION_HANDLE_END) {
             int start = Math.max(0, Math.min(text.length(), textSelectionStart));
-            if (offset <= start) {
+            if (offset == start) return;
+            if (offset < start) {
                 textSelectionStart = FileUtils.clampToSurrogateSafeStart(text, offset);
                 textSelectionEnd = start;
                 activeSelectionHandle = SELECTION_HANDLE_START;
@@ -1400,6 +1528,8 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         if (!hasActiveTextSelection()) return null;
         int offset = start ? textSelectionStart : textSelectionEnd;
         offset = Math.max(0, Math.min(text.length(), offset));
+        int line = Math.max(0, Math.min(layout.getLineCount() - 1, layout.getLineForOffset(offset)));
+        boolean trailingEdge = false;
         if (!start && offset > 0) {
             // StaticLayout line lookup at an end offset that is exactly at the
             // next line start can make the end handle jump to column 0. Anchor it
@@ -1407,13 +1537,15 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
             // for the logical selection end.
             int previous = Math.max(0, Math.min(text.length() - 1, offset - 1));
             int previousLine = layout.getLineForOffset(previous);
-            int offsetLine = offset < text.length() ? layout.getLineForOffset(offset) : previousLine;
+            int offsetLine = layout.getLineForOffset(offset);
             if (offsetLine != previousLine) {
-                offset = Math.max(0, offset - 1);
+                line = previousLine;
+                trailingEdge = true;
             }
         }
-        int line = Math.max(0, Math.min(layout.getLineCount() - 1, layout.getLineForOffset(offset)));
-        float horizontal = layout.getPrimaryHorizontal(offset);
+        float horizontal = trailingEdge
+                ? (layout.getParagraphDirection(line) < 0 ? layout.getLineLeft(line) : layout.getLineRight(line))
+                : layout.getPrimaryHorizontal(offset);
         int lineBottom = layout.getLineBottom(line);
         float viewX = getPaddingLeft() + marginHorizontalPx + leftTextInsetPx + horizontal;
         float viewY = getTextViewportTopY() + marginVerticalPx - getVisualScrollYForDraw() + lineBottom;
@@ -1464,6 +1596,14 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     }
 
     private int getCharOffsetAt(float viewX, float viewY) {
+        return getOffsetAt(viewX, viewY, false);
+    }
+
+    private int getSelectionOffsetAt(float viewX, float viewY) {
+        return getOffsetAt(viewX, viewY, true);
+    }
+
+    private int getOffsetAt(float viewX, float viewY, boolean insertion) {
         if (layout == null || text == null || text.isEmpty()) return -1;
         int viewportTop = getTextViewportTopY();
         float layoutX = viewX - getPaddingLeft() - marginHorizontalPx - leftTextInsetPx;
@@ -1472,10 +1612,18 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         int line = Math.max(0, Math.min(layout.getLineCount() - 1,
                 layout.getLineForVertical(Math.max(0, Math.round(layoutY)))));
         int rawOffset;
-        if (layoutX <= layout.getLineLeft(line)) {
-            rawOffset = layout.getLineStart(line);
-        } else if (layoutX >= layout.getLineRight(line)) {
-            rawOffset = Math.max(layout.getLineStart(line), layout.getLineEnd(line) - 1);
+        if (layoutX <= layout.getLineLeft(line) || layoutX >= layout.getLineRight(line)) {
+            boolean atStart = layout.getParagraphDirection(line) < 0
+                    ? layoutX >= layout.getLineRight(line) : layoutX <= layout.getLineLeft(line);
+            int end = layout.getLineEnd(line);
+            if (insertion) {
+                // A selection endpoint is an insertion position, not a character seed.
+                if (end > layout.getLineStart(line) && text.charAt(end - 1) == '\n') end--;
+                rawOffset = atStart ? layout.getLineStart(line) : end;
+            } else {
+                rawOffset = atStart ? layout.getLineStart(line)
+                        : Math.max(layout.getLineStart(line), end - 1);
+            }
         } else {
             rawOffset = layout.getOffsetForHorizontal(line, layoutX);
         }
@@ -1520,20 +1668,64 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         }
     }
 
+    /** Retire old pixel coordinates and the old gesture before replacing a position. */
+    public void stopScrollMotion() {
+        scroller.forceFinished(true);
+        dragging = false;
+        dragScrollRemainder = 0f;
+        ignoreTouchUntilDown = true;
+        longPressTriggered = false;
+        textSelectionDragging = false;
+        activeSelectionHandle = SELECTION_HANDLE_NONE;
+        activeSelectionHandleTouchOffsetX = 0f;
+        activeSelectionHandleTouchOffsetY = 0f;
+        cancelPendingLongPress();
+        recycleVelocityTracker();
+    }
+
     @Override
     public void computeScroll() {
         if (scroller.computeScrollOffset()) {
-            setReaderScrollY(scroller.getCurrY());
+            setReaderManualScrollY(scroller.getCurrY());
             postInvalidateOnAnimation();
         }
     }
 
-    private void scrollByPixels(int dy) {
-        setReaderScrollY(readerScrollY + dy);
+    private void scrollByTouchPixels(float dy) {
+        if ((dy > 0f && dragScrollRemainder < 0f)
+                || (dy < 0f && dragScrollRemainder > 0f)) {
+            dragScrollRemainder = 0f;
+        }
+        float accumulated = dy + dragScrollRemainder;
+        int pixels = (int) accumulated;
+        dragScrollRemainder = accumulated - pixels;
+        int previous = readerScrollY;
+        int manualMax = Math.max(maxScrollY, previous);
+        setReaderManualScrollY((long) previous + pixels);
+        // Keep subpixel movement, but not overscroll debt at either boundary.
+        if (readerScrollY - previous != pixels
+                || (dy < 0f && readerScrollY <= getMinPageScrollY())
+                || (dy > 0f && readerScrollY >= manualMax)) {
+            dragScrollRemainder = 0f;
+        }
+    }
+
+    private void setReaderManualScrollY(long y) {
+        // Search can place a result above its popup beyond the ordinary bottom.
+        // Let a drag/fling return continuously from there without extending that
+        // range. Programmatic navigation continues to use the normal page bound.
+        int bounded = (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, y));
+        int clamped = readerScrollY > maxScrollY
+                ? Math.max(getMinPageScrollY(), Math.min(readerScrollY, bounded))
+                : clampScrollY(bounded);
+        applyReaderScrollY(clamped);
     }
 
     public void setReaderScrollY(int y) {
-        int clamped = clampScrollY(y);
+        applyReaderScrollY(clampScrollY(y));
+    }
+
+    private void applyReaderScrollY(int clamped) {
         if (clamped != readerScrollY) {
             readerScrollY = clamped;
             invalidate();
@@ -1543,6 +1735,64 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
 
     public int getReaderScrollY() {
         return readerScrollY;
+    }
+
+    /** True only after the current text has a layout for this sized viewport. */
+    private boolean updatingPresentation;
+
+    /** Insets, margins and font are one geometry change for restore/index listeners. */
+    public void updatePresentation(Runnable update) {
+        boolean nested = updatingPresentation;
+        updatingPresentation = true;
+        try { update.run(); }
+        finally {
+            updatingPresentation = nested;
+            if (!nested) notifyScrollChanged();
+        }
+    }
+
+    public boolean hasCurrentTextLayout() {
+        int width = getWidth() - getPaddingLeft() - getPaddingRight()
+                - marginHorizontalPx * 2 - leftTextInsetPx - rightTextInsetPx;
+        return !updatingPresentation && getWidth() > 0
+                && getHeight() - getPaddingTop() - getPaddingBottom() > 0 && width > 0
+                && layout != null && layoutSourceText == text && layout.getWidth() == width
+                && layoutMarginVerticalPx == marginVerticalPx;
+    }
+
+    @Nullable
+    public ScrollViewportAnchor captureScrollViewportAnchor() {
+        return hasCurrentTextLayout() ? captureLayoutViewportAnchor(marginVerticalPx) : null;
+    }
+
+    /** Cheap lookahead for partition prefetch; this does not define a page boundary. */
+    public int getCharPositionAfterViewportScreens(int screens) {
+        if (!hasCurrentTextLayout() || text.isEmpty()) return 0;
+        long layoutY = (long) readerScrollY - marginVerticalPx
+                + (long) Math.max(0, screens) * getViewportHeight();
+        if (layoutY >= layout.getHeight()) return text.length();
+        int line = layout.getLineForVertical((int) Math.max(0L, layoutY));
+        return layout.getLineStart(line);
+    }
+
+    @Nullable
+    private ScrollViewportAnchor captureLayoutViewportAnchor(int sourceMarginVerticalPx) {
+        if (layout == null || layoutSourceText != text || text.isEmpty()
+                || layout.getLineCount() <= 0) return null;
+        int line = layout.getLineForVertical(Math.max(0, readerScrollY - sourceMarginVerticalPx));
+        return new ScrollViewportAnchor(layout.getLineStart(line),
+                sourceMarginVerticalPx - readerScrollY + layout.getLineBaseline(line));
+    }
+
+    /** Preserve an automatic handoff's baseline without snapping to a page or row top. */
+    public boolean restoreScrollViewportAnchor(int localCharPosition, int baselineOffsetPx) {
+        if (!hasCurrentTextLayout() || text.isEmpty()
+                || localCharPosition < 0 || localCharPosition > text.length()) return false;
+        int line = layout.getLineForOffset(localCharPosition);
+        long target = (long) layout.getLineBaseline(line) + marginVerticalPx - baselineOffsetPx;
+        stopScrollMotion();
+        setReaderScrollY((int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, target)));
+        return true;
     }
 
     /**
@@ -1596,7 +1846,21 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     }
 
     public boolean isUserDraggingOrFlinging() {
-        return dragging || !scroller.isFinished();
+        return touchActive || dragging || !scroller.isFinished();
+    }
+
+    /** Includes the DOWN-to-drag interval and an ignored gesture until its UP/CANCEL. */
+    public boolean isTouchActive() {
+        return touchActive;
+    }
+
+    /** A selection can remain active after its finger gesture has ended. */
+    public boolean isTextSelectionActive() {
+        return hasActiveTextSelection();
+    }
+
+    public boolean isAtStartOfText() {
+        return readerScrollY <= getMinPageScrollY() + 2;
     }
 
     /**
@@ -1694,6 +1958,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
                 }
             }
 
+            if (textReachesDocumentEnd && lastFullLine == lineCount - 1) break;
             int nextStartLine = Math.max(startLine + 1, lastFullLine + 1 - overlap);
             if (nextStartLine <= startLine || nextStartLine >= lineCount) {
                 break;
@@ -1762,13 +2027,22 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
 
         int visualScrollY = getVisualScrollYForDraw();
         int layoutTopY = Math.max(0, visualScrollY - marginVerticalPx);
-        int visibleBottomInLayout = Math.min(layout.getHeight(), layoutTopY + viewportHeight);
+        int visibleBottomInLayout = (int) Math.min(layout.getHeight(),
+                (long) layoutTopY + viewportHeight);
 
         int line = layout.getLineForVertical(Math.max(0, visibleBottomInLayout));
         int lineBottom = layout.getLineBottom(line);
 
         if (lineBottom > visibleBottomInLayout) {
             int fullBottomInLayout = Math.max(0, layout.getLineTop(line));
+            // A viewport shorter than one row cannot show that row in full.
+            // Do not turn its available slice into an empty clip, including
+            // while scrolling inside the row. Ordinary partial bottom rows
+            // are still hidden when the viewport can accommodate a full row.
+            if (fullBottomInLayout <= layoutTopY
+                    && lineBottom - fullBottomInLayout > viewportHeight) {
+                return viewBottom;
+            }
             int screenBottom = viewTop + marginVerticalPx - visualScrollY + fullBottomInLayout;
             return Math.max(viewTop, Math.min(viewBottom, screenBottom));
         }
@@ -1777,7 +2051,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     }
 
     private void notifyScrollChanged() {
-        if (listener != null) listener.onReaderScrollChanged();
+        if (!updatingPresentation && listener != null) listener.onReaderScrollChanged();
     }
 
     public int getPageStepPx() {
@@ -1835,6 +2109,14 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         return readerScrollY >= Math.max(0, maxScrollY - 2);
     }
 
+    /** Includes the final blank layout row, when the document ends in a newline. */
+    public boolean isDocumentEndFullyVisible() {
+        if (!hasCurrentTextLayout() || !textReachesDocumentEnd) return false;
+        int layoutTopY = Math.max(0, readerScrollY - marginVerticalPx);
+        return layout.getLineBottom(layout.getLineCount() - 1)
+                <= (long) layoutTopY + Math.max(1, getViewportHeight());
+    }
+
     public int getCurrentPageNumber() {
         ensurePageAnchors();
         int total = pageAnchors.size();
@@ -1879,18 +2161,27 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         if (pageAnchors.isEmpty()) return 1;
 
         int currentPage = getCurrentPageNumber();
+        return getCurrentLineOffsetFromCharPosition(getPageStartCharPosition(currentPage));
+    }
 
-        // Use the same visual row anchor that TXT bookmarks use.  The previous
-        // implementation sampled readerScrollY directly; after restoring a
-        // bookmark, the displayed text row could be correct while the status
-        // label was off by one because the visual/title-covered row and the raw
-        // scroll boundary were not always the same StaticLayout line.
-        int pageStartChar = getPageStartCharPosition(currentPage);
-        int currentVisualChar = getCharPositionAtTitleCoveredRow();
+    /** In-page row relative to the supplied local character anchor, including seam anchors. */
+    public int getCurrentLineOffsetFromCharPosition(int pageStartChar) {
+        if (layout == null || text.isEmpty()) return 1;
+        // An unloaded global anchor has no trustworthy local row offset. Suppress
+        // the optional row suffix instead of silently substituting a local page.
+        if (pageStartChar < 0 || pageStartChar >= text.length()) return 1;
+        // Raw top-edge offset for navigation/coverage callers. User-facing
+        // labels and new saved positions separately use getDisplayTopCharPosition().
+        int currentChar = getCurrentCharPosition();
 
-        int pageStartLine = getStableLineForCharPosition(pageStartChar);
-        int currentLine = getStableLineForCharPosition(currentVisualChar);
-        return Math.max(1, currentLine - pageStartLine + 1);
+        return Math.max(1, getLineOffsetBetweenCharPositions(pageStartChar, currentChar));
+    }
+
+    /** Rendered rows, including wrapping and blanks; 0 means the range is not loaded. */
+    public int getLineOffsetBetweenCharPositions(int startChar, int endChar) {
+        if (layout == null || startChar < 0 || endChar < startChar
+                || startChar >= text.length() || endChar > text.length()) return 0;
+        return getStableLineForCharPosition(endChar) - getStableLineForCharPosition(startChar) + 1;
     }
 
     private int getStableLineForCharPosition(int charPosition) {
@@ -1900,6 +2191,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     }
 
     public void scrollToPage(int page) {
+        stopScrollMotion();
         setReaderScrollY(getPageAnchorScrollY(page));
     }
 
@@ -1910,12 +2202,14 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
      * tap paging must be able to reach that tail just like manual scroll can.
      */
     public void scrollToVisualEndOfText() {
+        stopScrollMotion();
         ensurePageAnchors();
         setReaderScrollY(maxScrollY);
     }
 
     public void pageBy(int direction) {
         if (direction == 0) return;
+        stopScrollMotion();
 
         int total = getTotalPageCount();
         int current = getCurrentPageNumber();
@@ -2013,12 +2307,37 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     }
 
     public void scrollToPercent(float percent) {
+        stopScrollMotion();
         percent = Math.max(0f, Math.min(1f, percent));
         setReaderScrollY(snapScrollYToLineTop(Math.round(maxScrollY * percent)));
     }
 
     public int getCurrentCharPosition() {
         return getCharPositionFromCurrentLineOffset(0);
+    }
+
+    /**
+     * Status and newly saved reading/bookmark row: keep the clipped first row
+     * while no more than half its measured height has passed the viewport top. Advance
+     * after more than half has passed the viewport top, but never to a row
+     * outside the actual drawing clip (important for a very short viewport).
+     * Page navigation and existing saved character coordinates stay separate.
+     */
+    public int getDisplayTopCharPosition() {
+        if (layout == null || text.isEmpty()) return 0;
+        int visualScrollY = getVisualScrollYForDraw();
+        int layoutTop = Math.max(0, visualScrollY - marginVerticalPx);
+        int line = layout.getLineForVertical(layoutTop);
+        int lineTop = layout.getLineTop(line);
+        int lineBottom = layout.getLineBottom(line);
+        long hiddenHeight = Math.max(0L, (long) layoutTop - lineTop);
+        if (hiddenHeight * 2L > (long) lineBottom - lineTop
+                && line + 1 < layout.getLineCount()) {
+            long drawnBottom = (long) visualScrollY - marginVerticalPx
+                    + getFullLineClipBottom() - getTextViewportTopY();
+            if (layout.getLineTop(line + 1) < drawnBottom) line++;
+        }
+        return Math.max(0, Math.min(text.length(), layout.getLineStart(line)));
     }
 
     /**
@@ -2060,6 +2379,9 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
         }
 
         int overlap = includeConfiguredOverlap ? Math.max(0, getEffectiveOverlapLines()) : 0;
+        if (textReachesDocumentEnd && lastFullLine == layout.getLineCount() - 1) {
+            return text.length();
+        }
         int nextLine = Math.max(startLine + 1, lastFullLine + 1 - overlap);
         nextLine = Math.max(0, Math.min(layout.getLineCount(), nextLine));
         if (nextLine >= layout.getLineCount()) return text.length();
@@ -2081,38 +2403,6 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
      */
     public int getCurrentPageStartCharPositionForCoverage() {
         return getCharPositionFromCurrentLineOffset(0);
-    }
-
-    /**
-     * Returns the character offset for the TXT row selected by the filename/title
-     * strip.  Sample an interior point of the title-covered row instead of the
-     * top edge or the lower edge.  The top edge can resolve to the row above when
-     * the viewport is between StaticLayout rows, while the lower-edge correction
-     * can step into the next row.  An interior sample keeps the saved bookmark on
-     * the actual title-covered row without a forced +/- one-line adjustment.
-     */
-    public int getCharPositionAtTitleCoveredRow() {
-        if (layout == null || text.isEmpty()) return getCurrentCharPosition();
-
-        int rowTop = getStableFirstRowTopInView();
-        int rowBottom = Math.max(rowTop + 1, getStableFirstRowBottomInView());
-        int targetY = rowTop + Math.max(1, Math.round((rowBottom - rowTop) * 0.55f));
-        return getCharPositionAtViewY(targetY);
-    }
-
-    private int getCharPositionAtViewY(int viewY) {
-        if (layout == null || text.isEmpty()) return 0;
-
-        int viewportTop = getTextViewportTopY();
-        int viewportBottom = getTextViewportBottomY();
-        int safeY = Math.max(viewportTop, Math.min(viewportBottom - 1, viewY));
-
-        int visualScrollY = getVisualScrollYForDraw();
-        int layoutY = Math.max(0, visualScrollY - marginVerticalPx + (safeY - viewportTop));
-
-        int line = Math.max(0, Math.min(layout.getLineCount() - 1,
-                layout.getLineForVertical(layoutY)));
-        return Math.max(0, Math.min(text.length(), layout.getLineStart(line)));
     }
 
     public int getCharPositionBelowViewY(int viewY) {
@@ -2148,6 +2438,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     }
 
     public void scrollToSearchResultPosition(int charPosition) {
+        stopScrollMotion();
         if (layout == null || text.isEmpty()) return;
         int pos = Math.max(0, Math.min(text.length(), charPosition));
         int line = layout.getLineForOffset(pos);
@@ -2212,6 +2503,7 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     }
 
     private void scrollToCharPosition(int charPosition, boolean keepContextAboveTarget) {
+        stopScrollMotion();
         if (layout == null || text.isEmpty()) return;
         int pos = Math.max(0, Math.min(text.length(), charPosition));
         int line = layout.getLineForOffset(pos);

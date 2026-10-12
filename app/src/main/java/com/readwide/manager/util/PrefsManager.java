@@ -249,6 +249,10 @@ public class PrefsManager {
             // to compare, after applying the existing JSON numeric conversions.
             if (!valid || !PreferenceBackupSchema.accepts(key, value))
                 throw new JSONException("Invalid preference value/type: " + key);
+            if (("font_size".equals(key) && ((Float) value < 8f || (Float) value > 48f))
+                    || ("line_spacing".equals(key) && ((Float) value < 0.8f || (Float) value > 3f))
+                    || ("brightness_value".equals(key) && ((Float) value < 0f || (Float) value > 1f)))
+                throw new JSONException("Preference outside supported rendering range: " + key);
             if ("txt_display_replacement_rules_json".equals(key)) {
                 if (!(value instanceof String)) throw new JSONException("Invalid TXT display-rule preference");
                 JSONArray rules = new JSONArray((String) value);
@@ -446,6 +450,7 @@ public class PrefsManager {
                 "button_order_pdf_viewer",
                 "archive_landscape_spread_enabled",
                 "file_thumbnails_enabled",
+                "file_display_mode",
                 "txt_collapse_blank_lines",
                 "reader_search_case_sensitive",
                 "reader_search_whole_word",
@@ -1043,10 +1048,17 @@ public class PrefsManager {
 
     public void setTtsLastPlaybackState(String filePath, int charPosition, int pageNumber,
                                         boolean continuous, int sleepTimerMinutes, int textFormatVersion) {
+        setTtsLastPlaybackState(filePath, charPosition, pageNumber, continuous, sleepTimerMinutes, textFormatVersion, "");
+    }
+
+    public void setTtsLastPlaybackState(String filePath, int charPosition, int pageNumber,
+                                        boolean continuous, int sleepTimerMinutes, int textFormatVersion,
+                                        String contentSignature) {
         prefs.edit()
                 .putString("tts_last_file_path", filePath == null ? "" : filePath)
                 .putInt("tts_last_char_position", Math.max(0, charPosition))
                 .putInt("tts_last_text_format_version", Math.max(0, textFormatVersion))
+                .putString("tts_last_content_signature", contentSignature == null ? "" : contentSignature)
                 .putInt("tts_last_page_number", Math.max(1, pageNumber))
                 .putBoolean("tts_last_continuous", continuous)
                 .putInt("tts_last_sleep_timer_min", Math.max(0, sleepTimerMinutes))
@@ -1065,6 +1077,10 @@ public class PrefsManager {
 
     public int getTtsLastTextFormatVersion() {
         return Math.max(0, prefs.getInt("tts_last_text_format_version", 0));
+    }
+
+    public String getTtsLastContentSignature() {
+        return prefs.getString("tts_last_content_signature", "");
     }
 
     public int getTtsLastPageNumber() {
@@ -1088,6 +1104,7 @@ public class PrefsManager {
                 .remove("tts_last_file_path")
                 .remove("tts_last_char_position")
                 .remove("tts_last_text_format_version")
+                .remove("tts_last_content_signature")
                 .remove("tts_last_page_number")
                 .remove("tts_last_continuous")
                 .remove("tts_last_sleep_timer_min")
@@ -1218,6 +1235,34 @@ public class PrefsManager {
         prefs.edit().putBoolean("file_search_all_folders", enabled).apply();
     }
     public void setLastDirectory(String p) { prefs.edit().putString("last_directory", p).apply(); }
+
+    /** Rebind navigation preferences only after a directory move/rename succeeds. */
+    public void moveFolderReferences(String oldPath, String newPath) {
+        if (oldPath == null || newPath == null || oldPath.equals(newPath)) return;
+        SharedPreferences.Editor editor = prefs.edit();
+        boolean changed = false;
+        for (String key : new String[]{"folder_shortcuts", "recent_folders", "hidden_recent_folders"}) {
+            LinkedHashSet<String> before = readPathSet(key, 0);
+            LinkedHashSet<String> after = new LinkedHashSet<>();
+            boolean keyChanged = false;
+            for (String path : before) {
+                String replacement = NavigationPathRewriter.rebase(path, oldPath, newPath);
+                after.add(replacement);
+                keyChanged |= !path.equals(replacement);
+            }
+            if (keyChanged) {
+                putJoinedPaths(editor, key, after, 0);
+                changed = true;
+            }
+        }
+        String last = getLastDirectory();
+        String replacement = NavigationPathRewriter.rebase(last, oldPath, newPath);
+        if (last != null && !last.equals(replacement)) {
+            editor.putString("last_directory", replacement);
+            changed = true;
+        }
+        if (changed) editor.apply();
+    }
 
     public List<String> getRecentFolders(int limit) {
         String raw = prefs.getString("recent_folders", "");

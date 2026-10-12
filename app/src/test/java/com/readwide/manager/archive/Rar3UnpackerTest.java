@@ -19,6 +19,285 @@ public class Rar3UnpackerTest {
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
+    @Test public void solidLzDescriptorAppliesToNextEntryAfterExplicitBoundary() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        byte[] first = deferredLzPrimer(true);
+        File firstOutput = tempFolder.newFile();
+        Rar3Unpacker.unpack(solidContext("deferred-primer.rar", first, 1, crc("A"), state), firstOutput, null);
+        assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(firstOutput.toPath()));
+        byte[] second = syntheticPayload(block(new int[]{'A','B',256,257}, "00011001"));
+        File secondOutput = tempFolder.newFile();
+        Rar3Unpacker.unpack(solidContext("deferred-target.rar", second, 1, crc("A"), state), secondOutput, null);
+        assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(secondOutput.toPath()));
+        assertEquals(3,state.retained()); // Raw A + AB, not the final A + A.
+    }
+
+    @Test public void deferredSolidDescriptorRetiresOnBadPrimerCrcAndResetsCleanly() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        byte[] first = deferredLzPrimer(true);
+        File output = tempFolder.newFile();
+        org.junit.Assert.assertThrows(java.io.IOException.class,
+                () -> Rar3Unpacker.unpack(solidContext("deferred-bad-crc.rar",first,1,0,state),output,null));
+        assertFalse(output.exists());
+        org.junit.Assert.assertThrows(java.io.IOException.class,state::ensureUsable);
+        state.reset();
+        byte[] second = syntheticPayload(block(new int[]{'A','B',256,257}, "00011001"));
+        File fresh = tempFolder.newFile();
+        Rar3Unpacker.unpack(solidContext("deferred-reset.rar",second,2,crc("AB"),state),fresh,null);
+        assertArrayEquals(new byte[]{'A','B'},Files.readAllBytes(fresh.toPath()));
+    }
+
+    @Test public void deferredSolidDescriptorWithoutMarkerCannotCommit() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        byte[] packed = deferredLzPrimer(false);
+        File output = tempFolder.newFile();
+        org.junit.Assert.assertThrows(java.io.IOException.class,
+                () -> Rar3Unpacker.unpack(solidContext("deferred-no-marker.rar",packed,1,crc("A"),state),output,null));
+        assertFalse(output.exists());
+        org.junit.Assert.assertThrows(java.io.IOException.class,state::ensureUsable);
+    }
+
+    @Test public void symbolCodedDescriptorCarriesBetweenMixedPpmdEntries() throws Exception {
+        Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
+        Rar3PpmdFilterOutput.DeferredFilters deferred = new Rar3PpmdFilterOutput.DeferredFilters();
+        for (int entry=0;entry<2;entry++) {
+            ByteArrayOutputStream symbols = new ByteArrayOutputStream();
+            if (entry==0) {
+                symbols.write(2); symbols.write(3);
+                writeVmTransport(symbols,Rar3VirtualMachineTest.deferredResizingRecord(1,2,1));
+            }
+            symbols.write('A'); if (entry==1) symbols.write('B');
+            symbols.write(2); symbols.write(2);
+            byte[] encoded = symbols.toByteArray(); int[] cursor = {0};
+            Rar3ClassicLzEngine.PpmdSource ppmd = new Rar3ClassicLzEngine.PpmdSource() {
+                @Override public void readTable(java.io.InputStream in) throws java.io.IOException { assertEquals(0xa1,in.read()); }
+                @Override public int symbol() { return encoded[cursor[0]++] & 255; }
+                @Override public int escape() { return 2; }
+            };
+            ByteArrayOutputStream target = new ByteArrayOutputStream();
+            try (Rar3PpmdFilterOutput out = new Rar3PpmdFilterOutput(target,1,programs,0x40000,deferred)) {
+                Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(new RarBitInput(new byte[]{(byte)0xa1}),
+                        new RarLzWindow(8,out),1,new int[Rar3HuffmanTables.TABLE_SIZE],programs,
+                        new Rar3UnpackState(),ppmd,out,false,true);
+                assertTrue(engine.fileEndSeen()); out.finish(engine.fileEndSeen());
+            }
+            assertEquals(encoded.length,cursor[0]); assertArrayEquals(new byte[]{'A'},target.toByteArray());
+        }
+    }
+
+    private static byte[] deferredLzPrimer(boolean marker) throws Exception {
+        BitWriter bits = new BitWriter();
+        writeTable(bits,new int[]{'A','B',256,257},new int[0]);
+        bits.writeBitString("11");
+        ByteArrayOutputStream record = new ByteArrayOutputStream();
+        writeVmTransport(record,Rar3VirtualMachineTest.deferredResizingRecord(1,2,1));
+        for (byte value : record.toByteArray()) bits.writeBits(value & 255,8);
+        bits.writeBitString(marker ? "001001" : "00"); // A, then EOF with next-entry tables.
+        return bits.toByteArray();
+    }
+
+    private Rar3UnpackContext solidContext(String name,byte[] packed,long size,long checksum,Rar3SolidState state) throws Exception {
+        return Rar3UnpackContext.forSolidSequenceEntry(writeArchive(name,packed),0,packed.length,size,0x33,
+                false,false,false,checksum,state);
+    }
+
+    @Test public void streamedVmResizingChecksFinalLengthCrcAndProgress() throws Exception {
+        for (int finalSize : new int[]{0,1,4}) {
+            byte[] packed = resizingLzPayload(finalSize, true);
+            byte[] expected = java.util.Arrays.copyOf(new byte[]{'A','B'}, finalSize);
+            CRC32 checksum = new CRC32(); checksum.update(expected);
+            File archive = writeArchive("resized-" + finalSize + ".rar", packed);
+            File output = tempFolder.newFile();
+            com.readwide.manager.util.FileOperationProgress progress =
+                    new com.readwide.manager.util.FileOperationProgress("RAR", null);
+            Rar3Unpacker.unpack(contextFor(archive, packed, finalSize, checksum.getValue()), output, progress);
+            assertArrayEquals(expected, Files.readAllBytes(output.toPath()));
+            assertEquals(finalSize, progress.snapshot().doneBytes);
+        }
+    }
+
+    @Test public void resizingWithoutFileBoundaryFailsAndRemovesPartialOutput() throws Exception {
+        byte[] packed = resizingLzPayload(1, false);
+        File archive = writeArchive("resized-missing-end.rar", packed);
+        File output = tempFolder.newFile();
+        Rar3UnpackContext context = contextFor(archive, packed, 1, crc("A"));
+        java.io.IOException failure = org.junit.Assert.assertThrows(java.io.IOException.class,
+                () -> Rar3Unpacker.unpack(context, output, null));
+        assertTrue(failure.getMessage().contains("explicit file boundary"));
+        assertFalse(output.exists());
+    }
+
+    @Test public void resizedOutputStillRejectsBadFinalCrc() throws Exception {
+        byte[] packed = resizingLzPayload(4, true);
+        File archive = writeArchive("resized-bad-crc.rar", packed);
+        File output = tempFolder.newFile();
+        org.junit.Assert.assertThrows(java.io.IOException.class,
+                () -> Rar3Unpacker.unpack(contextFor(archive, packed, 4, 123), output, null));
+        assertFalse(output.exists());
+    }
+
+    @Test public void symbolCodedVmResizingChangesMixedPpmdStopPosition() throws Exception {
+        for (int finalSize : new int[]{0,1,4}) {
+            ByteArrayOutputStream symbols = new ByteArrayOutputStream();
+            symbols.write(2); symbols.write(3);
+            byte[] record = Rar3VirtualMachineTest.resizingRecord(2, finalSize);
+            writeVmTransport(symbols, record);
+            symbols.write('A'); symbols.write('B'); symbols.write(2); symbols.write(2);
+            byte[] encoded = symbols.toByteArray(); int[] cursor = {0};
+            Rar3ClassicLzEngine.PpmdSource ppmd = new Rar3ClassicLzEngine.PpmdSource() {
+                @Override public void readTable(java.io.InputStream input) throws java.io.IOException { assertEquals(0xa1, input.read()); }
+                @Override public int symbol() { return encoded[cursor[0]++] & 255; }
+                @Override public int escape() { return 2; }
+            };
+            ByteArrayOutputStream target = new ByteArrayOutputStream();
+            Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
+            try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target, finalSize, programs)) {
+                RarLzWindow window = new RarLzWindow(8, output);
+                Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(new RarBitInput(new byte[]{(byte)0xa1}),
+                        window, finalSize, new int[Rar3HuffmanTables.TABLE_SIZE], programs,
+                        new Rar3UnpackState(), ppmd, output, false, false);
+                output.finish(); assertTrue(engine.fileEndSeen()); assertEquals(2, window.written());
+            }
+            assertEquals(encoded.length, cursor[0]);
+            assertArrayEquals(java.util.Arrays.copyOf(new byte[]{'A','B'}, finalSize), target.toByteArray());
+        }
+    }
+
+    private static byte[] resizingLzPayload(int finalSize, boolean marker) throws Exception {
+        BitWriter bits = new BitWriter();
+        writeTable(bits, new int[]{'A','B',256,257}, new int[0]);
+        writeResizingLzRegion(bits, finalSize);
+        bits.writeBitString(marker ? "1000" : "0000");
+        return bits.toByteArray();
+    }
+
+    private static void writeResizingLzRegion(BitWriter bits, int finalSize) throws Exception {
+        bits.writeBitString("11"); // VM descriptor symbol.
+        ByteArrayOutputStream record = new ByteArrayOutputStream();
+        writeVmTransport(record, Rar3VirtualMachineTest.resizingRecord(2, finalSize));
+        for (byte value : record.toByteArray()) bits.writeBits(value & 255, 8);
+        bits.writeBitString("0001"); // Two raw literals, independent of final size.
+    }
+
+    @Test public void trailingZeroOutputVmRegionsKeepFinalSizeAndConsumeFileMarker() throws Exception {
+        BitWriter bits = new BitWriter();
+        writeTable(bits, new int[]{'A','B',256,257}, new int[0]);
+        bits.writeBitString("00"); // Complete final file output before either descriptor.
+        writeResizingLzRegion(bits, 0);
+        writeResizingLzRegion(bits, 0);
+        bits.writeBitString("1000");
+        byte[] packed = bits.toByteArray();
+        File output = tempFolder.newFile();
+        Rar3UnpackContext context = contextFor(writeArchive("trailing-zero-vm.rar", packed), packed, 1, crc("A"));
+        context.requireFileBoundary();
+        Rar3Unpacker.unpack(context, output, null);
+        assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test public void trailingVmCannotPublishBeyondFinalSize() throws Exception {
+        BitWriter bits = new BitWriter();
+        writeTable(bits, new int[]{'A','B',256,257}, new int[0]);
+        bits.writeBitString("00");
+        writeResizingLzRegion(bits, 1);
+        bits.writeBitString("1000");
+        byte[] packed = bits.toByteArray();
+        File output = tempFolder.newFile();
+        java.io.IOException failure = org.junit.Assert.assertThrows(java.io.IOException.class,
+                () -> Rar3Unpacker.unpack(contextFor(writeArchive("trailing-vm-overrun.rar", packed), packed, 1, crc("A")), output, null));
+        assertTrue(failure.getMessage().contains("exceeds final entry size"));
+        assertFalse(output.exists());
+    }
+
+    @Test public void trailingZeroOutputVmCannotHideExtraLiteralOrMissingMarker() throws Exception {
+        for (String suffix : new String[]{"", "001000"}) {
+            BitWriter bits = new BitWriter();
+            writeTable(bits, new int[]{'A','B',256,257}, new int[0]);
+            bits.writeBitString("00");
+            writeResizingLzRegion(bits, 0);
+            bits.writeBitString(suffix); // Missing EOF, or another literal before EOF.
+            byte[] packed = bits.toByteArray();
+            File output = tempFolder.newFile();
+            File archive = writeArchive("trailing-vm-end-" + suffix.length() + ".rar", packed);
+            java.io.IOException failure = org.junit.Assert.assertThrows(java.io.IOException.class,
+                    () -> Rar3Unpacker.unpack(contextFor(archive, packed, 1, crc("A")), output, null));
+            assertTrue(failure.getMessage().contains("explicit file boundary"));
+            assertFalse(output.exists());
+        }
+    }
+
+    @Test public void zeroOutputVmStillRequiresItsWholeRawRegion() throws Exception {
+        BitWriter bits = new BitWriter();
+        writeTable(bits, new int[]{'A','B',256,257}, new int[0]);
+        bits.writeBitString("11");
+        ByteArrayOutputStream record = new ByteArrayOutputStream();
+        writeVmTransport(record, Rar3VirtualMachineTest.resizingRecord(2, 0));
+        for (byte value : record.toByteArray()) bits.writeBits(value & 255, 8);
+        bits.writeBitString("001000"); // Only one of the two raw bytes, then EOF.
+        byte[] packed = bits.toByteArray();
+        File output = tempFolder.newFile();
+        org.junit.Assert.assertThrows(java.io.IOException.class,
+                () -> Rar3Unpacker.unpack(contextFor(writeArchive("zero-vm-short.rar", packed), packed, 0, 0), output, null));
+        assertFalse(output.exists());
+    }
+
+    @Test public void trailingLzPpmdLzControlsPreserveRawHistoryAndFinalPosition() throws Exception {
+        BitWriter bits = new BitWriter();
+        writeTable(bits, new int[]{'A',256}, new int[0]);
+        bits.writeBitString("00011"); // A completes output; then switch to PPMd.
+        bits.alignToByte(); bits.writeBits(0xa1, 8);
+        writeTable(bits, new int[]{'A',256}, new int[0]);
+        bits.writeBitString("0100"); // Return to LZ with an explicit EOF.
+        ByteArrayOutputStream symbols = new ByteArrayOutputStream();
+        symbols.write(2); symbols.write(3);
+        writeVmTransport(symbols, Rar3VirtualMachineTest.resizingRecord(2, 0));
+        symbols.write('B'); symbols.write('C'); symbols.write(2); symbols.write(0);
+        byte[] encoded = symbols.toByteArray(); int[] cursor = {0};
+        Rar3ClassicLzEngine.PpmdSource source = new Rar3ClassicLzEngine.PpmdSource() {
+            @Override public void readTable(java.io.InputStream input) throws java.io.IOException { assertEquals(0xa1, input.read()); }
+            @Override public int symbol() { return encoded[cursor[0]++] & 255; }
+            @Override public int escape() { return 2; }
+        };
+        ByteArrayOutputStream target = new ByteArrayOutputStream();
+        Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
+        try (Rar3PpmdFilterOutput out = new Rar3PpmdFilterOutput(target, 1, programs)) {
+            RarLzWindow window = new RarLzWindow(8, out);
+            Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(new RarBitInput(bits.toByteArray()),
+                    window, 1, new int[Rar3HuffmanTables.TABLE_SIZE], programs, new Rar3UnpackState(), source, out, false, false);
+            out.finish(); assertTrue(engine.fileEndSeen()); assertTrue(engine.reuseTablesForNextEntry());
+            assertEquals(3, window.written()); assertEquals(encoded.length, cursor[0]);
+        }
+        assertArrayEquals(new byte[]{'A'}, target.toByteArray());
+    }
+
+    @Test public void trailingPpmdToLzVmControlResumesWithoutExtraOutput() throws Exception {
+        BitWriter bits = new BitWriter(); bits.writeBits(0xa1, 8);
+        writeTable(bits, new int[]{'A','B',256,257}, new int[0]);
+        writeResizingLzRegion(bits, 0); bits.writeBitString("1000");
+        int[] symbols = {'A',2,0}; int[] cursor = {0};
+        Rar3ClassicLzEngine.PpmdSource source = new Rar3ClassicLzEngine.PpmdSource() {
+            @Override public void readTable(java.io.InputStream input) throws java.io.IOException { assertEquals(0xa1, input.read()); }
+            @Override public int symbol() { return symbols[cursor[0]++]; }
+            @Override public int escape() { return 2; }
+        };
+        ByteArrayOutputStream target = new ByteArrayOutputStream();
+        Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
+        try (Rar3PpmdFilterOutput out = new Rar3PpmdFilterOutput(target, 1, programs)) {
+            RarLzWindow window = new RarLzWindow(8, out);
+            Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(new RarBitInput(bits.toByteArray()),
+                    window, 1, new int[Rar3HuffmanTables.TABLE_SIZE], programs, new Rar3UnpackState(), source, out, false, false);
+            out.finish(); assertTrue(engine.fileEndSeen()); assertEquals(3, window.written());
+            assertEquals(symbols.length, cursor[0]);
+        }
+        assertArrayEquals(new byte[]{'A'}, target.toByteArray());
+    }
+
+    private static void writeVmTransport(ByteArrayOutputStream out, byte[] record) throws java.io.IOException {
+        if (record.length <= 6) out.write(0xa0 | (record.length - 1));
+        else if (record.length <= 262) { out.write(0xa6); out.write(record.length - 7); }
+        else { out.write(0xa7); out.write(record.length >>> 8); out.write(record.length); }
+        out.write(record);
+    }
+
     @Test public void mixedDispatchPreservesOneReservoirAcrossLzPpmdLz() throws Exception {
         BitWriter packed = new BitWriter();
         writeTable(packed, new int[]{'A', 256}, new int[0]);

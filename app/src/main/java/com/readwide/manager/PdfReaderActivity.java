@@ -13,7 +13,6 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.ParcelFileDescriptor;
 import android.text.InputType;
 import android.util.LruCache;
 import android.util.SparseIntArray;
@@ -223,10 +222,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     // platform/native implementations may still serialize PDF operations.
     final Object prefetchRendererLock = new Object();
 
-    private ParcelFileDescriptor parcelFileDescriptor;
-    PdfRenderer pdfRenderer;
-    private ParcelFileDescriptor prefetchParcelFileDescriptor;
-    private PdfRenderer prefetchRenderer;
+    volatile PdfRenderer pdfRenderer;
+    private volatile PdfRenderer prefetchRenderer;
+    private PdfRendererSession activePdfSession; // main-thread ownership
+    private final java.util.concurrent.atomic.AtomicReference<PdfRendererSession> pendingPdfSession =
+            new java.util.concurrent.atomic.AtomicReference<>();
     private Bitmap currentBitmap;
 
     /**
@@ -308,7 +308,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private int pendingPageSlideDirection = 0;
     volatile int renderGeneration = 0;
     /** Rejects a stale async path/URI resolution after a newer singleTop intent. */
-    private int pdfDocumentLoadGeneration = 0;
+    private volatile int pdfDocumentLoadGeneration = 0;
     private boolean backgroundPdfBitmapsReleased = false;
     private final Runnable backgroundPdfMemoryTrimRunnable = () -> trimPdfBitmapsForBackground(false);
     private PdfReaderStartupController startupController;
@@ -1751,16 +1751,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             controller.setAppearanceLightStatusBars(!isDarkColor(statusBg));
             controller.setAppearanceLightNavigationBars(!isDarkColor(navBg));
         }
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            int flags = getWindow().getDecorView().getSystemUiVisibility();
-            if (!isDarkColor(navBg)) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-            else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                if (!isDarkColor(statusBg)) flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-                else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-            }
-            getWindow().getDecorView().setSystemUiVisibility(flags);
-        }
+        // Keep one appearance owner, including on older Android versions.
+        // Mixing compat control and legacy systemUiVisibility is undefined.
         View insetRoot = root != null ? root : findViewById(R.id.pdf_root);
         if (insetRoot != null) {
             com.readwide.manager.util.EdgeToEdgeUtil.applyPdfSystemBarVisibility(
@@ -2906,8 +2898,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     void loadPdfFromIntent(@Nullable Bundle savedInstanceState) {
         if (activityDestroyed) return;
-        resetPdfDocumentScopedState();
         final int loadGeneration = ++pdfDocumentLoadGeneration;
+        resetPdfDocumentScopedState();
         updateLoadingIndicatorTheme();
         progressBar.setVisibility(View.VISIBLE);
         pageStatus.setText(getString(R.string.loading));
@@ -2945,12 +2937,24 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
                 final File finalFile = pdfFile;
                 final String finalName = loadedName;
+                if (activityDestroyed || loadGeneration != pdfDocumentLoadGeneration) return;
+                PdfRendererSession opened = PdfRendererSession.open(pdfFile);
+                PdfRendererSession replaced = pendingPdfSession.getAndSet(opened);
+                if (replaced != null) replaced.closeUnpublished();
+                // Recheck after publication: destruction/reset may race a slow native open.
+                if (activityDestroyed || loadGeneration != pdfDocumentLoadGeneration) {
+                    if (pendingPdfSession.compareAndSet(opened, null)) opened.closeUnpublished();
+                    return;
+                }
                 handler.post(() -> {
+                    if (!pendingPdfSession.compareAndSet(opened, null)) return;
                     if (!activityDestroyed && loadGeneration == pdfDocumentLoadGeneration) {
-                        openPdfFile(finalFile, finalName, jumpPage);
+                        openPdfFile(finalFile, finalName, jumpPage, opened);
+                    } else {
+                        retirePdfSession(opened);
                     }
                 });
-            } catch (Exception e) {
+            } catch (Exception | OutOfMemoryError e) {
                 handler.post(() -> {
                     if (!activityDestroyed && loadGeneration == pdfDocumentLoadGeneration) {
                         showLoadError(e);
@@ -3009,9 +3013,12 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         pageCount = 0;
     }
 
-    private void openPdfFile(@NonNull File pdfFile, String loadedName, int jumpPage) {
+    private void openPdfFile(@NonNull File pdfFile, String loadedName, int jumpPage,
+                             PdfRendererSession opened) {
         try {
-            closeRenderer();
+            activePdfSession = opened;
+            pdfRenderer = opened.primary;
+            prefetchRenderer = opened.prefetch;
             localFile = pdfFile;
             filePath = pdfFile.getAbsolutePath();
             openedPdfFileLength = fileSizeBytes(filePath);
@@ -3019,26 +3026,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
             if (getSupportActionBar() != null) getSupportActionBar().setTitle(fileName);
 
-            parcelFileDescriptor = ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY);
-            pdfRenderer = new PdfRenderer(parcelFileDescriptor);
-            pageCount = pdfRenderer.getPageCount();
-            if (pageCount <= 0) throw new IllegalStateException("PDF has no pages");
-
-            // Second renderer over the same file for worker-side neighbor prefetch.
-            // Some platform renderers serialize internally; this is not a promise
-            // of parallel native rasterization.
-            // Best-effort: if it can't open, prefetch falls back to skipping.
-            try {
-                prefetchParcelFileDescriptor =
-                        ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY);
-                prefetchRenderer = new PdfRenderer(prefetchParcelFileDescriptor);
-            } catch (Exception prefetchOpenFailure) {
-                prefetchRenderer = null;
-                if (prefetchParcelFileDescriptor != null) {
-                    try { prefetchParcelFileDescriptor.close(); } catch (Exception ignored) {}
-                    prefetchParcelFileDescriptor = null;
-                }
-            }
+            pageCount = opened.pageCount;
 
             int restored = 0;
             if (jumpPage >= 0) {
@@ -3056,11 +3044,9 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             // content anchor, saving before the page/view has rendered would
             // overwrite the precise PDF coordinate with a page-only fallback.
             applyPdfDisplayMode();
-        } catch (Exception e) {
-            // A descriptor may already be open even when PdfRenderer creation
-            // or page-count validation fails. Release every partial handle and
-            // clear the identity so onPause cannot persist a zero-page state for
-            // a document that never opened successfully.
+        } catch (Exception | OutOfMemoryError e) {
+            // UI adoption may fail after a worker opened the session. Retire its
+            // handles and clear identity so onPause cannot save a failed document.
             closeRenderer();
             localFile = null;
             openedPdfFileLength = 0L;
@@ -3075,7 +3061,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         }
     }
 
-    private void showLoadError(Exception e) {
+    private void showLoadError(Throwable e) {
         if (activityDestroyed) return;
         progressBar.setVisibility(View.GONE);
         String message = getString(R.string.error_prefix) + (e.getMessage() != null ? e.getMessage() : e.toString());
@@ -3385,10 +3371,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             try {
                 if (!request.cancelled && !singlePageRenderGeometryChanged(zoomSnap, request.geometry)) {
                     synchronized (prefetchRendererLock) {
-                        if (prefetchRenderer != null
+                        PdfRenderer renderer = prefetchRenderer;
+                        if (renderer != null
                                 && !request.cancelled
                                 && !singlePageRenderGeometryChanged(zoomSnap, request.geometry)) {
-                            PdfRenderer.Page page = prefetchRenderer.openPage(request.page);
+                            PdfRenderer.Page page = renderer.openPage(request.page);
                             try {
                                 // openPage can itself wait on the native renderer.
                                 // Recheck before allocating/rasterizing an obsolete page.
@@ -3557,10 +3544,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 if (activityDestroyed || requestGeneration != sharpenRenderGeneration
                         || baseRenderGeneration != renderGeneration) return;
                 synchronized (rendererLock) {
-                    if (pdfRenderer == null || activityDestroyed
+                    PdfRenderer renderer = pdfRenderer;
+                    if (renderer == null || activityDestroyed
                             || requestGeneration != sharpenRenderGeneration
                             || baseRenderGeneration != renderGeneration) return;
-                    PdfRenderer.Page page = pdfRenderer.openPage(pageIndex);
+                    PdfRenderer.Page page = renderer.openPage(pageIndex);
                     try {
                         PdfSharpPatchPlan plan = PdfSharpPatchPlan.create(
                                 page.getWidth(), page.getHeight(), nl, nt, nr, nb, displayScale);
@@ -3736,20 +3724,21 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 // actually stopped on appears only after the backlog clears.
                 if (activityDestroyed || generation != renderGeneration) return;
                 synchronized (rendererLock) {
-                    if (pdfRenderer == null || generation != renderGeneration) return;
+                    PdfRenderer renderer = pdfRenderer;
+                    if (renderer == null || generation != renderGeneration) return;
                     if (spreadToRender && rightPageToRender >= 0) {
                         int leftWpt;
                         int leftHpt;
                         int rightWpt;
                         int rightHpt;
-                        PdfRenderer.Page measurePage = pdfRenderer.openPage(pageToRender);
+                        PdfRenderer.Page measurePage = renderer.openPage(pageToRender);
                         try {
                             leftWpt = Math.max(1, measurePage.getWidth());
                             leftHpt = Math.max(1, measurePage.getHeight());
                         } finally {
                             measurePage.close();
                         }
-                        measurePage = pdfRenderer.openPage(rightPageToRender);
+                        measurePage = renderer.openPage(rightPageToRender);
                         try {
                             rightWpt = Math.max(1, measurePage.getWidth());
                             rightHpt = Math.max(1, measurePage.getHeight());
@@ -3812,7 +3801,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                         Bitmap pageBitmap = null;
                         try {
                             int leftTop = (compositeH - leftH) / 2;
-                            pageBitmap = renderPdfPageBitmapLocked(pageToRender, leftW, leftH);
+                            pageBitmap = renderPdfPageBitmapLocked(renderer, pageToRender, leftW, leftH);
                             spreadCanvas.drawBitmap(pageBitmap, 0f, leftTop, null);
                             pageBitmap.recycle();
                             pageBitmap = null;
@@ -3827,7 +3816,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                             int rightLeft = leftW + gapBitmapPx;
                             int rightTop = (compositeH - rightH) / 2;
                             pageBitmap = renderPdfPageBitmapLocked(
-                                    rightPageToRender, rightW, rightH);
+                                    renderer, rightPageToRender, rightW, rightH);
                             spreadCanvas.drawBitmap(pageBitmap, rightLeft, rightTop, null);
 
                             spreadLayoutHolder[0] = new PdfSpreadHighlightMath.Layout(
@@ -3844,8 +3833,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                         intendedDisplayWidthHolder[0] = Math.max(1, Math.round(
                                 leftWpt * fitScale + displayGapPx + rightWpt * fitScale));
                     } else {
-                        PdfRenderer.Page page = pdfRenderer.openPage(pageToRender);
+                        PdfRenderer.Page page = renderer.openPage(pageToRender);
                         try {
+                            // Opening a page may wait in native code. Recheck before
+                            // allocating or rasterizing a page the user has left.
+                            if (activityDestroyed || generation != renderGeneration) return;
                             renderedPageWidthPtsHolder[0] = Math.max(1, page.getWidth());
                             renderedPageHeightPtsHolder[0] = Math.max(1, page.getHeight());
                             long maxPixels = zoomToRender > 1.05f ? 16_000_000L : fitPagePixelBudget;
@@ -3864,8 +3856,14 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                             int width = plan.bitmapWidthPx;
                             int height = plan.bitmapHeightPx;
 
+                            if (activityDestroyed || generation != renderGeneration) return;
                             bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
                             bitmap.eraseColor(Color.WHITE);
+                            if (activityDestroyed || generation != renderGeneration) {
+                                bitmap.recycle();
+                                bitmap = null;
+                                return;
+                            }
                             page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
                         } finally {
                             page.close();
@@ -4009,11 +4007,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     }
 
     /** Caller must hold rendererLock. */
-    private Bitmap renderPdfPageBitmapLocked(int pageIndex, int width, int height) {
+    private Bitmap renderPdfPageBitmapLocked(PdfRenderer renderer, int pageIndex, int width, int height) {
         Bitmap pageBitmap = Bitmap.createBitmap(
                 Math.max(1, width), Math.max(1, height), Bitmap.Config.ARGB_8888);
         pageBitmap.eraseColor(Color.WHITE);
-        PdfRenderer.Page page = pdfRenderer.openPage(pageIndex);
+        PdfRenderer.Page page = renderer.openPage(pageIndex);
         boolean rendered = false;
         try {
             page.render(pageBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
@@ -4584,37 +4582,31 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             pdfPageMatrixView.detachBitmaps();
         }
         resetContinuousPageViews(false);
-        synchronized (rendererLock) {
-            Bitmap shown = currentBitmap;
-            currentBitmap = null;
-            clearSinglePageRenderCache();
-            if (shown != null && !shown.isRecycled()) {
-                shown.recycle();
-            }
-            if (pageImage != null) {
-                pageImage.setImageDrawable(null);
-            }
-            if (pdfRenderer != null) {
-                pdfRenderer.close();
-                pdfRenderer = null;
-            }
-            if (parcelFileDescriptor != null) {
-                try { parcelFileDescriptor.close(); } catch (Exception ignored) {}
-                parcelFileDescriptor = null;
-            }
-        }
-        // Close the prefetch renderer under its own lock so an in-flight prefetch
-        // finishes (or sees null) before the instance is torn down.
-        synchronized (prefetchRendererLock) {
-            if (prefetchRenderer != null) {
-                prefetchRenderer.close();
-                prefetchRenderer = null;
-            }
-            if (prefetchParcelFileDescriptor != null) {
-                try { prefetchParcelFileDescriptor.close(); } catch (Exception ignored) {}
-                prefetchParcelFileDescriptor = null;
-            }
-        }
+        Bitmap shown = currentBitmap;
+        currentBitmap = null;
+        clearSinglePageRenderCache();
+        if (shown != null && !shown.isRecycled()) shown.recycle();
+        if (pageImage != null) pageImage.setImageDrawable(null);
+        // Detach on the UI thread without waiting for a native render. Workers
+        // retain a local renderer snapshot while holding the matching lock.
+        PdfRendererSession retired = activePdfSession;
+        activePdfSession = null;
+        pdfRenderer = null;
+        prefetchRenderer = null;
+        retirePdfSession(retired);
+        retirePdfSession(pendingPdfSession.getAndSet(null));
+    }
+
+    private void retirePdfSession(@Nullable PdfRendererSession session) {
+        if (session == null) return;
+        // These queues are drained on destroy, never discarded by shutdownNow.
+        // Each close follows all in-flight operations on its native renderer.
+        executor.execute(() -> {
+            synchronized (rendererLock) { session.closePrimary(); }
+        });
+        prefetchExecutor.execute(() -> {
+            synchronized (prefetchRendererLock) { session.closePrefetch(); }
+        });
     }
 
     @Override
@@ -4973,8 +4965,10 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             pdfTtsController = null;
         }
         TtsPlaybackBridge.unregister(this);
-        executor.shutdownNow();
-        prefetchExecutor.shutdownNow();
+        // Stale queued renders exit via their generation/destroy checks. Keep
+        // retirement and unpublished-load cleanup jobs alive until they finish.
+        executor.shutdown();
+        prefetchExecutor.shutdown();
         super.onDestroy();
     }
 

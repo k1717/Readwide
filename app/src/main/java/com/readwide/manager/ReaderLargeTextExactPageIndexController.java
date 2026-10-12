@@ -12,14 +12,23 @@ import com.readwide.manager.util.FontManager;
 import com.readwide.manager.util.LargeTextAnchorMath;
 import com.readwide.manager.util.LargeTextContinuityMath;
 import com.readwide.manager.util.LargeTextExactPageIndexState;
+import com.readwide.manager.util.LargeTextPageIndexCache;
+import com.readwide.manager.util.PageIndexCacheManager;
+import com.readwide.manager.util.TextDisplayRule;
 import com.readwide.manager.util.TextDisplayRuleManager;
+import com.readwide.manager.util.TextPageFontIdentity;
 import com.readwide.manager.view.CustomReaderView;
+import com.readwide.manager.view.MarkdownSyntaxHighlighter;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.List;
 
 final class ReaderLargeTextExactPageIndexController {
     private static final long INDEX_RESTART_DEBOUNCE_MS = 200L;
+    // Retire cached anchors and bookmark page metadata made before the EOF overlap fix.
+    private static final String PAGE_MODEL_REVISION = "txt-v6-eof-overlap";
 
     private final ReaderActivity activity;
     private String lastSeenStableLayoutSignature = "";
@@ -37,7 +46,7 @@ final class ReaderLargeTextExactPageIndexController {
     }
 
     boolean isReady() {
-        return activity.largeTextExactPageIndexState.isReady();
+        return hasUsableTextLayout() && activity.largeTextExactPageIndexState.isReady();
     }
 
     boolean isFailed() {
@@ -45,21 +54,22 @@ final class ReaderLargeTextExactPageIndexController {
     }
 
     int readyPageCount() {
-        return activity.largeTextExactPageIndexState.readyPageCount();
+        return hasUsableTextLayout() ? activity.largeTextExactPageIndexState.readyPageCount() : 0;
     }
 
     @NonNull
     ArrayList<CustomReaderView.PageTextAnchor> copyAnchors() {
-        return activity.largeTextExactPageIndexState.copyAnchors();
+        return hasUsableTextLayout() ? activity.largeTextExactPageIndexState.copyAnchors() : new ArrayList<>();
     }
 
     @Nullable
     ArrayList<CustomReaderView.PageTextAnchor> copyAnchorsIfUsable(@NonNull String currentSignature) {
-        return activity.largeTextExactPageIndexState.copyAnchorsIfUsable(currentSignature);
+        return hasUsableTextLayout()
+                ? activity.largeTextExactPageIndexState.copyAnchorsIfUsable(currentSignature) : null;
     }
 
     int findPageForChar(int charPosition) {
-        return LargeTextAnchorMath.findExactPageForChar(copyAnchors(), charPosition);
+        return hasUsableTextLayout() ? activity.largeTextExactPageIndexState.findPageForChar(charPosition) : 1;
     }
 
     int findPageForChar(@NonNull ArrayList<CustomReaderView.PageTextAnchor> anchors, int charPosition) {
@@ -68,10 +78,13 @@ final class ReaderLargeTextExactPageIndexController {
 
     @Nullable
     CustomReaderView.PageTextAnchor getAnchorForPage(int page) {
-        ArrayList<CustomReaderView.PageTextAnchor> anchors = copyAnchors();
-        if (anchors.isEmpty()) return null;
-        int index = Math.max(0, Math.min(anchors.size() - 1, page - 1));
-        return anchors.get(index);
+        return hasUsableTextLayout() ? activity.largeTextExactPageIndexState.anchorForPage(page) : null;
+    }
+
+    private boolean hasUsableTextLayout() {
+        // The width getter used by builders is clamped to 1. It cannot prove
+        // that the view actually has room for the current text and geometry.
+        return activity.readerView != null && activity.readerView.hasCurrentTextLayout();
     }
 
     int estimateCharPositionForLine(int targetLine) {
@@ -83,7 +96,7 @@ final class ReaderLargeTextExactPageIndexController {
 
     @NonNull
     String buildCurrentSignature(@NonNull String loadedFilePath) {
-        if (activity.readerView == null) return "";
+        if (!hasUsableTextLayout()) return "";
         return buildSignature(
                 loadedFilePath,
                 activity.readerView.getTextLayoutWidthForIndex(),
@@ -97,20 +110,24 @@ final class ReaderLargeTextExactPageIndexController {
                 activity.readerView.getReaderBackgroundColorForIndex(),
                 activity.getLargeTextPartitionLines(),
                 activity.getLargeTextPartitionBufferLines(),
-                activity.largeTextActiveCollapseBlankLines);
+                activity.largeTextActiveCollapseBlankLines,
+                TextDisplayRuleManager.getExactSignature(activity.getApplicationContext(), loadedFilePath));
     }
 
     void handleRestartIndexingTick() {
         if (activity.activityDestroyed) return;
         if (!activity.largeTextEstimateActive) return;
         String snapshot = activity.filePath;
-        if (snapshot == null || activity.readerView == null) return;
+        if (snapshot == null) return;
+
+        invalidateMismatchedPageModel();
 
         String currentLayoutSig = buildLayoutOnlySignature();
         if (currentLayoutSig.isEmpty()) {
             lastSeenStableLayoutSignature = "";
             activity.handler.removeCallbacks(activity.largeTextRestartIndexingRunnable);
-            activity.handler.postDelayed(activity.largeTextRestartIndexingRunnable, INDEX_RESTART_DEBOUNCE_MS);
+            // A layout/preference event restarts indexing when usable. Polling
+            // cannot repair zero space or a released/not-yet-rendered view.
             return;
         }
         if (!currentLayoutSig.equals(lastSeenStableLayoutSignature)) {
@@ -119,7 +136,8 @@ final class ReaderLargeTextExactPageIndexController {
             activity.handler.postDelayed(activity.largeTextRestartIndexingRunnable, INDEX_RESTART_DEBOUNCE_MS);
             return;
         }
-        reset();
+        // beginBuild already reuses a matching ready/running index. Resetting here
+        // would throw it away even when this was only a redundant layout callback.
         startIndexing(snapshot);
     }
 
@@ -127,8 +145,13 @@ final class ReaderLargeTextExactPageIndexController {
         if (activity.activityDestroyed) return;
         if (!activity.largeTextEstimateActive) return;
         if (activity.handler == null) return;
+        // Geometry/font callbacks run synchronously after the view changes. The
+        // debounce delays expensive indexing, never retirement of old anchors:
+        // slider/goto/labels must not navigate with a previous layout meanwhile.
+        invalidateMismatchedPageModel();
         lastSeenStableLayoutSignature = "";
         activity.handler.removeCallbacks(activity.largeTextRestartIndexingRunnable);
+        if (!hasUsableTextLayout()) return;
         activity.handler.postDelayed(activity.largeTextRestartIndexingRunnable, INDEX_RESTART_DEBOUNCE_MS);
     }
 
@@ -136,14 +159,24 @@ final class ReaderLargeTextExactPageIndexController {
         if (activity.activityDestroyed) return;
         if (!activity.largeTextEstimateActive) return;
         if (activity.handler == null) return;
-        reset();
-        recomputeEstimatedTotalForCurrentViewport();
-        activity.updatePositionLabel();
+        invalidateMismatchedPageModel();
+        if (!isReady()) {
+            recomputeEstimatedTotalForCurrentViewport();
+            activity.updatePositionLabel();
+        }
         scheduleRestart();
     }
 
+    private boolean invalidateMismatchedPageModel() {
+        if (activity.filePath == null) return false;
+        boolean invalidated = activity.largeTextExactPageIndexState.invalidateIfSignatureChanged(
+                buildCurrentSignature(activity.filePath));
+        if (invalidated) activity.updatePositionLabel();
+        return invalidated;
+    }
+
     private void recomputeEstimatedTotalForCurrentViewport() {
-        if (!activity.largeTextEstimateActive || activity.readerView == null) return;
+        if (!activity.largeTextEstimateActive || !hasUsableTextLayout()) return;
         if (activity.largeTextTotalLogicalLines <= 0) return;
         int bodyPages = activity.getLastLocalPageStartingInsideLargeTextPartition();
         if (bodyPages <= 0) return;
@@ -162,16 +195,17 @@ final class ReaderLargeTextExactPageIndexController {
     }
 
     private String buildLayoutOnlySignature() {
-        if (activity.readerView == null) return "";
+        if (!hasUsableTextLayout()) return "";
         int width = activity.readerView.getTextLayoutWidthForIndex();
         int height = activity.readerView.getViewportHeight();
         if (width <= 0 || height <= 0) return "";
-        return "txt-v5-px-boundary"
+        return PAGE_MODEL_REVISION
                 + "|w=" + width
                 + "|h=" + height
                 + "|mv=" + activity.readerView.getMarginVerticalPxForIndex()
                 + "|ol=" + activity.readerView.getOverlapLinesForIndex()
-                + "|markdown=" + (activity.readerView.isMarkdownHighlightingEnabledForIndex() ? "4" : "0")
+                + "|markdown=" + (activity.readerView.isMarkdownHighlightingEnabledForIndex()
+                    ? MarkdownSyntaxHighlighter.PAGE_LAYOUT_REVISION : "0")
                 + "|ls=" + quantizeFloatForSignature(activity.readerView.getLineSpacingMultiplierForIndex());
     }
 
@@ -187,7 +221,8 @@ final class ReaderLargeTextExactPageIndexController {
                                   int readerBackgroundColor,
                                   int partitionLines,
                                   int partitionBufferLines,
-                                  boolean collapseBlankLines) {
+                                  boolean collapseBlankLines,
+                                  @NonNull String displayRuleSignature) {
         File source = new File(loadedFilePath);
         String stableTypefaceKey;
         try {
@@ -197,8 +232,9 @@ final class ReaderLargeTextExactPageIndexController {
             Typeface typeface = paintSnapshot.getTypeface();
             stableTypefaceKey = typeface == null ? "default" : ("style:" + typeface.getStyle());
         }
+        stableTypefaceKey += ":resolved:" + TextPageFontIdentity.key(paintSnapshot.getTypeface());
 
-        return "txt-v5-px-boundary"
+        return PAGE_MODEL_REVISION
                 + "|" + source.getAbsolutePath()
                 + "|len=" + source.length()
                 + "|mod=" + source.lastModified()
@@ -214,16 +250,36 @@ final class ReaderLargeTextExactPageIndexController {
                 + "|ts=" + quantizeFloatForSignature(paintSnapshot.getTextSize())
                 + "|sx=" + quantizeFloatForSignature(paintSnapshot.getTextScaleX())
                 + "|tf=" + stableTypefaceKey
-                + "|markdown=" + (markdownHighlightingEnabled ? "4" : "0")
-                + "|displayRules=" + TextDisplayRuleManager.getSignature(activity.getApplicationContext(), loadedFilePath);
+                + "|markdown=" + (markdownHighlightingEnabled
+                    ? MarkdownSyntaxHighlighter.pageLayoutCacheKey(readerTextColor, readerBackgroundColor) : "0")
+                + "|encoding=" + cachedEncoding(source)
+                + "|skew=" + quantizeFloatForSignature(paintSnapshot.getTextSkewX())
+                + "|letterSpacing=" + quantizeFloatForSignature(paintSnapshot.getLetterSpacing())
+                + "|flags=" + paintSnapshot.getFlags()
+                + "|locales=" + paintSnapshot.getTextLocales().toLanguageTags()
+                + "|features=" + paintSnapshot.getFontFeatureSettings()
+                + "|displayRules=" + displayRuleSignature;
     }
 
     private static String quantizeFloatForSignature(float value) {
-        return String.format(java.util.Locale.ROOT, "%.4f", value);
+        // Do not merge distinct pixel metrics merely because they round to four decimals.
+        return Float.toHexString(value);
+    }
+
+    private String cachedEncoding(File source) {
+        if (activity.prefs == null) return "";
+        String manual = FileUtils.normalizeManualEncodingName(activity.prefs.getManualTextEncodingForFile(source));
+        if (manual != null) return manual;
+        String automatic = FileUtils.normalizeManualEncodingName(activity.prefs.getCachedAutoTextEncodingForFile(source));
+        return automatic != null ? automatic : "";
     }
 
     void startIndexing(@NonNull String loadedFilePath) {
-        if (activity.readerView == null) return;
+        if (!activity.ensureLoadedTextCurrent()) return;
+        if (!hasUsableTextLayout()) {
+            invalidateMismatchedPageModel();
+            return;
+        }
 
         final int layoutWidth = activity.readerView.getTextLayoutWidthForIndex();
         final int viewportHeight = activity.readerView.getViewportHeight();
@@ -238,6 +294,10 @@ final class ReaderLargeTextExactPageIndexController {
         final int partitionBufferLines = activity.getLargeTextPartitionBufferLines();
         final int lookaheadLines = partitionBufferLines;
         final File source = new File(loadedFilePath);
+        final long sourceLength = source.length(), sourceModified = source.lastModified();
+        final String encodingSnapshot = cachedEncoding(source);
+        final List<TextDisplayRule> activeRules =
+                TextDisplayRuleManager.getActiveRules(activity.getApplicationContext(), loadedFilePath);
         // Build and sign the exact page index against the collapse basis captured for the
         // loaded content, not live prefs, so the index anchors match the displayed text and
         // the stored signature stays consistent with buildCurrentSignature.
@@ -245,9 +305,19 @@ final class ReaderLargeTextExactPageIndexController {
         final String indexSignature = buildSignature(
                 loadedFilePath, layoutWidth, viewportHeight, marginVertical, overlap, lineSpacing, paintSnapshot,
                 markdownHighlightingEnabled, readerTextColor, readerBackgroundColor,
-                partitionLines, partitionBufferLines, collapseBlankLines);
+                partitionLines, partitionBufferLines, collapseBlankLines,
+                TextDisplayRuleManager.getExactSignature(activeRules));
         final int indexGeneration = activity.largeTextExactPageIndexState.beginBuild(indexSignature);
         if (indexGeneration < 0) return;
+
+        // Styled TXT uses the same exact builder on a miss. Unidentified/file-backed fonts
+        // carry a process/actual-face token in indexSignature, so their on-disk
+        // entries cannot be mistaken for reusable indexes after a process restart.
+        final boolean persistIndex = !encodingSnapshot.isEmpty();
+        final String diskSignature = indexSignature
+                + "|android=" + android.os.Build.FINGERPRINT
+                + "|configuration=" + LargeTextPageIndexCache.configurationKey(
+                        activity.getResources().getConfiguration().toString());
 
         final int expectedTotalLines = Math.max(1, activity.largeTextTotalLogicalLines);
         final int expectedTotalChars = Math.max(0, activity.largeTextEstimatedTotalChars);
@@ -257,24 +327,76 @@ final class ReaderLargeTextExactPageIndexController {
             boolean buildFailed = false;
             String failureReason = "";
             try {
-                builtAnchors = activity.exactAnchorBuilder().buildChunked(
-                        source,
-                        loadedFilePath,
-                        paintSnapshot,
-                        layoutWidth,
-                        viewportHeight,
-                        marginVertical,
-                        overlap,
-                        lineSpacing,
-                        markdownHighlightingEnabled,
-                        readerTextColor,
-                        readerBackgroundColor,
-                        expectedTotalLines,
-                        expectedTotalChars,
-                        partitionLines,
-                        lookaheadLines,
-                        indexGeneration,
-                        collapseBlankLines);
+                LargeTextPageIndexCache.Checkpoint checkpoint = () -> {
+                    if (Thread.currentThread().isInterrupted() || activity.activityDestroyed
+                            || !loadedFilePath.equals(activity.filePath)
+                            || !activity.largeTextExactPageIndexState.isGenerationCurrent(indexGeneration)) {
+                        throw new java.io.InterruptedIOException("TXT indexing cancelled");
+                    }
+                };
+                checkpoint.check();
+                File cacheFile = null;
+                ArrayList<CustomReaderView.PageTextAnchor> cached = null;
+                if (persistIndex) {
+                    try {
+                        cacheFile = PageIndexCacheManager.getInstance(activity)
+                                .getExactPageCacheFile(source);
+                        if (cacheFile.isFile()) {
+                            cached = LargeTextPageIndexCache.load(cacheFile, diskSignature,
+                                    expectedTotalChars, checkpoint,
+                                    () -> LargeTextPageIndexCache.fingerprint(source, checkpoint));
+                        }
+                    } catch (IOException | RuntimeException cacheUnavailable) {
+                        checkpoint.check(); // cancellation must not become an uncancelled rebuild
+                    }
+                }
+                if (cached != null) {
+                    builtAnchors = cached;
+                } else {
+                    checkpoint.check();
+                    if (!activity.largeTextExactPageIndexState.beginCalculation(indexGeneration, indexSignature)) {
+                        throw new java.io.InterruptedIOException("TXT index was replaced");
+                    }
+                    activity.handler.post(() -> {
+                        if (!activity.activityDestroyed && loadedFilePath.equals(activity.filePath)
+                                && activity.largeTextExactPageIndexState.isCurrent(indexGeneration, indexSignature)) {
+                            activity.updatePositionLabel();
+                        }
+                    });
+                    java.security.MessageDigest digest = cacheFile != null ? LargeTextPageIndexCache.newDigest() : null;
+                    String encoding = encodingSnapshot.isEmpty()
+                            ? activity.resolveTextEncodingForFile(source) : encodingSnapshot;
+                    builtAnchors = activity.exactAnchorBuilder().buildChunked(
+                            source,
+                            loadedFilePath,
+                            paintSnapshot,
+                            layoutWidth,
+                            viewportHeight,
+                            marginVertical,
+                            overlap,
+                            lineSpacing,
+                            markdownHighlightingEnabled,
+                            readerTextColor,
+                            readerBackgroundColor,
+                            expectedTotalLines,
+                            expectedTotalChars,
+                            partitionLines,
+                            lookaheadLines,
+                            indexGeneration,
+                            collapseBlankLines, encoding, activeRules, digest);
+                    checkpoint.check();
+                    requireUnchangedSource(source, sourceLength, sourceModified);
+                    if (cacheFile != null) {
+                        try {
+                            LargeTextPageIndexCache.save(cacheFile, diskSignature, digest.digest(),
+                                    expectedTotalChars, builtAnchors, checkpoint);
+                        } catch (IOException | RuntimeException cacheUnavailable) {
+                            checkpoint.check(); // cache failure alone never invalidates exact anchors
+                        }
+                    }
+                }
+                checkpoint.check();
+                requireUnchangedSource(source, sourceLength, sourceModified);
             } catch (Throwable t) {
                 buildFailed = true;
                 failureReason = t.getClass().getSimpleName();
@@ -294,6 +416,12 @@ final class ReaderLargeTextExactPageIndexController {
         });
     }
 
+    private static void requireUnchangedSource(File source, long length, long modified) throws IOException {
+        if (!source.isFile() || source.length() != length || source.lastModified() != modified) {
+            throw new IOException("TXT changed while indexing pages");
+        }
+    }
+
     private void finishBuild(@NonNull String loadedFilePath,
                              @NonNull String indexSignature,
                              int indexGeneration,
@@ -307,12 +435,15 @@ final class ReaderLargeTextExactPageIndexController {
         boolean shouldRescheduleForStableLayout = false;
         LargeTextExactPageIndexState state = activity.largeTextExactPageIndexState;
         if (!state.isCurrent(indexGeneration, indexSignature)) return;
+        if (!activity.activityDestroyed && loadedFilePath.equals(activity.filePath)
+                && !activity.ensureLoadedTextCurrent()) return;
         if (activity.activityDestroyed
                 || !loadedFilePath.equals(activity.filePath)
                 || !indexSignature.equals(currentSignature)) {
             state.discardCurrent(indexGeneration, indexSignature);
             shouldRescheduleForStableLayout = !activity.activityDestroyed
-                    && loadedFilePath.equals(activity.filePath);
+                    && loadedFilePath.equals(activity.filePath)
+                    && hasUsableTextLayout();
         } else {
             LargeTextExactPageIndexState.CommitResult commit =
                     state.completeCurrent(

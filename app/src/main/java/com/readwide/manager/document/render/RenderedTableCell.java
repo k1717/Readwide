@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.List;
 
 public final class RenderedTableCell {
+    public enum VerticalAlignment { TOP, MIDDLE, BOTTOM }
     public final List<RenderedBlock> blocks;
     public final int colSpan;
     public final int rowSpan;
@@ -21,6 +22,7 @@ public final class RenderedTableCell {
     public final String backgroundColor;
     public final Float widthPercent;
     public final Float minHeightPt;
+    public final VerticalAlignment verticalAlignment;
     public final Float paddingTopPt;
     public final Float paddingRightPt;
     public final Float paddingBottomPt;
@@ -39,6 +41,7 @@ public final class RenderedTableCell {
         this.backgroundColor = b.backgroundColor;
         this.widthPercent = b.widthPercent;
         this.minHeightPt = b.minHeightPt;
+        this.verticalAlignment = b.verticalAlignment;
         this.paddingTopPt = b.paddingTopPt;
         this.paddingRightPt = b.paddingRightPt;
         this.paddingBottomPt = b.paddingBottomPt;
@@ -64,6 +67,7 @@ public final class RenderedTableCell {
         private String backgroundColor;
         private Float widthPercent;
         private Float minHeightPt;
+        private VerticalAlignment verticalAlignment;
         private Float paddingTopPt;
         private Float paddingRightPt;
         private Float paddingBottomPt;
@@ -84,6 +88,7 @@ public final class RenderedTableCell {
         public Builder backgroundColor(String v) { this.backgroundColor = RenderStyleUtil.emptyToNull(v); return this; }
         public Builder widthPercent(float v) { this.widthPercent = v > 0 ? v : null; return this; }
         public Builder minHeightPt(float v) { this.minHeightPt = v > 0 ? v : null; return this; }
+        public Builder verticalAlignment(VerticalAlignment v) { this.verticalAlignment = v; return this; }
         public Builder paddingPt(Float top, Float right, Float bottom, Float left) {
             this.paddingTopPt = positiveOrNull(top);
             this.paddingRightPt = positiveOrNull(right);

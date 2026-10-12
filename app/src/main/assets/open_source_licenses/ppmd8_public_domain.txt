@@ -1,0 +1,18 @@
+ZIP PPMd-I decoder — Readwide binary attribution
+
+Pinned source: https://github.com/ip7z/7zip/tree/9128b80e3a471108678e2b3ec3c985861c8d7b0f/C
+Eight source files: Ppmd8.c, Ppmd8Dec.c, Ppmd8.h, Ppmd.h, CpuArch.h, 7zTypes.h, Precomp.h, Compiler.h.
+Ppmd8.c and Ppmd8.h carry marked Apache-2.0 Readwide additions for explicit freeze
+revision selection; the other six files retain exact upstream bytes. Original and
+current hashes are supplied in third_party/ppmd8.
+
+Retained upstream declarations:
+Igor Pavlov: Public domain.
+PPMd var.I (2002): Dmitry Shkarin: Public domain.
+PPMd common code is based on PPMd var.H (2001): Dmitry Shkarin: Public domain.
+Carryless rangecoder (1999): Dmitry Subbotin: Public domain.
+
+The Readwide Java/JNI adapter is Apache-2.0 and builds a separate
+libreadwide-ppmd.so using this decoder only. No UnRAR implementation or encoder is
+included. Complete source/build scripts are supplied in Readwide's source release:
+https://github.com/k1717/Readwide (third_party/ppmd8 and third_party/zipx-codecs-android).

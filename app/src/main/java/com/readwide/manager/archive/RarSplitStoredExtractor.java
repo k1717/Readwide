@@ -19,6 +19,9 @@ final class RarSplitStoredExtractor {
                         @Nullable char[] password,
                         @NonNull List<RarArchiveReader.RarEntry> allEntries,
                         @Nullable FileOperationProgress progress) throws IOException {
+        if (Thread.currentThread().isInterrupted() || (progress != null && !progress.checkpoint())) {
+            throw new java.io.InterruptedIOException("RAR extraction cancelled");
+        }
         RarSplitStoredPlan plan = null;
         try {
             plan = RarSplitStoredPlan.fromFirstEntry(first, allEntries);
@@ -29,7 +32,7 @@ final class RarSplitStoredExtractor {
                 } else {
                     RarStoredPayloadIO.copySegmentsToFile(plan.payloadSegments(), outFile, progress);
                 }
-                RarStoredPayloadIO.verifyCrc(plan.crcEntry(), outFile, checksumSecrets);
+                RarStoredPayloadIO.verifyCrc(plan.crcEntry(), outFile, checksumSecrets, progress);
                 guard.commit();
             }
         } catch (IOException e) {
@@ -54,10 +57,10 @@ final class RarSplitStoredExtractor {
         Rar5Crypto.Secrets checksumSecrets = null;
         String errorMessage;
         if (plan.kind() == RarSplitStoredPlan.Kind.RAR4_AES_STORED) {
-            cipher = Rar3Crypto.createAesCbcDecryptCipher(password, encryption.salt);
+            cipher = Rar3Crypto.createAesCbcDecryptCipher(password, encryption.salt, progress);
             errorMessage = "RAR3/RAR4 AES split decrypt failed";
         } else if (plan.kind() == RarSplitStoredPlan.Kind.RAR5_AES_STORED) {
-            Rar5Crypto.Secrets secrets = Rar5Crypto.deriveSecrets(password, encryption.kdfCount, encryption.salt);
+            Rar5Crypto.Secrets secrets = Rar5Crypto.deriveSecrets(password, encryption.kdfCount, encryption.salt, progress);
             checksumSecrets = secrets;
             if (!Rar5Crypto.passwordMatches(secrets, encryption.check)) {
                 throw new ArchiveSupport.PasswordRequiredException();
@@ -69,6 +72,11 @@ final class RarSplitStoredExtractor {
                     "Encrypted split RAR payload is not supported yet");
         }
 
+        if (plan.unpackedSize() == -1L) {
+            RarStoredPayloadIO.decryptUnknownSizeSegmentsToFile(plan.payloadSegments(), plan.crcEntry(),
+                    plan.totalPackedSize(), cipher, checksumSecrets, outFile, progress);
+            return checksumSecrets;
+        }
         RarCryptoStreams.decryptSegmentsToFile(
                 plan.payloadSegments(),
                 plan.unpackedSize(),

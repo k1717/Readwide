@@ -6,12 +6,16 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.readwide.manager.archive.ArchiveSupport;
+import com.readwide.manager.archive.ArchiveCancellation;
 import com.readwide.manager.util.FileUtils;
+import com.readwide.manager.util.FileTreeWalk;
+import com.readwide.manager.util.FileSystemOps;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
@@ -45,6 +49,22 @@ final class ArchiveImageEntryCache {
 
     private ArchiveImageEntryCache() {}
 
+    static void checkInterrupted() throws InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedIOException("Archive image request interrupted");
+        }
+    }
+
+    /** Boolean/result adapters must not lose a typed cancellation with a cleared flag. */
+    static void preserveCancellation(Throwable failure) {
+        ArchiveCancellation.restoreIfCancelled(failure, null);
+    }
+
+    static ArchiveSupport.ExtractionResult interruptedResult() {
+        return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED,
+                "Archive image request interrupted");
+    }
+
     @NonNull
     static ArchiveSupport.ExtractionResult ensureReady(@NonNull File archiveFile,
                                                        @NonNull String entryPath,
@@ -52,8 +72,11 @@ final class ArchiveImageEntryCache {
                                                        @Nullable char[] password,
                                                        boolean sensitiveCache,
                                                        @Nullable Set<String> verifiedSensitivePaths) {
+        if (Thread.currentThread().isInterrupted()) return interruptedResult();
         String cacheKey = outFile.getAbsolutePath();
         synchronized (lockFor(cacheKey)) {
+            // A canceled request may have waited behind another extraction.
+            if (Thread.currentThread().isInterrupted()) return interruptedResult();
             if (shouldReuseReadyImageFile(entryPath, outFile, sensitiveCache, verifiedSensitivePaths)) {
                 return ArchiveSupport.ExtractionResult.success();
             }
@@ -62,6 +85,7 @@ final class ArchiveImageEntryCache {
 
             File tmpFile = null;
             try {
+                checkInterrupted();
                 File parent = outFile.getParentFile();
                 if (parent == null) {
                     return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, null);
@@ -80,6 +104,7 @@ final class ArchiveImageEntryCache {
                             password,
                             sensitiveCache,
                             verifiedSensitivePaths);
+                    checkInterrupted();
                     if (bulkResult.success || bulkResult.failure == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED
                             || bulkResult.failure == ArchiveSupport.ExtractionFailure.BAD_PASSWORD) {
                         return bulkResult;
@@ -88,15 +113,24 @@ final class ArchiveImageEntryCache {
                     // A codec-header guess must not override their capability/CRC decisions.
                 }
 
+                checkInterrupted();
                 tmpFile = File.createTempFile("archive_image_", ".extracting", parent);
-                ArchiveSupport.ExtractionResult result;
-                synchronized (lockForArchive(outFile)) {
-                    result = ArchiveSupport.extractSingleEntryDetailed(
-                            archiveFile,
-                            entryPath,
-                            tmpFile,
-                            password);
+                // The existing foreground + prefetch workers may independently read
+                // plain Store/Deflate ZIP entries. Keep per-output publication locking,
+                // and serialize every ineligible/encrypted/stateful reader as before.
+                ArchiveSupport.ExtractionResult result = sensitiveCache || (password != null && password.length != 0)
+                        ? null : ArchiveSupport.tryExtractIndependentZipImageEntry(archiveFile, entryPath, tmpFile);
+                if (result == null) {
+                    synchronized (lockForArchive(outFile)) {
+                        checkInterrupted();
+                        result = ArchiveSupport.extractSingleEntryDetailed(
+                                archiveFile,
+                                entryPath,
+                                tmpFile,
+                                password);
+                    }
                 }
+                checkInterrupted();
                 if (!result.success) {
                     deleteQuietly(tmpFile);
                     ArchiveSupport.ExtractionResult fallback = bulkAttempted ? null : tryEnsureReadyByWholeArchiveExtraction(
@@ -112,6 +146,7 @@ final class ArchiveImageEntryCache {
                     return fallback != null ? fallback
                             : ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, null);
                 }
+                checkInterrupted();
                 if (!replaceReadyFile(tmpFile, outFile)) {
                     deleteQuietly(tmpFile);
                     return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, null);
@@ -122,8 +157,12 @@ final class ArchiveImageEntryCache {
                 }
                 return ArchiveSupport.ExtractionResult.success();
             } catch (IOException | SecurityException e) {
-                deleteQuietly(tmpFile);
+                preserveCancellation(e);
                 return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, e.getMessage());
+            } finally {
+                // Success consumes the temporary file by rename. Failures,
+                // including unchecked decoder errors, must not leave plaintext.
+                deleteQuietly(tmpFile);
             }
         }
     }
@@ -163,6 +202,7 @@ final class ArchiveImageEntryCache {
         }
         File extractRoot = null;
         try {
+            checkInterrupted();
             if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
                 return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, null);
             }
@@ -170,6 +210,7 @@ final class ArchiveImageEntryCache {
             ArchiveSupport.ExtractionResult result;
             int copied;
             synchronized (lockForArchive(outFile)) {
+                checkInterrupted();
                 if (shouldReuseReadyImageFile(entryPath, outFile, sensitiveCache, verifiedSensitivePaths)) {
                     return ArchiveSupport.ExtractionResult.success();
                 }
@@ -180,6 +221,7 @@ final class ArchiveImageEntryCache {
                         false,
                         password,
                         null);
+                checkInterrupted();
                 if (!result.success) {
                     return result;
                 }
@@ -190,6 +232,7 @@ final class ArchiveImageEntryCache {
                         sensitiveCache,
                         verifiedSensitivePaths);
             }
+            checkInterrupted();
             if (copied <= 0) {
                 return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED,
                         "Whole-archive fallback produced no readable image cache entries");
@@ -202,6 +245,7 @@ final class ArchiveImageEntryCache {
                     : ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED,
                             "Whole-archive fallback did not produce the requested image entry");
         } catch (IOException | SecurityException e) {
+            preserveCancellation(e);
             return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, e.getMessage());
         } finally {
             deleteRecursively(extractRoot);
@@ -223,6 +267,7 @@ final class ArchiveImageEntryCache {
         collectFiles(extractRoot, files);
         int copied = 0;
         for (File file : files) {
+            checkInterrupted();
             String relative = relativePath(extractRoot, file);
             if (relative == null || relative.length() == 0 || !FileUtils.isImageFile(relative)) continue;
             if (!looksLikeExpectedImage(relative, file)) continue;
@@ -239,6 +284,7 @@ final class ArchiveImageEntryCache {
     }
 
     private static boolean copyReadyFile(@NonNull File source, @NonNull File target) throws IOException {
+        checkInterrupted();
         File parent = target.getParentFile();
         if (parent == null) return false;
         if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) return false;
@@ -250,6 +296,7 @@ final class ArchiveImageEntryCache {
         try {
             copyFile(source, tmp);
             if (!isUsableFile(tmp)) return false;
+            checkInterrupted();
             return replaceReadyFile(tmp, target);
         } finally {
             deleteQuietly(tmp);
@@ -257,26 +304,29 @@ final class ArchiveImageEntryCache {
     }
 
     private static void copyFile(@NonNull File source, @NonNull File target) throws IOException {
+        checkInterrupted();
         byte[] buffer = new byte[64 * 1024];
         try (InputStream in = new FileInputStream(source);
              OutputStream out = ArchiveSupport.openExtractionOutputStream(target)) {
             int read;
             while ((read = in.read(buffer)) != -1) {
+                checkInterrupted();
                 out.write(buffer, 0, read);
             }
             out.flush();
         }
     }
 
-    private static void collectFiles(@Nullable File root, @NonNull List<File> out) {
-        if (root == null || !root.exists()) return;
-        if (root.isFile()) {
-            out.add(root);
-            return;
-        }
-        File[] children = root.listFiles();
-        if (children == null) return;
-        for (File child : children) collectFiles(child, out);
+    private static void collectFiles(@Nullable File root, @NonNull List<File> out) throws IOException {
+        checkInterrupted();
+        if (root == null) return;
+        boolean complete = FileTreeWalk.walk(root, () -> !Thread.currentThread().isInterrupted(), entry -> {
+            entry.recheck();
+            if (entry.kind == FileTreeWalk.Kind.FILE) out.add(entry.file);
+            return true;
+        });
+        checkInterrupted();
+        if (!complete) throw new IOException("Incomplete extracted-image inventory");
     }
 
     @Nullable
@@ -295,6 +345,7 @@ final class ArchiveImageEntryCache {
 
     private static boolean shouldUseWholeArchiveFallback(@NonNull File archiveFile,
                                                           @Nullable ArchiveSupport.ExtractionResult originalResult) {
+        if (Thread.currentThread().isInterrupted()) return false;
         if (ArchiveSupport.getSupportedArchiveType(archiveFile) != ArchiveSupport.Type.RAR) return false;
         if (originalResult == null) return true;
         if (originalResult.failure == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED
@@ -453,10 +504,12 @@ final class ArchiveImageEntryCache {
                                         @Nullable Set<String> verifiedSensitivePaths) {
         synchronized (lockFor(outFile.getAbsolutePath())) {
             try {
+                checkInterrupted();
                 if (!isUsableFile(tmpFile) || !looksLikeExpectedImage(entryPath, tmpFile)) {
                     deleteQuietly(tmpFile);
                     return false;
                 }
+                checkInterrupted();
                 if (!replaceReadyFile(tmpFile, outFile)) {
                     deleteQuietly(tmpFile);
                     return false;
@@ -467,6 +520,7 @@ final class ArchiveImageEntryCache {
                 }
                 return true;
             } catch (IOException | SecurityException e) {
+                preserveCancellation(e);
                 deleteQuietly(tmpFile);
                 return false;
             }
@@ -593,12 +647,8 @@ final class ArchiveImageEntryCache {
 
 
     private static void deleteRecursively(@Nullable File file) {
-        if (file == null || !file.exists()) return;
-        File[] children = file.listFiles();
-        if (children != null) {
-            for (File child : children) deleteRecursively(child);
-        }
-        deleteQuietly(file);
+        // Cancellation must not abandon owned plaintext; links are deleted as leaves.
+        if (file != null) FileSystemOps.delete(file);
     }
 
     private static void deleteQuietly(@Nullable File file) {

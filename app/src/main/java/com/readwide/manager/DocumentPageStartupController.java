@@ -49,10 +49,11 @@ final class DocumentPageStartupController {
         activity.installDocumentFastScroll();
         activity.setupButtons();
         activity.installSwipePaging();
-        activity.loadFromIntent(activity.getIntent());
+        activity.loadFromIntent(activity.documentIntentForRecreation(savedInstanceState));
     }
 
     void onNewIntent(@NonNull android.content.Intent intent) {
+        activity.saveOutgoingDocumentReadingState();
         activity.setIntent(intent);
         activity.loadFromIntent(intent);
     }

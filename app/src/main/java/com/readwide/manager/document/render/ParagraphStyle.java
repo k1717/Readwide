@@ -3,6 +3,8 @@ package com.readwide.manager.document.render;
 /** Paragraph styling shared by DOCX/HWPX/HWP L3 preview extractors. */
 public final class ParagraphStyle {
     public final Alignment alignment;
+    /** Distinguishes an inherited default from an explicit left-alignment reset. */
+    public final boolean alignmentSpecified;
     public final Float marginTopPt;
     public final Float marginBottomPt;
     public final Float marginLeftPt;
@@ -34,6 +36,7 @@ public final class ParagraphStyle {
 
     private ParagraphStyle(Builder b) {
         this.alignment = b.alignment != null ? b.alignment : Alignment.LEFT;
+        this.alignmentSpecified = b.alignment != null;
         this.marginTopPt = b.marginTopPt;
         this.marginBottomPt = b.marginBottomPt;
         this.marginLeftPt = b.marginLeftPt;
@@ -52,7 +55,7 @@ public final class ParagraphStyle {
     }
 
     public boolean isDefault() {
-        return alignment == Alignment.LEFT && marginTopPt == null && marginBottomPt == null
+        return !alignmentSpecified && marginTopPt == null && marginBottomPt == null
                 && marginLeftPt == null && marginRightPt == null && textIndentPt == null
                 && lineHeightMultiplier == null && lineHeightPt == null && listType == ListType.NONE
                 && listLevel == null && listLabel == null && backgroundColor == null;

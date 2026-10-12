@@ -18,6 +18,8 @@ import static org.junit.Assert.*;
 /** Uses a private test preference file, never the app's live singleton/store. */
 @RunWith(AndroidJUnit4.class)
 public class BackupPreferencesInstrumentedTest {
+    @Rule public org.junit.rules.TemporaryFolder folders = new org.junit.rules.TemporaryFolder(
+            InstrumentationRegistry.getInstrumentation().getTargetContext().getCacheDir());
     private static final String RULES = "txt_display_replacement_rules_json";
     private Context context;
     private String name;
@@ -82,6 +84,24 @@ public class BackupPreferencesInstrumentedTest {
         catch (org.json.JSONException expected) { assertEquals(before, store.getAll()); }
     }
 
+    @Test public void missingTtsSignatureStillRequiresStringType() throws Exception {
+        store.edit().putString("marker", "keep").commit();
+        Map<String, ?> before = store.getAll();
+        try { manager(store).importSettingsFromJson(setting("tts_last_content_signature", "int", 7), false); fail(); }
+        catch (org.json.JSONException expected) { assertEquals(before, store.getAll()); }
+    }
+
+    @Test public void rejectsUnsafeRenderingNumbersWithoutChangingPreferences() throws Exception {
+        store.edit().putString("marker", "keep").commit();
+        Map<String, ?> before = store.getAll();
+        for (String key : new String[]{"font_size", "line_spacing", "brightness_value"}) {
+            for (float value : new float[]{-1f, Float.MAX_VALUE}) {
+                try { manager(store).importSettingsFromJson(setting(key, "float", value), false); fail(); }
+                catch (org.json.JSONException expected) { assertEquals(before, store.getAll()); }
+            }
+        }
+    }
+
     @Test public void failedPreferenceCommitRestoresPreviousMemoryAndRules() throws Exception {
         store.edit().putString(RULES, rules("old")).putString("marker", "keep").commit();
         TextDisplayRuleManager.getRules(store);
@@ -129,5 +149,39 @@ public class BackupPreferencesInstrumentedTest {
         editor.get(0).enabled = false;
         editor.clear();
         assertEquals("original", TextDisplayRuleManager.apply("cat", TextDisplayRuleManager.captureActive(store, "/book.txt").compiled));
+    }
+
+    @Test public void foreignMissingFoldersKeepValidLocalFallbacksDuringReplacement() throws Exception {
+        String local = folders.newFolder("local").getAbsolutePath();
+        store.edit().putString("last_directory", local).putString("recent_folders", local)
+                .putString("folder_shortcuts", local).commit();
+        String missing = new java.io.File(folders.getRoot(), "not-transferred").getAbsolutePath();
+        JSONObject incoming = setting("last_directory", "string", "content://unrestored-permission/tree");
+        incoming.getJSONObject("values").put("recent_folders", setting("recent_folders", "string", missing)
+                .getJSONObject("values").get("recent_folders"));
+        incoming.getJSONObject("values").put("folder_shortcuts", setting("folder_shortcuts", "string", missing)
+                .getJSONObject("values").get("folder_shortcuts"));
+        manager(store).importSettingsFromJson(incoming, false);
+        for (String key : new String[]{"last_directory", "recent_folders", "folder_shortcuts"})
+            assertEquals(local, store.getString(key, null));
+    }
+
+    @Test public void availableFolderListsFilterMissingAndDuplicatePathsWithoutCreatingThem() throws Exception {
+        String available = folders.newFolder("available").getAbsolutePath();
+        java.io.File missing = new java.io.File(folders.getRoot(), "not-created");
+        manager(store).importSettingsFromJson(setting("recent_folders", "string",
+                missing.getAbsolutePath() + "\n" + available + "\n" + available), false);
+        assertEquals(available, store.getString("recent_folders", null));
+        assertFalse(missing.exists());
+    }
+
+    @Test public void missingFontReferenceRemainsPortableAndResolvesToDefaultWithoutImportingFiles() throws Exception {
+        java.io.File missing = new java.io.File(folders.getRoot(), "not-transferred.ttf");
+        PrefsManager preferences = manager(store);
+        preferences.importSettingsFromJson(setting("font_family", "string", missing.getAbsolutePath()), false);
+        assertEquals(missing.getAbsolutePath(), preferences.getFontFamily());
+        assertEquals(android.graphics.Typeface.DEFAULT, FontManager.getInstance().getTypeface(preferences.getFontFamily()));
+        assertNull(FontManager.getInstance().getFontPathForName(preferences.getFontFamily()));
+        assertFalse(missing.exists());
     }
 }

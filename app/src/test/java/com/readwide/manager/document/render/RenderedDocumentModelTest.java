@@ -6,6 +6,25 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public class RenderedDocumentModelTest {
+    @Test public void malformedPageGeometryCannotProduceInvalidOrEmptyContentBoxes() {
+        RenderedPage page = RenderedPage.builder(0).pageSizePt(Float.NaN, Float.POSITIVE_INFINITY)
+                .marginsPt(Float.NaN, 1000f, Float.POSITIVE_INFINITY, 1000f).build();
+        assertEquals(595f, page.widthPt, 0f);
+        assertEquals(842f, page.heightPt, 0f);
+        assertEquals(54f, page.marginTopPt, 0f);
+        assertTrue(page.marginLeftPt + page.marginRightPt < page.widthPt);
+        String html = FixedHtmlRenderer.render(RenderedDocument.builder("docx").addPage(page).build());
+        assertTrue(!html.contains("NaN") && !html.contains("Infinity"));
+    }
+
+    @Test public void validLandscapeAndAsymmetricMarginsAreNotNormalizedAway() {
+        RenderedPage page = RenderedPage.builder(0).pageSizePt(842f, 595f).marginsPt(0f, 24f, 36f, 72f).build();
+        assertEquals(842f, page.widthPt, 0f);
+        assertEquals(595f, page.heightPt, 0f);
+        assertEquals(0f, page.marginTopPt, 0f);
+        assertEquals(72f, page.marginLeftPt, 0f);
+    }
+
     @Test
     public void collectsPlainTextFromParagraphTableAndImageAlt() {
         RenderedTable table = RenderedTable.ofRows(java.util.Collections.singletonList(

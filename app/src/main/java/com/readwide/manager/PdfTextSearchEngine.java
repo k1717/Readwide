@@ -36,8 +36,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * query cancels the previous scan via a generation token. Listener callbacks
  * are posted to the main thread.
  *
- * Memory: holds the PDDocument open and extracts all page text/geometry on the
- * first nonempty valid query. The retained map is not a bounded page LRU.
+ * Memory: scans glyphs at each page boundary. Only complete small-document
+ * extractions are cached (8 pages / 128K UTF-16 slots); larger documents are
+ * traversed again for a new query. PDDocument, current-page glyphs and result
+ * rectangles remain outside that cache budget.
  * This is a second handle on the file,
  * separate from the render PdfRenderer. Call close() when leaving the reader
  * (the same lifecycle care the 1.0.7/1.0.8 trim work taught us).
@@ -80,6 +82,7 @@ final class PdfTextSearchEngine {
 
         /** Completion for the current query only; superseded/cleared queries are silent. */
         void onSearchFinished(int totalMatches, boolean cancelled);
+        default void onSearchFailed() { onSearchFinished(0, true); }
     }
 
     private static final class PageText {
@@ -98,7 +101,12 @@ final class PdfTextSearchEngine {
 
     private final PDDocument document;
     private final int pageCount;
-    private volatile java.util.Map<Integer, PageText> pageTexts;
+    private static final int CACHE_MAX_PAGES = 8;
+    private static final int CACHE_MAX_CHARS = 128 * 1024;
+    // Worker-owned, complete extractions only. Never publish a cancelled prefix.
+    private java.util.Map<Integer, PageText> pageTexts;
+    private final java.util.concurrent.ConcurrentHashMap<Integer, float[]> pageSizes =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private final ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 0L,
             TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>());
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -166,65 +174,93 @@ final class PdfTextSearchEngine {
             });
             return;
         }
-        ensureExtracted();
-        if (closed || gen != generation.get()) {
-            return;
+        try {
+            final int n = document.getNumberOfPages();
+            Scan scan = new Scan(gen, query, listener, n);
+            if (pageTexts != null) {
+                scan.cache = null; // Reuse the complete cache, do not copy it.
+                for (int page = 0; page < n; page++) scan.accept(page, pageTexts.get(page));
+            } else {
+                DocStripper stripper = new DocStripper(scan);
+                stripper.setSortByPosition(true);
+                // One whole-document traversal; no redundant aggregate output string.
+                stripper.writeText(document, new java.io.Writer() {
+                    @Override public void write(char[] data, int offset, int length) { }
+                    @Override public void flush() { }
+                    @Override public void close() { }
+                });
+                scan.checkCurrent();
+                pageTexts = scan.cache; // null for large documents, complete otherwise.
+            }
+            scan.checkCurrent();
+            main.post(() -> {
+                if (!closed && gen == generation.get()) listener.onSearchFinished(matchCount(), false);
+            });
+        } catch (IOException | RuntimeException failure) {
+            synchronized (matches) {
+                if (closed || gen != generation.get()) return;
+                matches.clear();
+                currentIndex = -1;
+            }
+            main.post(() -> {
+                if (!closed && gen == generation.get()) listener.onSearchFailed();
+            });
         }
-        final int n = document.getNumberOfPages();
-        boolean reportedFirst = false;
-        for (int page = 0; page < n; page++) {
-            if (closed || gen != generation.get()) {
-                return;
-            }
-            PageText pt = pageTexts == null ? null : pageTexts.get(page);
-            if (pt == null) {
-                continue; // no extractable text on this page
-            }
-            List<Match> pageMatches = findOnPage(pt, page, query, gen);
-            if (!pageMatches.isEmpty()) {
-                boolean cancelled;
-                synchronized (matches) {
-                    // startSearch increments generation before taking this same
-                    // lock to clear results. Therefore an old scan can either
-                    // commit before the new clear or be rejected after it, but
-                    // can never append query-A matches into query-B results.
-                    cancelled = gen != generation.get();
-                    if (!cancelled) {
-                        matches.addAll(pageMatches);
-                        if (currentIndex < 0) {
-                            currentIndex = 0;
-                        }
+    }
+
+    private final class Scan {
+        final int gen;
+        final PdfSearchText.Query query;
+        final Listener listener;
+        final int totalPages;
+        java.util.Map<Integer, PageText> cache;
+        int cachedChars;
+        boolean reportedFirst;
+
+        Scan(int gen, PdfSearchText.Query query, Listener listener, int totalPages) {
+            this.gen = gen;
+            this.query = query;
+            this.listener = listener;
+            this.totalPages = totalPages;
+            cache = totalPages <= CACHE_MAX_PAGES ? new java.util.HashMap<>() : null;
+        }
+
+        void checkCurrent() throws java.io.InterruptedIOException {
+            if (closed || gen != generation.get()) throw new java.io.InterruptedIOException("Search superseded");
+        }
+
+        void accept(int page, PageText text) throws IOException {
+            checkCurrent();
+            if (text != null) {
+                pageSizes.put(page, new float[]{text.pageWpts, text.pageHpts});
+                if (cache != null) {
+                    if (text.text.length() > CACHE_MAX_CHARS - cachedChars) {
+                        cache.clear();
+                        cache = null;
+                    } else {
+                        cachedChars += text.text.length();
+                        cache.put(page, text);
                     }
                 }
-                if (cancelled) {
-                    return;
+                List<Match> found = findOnPage(text, page, query, gen);
+                synchronized (matches) {
+                    checkCurrent();
+                    matches.addAll(found);
+                    if (currentIndex < 0 && !matches.isEmpty()) currentIndex = 0;
                 }
             }
-
+            checkCurrent();
             boolean firstNow = !reportedFirst && matchCount() > 0;
-            if (firstNow) {
-                reportedFirst = true;
-            }
-            // Throttle UI: report on first match, every 8 pages, and at the end.
-            if (firstNow || page % 8 == 0 || page == n - 1) {
-                final int scanned = page + 1;
+            if (firstNow) reportedFirst = true;
+            if (firstNow || page % 8 == 0 || page == totalPages - 1) {
                 final int soFar = matchCount();
                 final Match first = firstNow ? matchAt(0) : null;
-                if (gen == generation.get()) {
-                    main.post(() -> {
-                        if (!closed && gen == generation.get()) {
-                            listener.onSearchProgress(soFar, scanned, n, first);
-                        }
-                    });
-                }
+                main.post(() -> {
+                    if (!closed && gen == generation.get()) {
+                        listener.onSearchProgress(soFar, page + 1, totalPages, first);
+                    }
+                });
             }
-        }
-        if (gen == generation.get()) {
-            main.post(() -> {
-                if (!closed && gen == generation.get()) {
-                    listener.onSearchFinished(matchCount(), false);
-                }
-            });
         }
     }
 
@@ -301,9 +337,8 @@ final class PdfTextSearchEngine {
      *  Returns null if not yet extracted. */
     @Nullable
     float[] pageSizePts(int pageIndex) {
-        java.util.Map<Integer, PageText> snapshot = pageTexts;
-        PageText pt = snapshot == null ? null : snapshot.get(pageIndex);
-        return pt == null ? null : new float[]{pt.pageWpts, pt.pageHpts};
+        float[] size = pageSizes.get(pageIndex);
+        return size == null ? null : size.clone();
     }
 
     synchronized void close() {
@@ -322,6 +357,7 @@ final class PdfTextSearchEngine {
         // this final task after the current scan observes the new generation.
         executor.execute(() -> {
             pageTexts = null;
+            pageSizes.clear();
             try {
                 document.close();
             } catch (IOException ignored) {
@@ -334,46 +370,26 @@ final class PdfTextSearchEngine {
     /* Extraction (self-contained; supersedes the spike)                   */
     /* ------------------------------------------------------------------ */
 
-    /**
-     * Extract every page once, in a single pass over the whole document.
-     * Repeated per-page getText() calls on the same PDDocument proved
-     * unreliable (only the first page came back), so this walks the document
-     * once and buckets text and glyph boxes by page. Runs on the scan thread.
-     */
-    private void ensureExtracted() {
-        if (pageTexts != null) {
-            return;
-        }
-        DocStripper stripper;
-        try {
-            stripper = new DocStripper();
-            stripper.setSortByPosition(true);
-            stripper.getText(document);
-        } catch (IOException | RuntimeException e) {
-            stripper = null; // Do not publish a partially extracted document as complete.
-        }
-        pageTexts = java.util.Collections.unmodifiableMap(
-                (stripper != null) ? stripper.result : new java.util.HashMap<>());
-    }
-
     private static RectF glyphBox(TextPosition tp) {
         return com.readwide.manager.util.PdfGlyphBoxMath.glyphBox(tp);
     }
 
     private static final class DocStripper extends PDFTextStripper {
-        final java.util.Map<Integer, PageText> result = new java.util.HashMap<>();
+        private final Scan scan;
         private StringBuilder builder;
         private List<RectF> rects;
         private float pageWpts = 1f;
         private float pageHpts = 1f;
         private int pageIndex0 = -1;
 
-        DocStripper() throws IOException {
+        DocStripper(Scan scan) throws IOException {
             super();
+            this.scan = scan;
         }
 
         @Override
         protected void startPage(PDPage page) throws IOException {
+            scan.checkCurrent();
             pageIndex0 = getCurrentPageNo() - 1;
             builder = new StringBuilder();
             rects = new ArrayList<>();
@@ -390,7 +406,8 @@ final class PdfTextSearchEngine {
         }
 
         @Override
-        protected void writeString(String string, List<TextPosition> textPositions) {
+        protected void writeString(String string, List<TextPosition> textPositions) throws IOException {
+            scan.checkCurrent();
             if (builder == null) {
                 return;
             }
@@ -420,7 +437,9 @@ final class PdfTextSearchEngine {
         @Override
         protected void endPage(PDPage page) throws IOException {
             if (pageIndex0 >= 0 && builder != null) {
-                result.put(pageIndex0, new PageText(builder.toString(), rects, pageWpts, pageHpts));
+                scan.accept(pageIndex0, new PageText(builder.toString(), rects, pageWpts, pageHpts));
+                builder = null;
+                rects = null;
             }
             super.endPage(page);
         }

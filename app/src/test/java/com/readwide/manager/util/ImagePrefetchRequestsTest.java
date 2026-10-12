@@ -12,6 +12,84 @@ import static org.junit.Assert.*;
 
 /** Queue ownership only; no bitmap decoding or Android executor lifecycle. */
 public class ImagePrefetchRequestsTest {
+    @Test public void foregroundTakesOverQueuedWarmupWithoutLateReleaseLosingOwnership() {
+        ImagePrefetchRequests gate = new ImagePrefetchRequests(1);
+        ImagePrefetchRequests.Ticket queued = gate.acquire(1, 2);
+        ImagePrefetchRequests.Ticket visible = gate.acquireForeground(1, 2, () -> fail("Owner is not a waiter"));
+        assertNotNull(visible);
+        assertFalse(gate.tryStart(queued));
+        gate.release(queued);
+        assertNull(gate.acquire(1, 2));
+        gate.release(visible);
+        assertNotNull(gate.acquire(1, 2));
+    }
+
+    @Test public void runningWarmupNotifiesForegroundOnlyAfterPublicationAndRelease() {
+        ImagePrefetchRequests gate = new ImagePrefetchRequests(1);
+        ImagePrefetchRequests.Ticket running = gate.acquire(1, 2);
+        assertTrue(gate.tryStart(running));
+        assertFalse(gate.tryStart(running));
+        java.util.concurrent.atomic.AtomicBoolean published = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicInteger notified = new java.util.concurrent.atomic.AtomicInteger();
+        assertNull(gate.acquireForeground(1, 2, () -> {
+            assertTrue(published.get());
+            notified.incrementAndGet();
+            // The callback can retry without waiting or holding the old reservation.
+            assertNotNull(gate.acquire(1, 2));
+        }));
+        assertEquals(0, notified.get());
+        published.set(true);
+        gate.release(running);
+        gate.release(running);
+        assertEquals(1, notified.get());
+        assertNull(gate.acquire(1, 2));
+    }
+
+    @Test public void fullWarmupBudgetDoesNotRejectForeground() {
+        ImagePrefetchRequests gate = new ImagePrefetchRequests(1);
+        assertNotNull(gate.acquire(1, 0));
+        ImagePrefetchRequests.Ticket visible = gate.acquireForeground(1, 3, () -> {});
+        assertNotNull(visible);
+        assertFalse(gate.tryStart(visible)); // already owns foreground work
+        assertNull(gate.acquireForeground(1, 3, () -> {}));
+    }
+
+    @Test public void clearNotifiesAllWaitersOnceAndOldCompletionCannotRemoveNewOwner() {
+        ImagePrefetchRequests gate = new ImagePrefetchRequests(1);
+        ImagePrefetchRequests.Ticket old = gate.acquireForeground(1, 2, () -> {});
+        java.util.concurrent.atomic.AtomicInteger notified = new java.util.concurrent.atomic.AtomicInteger();
+        assertNull(gate.acquireForeground(1, 2, () -> { throw new IllegalStateException("retired"); }));
+        assertNull(gate.acquireForeground(1, 2, notified::incrementAndGet));
+        gate.clear();
+        assertEquals(1, notified.get());
+        assertNotNull(gate.acquireForeground(1, 2, () -> {}));
+        gate.release(old);
+        assertEquals(1, notified.get());
+        assertNull(gate.acquire(1, 2));
+    }
+
+    @Test public void startAndForegroundTakeoverRaceHasExactlyOneDecodeOwner() throws Exception {
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+            for (int attempt = 0; attempt < 100; attempt++) {
+                ImagePrefetchRequests gate = new ImagePrefetchRequests(1);
+                ImagePrefetchRequests.Ticket queued = gate.acquire(1, 2);
+                CountDownLatch start = new CountDownLatch(1);
+                Future<Boolean> warmup = workers.submit(() -> {
+                    if (!start.await(5, TimeUnit.SECONDS)) throw new AssertionError("start");
+                    return gate.tryStart(queued);
+                });
+                Future<ImagePrefetchRequests.Ticket> visible = workers.submit(() -> {
+                    if (!start.await(5, TimeUnit.SECONDS)) throw new AssertionError("start");
+                    return gate.acquireForeground(1, 2, () -> {});
+                });
+                start.countDown();
+                assertEquals(1, (warmup.get(5, TimeUnit.SECONDS) ? 1 : 0)
+                        + (visible.get(5, TimeUnit.SECONDS) != null ? 1 : 0));
+            }
+        } finally { workers.shutdownNow(); }
+    }
+
     @Test public void duplicatesAreRejectedBeforeWorkStarts() {
         ImagePrefetchRequests gate = new ImagePrefetchRequests(4);
         ImagePrefetchRequests.Ticket first = gate.acquire(1, 2);

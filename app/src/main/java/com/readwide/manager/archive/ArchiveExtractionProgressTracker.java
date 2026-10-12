@@ -5,11 +5,9 @@ import androidx.annotation.Nullable;
 
 import com.readwide.manager.util.FileOperationProgress;
 
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
+import java.io.IOException;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 
 /**
@@ -19,95 +17,93 @@ import java.util.Set;
  * folders actually created from the archive entry tree.
  */
 final class ArchiveExtractionProgressTracker {
-    @Nullable private final FileOperationProgress progress;
+    @NonNull private final FileOperationProgress progress;
     private final int totalFiles;
     private final int totalFolders;
     private final boolean preserveOuterFolderProgress;
-    @NonNull private final Map<String, Integer> folderOrder;
-    @NonNull private final Set<String> seenFolders = new LinkedHashSet<>();
+    @NonNull private final Set<String> folders = new HashSet<>();
+    @NonNull private final Set<String> seenFolders = new HashSet<>();
+    @Nullable private String currentFolder;
     private int fileIndex = 0;
 
     @Nullable
     static ArchiveExtractionProgressTracker create(@Nullable FileOperationProgress progress,
-                                                   @Nullable List<ArchiveSupport.EntryInfo> entries) {
+                                                   @Nullable List<ArchiveSupport.EntryInfo> entries) throws IOException {
         if (progress == null || entries == null) return null;
         return new ArchiveExtractionProgressTracker(progress, entries);
     }
 
     private ArchiveExtractionProgressTracker(@NonNull FileOperationProgress progress,
-                                             @NonNull List<ArchiveSupport.EntryInfo> entries) {
+                                             @NonNull List<ArchiveSupport.EntryInfo> entries) throws IOException {
         this.progress = progress;
         this.preserveOuterFolderProgress = progress.snapshot().folderTotal > 1;
-        this.folderOrder = new LinkedHashMap<>();
+        ArchiveCancellation.checkpoint(progress);
         int files = 0;
         for (ArchiveSupport.EntryInfo entry : entries) {
+            ArchiveCancellation.checkpoint(progress);
             if (entry == null) continue;
             String path = normalizeEntryPath(entry.path);
             if (path == null) continue;
             if (entry.directory || path.endsWith("/")) {
-                addFolderToOrder(toDirectoryPath(path));
+                if (!preserveOuterFolderProgress) addFolderTree(toDirectoryPath(path));
             } else {
                 files++;
-                addParentFoldersToOrder(path);
+                if (!preserveOuterFolderProgress) addFolderTree(parentFolder(path));
             }
         }
         this.totalFiles = files;
-        this.totalFolders = folderOrder.size();
+        this.totalFolders = folders.size();
+        ArchiveCancellation.checkpoint(progress);
         progress.clearItemProgress();
         if (!preserveOuterFolderProgress) progress.clearFolderProgress();
     }
 
     void onDirectory(@Nullable String rawPath) {
-        if (progress == null || preserveOuterFolderProgress || totalFolders <= 0) return;
+        if (preserveOuterFolderProgress || totalFolders <= 0) return;
         String path = normalizeEntryPath(rawPath);
         if (path == null) return;
-        noteFolder(toDirectoryPath(path));
+        noteFolderTree(toDirectoryPath(path));
     }
 
     void onFile(@Nullable String rawPath) {
-        if (progress == null) return;
         String path = normalizeEntryPath(rawPath);
         if (path == null || path.endsWith("/")) return;
-        if (!preserveOuterFolderProgress) noteParentFolders(path);
+        if (!preserveOuterFolderProgress) noteFolderTree(parentFolder(path));
         fileIndex++;
         progress.setDetail(displayFileName(path));
         if (totalFiles > 0) progress.setItemProgress(fileIndex, totalFiles);
     }
 
-    private void addParentFoldersToOrder(@NonNull String filePath) {
-        int slash = filePath.indexOf('/');
-        while (slash >= 0) {
-            addFolderToOrder(filePath.substring(0, slash + 1));
-            slash = filePath.indexOf('/', slash + 1);
+    private void addFolderTree(@NonNull String folder) throws IOException {
+        // Every admitted folder includes its ancestors, including empty directory entries.
+        // A previously admitted parent therefore ends the walk for repeated siblings.
+        while (!folder.isEmpty()) {
+            ArchiveCancellation.checkpoint(progress);
+            if (!folders.add(folder)) break;
+            folder = parentFolder(folder.substring(0, folder.length() - 1));
         }
     }
 
-    private void addFolderToOrder(@Nullable String folderPath) {
-        if (folderPath == null || folderPath.length() == 0) return;
-        String dir = toDirectoryPath(folderPath);
-        if (!folderOrder.containsKey(dir)) folderOrder.put(dir, folderOrder.size() + 1);
+    private void noteFolderTree(@NonNull String folder) {
+        int before = seenFolders.size();
+        String parent = folder;
+        while (!parent.isEmpty()) {
+            if (folders.contains(parent) && !seenFolders.add(parent)) break;
+            parent = parentFolder(parent.substring(0, parent.length() - 1));
+        }
+        // Publish only the deepest folder, not one transient notification per ancestor.
+        // Root files clear a previous member's folder label without resetting the count.
+        if (!folder.equals(currentFolder)) {
+            currentFolder = folder;
+            progress.setFolder(folder.isEmpty() ? "" : displayFolder(folder));
+        }
+        if (seenFolders.size() != before) progress.setFolderProgress(seenFolders.size(), totalFolders);
     }
 
-    private void noteParentFolders(@NonNull String filePath) {
-        if (totalFolders <= 0) return;
-        int slash = filePath.indexOf('/');
-        while (slash >= 0) {
-            noteFolder(filePath.substring(0, slash + 1));
-            slash = filePath.indexOf('/', slash + 1);
-        }
-    }
-
-    private void noteFolder(@Nullable String folderPath) {
-        if (progress == null || totalFolders <= 0 || folderPath == null || folderPath.length() == 0) return;
-        String dir = toDirectoryPath(folderPath);
-        if (!seenFolders.add(dir)) {
-            progress.setFolder(displayFolder(dir));
-            Integer ordered = folderOrder.get(dir);
-            if (ordered != null) progress.setFolderProgress(Math.min(seenFolders.size(), totalFolders), totalFolders);
-            return;
-        }
-        progress.setFolder(displayFolder(dir));
-        progress.setFolderProgress(Math.min(seenFolders.size(), totalFolders), totalFolders);
+    @NonNull
+    private static String parentFolder(@NonNull String path) {
+        int slash = path.lastIndexOf('/');
+        return slash < 0 ? "" : path.substring(0, slash + 1);
     }
 
     @NonNull
@@ -134,20 +130,6 @@ final class ArchiveExtractionProgressTracker {
 
     @Nullable
     private static String normalizeEntryPath(@Nullable String rawPath) {
-        if (rawPath == null) return null;
-        String path = rawPath.trim().replace('\\', '/');
-        while (path.startsWith("./")) path = path.substring(2);
-        while (path.contains("//")) path = path.replace("//", "/");
-        String lower = path.toLowerCase(Locale.ROOT);
-        if (path.length() == 0
-                || path.startsWith("/")
-                || path.equals("..")
-                || path.startsWith("../")
-                || path.contains("/../")
-                || path.endsWith("/..")
-                || lower.matches("^[a-z]:.*")) {
-            return null;
-        }
-        return path;
+        return ArchiveSupport.sanitizeEntryPathForList(rawPath);
     }
 }

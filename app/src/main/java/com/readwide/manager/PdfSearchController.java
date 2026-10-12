@@ -64,6 +64,8 @@ final class PdfSearchController {
     private int pageCount;
 
     @Nullable private PdfTextSearchEngine engine;
+    private final java.util.concurrent.atomic.AtomicReference<PDDocument> pendingDocument =
+            new java.util.concurrent.atomic.AtomicReference<>();
     private boolean loadingDoc;
     private boolean loadFailed;
     /** Invalidates a lazy PDFBox load that outlives a singleTop document swap. */
@@ -140,6 +142,7 @@ final class PdfSearchController {
             if (closed || !active || callbackGeneration != queryGeneration) return;
             if (engine == null) {
                 emitStatus();
+                if (loadFailed) ShortToast.show(appContext, R.string.file_operation_failed);
                 return;
             }
             engine.startSearch(q, options, new PdfTextSearchEngine.Listener() {
@@ -171,6 +174,14 @@ final class PdfSearchController {
                         }
                         emitStatus();
                     }
+                }
+
+                @Override public void onSearchFailed() {
+                    if (closed || !active || callbackGeneration != queryGeneration) return;
+                    currentMatch = null;
+                    clearHighlights();
+                    emitStatus();
+                    ShortToast.show(appContext, R.string.file_operation_failed);
                 }
             });
         });
@@ -320,12 +331,14 @@ final class PdfSearchController {
             } catch (Throwable t) {
                 doc = null;
             }
-            final PDDocument loaded = doc;
+            if (closed) {
+                closeDocumentQuietly(doc); // Still on the loader worker.
+                return;
+            }
+            pendingDocument.set(doc);
             host.runOnUi(() -> {
-                if (closed) {
-                    closeDocumentQuietly(loaded);
-                    return;
-                }
+                if (closed) return; // Worker cleanup owns the pending handle.
+                PDDocument loaded = pendingDocument.getAndSet(null);
                 loadingDoc = false;
                 if (loaded == null) {
                     loadFailed = true;
@@ -345,8 +358,10 @@ final class PdfSearchController {
         statusListener = null;
         currentMatch = null;
         pendingQuery = "";
-        main.removeCallbacks(searchRunnable);
-        loader.shutdownNow();
+        main.removeCallbacksAndMessages(null);
+        // Ordered after an in-flight open; never close PDFBox on the UI thread.
+        loader.execute(() -> closeDocumentQuietly(pendingDocument.getAndSet(null)));
+        loader.shutdown();
         clearHighlights();
         if (engine != null) {
             engine.close();

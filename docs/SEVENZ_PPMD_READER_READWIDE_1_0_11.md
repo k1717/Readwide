@@ -1,9 +1,12 @@
 # 7z PPMd first-party decoder notes
 
-Current 1.0.18 source note: streaming replaces whole-input/output arrays with
-lazy PPMd streaming while retaining model and metadata limits. The historical
-validation below does not validate that new path; see
-streaming changes and pending checks.
+Historical 1.0.11 implementation/validation notes. The later streaming reader
+replaced whole-payload arrays. Current 1.0.20 has no blanket model-memory quota;
+format/representation constraints and actual memory availability still apply.
+The results below do not validate the latest source. See the
+[current decode boundaries](ARCHIVE_DECODE_BOUNDARIES_1_0_20.md) and
+[pending checks](RELEASE_READINESS_1_0_20.md). This 7z PPMd-H implementation is
+distinct from the newer ZIP PPMd-I native adapter.
 
 Reference notes for `SevenZPpmd7Decoder`, the first-party decoder for the 7z
 PPMd coder (id `03 04 01`), wired into the `SevenZBcj2ArchiveReader` fallback

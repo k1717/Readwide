@@ -1,0 +1,157 @@
+{
+  "upstream": "https://github.com/mcmilk/7-Zip-zstd",
+  "commit": "b5ac55ff587ec9c9315ffd624c5c93a2899340d2",
+  "pathPrefix": "C/",
+  "files": [
+    {
+      "file": "lz5/LICENSE",
+      "upstreamSha256": "efe4fa03ac8be43315cd0fc07d1fe92d83a06721bf713322d3426f14faacf458",
+      "modified": false
+    },
+    {
+      "file": "lz5/lz5.c",
+      "upstreamSha256": "ef185eb03ee9c2518a42058ba8f20f12cf86cf681a428a04a3d061a6285b2861",
+      "modified": true
+    },
+    {
+      "file": "lz5/lz5.h",
+      "upstreamSha256": "f2da44144019fe179397fe2ce4a533e302c40e76f0500dd947b45dfa86de1160",
+      "modified": false
+    },
+    {
+      "file": "lz5/lz5common.h",
+      "upstreamSha256": "38e9ea87a9fb34d1d835b368944a3e4f809fa2b8ccbc2bad59baa28d3897c420",
+      "modified": false
+    },
+    {
+      "file": "lz5/lz5frame.c",
+      "upstreamSha256": "df818b538ec63add71634c85f5bb1e694c09cc85f0b80c406d82e71cc2c0752a",
+      "modified": true
+    },
+    {
+      "file": "lz5/lz5frame.h",
+      "upstreamSha256": "065eac40c61108c27e4439d2d74dce2753a54110e365b0d9ff63c1f62bf8ac2b",
+      "modified": false
+    },
+    {
+      "file": "lz5/lz5frame_static.h",
+      "upstreamSha256": "47705e5e858160e4d5897fe7ef234b8d96cdd49b5b1f604ef2d0f1be41761b21",
+      "modified": true
+    },
+    {
+      "file": "lz5/lz5hc.h",
+      "upstreamSha256": "01cd6ec59d03a1ca0d913dae89ba1f7ceb455ebaca2fbd069ac5c8b465c92f0c",
+      "modified": false
+    },
+    {
+      "file": "lz5/mem.h",
+      "upstreamSha256": "1ccc987d777b9e4b9605c09811f68a156baca4539a457d00ad732a9fb2930e5e",
+      "modified": false
+    },
+    {
+      "file": "lizard/LICENSE",
+      "upstreamSha256": "1d02f9cab7515614726c9c2957bcb8965762e6f529929b4dde07745d6ffee916",
+      "modified": false
+    },
+    {
+      "file": "lizard/bitstream.h",
+      "upstreamSha256": "812488e83a3222b352d842b5f5dd8b69c05dde6f8932b533c720b2170891bc47",
+      "modified": true
+    },
+    {
+      "file": "lizard/compiler.h",
+      "upstreamSha256": "b7b1407d0d564d3464554e9c2e3aca7738da04a4351ef6a6797a2e7450ff40e3",
+      "modified": true
+    },
+    {
+      "file": "lizard/debug.h",
+      "upstreamSha256": "6035ac4e5f32e785542d2972d002c78221432a95eb1366f6648d2db5a9e80585",
+      "modified": true
+    },
+    {
+      "file": "lizard/error_private.h",
+      "upstreamSha256": "43a09571d014f371c4bba98368d2d91f9235a76a0556e7a34e28167fb8daf055",
+      "modified": false
+    },
+    {
+      "file": "lizard/error_public.h",
+      "upstreamSha256": "92a58fcbcf6efb32322eb6ed2f2d3b14d5a1334d7b788d84d336c2e188832c95",
+      "modified": false
+    },
+    {
+      "file": "lizard/fse.h",
+      "upstreamSha256": "cd35dccf3b7ca29f8105f65f85b7eb1ee4c48cd06096cccc6baba8f80a698bc7",
+      "modified": false
+    },
+    {
+      "file": "lizard/huf.h",
+      "upstreamSha256": "dba25778939071bfb1755a6a75af3b47daab3269cf0cfca819b3c38763322d55",
+      "modified": false
+    },
+    {
+      "file": "lizard/mem.h",
+      "upstreamSha256": "178c9ce706d472cd88a4c720de1be3e3d3fa9fd08867eace836c85f0f13d9ba2",
+      "modified": true
+    },
+    {
+      "file": "lizard/liz_entropy_common.c",
+      "upstreamSha256": "40d52d47fc836b3c22fc261e52b4cb747c1a4575ad5226147f34de634224a923",
+      "modified": false
+    },
+    {
+      "file": "lizard/liz_fse_decompress.c",
+      "upstreamSha256": "6fff2c95458ec51b21a8041a4ebc52dc6e3caf34d1d98e80b9b79864dd165747",
+      "modified": false
+    },
+    {
+      "file": "lizard/liz_huf_decompress.c",
+      "upstreamSha256": "c4640c400dc1264858efa4643f362c699bb6cedad39b0cee9b7d5fe42bd71325",
+      "modified": false
+    },
+    {
+      "file": "lizard/lizard_common.h",
+      "upstreamSha256": "6ea79c6489fb2eae530191a5b1cc3e42bb4713942f2ed2617b3daccd5e62a1e7",
+      "modified": false
+    },
+    {
+      "file": "lizard/lizard_compress.h",
+      "upstreamSha256": "535a4aaf991bf7ee57f785f3c292e48aaa0dc2673602e2453763acee49764943",
+      "modified": false
+    },
+    {
+      "file": "lizard/lizard_decompress.c",
+      "upstreamSha256": "1baf2d4083094394700c2253e97c5e7e58b131de8df107c5bfaea3714983d7b5",
+      "modified": false
+    },
+    {
+      "file": "lizard/lizard_decompress.h",
+      "upstreamSha256": "19a6523a6e0ab7ca441b8b776699b6f1b69f564c8264922402774403787dd7ec",
+      "modified": false
+    },
+    {
+      "file": "lizard/lizard_decompress_liz.h",
+      "upstreamSha256": "f5e2839484d6e5173e8d61ddeab6daa800c12dce40dcb3eccfc33278e57a06b0",
+      "modified": false
+    },
+    {
+      "file": "lizard/lizard_decompress_lz4.h",
+      "upstreamSha256": "ea595dbe553b8762fadf8a5ba7196e6d9130870aef155e426dbd19041e3d7702",
+      "modified": false
+    },
+    {
+      "file": "lizard/lizard_frame.c",
+      "upstreamSha256": "e52a8359430f8ca27dd2319f58e05fef6f505f8c1596f4552b49cb95658c868f",
+      "modified": true
+    },
+    {
+      "file": "lizard/lizard_frame.h",
+      "upstreamSha256": "9aa1aeb99ddb58fb1b03630ffb17312342e9e046e1668af01a278b15c2db757b",
+      "modified": false
+    },
+    {
+      "file": "lizard/lizard_frame_static.h",
+      "upstreamSha256": "683508bb354d7aafc8f238753f448a3d252248a7034233b8ccad90d123d30865",
+      "modified": true
+    }
+  ]
+}

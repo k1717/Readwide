@@ -91,6 +91,52 @@ public class TextMatchIndexTest {
         assertEquals(9, index.occurrence(2, null).position);
     }
 
+    @Test public void overflowIndexUsesCachedPrefixWithoutVisitingMatchesAgain() {
+        for (SearchOptions options : new SearchOptions[]{REGEX, SearchOptions.literal()}) {
+            TextMatchIndex index = TextMatchIndex.build("aa aaaa z aaa", "aa", options, null, 2);
+            for (boolean forward : new boolean[]{true, false}) {
+                AtomicInteger checks = new AtomicInteger();
+                TextMatchIndex.Hit hit = index.nearest(forward ? 1 : 3, forward,
+                        () -> { checks.incrementAndGet(); return false; });
+                assertEquals(3, hit.position);
+                assertEquals(2, hit.ordinal);
+                assertEquals("Only the initial cancellation check, no match rescan", 1, checks.get());
+            }
+        }
+    }
+
+    @Test public void partialPrefixesAgreeWithCompleteIndexAcrossBoundariesAndWraps() {
+        String text = "aa aaaa z aaa";
+        for (SearchOptions options : new SearchOptions[]{REGEX, SearchOptions.literal(),
+                new SearchOptions(false, true, false, true)}) {
+            TextMatchIndex full = index(text, "aa", options);
+            for (int limit = 0; limit <= 3; limit++) {
+                TextMatchIndex partial = TextMatchIndex.build(text, "aa", options, null, limit);
+                for (int from = -2; from <= text.length() + 2; from++) {
+                    for (boolean forward : new boolean[]{true, false}) {
+                        TextMatchIndex.Hit expected = full.nearest(from, forward, null);
+                        TextMatchIndex.Hit actual = partial.nearest(from, forward, null);
+                        assertEquals(expected.position, actual.position);
+                        assertEquals(expected.ordinal, actual.ordinal);
+                    }
+                    assertEquals(full.ordinalAt(from, null), partial.ordinalAt(from, null));
+                }
+                for (int from : new int[]{Integer.MIN_VALUE, Integer.MAX_VALUE}) {
+                    for (boolean forward : new boolean[]{true, false}) {
+                        TextMatchIndex.Hit expected = full.nearest(from, forward, null);
+                        TextMatchIndex.Hit actual = partial.nearest(from, forward, null);
+                        assertEquals(expected.position, actual.position);
+                        assertEquals(expected.ordinal, actual.ordinal);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test(expected = CancellationException.class) public void partialCachedNavigationHonorsCancellation() {
+        TextMatchIndex.build("aa aaaa z aaa", "aa", REGEX, null, 2).nearest(1, true, () -> true);
+    }
+
     @Test(expected = CancellationException.class) public void cancellationNeverPublishesAPartialCount() {
         AtomicInteger checks = new AtomicInteger();
         TextMatchIndex.build("aaaaaa", "a", SearchOptions.literal(), () -> checks.incrementAndGet() > 3);

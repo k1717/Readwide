@@ -14,8 +14,8 @@ import androidx.annotation.NonNull;
 public final class AutoPageTurnController {
     public interface Callback {
         boolean isDestroyed();
-        int getDisplayedTotalPageCount();
-        int getDisplayedCurrentPageNumber();
+        boolean isReadyForAutoPageTurn();
+        boolean hasAutoPageTurnReachedEnd();
         int getIntervalSeconds();
         void pageForwardFromAutoPageTurn();
         void onAutoPageTurnStarted();
@@ -32,9 +32,13 @@ public final class AutoPageTurnController {
         public void run() {
             if (!running || callback.isDestroyed()) return;
 
-            int total = Math.max(1, callback.getDisplayedTotalPageCount());
-            int current = Math.max(1, callback.getDisplayedCurrentPageNumber());
-            if (current >= total) {
+            // A tick during a load is not a new page request. Queuing these
+            // ticks can skip several unread pages when a slow partition lands.
+            if (!callback.isReadyForAutoPageTurn()) {
+                scheduleNext();
+                return;
+            }
+            if (callback.hasAutoPageTurnReachedEnd()) {
                 stop(true);
                 callback.onAutoPageTurnEndReached();
                 return;

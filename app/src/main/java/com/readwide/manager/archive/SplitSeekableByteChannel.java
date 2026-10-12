@@ -9,6 +9,7 @@ import java.nio.channels.ClosedChannelException;
 import java.nio.channels.NonWritableChannelException;
 import java.nio.channels.SeekableByteChannel;
 import java.util.List;
+import java.util.Arrays;
 import java.util.Objects;
 
 /**
@@ -86,12 +87,20 @@ final class SplitSeekableByteChannel implements SeekableByteChannel {
     }
 
     private int segmentFor(long offset) {
+        if (currentIndex >= 0 && offset >= starts[currentIndex]
+                && offset - starts[currentIndex] < lengths[currentIndex]) return currentIndex;
         int low = 0, high = starts.length;
         while (low < high) {
             int mid = low + (high - low) / 2;
             if (starts[mid] <= offset) low = mid + 1; else high = mid;
         }
         return Math.max(0, low - 1); // last equal start skips empty volumes
+    }
+
+    /** Disk-relative windows must match every captured part, not only their total. */
+    synchronized void requireVolumeLengths(long[] expected) throws IOException {
+        checkReadable();
+        if (!Arrays.equals(lengths, expected)) throw new IOException("Split volume lengths changed before open");
     }
 
     private void select(int index) throws IOException {

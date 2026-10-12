@@ -1231,9 +1231,21 @@ final class TextEncodingDetector {
         try (InputStream is = context.getContentResolver().openInputStream(uri)) {
             if (is == null) throw new IOException("Cannot open URI: " + uri);
             byte[] data = readAllBytes(is, MAX_TEXT_FROM_URI_BYTES);
-            String encoding = detectEncodingResultFromDataAdaptive(data).charsetName;
-            return decodeBestEffort(data, encoding);
+            return decodeBackupText(data);
         }
+    }
+
+    /** Backup data is not display text: preserve paths, emoji, rules and anchors verbatim. */
+    static String decodeBackupText(byte[] data) throws IOException {
+        String bom = detectBom(data);
+        String encoding = bom != null ? bom : detectEncodingResultFromDataAdaptive(data).charsetName;
+        int offset = bomOffset(data);
+        // Reject a broken byte sequence rather than silently importing replacement
+        // characters into durable identifiers. Keep legacy encoding detection/BOMs.
+        return Charset.forName(encoding).newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(data, offset, data.length - offset)).toString();
     }
 
     static String decodeBestEffort(byte[] data, String encoding) {

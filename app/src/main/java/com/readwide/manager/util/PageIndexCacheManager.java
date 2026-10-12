@@ -29,6 +29,7 @@ import java.util.Set;
  * It only tracks generated/derived cache files under app cache/txt_page_cache.
  */
 public final class PageIndexCacheManager {
+    public static final String EXACT_PAGE_CACHE_LAYOUT = "txt-exact-page-cache-v1";
     private static final String CACHE_DIR = "txt_page_cache";
     private static final String INDEX_FILE = "index.json";
 
@@ -115,6 +116,12 @@ public final class PageIndexCacheManager {
             dir.mkdirs();
         }
         return dir;
+    }
+
+    /** The binary payload validates its full layout/source identity independently. */
+    @NonNull
+    public synchronized File getExactPageCacheFile(@NonNull File file) {
+        return new File(getEntryCacheDir(file, EXACT_PAGE_CACHE_LAYOUT), "exact-pages-v1.bin");
     }
 
     public synchronized void cleanup() {

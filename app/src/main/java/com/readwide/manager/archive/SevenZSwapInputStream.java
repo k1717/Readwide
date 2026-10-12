@@ -12,8 +12,8 @@ final class SevenZSwapInputStream extends InputStream {
     private final byte[] buffer = new byte[64 * 1024];
     private final byte[] single = new byte[1];
     private int position, limit;
-    private boolean eof, closed;
-    private IOException failure;
+    private boolean eof, closed, sourceClosed;
+    private Throwable failure;
 
     SevenZSwapInputStream(InputStream source, int width) {
         if (width != 2 && width != 4) throw new IllegalArgumentException("Swap word width must be 2 or 4");
@@ -54,7 +54,7 @@ final class SevenZSwapInputStream extends InputStream {
             position = 0;
             limit = count;
             return true;
-        } catch (IOException error) {
+        } catch (IOException | RuntimeException | Error error) {
             failure = error;
             throw error;
         }
@@ -67,17 +67,21 @@ final class SevenZSwapInputStream extends InputStream {
     }
     private void checkOpen() throws IOException {
         if (closed) throw new IOException("7z Swap stream is closed");
-        if (failure != null) throw failure;
+        if (failure instanceof IOException) throw (IOException) failure;
+        if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+        if (failure instanceof Error) throw (Error) failure;
         if (Thread.currentThread().isInterrupted()) {
-            failure = new InterruptedIOException("7z Swap decoding cancelled");
-            throw failure;
+            InterruptedIOException cancelled = new InterruptedIOException("7z Swap decoding cancelled");
+            failure = cancelled;
+            throw cancelled;
         }
     }
     @Override public int available() throws IOException { checkOpen(); return limit - position; }
     @Override public void close() throws IOException {
-        if (closed) return;
-        closed = true;
-        java.util.Arrays.fill(buffer, (byte) 0);
-        source.close();
+        if (!closed) {
+            closed = true;
+            java.util.Arrays.fill(buffer, (byte) 0);
+        }
+        if (!sourceClosed) { source.close(); sourceClosed = true; }
     }
 }

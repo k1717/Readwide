@@ -31,6 +31,13 @@ import java.util.regex.Pattern;
  * filename-style words stay visible.
  */
 public final class MarkdownSyntaxHighlighter {
+    // Bump when spans or syntax parsing can change measured page boundaries.
+    public static final String PAGE_LAYOUT_REVISION = "4";
+
+    public static String pageLayoutCacheKey(int textColor, int backgroundColor) {
+        return PAGE_LAYOUT_REVISION + ":text=" + textColor + ":background=" + backgroundColor;
+    }
+
     private static final Pattern BOLD_PATTERN = Pattern.compile("(\\*\\*|__)(?=\\S)(.+?)(?<=\\S)\\1");
     private static final Pattern ITALIC_STAR_PATTERN = Pattern.compile("(?<!\\*)\\*(?!\\*)(?=\\S)(.+?)(?<=\\S)(?<!\\*)\\*(?!\\*)");
     private static final Pattern ITALIC_UNDERSCORE_PATTERN = Pattern.compile("(?<!_)_(?!_)(?=\\S)(.+?)(?<=\\S)(?<!_)_(?!_)");

@@ -215,6 +215,12 @@ public class BookmarkManager {
         saveReadingStates();
     }
 
+    /** Shared move/rename dispatch; the directory flag is captured before mutation. */
+    public void moveReferences(String oldPath, String newPath, boolean wasDirectory) {
+        if (wasDirectory) movePathPrefixReferences(oldPath, newPath);
+        else moveFileReferences(oldPath, newPath);
+    }
+
     /**
      * Rebind saved progress and bookmarks after the app moves a local file.
      */
@@ -460,8 +466,14 @@ public class BookmarkManager {
             // them in the same backup JSON as the active_theme_id setting.
             root.put("customThemes", ThemeManager.getInstance(context).exportCustomThemesToJson());
 
+            // Optional extension: durable contents choices, bound to the original
+            // path digest and text/transform version. Never export auto-index caches.
+            root.put("txtContents", new TxtContentsBackup(context).exportJson());
+            root.put("txtContentsNote_EN", "TXT Contents options/manual/hidden entries use the original path and content/transform identity. Changed paths are not automatically rebound. No source text or automatic index cache is included.");
+            root.put("txtContentsNote_KO", "TXT 목차 옵션·수동/숨김 항목은 원래 경로와 본문/변환 식별자 기준으로 복원됩니다. 바뀐 경로에 자동 연결되지 않으며 원문 파일과 자동 목차 캐시는 포함하지 않습니다.");
+
             return root.toString(2); // pretty-printed for readability
-        } catch (JSONException e) {
+        } catch (JSONException | java.io.IOException e) {
             Log.e(TAG, "Export failed", e);
             throw new IllegalStateException("Could not serialize the backup", e);
         }
@@ -613,6 +625,11 @@ public class BookmarkManager {
         // Parsing, validation and optional local-file edits happen on owned rows,
         // outside the live model lock. Nothing is cleared on a malformed backup.
         BackupImportData data = new BackupImportData(jsonString);
+        PrefsManager preferences = PrefsManager.getInstance(context);
+        Map<String, ?> beforeSettings = preferences.snapshotForImport();
+        Map<String, ?> effectiveSettings = data.settings == null ? beforeSettings
+                : preferences.planImportSettings(data.settings, merge, beforeSettings);
+        BackupTextContext textContext = new BackupTextContext(effectiveSettings);
         if (data.bookmarks != null) {
             Map<String, JSONObject> beginner = readBeginnerEditableBookmarkMap(data.root);
             Map<String, JSONObject> developer = readDeveloperEditableBookmarkMap(data.root);
@@ -620,19 +637,22 @@ public class BookmarkManager {
             for (int i = 0; i < data.bookmarks.size(); i++) {
                 if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException();
                 Bookmark value = data.bookmarks.get(i);
-                applyPcEditableBookmarkFields(rows.getJSONObject(i), value);
-                applyDeveloperEditableBookmarkFields(developer.get(value.getId()), value);
-                applyBeginnerEditableBookmarkFields(beginner.get(value.getId()), value);
+                applyPcEditableBookmarkFields(rows.getJSONObject(i), value, textContext);
+                applyDeveloperEditableBookmarkFields(developer.get(value.getId()), value, textContext);
+                applyBeginnerEditableBookmarkFields(beginner.get(value.getId()), value, textContext);
                 enrichPortableIdentity(value);
             }
         }
         ThemeManager themes = ThemeManager.getInstance(context);
         DocumentAnnotationManager annotations = DocumentAnnotationManager.getInstance(context);
-        PrefsManager preferences = PrefsManager.getInstance(context);
         synchronized (this) {
             synchronized (themes) {
                 synchronized (annotations) {
-                    commitImport(data, merge, themes, annotations, preferences);
+                    synchronized (TxtContentsRepository.EDIT_LOCK) {
+                        if (!beforeSettings.equals(preferences.snapshotForImport()))
+                            throw new java.io.IOException("Settings changed while preparing the backup; retry import");
+                        commitImport(data, merge, themes, annotations, preferences);
+                    }
                 }
             }
         }
@@ -696,6 +716,10 @@ public class BookmarkManager {
                 () -> themes.replaceFromImport(plannedThemes), () -> themes.restoreAfterImportFailure(previousThemes)));
         if (plannedAnnotations != null) steps.add(BackupImportTransaction.step(
                 () -> annotations.replaceFromImport(plannedAnnotations), () -> annotations.restoreAfterImportFailure(previousAnnotations)));
+        // Preparation reads/validates every affected contents record before any step
+        // runs. Its per-record undo steps participate in the same reverse rollback.
+        if (data.txtContents != null)
+            new TxtContentsBackup(context).appendImportSteps(steps, data.txtContents, merge);
         if (plannedPrefs != null) steps.add(BackupImportTransaction.step(
                 () -> preferences.replaceImportSettings(plannedPrefs), () -> preferences.replaceImportSettings(previousPrefs)));
         // Once committing starts, finish or roll back; do not abort midway merely
@@ -866,7 +890,7 @@ public class BookmarkManager {
         }
     }
 
-    private void applyDeveloperEditableBookmarkFields(JSONObject developerObj, Bookmark bookmark) {
+    private void applyDeveloperEditableBookmarkFields(JSONObject developerObj, Bookmark bookmark, BackupTextContext textContext) {
         if (developerObj == null || bookmark == null) return;
 
         JSONObject flat = normalizeBeginnerBookmarkEdit(developerObj);
@@ -877,7 +901,7 @@ public class BookmarkManager {
 
         // Developer rows intentionally accept the same safe line/page/search edit
         // fields as beginner rows, plus optional direct charPosition repair below.
-        applyBeginnerEditableBookmarkFields(flat, bookmark);
+        applyBeginnerEditableBookmarkFields(flat, bookmark, textContext);
 
         int originalChar = readNonNegativeInt(current, "charPosition", Integer.MIN_VALUE);
         if (originalChar == Integer.MIN_VALUE) {
@@ -896,14 +920,14 @@ public class BookmarkManager {
 
         if (isPdfBookmark(bookmark) || isEpubBookmark(bookmark) || isWordBookmark(bookmark)) {
             bookmark.setCharPosition(Math.max(0, targetChar));
-            bookmark.setEndPosition(Math.max(bookmark.getCharPosition() + 1, bookmark.getEndPosition()));
+            bookmark.setEndPosition(Math.max(saturatedPosition(bookmark.getCharPosition(), 1), bookmark.getEndPosition()));
             return;
         }
 
         File file = fileFromPath(bookmark.getFilePath());
         if (file != null && file.exists() && file.isFile()) {
             try {
-                String text = FileUtils.readTextFile(file);
+                String text = textContext.read(file);
                 applyPcTextCharPositionFromText(bookmark, text, targetChar);
                 bookmark.clearPendingPcTextEdit();
                 return;
@@ -913,27 +937,19 @@ public class BookmarkManager {
         }
 
         bookmark.setCharPosition(Math.max(0, targetChar));
-        bookmark.setEndPosition(Math.max(bookmark.getCharPosition() + 1, bookmark.getEndPosition()));
+        bookmark.setEndPosition(Math.max(saturatedPosition(bookmark.getCharPosition(), 1), bookmark.getEndPosition()));
+        bookmark.clearPendingPcTextEdit();
+        bookmark.setAnchorTextBefore("");
+        bookmark.setAnchorTextAfter("");
+        bookmark.setExcerpt("");
         bookmark.setPageNumber(0);
         bookmark.setTotalPages(0);
         bookmark.setPageLayoutSignature("");
     }
 
     private int readNonNegativeInt(JSONObject obj, String key, int fallback) {
-        if (obj == null || key == null || !obj.has(key)) return fallback;
-        try {
-            Object raw = obj.opt(key);
-            if (raw instanceof Number) {
-                int value = ((Number) raw).intValue();
-                return value >= 0 ? value : fallback;
-            }
-            String text = obj.optString(key, "").trim();
-            if (text.isEmpty()) return fallback;
-            int value = Integer.parseInt(text);
-            return value >= 0 ? value : fallback;
-        } catch (Exception ignored) {
-            return fallback;
-        }
+        int value = readSignedInt(obj, key, fallback);
+        return value >= 0 ? value : fallback;
     }
 
     /**
@@ -944,7 +960,7 @@ public class BookmarkManager {
      * movement, or search text; document bookmarks can be edited by exact page
      * and/or relative page movement.
      */
-    private void applyBeginnerEditableBookmarkFields(JSONObject editObj, Bookmark bookmark) {
+    private void applyBeginnerEditableBookmarkFields(JSONObject editObj, Bookmark bookmark, BackupTextContext textContext) {
         if (editObj == null || bookmark == null) return;
         editObj = normalizeBeginnerBookmarkEdit(editObj);
 
@@ -961,7 +977,7 @@ public class BookmarkManager {
         if (isPdfBookmark(bookmark) || isEpubBookmark(bookmark) || isWordBookmark(bookmark)) {
             applyBeginnerDocumentEdit(editObj, bookmark);
         } else {
-            applyBeginnerTextEdit(editObj, bookmark);
+            applyBeginnerTextEdit(editObj, bookmark, textContext);
         }
     }
 
@@ -1005,11 +1021,11 @@ public class BookmarkManager {
         if (!changedAbsolute && !changedRelative) return;
 
         int base = setPosition > 0 ? setPosition : (current != Integer.MIN_VALUE ? current : bookmark.getPcEditPositionForManager());
-        int target = Math.max(1, base + moveBy);
+        int target = saturatedPosition(base, moveBy);
         applyPcDocumentPosition(bookmark, target);
     }
 
-    private void applyBeginnerTextEdit(JSONObject editObj, Bookmark bookmark) {
+    private void applyBeginnerTextEdit(JSONObject editObj, Bookmark bookmark, BackupTextContext textContext) {
         int currentLine = readPositiveInt(editObj, "currentLine_DoNotEdit", Integer.MIN_VALUE);
         int originalPosition = readPositiveInt(editObj, "originalPosition_DoNotEdit", Integer.MIN_VALUE);
         if (currentLine == Integer.MIN_VALUE) {
@@ -1045,7 +1061,7 @@ public class BookmarkManager {
         File file = fileFromPath(bookmark.getFilePath());
         if (file != null && file.exists() && file.isFile()) {
             try {
-                String text = FileUtils.readTextFile(file);
+                String text = textContext.read(file);
                 boolean applied = applyTextEditWithContent(
                         bookmark,
                         text,
@@ -1075,7 +1091,7 @@ public class BookmarkManager {
         bookmark.setPendingPcFindOccurrence(findOccurrence);
         bookmark.setPendingPcFindCaseSensitive(findCaseSensitive);
         if (setLine > 0 || moveByLines != 0) {
-            bookmark.setLineNumber(Math.max(1, fallbackLine + moveByLines));
+            bookmark.setLineNumber(saturatedPosition(fallbackLine, moveByLines));
         }
         bookmark.setPageNumber(0);
         bookmark.setTotalPages(0);
@@ -1083,27 +1099,15 @@ public class BookmarkManager {
     }
 
     private int readPositiveInt(JSONObject obj, String key, int fallback) {
-        if (obj == null || key == null || !obj.has(key)) return fallback;
-        try {
-            Object raw = obj.opt(key);
-            if (raw instanceof Number) {
-                int value = ((Number) raw).intValue();
-                return value > 0 ? value : fallback;
-            }
-            String text = obj.optString(key, "").trim();
-            if (text.isEmpty()) return fallback;
-            int value = Integer.parseInt(text);
-            return value > 0 ? value : fallback;
-        } catch (Exception ignored) {
-            return fallback;
-        }
+        int value = readSignedInt(obj, key, fallback);
+        return value > 0 ? value : fallback;
     }
 
     private int readSignedInt(JSONObject obj, String key, int fallback) {
         if (obj == null || key == null || !obj.has(key)) return fallback;
         try {
             Object raw = obj.opt(key);
-            if (raw instanceof Number) return ((Number) raw).intValue();
+            if (raw instanceof Number) return new java.math.BigDecimal(raw.toString()).intValueExact();
             String text = obj.optString(key, "").trim();
             if (text.isEmpty()) return fallback;
             return Integer.parseInt(text);
@@ -1138,14 +1142,14 @@ public class BookmarkManager {
      * from pcEditOriginalPosition, which means an unedited backup imports without
      * losing the exact original character offset inside long TXT lines.
      */
-    private void applyPcEditableBookmarkFields(JSONObject obj, Bookmark bookmark) {
+    private void applyPcEditableBookmarkFields(JSONObject obj, Bookmark bookmark, BackupTextContext textContext) {
         if (obj == null || bookmark == null || !obj.has("pcEditPosition")) return;
 
-        int pcPosition = obj.optInt("pcEditPosition", -1);
+        int pcPosition = readPositiveInt(obj, "pcEditPosition", -1);
         if (pcPosition <= 0) return;
 
         int original = obj.has("pcEditOriginalPosition")
-                ? obj.optInt("pcEditOriginalPosition", pcPosition)
+                ? readPositiveInt(obj, "pcEditOriginalPosition", pcPosition)
                 : Integer.MIN_VALUE;
         boolean editedOnPc = !obj.has("pcEditOriginalPosition") || pcPosition != original;
         if (!editedOnPc) return;
@@ -1153,7 +1157,7 @@ public class BookmarkManager {
         if (isPdfBookmark(bookmark) || isEpubBookmark(bookmark) || isWordBookmark(bookmark)) {
             applyPcDocumentPosition(bookmark, pcPosition);
         } else {
-            applyPcTextLinePosition(bookmark, pcPosition);
+            applyPcTextLinePosition(bookmark, pcPosition, textContext);
         }
     }
 
@@ -1167,7 +1171,10 @@ public class BookmarkManager {
         // document page jumps against the actual opened file.
     }
 
-    private void applyPcTextLinePosition(Bookmark bookmark, int oneBasedLine) {
+    private void applyPcTextLinePosition(Bookmark bookmark, int oneBasedLine, BackupTextContext textContext) {
+        // Preserve the requested action when the book is absent on this device.
+        bookmark.clearPendingPcTextEdit();
+        bookmark.setPendingPcEditLine(Math.max(1, oneBasedLine));
         bookmark.setLineNumber(Math.max(1, oneBasedLine));
         bookmark.setPageNumber(0);
         bookmark.setTotalPages(0);
@@ -1180,7 +1187,7 @@ public class BookmarkManager {
         if (!file.exists() || !file.isFile()) return;
 
         try {
-            String text = FileUtils.readTextFile(file);
+            String text = textContext.read(file);
             applyPcTextLinePositionFromText(bookmark, text, oneBasedLine);
             bookmark.clearPendingPcTextEdit();
         } catch (Exception e) {
@@ -1192,7 +1199,6 @@ public class BookmarkManager {
         int safeLine = Math.max(1, oneBasedLine);
         int charPosition = findCharPositionForOneBasedLine(text, safeLine);
         applyPcTextCharPositionFromText(bookmark, text, charPosition);
-        bookmark.setLineNumber(safeLine);
     }
 
     private void applyPcTextCharPositionFromText(Bookmark bookmark, String text, int charPosition) {
@@ -1209,7 +1215,7 @@ public class BookmarkManager {
         bookmark.setAnchorTextAfter(makeAnchorTextAfter(text, safePosition));
         bookmark.setEndPosition(Math.min(
                 text != null ? text.length() : safePosition,
-                safePosition + Math.max(1, excerpt.length())));
+                saturatedPosition(safePosition, Math.max(1, excerpt.length()))));
     }
 
     private boolean applyTextEditWithContent(Bookmark bookmark, String text, String findText,
@@ -1225,7 +1231,7 @@ public class BookmarkManager {
         if (baseChar >= 0) {
             if (moveByLines != 0) {
                 int line = countOneBasedLineForChar(text, baseChar);
-                applyPcTextLinePositionFromText(bookmark, text, Math.max(1, line + moveByLines));
+                applyPcTextLinePositionFromText(bookmark, text, saturatedPosition(line, moveByLines));
             } else {
                 applyPcTextCharPositionFromText(bookmark, text, baseChar);
             }
@@ -1237,7 +1243,7 @@ public class BookmarkManager {
             baseLine = Math.max(1, bookmark.getLineNumber());
         }
         if (setLine > 0 || moveByLines != 0) {
-            applyPcTextLinePositionFromText(bookmark, text, Math.max(1, baseLine + moveByLines));
+            applyPcTextLinePositionFromText(bookmark, text, saturatedPosition(baseLine, moveByLines));
             return true;
         }
 
@@ -1247,16 +1253,17 @@ public class BookmarkManager {
     private int findTextPosition(String text, String needle, int occurrence, boolean caseSensitive) {
         if (text == null || needle == null || needle.isEmpty()) return -1;
         int wanted = Math.max(1, occurrence);
-        String haystack = caseSensitive ? text : text.toLowerCase(Locale.ROOT);
-        String target = caseSensitive ? needle : needle.toLowerCase(Locale.ROOT);
-        int from = 0;
-        int found = -1;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
+                java.util.regex.Pattern.quote(needle), caseSensitive ? 0
+                        : java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE).matcher(text);
         for (int i = 0; i < wanted; i++) {
-            found = haystack.indexOf(target, from);
-            if (found < 0) return -1;
-            from = Math.min(haystack.length(), found + Math.max(1, target.length()));
+            if (!matcher.find()) return -1;
         }
-        return Math.max(0, Math.min(text.length(), found));
+        return matcher.start(); // Offsets in the original text, never a length-changing lowercase copy.
+    }
+
+    private static int saturatedPosition(int base, int delta) {
+        return (int) Math.max(1L, Math.min(Integer.MAX_VALUE, (long) base + delta));
     }
 
     private int countOneBasedLineForChar(String text, int charPosition) {
@@ -1285,7 +1292,7 @@ public class BookmarkManager {
         if (file == null || !file.exists() || !file.isFile()) return;
 
         try {
-            String text = FileUtils.readTextFile(file);
+            String text = new BackupTextContext(PrefsManager.getInstance(context).snapshotForImport()).read(file);
             boolean changed = false;
             for (Bookmark bookmark : result) {
                 if (bookmark == null || !bookmark.hasPendingPcTextEdit()) continue;

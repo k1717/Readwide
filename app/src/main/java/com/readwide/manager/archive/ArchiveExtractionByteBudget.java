@@ -3,6 +3,7 @@ package com.readwide.manager.archive;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.Map;
@@ -29,19 +30,27 @@ final class ArchiveExtractionByteBudget {
 
     static Scope begin(long limitBytes) {
         ArchiveExtractionByteBudget previous = ACTIVE.get();
-        if (previous != null) return new Scope(previous, null, false);
+        if (previous != null) return new Scope(previous, false);
         ArchiveExtractionByteBudget budget = new ArchiveExtractionByteBudget(limitBytes);
         ACTIVE.set(budget);
-        return new Scope(budget, null, true);
+        return new Scope(budget, true);
     }
 
     static OutputStream openOutputStream(File file, long standaloneLimitBytes) throws IOException {
+        ArchiveCancellation.checkpoint(null); // Do not truncate an output after cancellation.
         String path = file.getCanonicalPath();
-        FileOutputStream raw = new FileOutputStream(file, false);
         ArchiveExtractionByteBudget budget = ACTIVE.get();
         if (budget == null) budget = new ArchiveExtractionByteBudget(standaloneLimitBytes);
-        budget.beginFile(path);
-        return new BudgetedOutputStream(raw, budget, path, file.getAbsoluteFile().getParentFile());
+        FileOutputStream raw = new FileOutputStream(file, false);
+        try {
+            budget.beginFile(path);
+            return new BudgetedOutputStream(raw, budget, path, file.getAbsoluteFile().getParentFile());
+        } catch (RuntimeException | Error failure) {
+            try { raw.close(); } catch (IOException | RuntimeException | Error cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
     }
 
     synchronized long totalBytesForTest() {
@@ -59,14 +68,14 @@ final class ArchiveExtractionByteBudget {
             throw new ArchiveSupport.UnsupportedArchiveFeatureException(
                     "Archive extraction exceeds the runtime byte or free-space safety limit");
         }
-        long fileBytes = bytesByPath.containsKey(path) ? bytesByPath.get(path) : 0L;
+        long fileBytes = bytesByPath.getOrDefault(path, 0L);
         bytesByPath.put(path, fileBytes + count);
         totalBytes += count;
     }
 
     private synchronized void rollback(String path, int count) {
         if (count <= 0) return;
-        long fileBytes = bytesByPath.containsKey(path) ? bytesByPath.get(path) : 0L;
+        long fileBytes = bytesByPath.getOrDefault(path, 0L);
         long rolledBack = Math.min(fileBytes, (long) count);
         bytesByPath.put(path, fileBytes - rolledBack);
         totalBytes = Math.max(0L, totalBytes - rolledBack);
@@ -74,15 +83,11 @@ final class ArchiveExtractionByteBudget {
 
     static final class Scope implements AutoCloseable {
         private final ArchiveExtractionByteBudget budget;
-        private final ArchiveExtractionByteBudget previous;
         private final boolean installed;
         private boolean closed;
 
-        private Scope(ArchiveExtractionByteBudget budget,
-                      ArchiveExtractionByteBudget previous,
-                      boolean installed) {
+        private Scope(ArchiveExtractionByteBudget budget, boolean installed) {
             this.budget = budget;
-            this.previous = previous;
             this.installed = installed;
         }
 
@@ -95,8 +100,7 @@ final class ArchiveExtractionByteBudget {
             if (closed) return;
             closed = true;
             if (!installed) return;
-            if (previous == null) ACTIVE.remove();
-            else ACTIVE.set(previous);
+            ACTIVE.remove();
         }
     }
 
@@ -106,6 +110,8 @@ final class ArchiveExtractionByteBudget {
         private final String path;
         private final File parent;
         private long spaceAllowance;
+        private Throwable failure;
+        private boolean closed;
 
         private BudgetedOutputStream(OutputStream delegate,
                                      ArchiveExtractionByteBudget budget,
@@ -117,7 +123,7 @@ final class ArchiveExtractionByteBudget {
         }
 
         private void checkSpace(int count) throws IOException {
-            if (Thread.currentThread().isInterrupted()) throw new IOException("Archive extraction interrupted");
+            if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("Archive extraction interrupted");
             if (count <= spaceAllowance) { spaceAllowance -= count; return; }
             // A sibling block spool or concurrent extraction can consume space
             // after this output opened. Refresh periodically, not only at open.
@@ -126,14 +132,39 @@ final class ArchiveExtractionByteBudget {
             spaceAllowance = Math.min(1024L * 1024L, available - count);
         }
 
+        private void requireWritable() throws IOException {
+            if (closed) throw new IOException("Archive extraction output is closed");
+            // A fresh exception avoids self-suppression when a buffered close
+            // retries a failed write. The original failure stays available as cause.
+            if (failure != null) throw new IOException("Archive extraction output failed", failure);
+        }
+
+        private void reserve(int count) throws IOException {
+            requireWritable();
+            try {
+                checkSpace(count);
+                budget.reserve(path, count);
+            } catch (IOException | RuntimeException | Error error) {
+                failure = error;
+                throw error;
+            }
+        }
+
+        private void failWrite(Throwable error, int count) {
+            failure = error;
+            try { budget.rollback(path, count); }
+            catch (RuntimeException | Error cleanup) {
+                if (cleanup != error) error.addSuppressed(cleanup);
+            }
+        }
+
         @Override
         public void write(int value) throws IOException {
-            checkSpace(1);
-            budget.reserve(path, 1);
+            reserve(1);
             try {
                 delegate.write(value);
-            } catch (IOException | RuntimeException e) {
-                budget.rollback(path, 1);
+            } catch (IOException | RuntimeException | Error e) {
+                failWrite(e, 1);
                 throw e;
             }
         }
@@ -144,24 +175,27 @@ final class ArchiveExtractionByteBudget {
             if ((offset | length) < 0 || length > data.length - offset) {
                 throw new IndexOutOfBoundsException();
             }
-            if (length == 0) return;
-            checkSpace(length);
-            budget.reserve(path, length);
+            if (length == 0) { requireWritable(); return; }
+            reserve(length);
             try {
                 delegate.write(data, offset, length);
-            } catch (IOException | RuntimeException e) {
-                budget.rollback(path, length);
+            } catch (IOException | RuntimeException | Error e) {
+                failWrite(e, length);
                 throw e;
             }
         }
 
         @Override
         public void flush() throws IOException {
-            delegate.flush();
+            requireWritable();
+            try { delegate.flush(); }
+            catch (IOException | RuntimeException | Error error) { failure = error; throw error; }
         }
 
         @Override
         public void close() throws IOException {
+            closed = true;
+            // Cleanup is allowed after failure/cancellation and may be retried.
             delegate.close();
         }
     }

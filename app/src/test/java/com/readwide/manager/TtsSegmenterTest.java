@@ -9,6 +9,46 @@ import org.junit.Test;
 import java.util.List;
 
 public class TtsSegmenterTest {
+    @Test public void decimalsAndCommonAbbreviationsStayTogether() {
+        List<TtsSpeechSegment> segments = TtsSegmenter.segmentPage(
+                "Dr. Kim paid 3.14 dollars. Next sentence.", 0, 700);
+        assertEquals(2, segments.size());
+        assertEquals("Dr. Kim paid 3.14 dollars.", segments.get(0).speechText);
+        assertFalse(TtsSegmenter.endsSentence("Dr. Kim", 3));
+        assertTrue(TtsSegmenter.endsSentence("Done! Next", 5));
+    }
+
+    @Test public void shortSentencesAndClosingQuotesKeepOffsets() {
+        List<TtsSpeechSegment> segments = TtsSegmenter.segmentPage("Hi! \"Yes?\" End.", 7, 700);
+        assertEquals(3, segments.size());
+        assertEquals("Hi!", segments.get(0).speechText);
+        assertEquals("\"Yes?\"", segments.get(1).speechText);
+        assertEquals(17, segments.get(1).endChar);
+    }
+
+    @Test public void windowsKeepWordsAndSurrogatePairsIntact() {
+        String text = "Alpha beta gamma delta";
+        assertEquals(11, TtsSegmenter.windowEnd(text, 0, text.length(), 14));
+        String unicode = "abcdefghijklmno\uD83D\uDE00qrstuvwxyz";
+        int end = TtsSegmenter.windowEnd(unicode, 0, unicode.length(), 16);
+        assertEquals(15, end);
+        List<TtsSpeechSegment> segments = TtsSegmenter.segmentPage(unicode, 0, 16);
+        StringBuilder restored = new StringBuilder();
+        for (TtsSpeechSegment segment : segments) {
+            assertFalse(Character.isHighSurrogate(segment.speechText.charAt(segment.speechText.length() - 1)));
+            assertFalse(Character.isLowSurrogate(segment.speechText.charAt(0)));
+            restored.append(segment.speechText);
+        }
+        assertEquals(unicode, restored.toString());
+    }
+
+    @Test public void closingPunctuationCannotExceedChunkBudget() {
+        String text = "abcdefghijklmno.\"\"\"\" more words";
+        for (TtsSpeechSegment segment : TtsSegmenter.segmentPage(text, 0, 16)) {
+            assertTrue(segment.endChar - segment.startChar <= 16);
+        }
+    }
+
     @Test
     public void segmentPage_prefersSentenceBoundariesAndKeepsOffsets() {
         String text = "First sentence. Second sentence? Third sentence!";

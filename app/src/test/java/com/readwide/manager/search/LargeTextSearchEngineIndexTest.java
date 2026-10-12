@@ -20,6 +20,27 @@ import java.util.concurrent.atomic.AtomicReference;
 public class LargeTextSearchEngineIndexTest {
     @Rule public final TemporaryFolder temporaryFolder = new TemporaryFolder();
 
+    @Test public void normalizedDuplicateStartsAgreeWithInMemoryIndex() throws Exception {
+        String line = "\u00e1\u0301\u0301\u0301\u031b\u0301\u00e1\u031b";
+        String content = line + "\n" + line;
+        String query = "\u0301\u0301";
+        SearchOptions options = new SearchOptions(true, false, false, true);
+        com.readwide.manager.util.TextMatchIndex expected =
+                com.readwide.manager.util.TextMatchIndex.build(content, query, options, null);
+        File file = textFile(content);
+        LargeTextSearchEngine engine = engine(new AtomicInteger(), new AtomicReference<>("rules"));
+        try {
+            assertTrue(expected.count() > 0);
+            assertEquals(expected.count(), engine.countMatches(file, query, options, false, null));
+            for (int ordinal = 1; ordinal <= expected.count(); ordinal++) {
+                LargeTextSearchResult actual = engine.search(file, query, 0, true, ordinal,
+                        options, false, null);
+                assertEquals(expected.occurrence(ordinal, null).position, actual.charPosition);
+                assertEquals(ordinal, actual.ordinal);
+            }
+        } finally { engine.close(); }
+    }
+
     @Test public void previousBeforeFirstMatchWrapsInStreamingAndIndexedPaths() throws Exception {
         File file = textFile("hit\nhit\nhit");
         LargeTextSearchEngine engine = engine(new AtomicInteger(), new AtomicReference<>("rules"));
@@ -184,10 +205,80 @@ public class LargeTextSearchEngineIndexTest {
         } finally { engine.close(); }
     }
 
+    @Test public void reloadInvalidationDropsIndexEvenWhenFileMetadataIsUnchanged() throws Exception {
+        File file = textFile("same bytes");
+        AtomicReference<String> decoded = new AtomicReference<>("hit suffix");
+        AtomicInteger opens = new AtomicInteger();
+        LargeTextSearchEngine engine = new LargeTextSearchEngine(f -> {
+            opens.incrementAndGet();
+            return new BufferedReader(new java.io.StringReader(decoded.get()));
+        }, f -> new LargeTextSearchEngine.LineTransform() {
+            @Override public String apply(String line) { return line; }
+            @Override public String signature() { return "unchanged-rules"; }
+        });
+        try {
+            assertEquals(1, engine.countMatches(file, "hit", SearchOptions.literal(), false, null));
+            decoded.set("prefix hit"); // Simulates a different decoder for the same file.
+            engine.invalidateCache();
+            assertEquals(7, engine.search(file, "hit", 0, true, 1,
+                    SearchOptions.literal(), false, null).charPosition);
+            assertEquals(2, opens.get());
+        } finally { engine.close(); }
+    }
+
+    @Test public void invalidatedCountingPassCannotRepublishItsIndex() throws Exception {
+        File file = textFile("hit");
+        AtomicInteger opens = new AtomicInteger();
+        AtomicReference<LargeTextSearchEngine> owner = new AtomicReference<>();
+        java.util.concurrent.atomic.AtomicBoolean invalidateDuringRead = new java.util.concurrent.atomic.AtomicBoolean(true);
+        LargeTextSearchEngine engine = new LargeTextSearchEngine(f -> {
+            opens.incrementAndGet();
+            return new BufferedReader(Files.newBufferedReader(f.toPath(), StandardCharsets.UTF_8));
+        }, f -> new LargeTextSearchEngine.LineTransform() {
+            @Override public String apply(String line) {
+                if (invalidateDuringRead.getAndSet(false)) owner.get().invalidateCache();
+                return line;
+            }
+            @Override public String signature() { return "unchanged-rules"; }
+        });
+        owner.set(engine);
+        try {
+            assertEquals(1, engine.countMatches(file, "hit", SearchOptions.literal(), false, null));
+            assertTrue(engine.search(file, "hit", 0, true, 1, SearchOptions.literal(), false, null).found());
+            assertEquals(2, opens.get());
+        } finally { engine.close(); }
+    }
+
     private File textFile(String text) throws Exception {
         File file = temporaryFolder.newFile();
         Files.write(file.toPath(), text.getBytes(StandardCharsets.UTF_8));
         return file;
+    }
+
+    @Test public void changedSourceCannotReturnCountNearestOrNthResult() throws Exception {
+        for (int operation = 0; operation < 4; operation++) {
+            File file = textFile("hit\nhit\n");
+            AtomicInteger reads = new AtomicInteger();
+            LargeTextSearchEngine engine = new LargeTextSearchEngine(f ->
+                    new BufferedReader(new java.io.StringReader("hit\nhit\n")) {
+                        @Override public String readLine() throws java.io.IOException {
+                            if (reads.getAndIncrement() == 0) Files.write(f.toPath(), new byte[]{1});
+                            return super.readLine();
+                        }
+                    }, f -> new LargeTextSearchEngine.LineTransform() {
+                        @Override public String apply(String line) { return line; }
+                        @Override public String signature() { return "identity"; }
+                    });
+            try {
+                if (operation == 0) engine.countMatches(file, "hit", SearchOptions.literal(), false, null);
+                else if (operation == 1) engine.searchNearest(file, "hit", 0, true, SearchOptions.literal(), false, null);
+                else if (operation == 2) engine.searchNearest(file, "hit", 7, false, SearchOptions.literal(), false, null);
+                else engine.search(file, "hit", 0, true, 2, SearchOptions.literal(), false, null);
+                org.junit.Assert.fail("mixed source result must not escape: " + operation);
+            } catch (java.io.IOException expected) {
+                assertTrue(expected.getMessage().contains("changed"));
+            } finally { engine.close(); }
+        }
     }
 
     private static LargeTextSearchEngine engine(AtomicInteger opens,

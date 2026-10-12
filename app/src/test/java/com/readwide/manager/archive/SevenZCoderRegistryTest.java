@@ -16,7 +16,7 @@ import org.tukaani.xz.LZMAOutputStream;
 
 public class SevenZCoderRegistryTest {
     @Test public void capabilityTableIsCompleteAndReadOnly() {
-        assertEquals(20, SevenZCoderRegistry.entries().size());
+        assertEquals(26, SevenZCoderRegistry.entries().size());
         for (SevenZCoderRegistry.Entry entry : SevenZCoderRegistry.entries()) {
             assertSame(entry, SevenZCoderRegistry.find(id(entry.id)));
             assertEquals(entry.id.equals("0303011B") ? 4 : 1, entry.inputCount);
@@ -25,7 +25,7 @@ public class SevenZCoderRegistryTest {
     }
 
     @Test public void discoveryUsesExactIdsAndSharedSupplementalFlags() {
-        for (String method : new String[]{"0303011B", "030401", "0A", "0B", "020302", "020304"}) {
+        for (String method : new String[]{"0303011B", "030401", "0A", "0B", "020302", "020304", "040202", "04F71001", "04F71101", "04F71102", "04F71104", "04F71105", "04F71106"}) {
             assertTrue(SevenZCoderRegistry.requiresSupplemental(id(method)));
         }
         assertFalse(SevenZCoderRegistry.requiresSupplemental(id("21")));
@@ -36,6 +36,16 @@ public class SevenZCoderRegistryTest {
         assertNull(SevenZCoderRegistry.find(null));
         assertThrows(ArchiveSupport.UnsupportedArchiveFeatureException.class,
                 () -> SevenZCoderRegistry.require(id("FF")));
+    }
+
+    @Test public void forwardRoutingUsesTheSameCapabilityTableWithoutOpeningCodecs() {
+        for(String method:new String[]{"020302","020304","040202","04F71001","04F71102","04F71104","04F71105","04F71106"}) {
+            assertTrue(method,SevenZCoderRegistry.requiresDedicatedForward(id(method)));
+            assertTrue(SevenZCoderRegistry.requiresSupplemental(id(method)));
+        }
+        for(String method:new String[]{"00","21","030101","0303011B","04F71101","040108","FF"}) {
+            assertFalse(method,SevenZCoderRegistry.requiresDedicatedForward(id(method)));
+        }
     }
 
     @Test public void invalidPropertiesFailWithoutPayloadOrPassword() {
@@ -57,6 +67,76 @@ public class SevenZCoderRegistryTest {
         props[0] = 1;
         try (InputStream decoded = prepared.open(new InputStream[]{new ByteArrayInputStream(new byte[]{1,1,1,1})}, null)) {
             assertArrayEquals(new byte[]{1,2,3,4}, readAll(decoded));
+        }
+    }
+
+    @Test public void zstdPropertiesAreCheckedWithoutLoadingNativeCode() throws Exception {
+        SevenZCoderRegistry.Entry entry = SevenZCoderRegistry.require(id("04F71101"));
+        for (byte[] props : new byte[][]{{0}, {1,5,3}, {1,5,3,0,0}}) {
+            assertEquals(Long.MAX_VALUE, entry.prepare(props, Long.MAX_VALUE).outputSize);
+        }
+        for (int length : new int[]{0,2,4,6}) {
+            assertThrows(IOException.class, () -> entry.prepare(new byte[length], 32));
+        }
+        assertThrows(ArchiveSupport.UnsupportedArchiveFeatureException.class,
+                () -> entry.prepare(new byte[]{1}, 32));
+    }
+
+    @Test public void lz4ProducerPropertiesHaveExactFiveByteShape() throws Exception {
+        SevenZCoderRegistry.Entry entry = SevenZCoderRegistry.require(id("04F71104"));
+        assertEquals(Long.MAX_VALUE, entry.prepare(new byte[]{1,9,1,0,0}, Long.MAX_VALUE).outputSize);
+        for (int length : new int[]{0,1,2,3,4,6}) {
+            assertThrows(IOException.class, () -> entry.prepare(new byte[length], 32));
+        }
+    }
+
+    @Test public void brotliPropertiesHaveExactThreeByteShape() throws Exception {
+        SevenZCoderRegistry.Entry entry = SevenZCoderRegistry.require(id("04F71102"));
+        assertEquals(Long.MAX_VALUE, entry.prepare(new byte[]{1,0,11}, Long.MAX_VALUE).outputSize);
+        for (int length : new int[]{0,1,2,4,5}) {
+            assertThrows(IOException.class, () -> entry.prepare(new byte[length], 32));
+        }
+    }
+
+    @Test public void lz5AndLizardPropertiesAreCheckedWithoutLoadingNativeCode() throws Exception {
+        for (String method : new String[]{"04F71105", "04F71106"}) {
+            int wanted = method.endsWith("05") ? 5 : 3;
+            SevenZCoderRegistry.Entry entry = SevenZCoderRegistry.require(id(method));
+            assertEquals(Long.MAX_VALUE, entry.prepare(new byte[wanted], Long.MAX_VALUE).outputSize);
+            for (int length = 0; length <= 6; length++) {
+                if (length == wanted) continue;
+                byte[] properties = new byte[length];
+                assertThrows(IOException.class, () -> entry.prepare(properties, 32));
+            }
+        }
+    }
+
+    @Test public void lzhamPropertiesDoNotLoadNativeOrImposePayloadCaps() throws Exception {
+        SevenZCoderRegistry.Entry entry = SevenZCoderRegistry.require(id("04F71001"));
+        for (int version : new int[]{0x10,0x11}) {
+            for (int bits : new int[]{0,15,16,26,27,28,29}) {
+                assertEquals(Long.MAX_VALUE, entry.prepare(new byte[]{(byte)version,(byte)bits,4,6,0}, Long.MAX_VALUE).outputSize);
+            }
+            // Descriptive encoder metadata does not select custom table settings.
+            assertEquals(7, entry.prepare(new byte[]{(byte)version,15,(byte)255,(byte)255,(byte)255},7).outputSize);
+        }
+    }
+
+    @Test public void lzhamRejectsUnverifiedVersionsAndMalformedDictionaryProperties() throws Exception {
+        SevenZCoderRegistry.Entry entry = SevenZCoderRegistry.require(id("04F71001"));
+        for (int length : new int[]{0,1,2,3,4,6}) {
+            assertThrows(IOException.class, () -> entry.prepare(new byte[length],0));
+        }
+        for (int version = 0; version <= 255; version++) {
+            if (version == 0x10 || version == 0x11) continue;
+            final byte propertyVersion = (byte)version;
+            assertThrows(ArchiveSupport.UnsupportedArchiveFeatureException.class,
+                    () -> entry.prepare(new byte[]{propertyVersion,15,0,0,0},0));
+        }
+        for (int version : new int[]{0x10,0x11}) {
+            for (int bits : new int[]{1,14,30,255}) {
+                assertThrows(IOException.class, () -> entry.prepare(new byte[]{(byte)version,(byte)bits,0,0,0},0));
+            }
         }
     }
 
@@ -90,6 +170,73 @@ public class SevenZCoderRegistryTest {
         assertEquals(32769, SevenZCoderRegistry.boundedDictionary(0xffffffffL, 32769, maximum));
         assertEquals(1 << 20, SevenZCoderRegistry.boundedDictionary(1 << 20, Long.MAX_VALUE, maximum));
         assertEquals(Long.MAX_VALUE, SevenZCoderRegistry.find(id("21")).prepare(new byte[]{0}, Long.MAX_VALUE).outputSize);
+    }
+
+    @Test public void lzma2PreparationRetainsTheRawDecoderDictionaryRange() throws Exception {
+        // Preparation must not allocate a dictionary or inherit the options
+        // encoder's smaller ceiling. Opening these sizes requires real memory.
+        for (int dictionary : new int[]{LZMA2Options.DICT_SIZE_MAX,
+                LZMA2Options.DICT_SIZE_MAX + 16, LZMA2InputStream.DICT_SIZE_MAX}) {
+            assertEquals(dictionary, SevenZCoderRegistry.boundedDictionary(
+                    0xffffffffL, dictionary, LZMA2InputStream.DICT_SIZE_MAX));
+            assertEquals(dictionary, SevenZCoderRegistry.require(id("21"))
+                    .prepare(new byte[]{40}, dictionary).outputSize);
+        }
+    }
+
+    @Test public void knownSizeLzmaAcceptsBothEndingsIncludingEmptyOutput() throws Exception {
+        for (int length : new int[]{0, 1, 32768}) {
+            byte[] raw = new byte[length];
+            new java.util.Random(51).nextBytes(raw);
+            for (boolean marker : new boolean[]{false, true}) {
+                try (InputStream decoded = rawLzma(lzmaBytes(raw, marker), raw.length)) {
+                    assertArrayEquals(raw, readAll(decoded));
+                }
+            }
+        }
+    }
+
+    @Test public void optionalLzmaMarkerDoesNotPermitWrongOutputSize() throws Exception {
+        byte[] raw = new byte[32768];
+        new java.util.Random(52).nextBytes(raw);
+        for (boolean marker : new boolean[]{false, true}) {
+            byte[] packed = lzmaBytes(raw, marker);
+            for (int size : new int[]{raw.length - 1, raw.length + 1}) {
+                assertThrows(IOException.class, () -> {
+                    try (InputStream decoded = rawLzma(packed, size)) { readAll(decoded); }
+                });
+            }
+        }
+    }
+
+    @Test public void optionalLzmaMarkerStillRejectsTruncatedOrDamagedEnding() throws Exception {
+        byte[] raw = new byte[16384];
+        new java.util.Random(53).nextBytes(raw);
+        byte[] packed = lzmaBytes(raw, true);
+        for (int removed : new int[]{1, 3, 8}) {
+            byte[] truncated = java.util.Arrays.copyOf(packed, packed.length - removed);
+            assertThrows(IOException.class, () -> {
+                try (InputStream decoded = rawLzma(truncated, raw.length)) { readAll(decoded); }
+            });
+        }
+        packed[packed.length - 1] ^= 1;
+        assertThrows(IOException.class, () -> {
+            try (InputStream decoded = rawLzma(packed, raw.length)) { readAll(decoded); }
+        });
+    }
+
+    private static byte[] lzmaBytes(byte[] raw, boolean marker) throws IOException {
+        ByteArrayOutputStream packed = new ByteArrayOutputStream();
+        LZMA2Options options = new LZMA2Options(1);
+        options.setDictSize(1 << 20);
+        try (LZMAOutputStream encoded = new LZMAOutputStream(packed, options, marker)) { encoded.write(raw); }
+        return packed.toByteArray();
+    }
+
+    private static InputStream rawLzma(byte[] packed, long size) throws IOException {
+        return SevenZCoderRegistry.require(id("030101"))
+                .prepare(new byte[]{0x5d, 0, 0, 16, 0}, size)
+                .open(new InputStream[]{new ByteArrayInputStream(packed)}, null);
     }
 
     @Test public void genuinelyUnrepresentableDictionariesRemainExplicitlyUnsupported() {

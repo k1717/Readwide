@@ -18,6 +18,36 @@ final class ReaderPageJumpController {
         this.activity = activity;
     }
 
+    void scrollToDocumentPercent(float fraction) {
+        if (Float.isNaN(fraction) || Float.isInfinite(fraction)) return;
+        if (!activity.textContentReadyForPersistence || activity.readerView == null
+                || !activity.readerView.hasCurrentTextLayout()
+                || !activity.ensureLoadedTextCurrent()) return;
+        activity.stopAutoPageTurnForManualNavigation();
+        activity.clearPendingToolbarSeekJump();
+        float bounded = Math.max(0f, Math.min(1f, fraction));
+        if (activity.largeTextEstimateActive) {
+            int total = Math.max(1, activity.getDisplayedTotalPageCount());
+            int page = (int) (1L + Math.round((total - 1L) * (double) bounded));
+            scrollToPageNumber(page, true);
+        } else {
+            activity.scrollToPercent(bounded);
+        }
+    }
+
+    void scrollToDocumentLine(int line) {
+        if (!activity.textContentReadyForPersistence || activity.readerView == null
+                || !activity.readerView.hasCurrentTextLayout()
+                || !activity.ensureLoadedTextCurrent()) return;
+        activity.stopAutoPageTurnForManualNavigation();
+        activity.clearPendingToolbarSeekJump();
+        if (activity.largeTextEstimateActive) {
+            new ReaderLargeTextPartitionNavigator(activity).switchToDisplayLine(Math.max(1, line));
+        } else {
+            activity.scrollToCharPosition(activity.findCharForLine(Math.max(1, line)));
+        }
+    }
+
     boolean scrollToPageNumber(int page) {
         return scrollToPageNumber(page, false, true);
     }
@@ -91,7 +121,8 @@ final class ReaderPageJumpController {
     boolean jumpToFinalLargeTextPage(int totalPages, boolean showLoadingForAsyncPartitionJump) {
         if (!activity.largeTextEstimateActive || activity.filePath == null) return false;
 
-        int stableTotalPages = Math.max(1, totalPages);
+        int exactTotal = activity.getLargeTextExactPageCountIfReady();
+        int stableTotalPages = Math.max(1, exactTotal > 0 ? exactTotal : totalPages);
 
         CustomReaderView.PageTextAnchor finalAnchor =
                 activity.getExactLargeTextAnchorForPage(stableTotalPages);

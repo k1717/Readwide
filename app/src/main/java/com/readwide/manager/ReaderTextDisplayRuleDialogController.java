@@ -259,7 +259,8 @@ final class ReaderTextDisplayRuleDialogController {
                     || oldCaseSensitive != rule.caseSensitive
                     || oldUseRegex != rule.useRegex);
             boolean shouldRefreshTxtContent = editingExistingRule
-                    ? ((enabledChanged || textOrModeChanged) && (oldAppliesToCurrentFile || newAppliesToCurrentFile))
+                    ? (oldAppliesToCurrentFile != newAppliesToCurrentFile
+                        || ((enabledChanged || textOrModeChanged) && (oldAppliesToCurrentFile || newAppliesToCurrentFile)))
                     : newAppliesToCurrentFile;
 
             if (editingExistingRule && editIndex >= 0 && editIndex < rules.size()) {
@@ -281,8 +282,8 @@ final class ReaderTextDisplayRuleDialogController {
                         activity.handler.post(activity::applyPendingTextDisplayRuleWindowRefresh);
                     }
                 } else {
-                    // Scope-only changes such as All files <-> Current file only should update
-                    // the rule list immediately, but they should not reload the opened TXT.
+                    // Metadata/scope changes that preserve this file's transforms
+                    // do not require rebuilding the content.
                     acknowledgeTextDisplayRuleWindowNoContentChange();
                 }
             }
@@ -440,21 +441,25 @@ final class ReaderTextDisplayRuleDialogController {
                 final int index = i;
                 up.setOnClickListener(v -> {
                     if (index <= 0) return;
+                    String beforeSignature = currentTextDisplayRuleSignature();
                     TextDisplayRule moved = rules.remove(index);
                     rules.add(index - 1, moved);
                     TextDisplayRuleManager.saveRules(getApplicationContext(), rules);
                     refresh[0].run();
-                    // Reordering only changes display priority in the manager. Do not reload TXT.
-                    acknowledgeTextDisplayRuleWindowNoContentChange();
+                    if (!beforeSignature.equals(currentTextDisplayRuleSignature())) {
+                        requestTextDisplayRuleContentRefreshOnWindowClose();
+                    }
                 });
                 down.setOnClickListener(v -> {
                     if (index >= rules.size() - 1) return;
+                    String beforeSignature = currentTextDisplayRuleSignature();
                     TextDisplayRule moved = rules.remove(index);
                     rules.add(index + 1, moved);
                     TextDisplayRuleManager.saveRules(getApplicationContext(), rules);
                     refresh[0].run();
-                    // Reordering only changes display priority in the manager. Do not reload TXT.
-                    acknowledgeTextDisplayRuleWindowNoContentChange();
+                    if (!beforeSignature.equals(currentTextDisplayRuleSignature())) {
+                        requestTextDisplayRuleContentRefreshOnWindowClose();
+                    }
                 });
                 toggle.setOnClickListener(v -> {
                     String beforeSignature = currentTextDisplayRuleSignature();

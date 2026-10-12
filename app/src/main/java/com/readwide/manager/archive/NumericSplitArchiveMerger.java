@@ -43,7 +43,7 @@ final class NumericSplitArchiveMerger {
             // The one-open-volume channel preserves the round-two descriptor bound.
             try (SplitSeekableByteChannel input = new SplitSeekableByteChannel(java.util.Arrays.asList(files));
                  OutputStream output = new BufferedOutputStream(new FileOutputStream(temp))) {
-                if (input.size() != expected) throw new IOException("Split volume set changed before merge");
+                input.requireVolumeLengths(lengths);
                 byte[] bytes = new byte[64 * 1024];
                 ByteBuffer buffer = ByteBuffer.wrap(bytes);
                 long copied = 0, sinceSpaceCheck = 0;

@@ -650,10 +650,11 @@ class PdfContinuousPageAdapter extends RecyclerView.Adapter<PdfContinuousPageAda
                 if (isObsoleteRender(request)) return;
                 synchronized (activity.rendererLock) {
                     if (isObsoleteRender(request)) return;
-                    if (activity.activityDestroyed || activity.pdfRenderer == null || pageToRender >= activity.pageCount) {
+                    PdfRenderer renderer = activity.pdfRenderer;
+                    if (activity.activityDestroyed || renderer == null || pageToRender >= activity.pageCount) {
                         throw new IllegalStateException("PDF renderer is closed");
                     }
-                    PdfRenderer.Page page = activity.pdfRenderer.openPage(pageToRender);
+                    PdfRenderer.Page page = renderer.openPage(pageToRender);
                     try {
                         plan = PdfPageRenderPlan.create(
                                 page.getWidth(),

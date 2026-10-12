@@ -125,6 +125,7 @@ public final class LargeTextSearchEngine {
                                                @NonNull SearchOptions options,
                                                boolean collapseBlankLines,
                                                @Nullable CancelSignal cancel) throws IOException {
+        final long sourceLength = file.length(), sourceModified = file.lastModified();
         SearchMatcher matcher = SearchMatcher.compile(query, options);
         if (matcher == null) return new LargeTextSearchResult(-1, 1, 0, 0);
 
@@ -132,7 +133,11 @@ public final class LargeTextSearchEngine {
         LargeTextMatchIndex cached = getCachedIndex(
                 file, query, options, collapseBlankLines, lineTransform.signature());
         if (cached != null) {
-            try { return cached.nearest(startPosition, forward); }
+            try {
+                LargeTextSearchResult result = cached.nearest(startPosition, forward);
+                requireUnchangedSource(file, sourceLength, sourceModified);
+                return result;
+            }
             catch (IOException unavailable) { discardIndex(cached); }
         }
 
@@ -194,16 +199,21 @@ public final class LargeTextSearchEngine {
                 firstChar = state[1]; firstLine = state[2]; firstOrdinal = state[3];
                 lastChar = state[4]; lastLine = state[5]; lastOrdinal = state[6];
                 selectedChar = state[7]; selectedLine = state[8]; selectedOrdinal = state[9];
-                if (earlyReturn[0] != null) return earlyReturn[0];
+                if (earlyReturn[0] != null) {
+                    requireUnchangedSource(file, sourceLength, sourceModified);
+                    return earlyReturn[0];
+                }
 
                 charCount += normalized.length() + 1L;
                 if (!forward && selectedChar >= 0 && charCount > start) {
+                    requireUnchangedSource(file, sourceLength, sourceModified);
                     return new LargeTextSearchResult(selectedChar, selectedLine, selectedOrdinal, -1);
                 }
                 line++;
             }
         }
 
+        requireUnchangedSource(file, sourceLength, sourceModified);
         if (ordinal <= 0) {
             return new LargeTextSearchResult(-1, 1, 0, 0);
         }
@@ -271,9 +281,8 @@ public final class LargeTextSearchEngine {
             }
 
             if (closed || Thread.currentThread().isInterrupted() || (cancel != null && cancel.isCancelled())) return -1;
-            if (!indexBuilder.overflowed()
-                    && initialLength == file.length()
-                    && initialLastModified == file.lastModified()) {
+            requireUnchangedSource(file, initialLength, initialLastModified);
+            if (!indexBuilder.overflowed()) {
                 try {
                     installIndex(indexBuilder.build(
                         file,
@@ -283,6 +292,7 @@ public final class LargeTextSearchEngine {
                         lineTransform.signature()), generation);
                 } catch (IOException unavailable) { /* Exact count remains valid; navigation can scan. */ }
             }
+            requireUnchangedSource(file, initialLength, initialLastModified);
             return total[0];
         }
     }
@@ -313,6 +323,7 @@ public final class LargeTextSearchEngine {
                                         @NonNull SearchOptions options,
                                         boolean collapseBlankLines,
                                         @Nullable CancelSignal cancel) throws IOException {
+        final long sourceLength = file.length(), sourceModified = file.lastModified();
         SearchMatcher matcher = SearchMatcher.compile(query, options);
         if (matcher == null) return new LargeTextSearchResult(-1, 1, 0, 0);
 
@@ -320,9 +331,13 @@ public final class LargeTextSearchEngine {
         LargeTextMatchIndex cached = getCachedIndex(
                 file, query, options, collapseBlankLines, lineTransform.signature());
         if (cached != null) {
-            try { return targetOccurrence > 0
+            try {
+                LargeTextSearchResult result = targetOccurrence > 0
                     ? cached.occurrence(targetOccurrence)
-                    : cached.nearest(startPosition, forward); }
+                    : cached.nearest(startPosition, forward);
+                requireUnchangedSource(file, sourceLength, sourceModified);
+                return result;
+            }
             catch (IOException unavailable) { discardIndex(cached); }
         }
 
@@ -389,6 +404,7 @@ public final class LargeTextSearchEngine {
             }
         }
 
+        requireUnchangedSource(file, sourceLength, sourceModified);
         if (total <= 0) {
             return new LargeTextSearchResult(-1, 1, 0, 0);
         }
@@ -414,6 +430,13 @@ public final class LargeTextSearchEngine {
         return new LargeTextSearchResult(selectedChar, selectedLine, selectedOrdinal, total);
     }
 
+    private void requireUnchangedSource(File file, long length, long modified) throws IOException {
+        if (file.length() != length || file.lastModified() != modified) {
+            invalidateCache();
+            throw new IOException("TXT changed while searching");
+        }
+    }
+
     private synchronized void installIndex(LargeTextMatchIndex index, long generation) {
         if (closed || generation != indexGeneration.get()) { index.close(); return; }
         LargeTextMatchIndex old = cachedMatchIndex;
@@ -424,6 +447,12 @@ public final class LargeTextSearchEngine {
     private synchronized void discardIndex(LargeTextMatchIndex index) {
         if (cachedMatchIndex == index) cachedMatchIndex = null;
         index.close();
+    }
+
+    public synchronized void invalidateCache() {
+        indexGeneration.incrementAndGet();
+        if (cachedMatchIndex != null) cachedMatchIndex.close();
+        cachedMatchIndex = null;
     }
 
     public synchronized void close() {

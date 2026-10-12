@@ -3,6 +3,9 @@ package com.readwide.manager;
 import androidx.annotation.NonNull;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -19,7 +22,6 @@ import java.util.regex.Pattern;
  */
 final class MarkdownDocumentRenderer {
     private static final Pattern LINK_PATTERN = Pattern.compile("(!)?\\[([^\\]]*)\\]\\(([^)\\s]+)(?:\\s+\"[^\"]*\")?\\)");
-    private static final Pattern CODE_PATTERN = Pattern.compile("`([^`]+)`");
     private static final Pattern STRONG_PATTERN = Pattern.compile("(\\*\\*|__)(.+?)\\1");
     private static final Pattern STRIKE_PATTERN = Pattern.compile("~~(.+?)~~");
     private static final Pattern EMPHASIS_STAR_PATTERN = Pattern.compile("(?<!\\*)\\*([^*\\s][^*]*?[^*\\s]|[^*\\s])\\*(?!\\*)");
@@ -207,17 +209,20 @@ final class MarkdownDocumentRenderer {
 
     private static FenceBlock readFence(@NonNull List<String> lines, @NonNull int[] lineOffsets, int start) {
         String first = lines.get(start).trim();
-        String fence = first.startsWith("~~~") ? "~~~" : "```";
-        String lang = first.length() > 3 ? first.substring(3).trim().toLowerCase(Locale.ROOT) : "";
+        char marker = first.charAt(0);
+        int fenceLength = markerRunLength(first, 0, marker);
+        String lang = first.substring(fenceLength).trim().toLowerCase(Locale.ROOT);
         StringBuilder code = new StringBuilder();
         int i = start + 1;
         while (i < lines.size()) {
             String line = lines.get(i);
-            if (line.trim().startsWith(fence)) {
+            String candidate = line.trim();
+            int closeLength = markerRunLength(candidate, 0, marker);
+            if (closeLength >= fenceLength && candidate.substring(closeLength).trim().isEmpty()) {
                 i++;
                 break;
             }
-            if (code.length() > 0) code.append('\n');
+            if (i > start + 1) code.append('\n');
             code.append(line);
             i++;
         }
@@ -227,7 +232,8 @@ final class MarkdownDocumentRenderer {
     private static void appendFenceBlock(@NonNull StringBuilder body, @NonNull FenceBlock block) {
         String lang = block.language;
         if ("mermaid".equals(lang) || "chart".equals(lang) || "chart-json".equals(lang)) {
-            body.append("<figure class=\"md-diagram\"><div class=\"md-diagram-title\">")
+            body.append("<figure class=\"md-diagram\"").append(sourceAttrs(block.startLine, block.sourceOffset))
+                    .append("><div class=\"md-diagram-title\">")
                     .append("mermaid".equals(lang) ? "Mermaid diagram" : "Chart block")
                     .append("</div><div class=\"md-diagram-note\">")
                     .append("Diagram rendering is prepared as a Markdown document block. Full offline rendering will be added separately.")
@@ -236,7 +242,8 @@ final class MarkdownDocumentRenderer {
                     .append("</code></pre></figure>\n");
             return;
         }
-        body.append("<pre><code>").append(escapeHtml(block.code)).append("</code></pre>\n");
+        body.append("<pre").append(sourceAttrs(block.startLine, block.sourceOffset))
+                .append("><code>").append(escapeHtml(block.code)).append("</code></pre>\n");
     }
 
     private static int headingLevel(@NonNull String line) {
@@ -249,9 +256,15 @@ final class MarkdownDocumentRenderer {
     }
 
     private static boolean isHorizontalRule(@NonNull String trimmed) {
-        if (trimmed.length() < 3) return false;
-        String compact = trimmed.replace(" ", "").replace("\t", "");
-        return compact.matches("[-*_]{3,}");
+        char marker = trimmed.isEmpty() ? '\0' : trimmed.charAt(0);
+        if (marker != '-' && marker != '*' && marker != '_') return false;
+        int count = 0;
+        for (int i = 0; i < trimmed.length(); i++) {
+            char ch = trimmed.charAt(i);
+            if (ch == marker) count++;
+            else if (ch != ' ' && ch != '\t') return false;
+        }
+        return count >= 3;
     }
 
     private static boolean isUnorderedList(@NonNull String trimmed) {
@@ -332,9 +345,50 @@ final class MarkdownDocumentRenderer {
     }
 
     private static String renderInline(@NonNull String raw) {
+        // Index delimiter runs once: unmatched backticks must not repeatedly scan
+        // the rest of a long line. Render code separately so later markup passes
+        // cannot interpret its contents or alter generated attributes.
+        InlineTokens tokens = new InlineTokens(raw);
+        if (raw.indexOf('`') < 0) {
+            return tokens.expand(renderEmphasis(replaceLinksAndImages(raw, tokens)), true);
+        }
+        Map<Integer, ArrayDeque<Integer>> ticks = new HashMap<>();
+        for (int i = 0; i < raw.length();) {
+            if (raw.charAt(i) != '`') { i++; continue; }
+            int length = markerRunLength(raw, i, '`');
+            ticks.computeIfAbsent(length, key -> new ArrayDeque<>()).add(i);
+            i += length;
+        }
+        StringBuilder out = new StringBuilder(raw.length());
+        int plainStart = 0;
+        for (int i = 0; i < raw.length();) {
+            if (raw.charAt(i) != '`') { i++; continue; }
+            int length = markerRunLength(raw, i, '`');
+            ArrayDeque<Integer> ends = ticks.get(length);
+            while (!ends.isEmpty() && ends.peek() <= i) ends.remove();
+            if (ends.isEmpty()) { i += length; continue; }
+            int end = ends.remove();
+            out.append(raw, plainStart, i);
+            String code = raw.substring(i + length, end);
+            if (code.startsWith(" ") && code.endsWith(" ") && !code.trim().isEmpty()) {
+                code = code.substring(1, code.length() - 1);
+            }
+            out.append(tokens.add("<code>" + escapeHtml(code) + "</code>", code));
+            i = end + length;
+            plainStart = i;
+        }
+        out.append(raw, plainStart, raw.length());
+        return tokens.expand(renderEmphasis(replaceLinksAndImages(out.toString(), tokens)), true);
+    }
+
+    private static int markerRunLength(String text, int start, char marker) {
+        int end = start;
+        while (end < text.length() && text.charAt(end) == marker) end++;
+        return end - start;
+    }
+
+    private static String renderEmphasis(String raw) {
         String text = escapeHtml(raw);
-        text = replaceCode(text);
-        text = replaceLinksAndImages(text);
         text = STRIKE_PATTERN.matcher(text).replaceAll("<del>$1</del>");
         text = STRONG_PATTERN.matcher(text).replaceAll("<strong>$2</strong>");
         text = EMPHASIS_STAR_PATTERN.matcher(text).replaceAll("<em>$1</em>");
@@ -342,37 +396,66 @@ final class MarkdownDocumentRenderer {
         return text;
     }
 
-    private static String replaceCode(@NonNull String text) {
-        Matcher m = CODE_PATTERN.matcher(text);
-        StringBuffer sb = new StringBuffer();
-        while (m.find()) {
-            m.appendReplacement(sb, Matcher.quoteReplacement("<code>" + m.group(1) + "</code>"));
-        }
-        m.appendTail(sb);
-        return sb.toString();
-    }
-
-    private static String replaceLinksAndImages(@NonNull String text) {
+    private static String replaceLinksAndImages(@NonNull String text, InlineTokens tokens) {
         Matcher m = LINK_PATTERN.matcher(text);
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder(text.length());
+        int copied = 0;
         while (m.find()) {
+            sb.append(text, copied, m.start());
             boolean image = m.group(1) != null && !m.group(1).isEmpty();
             String label = m.group(2) != null ? m.group(2) : "";
-            String url = safeUrl(m.group(3));
+            String url = safeUrl(tokens.expand(m.group(3), false));
+            String plainLabel = tokens.expand(label, false);
+            String renderedLabel = tokens.expand(renderEmphasis(label), true);
             String replacement;
             if (image) {
                 replacement = url.isEmpty()
-                        ? "<span class=\"md-image-alt\">" + label + "</span>"
-                        : "<img src=\"" + escapeAttribute(url) + "\" alt=\"" + escapeAttribute(label) + "\">";
+                        ? "<span class=\"md-image-alt\">" + escapeHtml(plainLabel) + "</span>"
+                        : "<img src=\"" + escapeAttribute(url) + "\" alt=\"" + escapeAttribute(plainLabel) + "\">";
             } else {
                 replacement = url.isEmpty()
-                        ? label
-                        : "<a href=\"" + escapeAttribute(url) + "\" rel=\"noreferrer\">" + label + "</a>";
+                        ? renderedLabel
+                        : "<a href=\"" + escapeAttribute(url) + "\" rel=\"noreferrer\">" + renderedLabel + "</a>";
             }
-            m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+            sb.append(tokens.add(replacement, plainLabel));
+            copied = m.end();
         }
-        m.appendTail(sb);
+        sb.append(text, copied, text.length());
         return sb.toString();
+    }
+
+    /** Protect generated HTML while permitting emphasis to span code and links. */
+    private static final class InlineTokens {
+        final String prefix;
+        final List<String> html = new ArrayList<>();
+        final List<String> plain = new ArrayList<>();
+
+        InlineTokens(String source) {
+            String candidate = "\u0001RW";
+            while (source.contains(candidate)) candidate += "R";
+            prefix = candidate;
+        }
+
+        String add(String rendered, String text) {
+            String token = prefix + html.size() + "\u0002";
+            html.add(rendered);
+            plain.add(text);
+            return token;
+        }
+
+        String expand(String text, boolean markup) {
+            StringBuilder out = new StringBuilder(text.length());
+            int from = 0;
+            int start;
+            while ((start = text.indexOf(prefix, from)) >= 0) {
+                int end = text.indexOf('\u0002', start + prefix.length());
+                if (end < 0) break;
+                int index = Integer.parseInt(text.substring(start + prefix.length(), end));
+                out.append(text, from, start).append((markup ? html : plain).get(index));
+                from = end + 1;
+            }
+            return out.append(text, from, text.length()).toString();
+        }
     }
 
     private static String safeUrl(String raw) {

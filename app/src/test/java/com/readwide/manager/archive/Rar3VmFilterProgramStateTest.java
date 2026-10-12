@@ -3,10 +3,12 @@ package com.readwide.manager.archive;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertThrows;
 
 import org.junit.Test;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 
 public class Rar3VmFilterProgramStateTest {
     // A synthetic 53-byte payload with the published RAR E8 standard-filter
@@ -31,7 +33,7 @@ public class Rar3VmFilterProgramStateTest {
         Rar3VmFilter.ProgramState.Parsed parsedFirst = state.parse(
                 0x80 | 0x20, first.toByteArray(), 100, 1 << 20);
 
-        assertTrue(parsedFirst.resetPendingFilters);
+        assertTrue(parsedFirst.resetProgramSlots);
         assertEquals(Rar3VmFilter.StandardFilter.E8, parsedFirst.filter.type);
         assertEquals(103L, parsedFirst.filter.blockStartAbs);
         assertEquals(103L, parsedFirst.filter.fileOffset);
@@ -47,7 +49,7 @@ public class Rar3VmFilterProgramStateTest {
         Rar3VmFilter.ProgramState.Parsed parsedReuse = state.parse(
                 0x80 | 0x08, reused.toByteArray(), 200, 1 << 20);
 
-        assertFalse(parsedReuse.resetPendingFilters);
+        assertFalse(parsedReuse.resetProgramSlots);
         assertEquals(Rar3VmFilter.StandardFilter.E8, parsedReuse.filter.type);
         assertEquals(204L, parsedReuse.filter.blockStartAbs);
         assertEquals(5, parsedReuse.filter.blockLength);
@@ -69,6 +71,131 @@ public class Rar3VmFilterProgramStateTest {
                 assertEquals(1024,state.programCount());
             }
         }
+    }
+
+    @Test public void biasedOffsetsWrapBeforeAddingTheLongEntryPosition() throws Exception {
+        Rar3VmFilter.ProgramState state = new Rar3VmFilter.ProgramState();
+        define(state, 1, 5);
+        for (boolean compact : new boolean[]{false, true}) {
+            for (int lowByte : new int[]{0, 255}) {
+                BitWriter record = new BitWriter();
+                if (compact) record.writeBits(0x1000 | lowByte, 14); // 01 0000 + signed byte
+                else record.writeData(0xffffff00L | lowByte);
+                long current = 0x100000000L + 123;
+                Rar3VmFilter.PendingFilter filter = state.parse(
+                        0x40, record.toByteArray(), current, 1 << 20).filter;
+                assertEquals(current + lowByte + 2, filter.blockStartAbs);
+                assertEquals(filter.blockStartAbs, filter.fileOffset);
+            }
+        }
+    }
+
+    @Test public void unbiasedOffsetsRemainUnsignedAndLongOverflowFails() throws Exception {
+        Rar3VmFilter.ProgramState state = new Rar3VmFilter.ProgramState();
+        define(state, 1, 5);
+        BitWriter unsigned = new BitWriter(); unsigned.writeData(0xffffff00L);
+        assertEquals(0xffffff00L + 100, state.parse(
+                0, unsigned.toByteArray(), 100, 1 << 20).filter.blockStartAbs);
+        BitWriter overflow = new BitWriter(); overflow.writeData(2);
+        assertThrows(IOException.class, () -> state.parse(
+                0, overflow.toByteArray(), Long.MAX_VALUE - 1, 1 << 20));
+    }
+
+    @Test public void invalidContextDoesNotConsumeAProgramUse() throws Exception {
+        Rar3VmFilter.ProgramState state = new Rar3VmFilter.ProgramState();
+        define(state, 1, 5);
+        BitWriter record = new BitWriter(); record.writeData(0);
+        byte[] bytes = record.toByteArray();
+        assertThrows(IOException.class, () -> state.parse(0, bytes, -1, 1 << 20));
+        assertThrows(IOException.class, () -> state.parse(0, bytes, 0, 0));
+        assertThrows(IOException.class, () -> state.parse(0, null, 0, 1 << 20));
+        assertEquals(1, state.parse(0, bytes, 0, 1 << 20).filter.initR[5]);
+    }
+
+    @Test public void truncatedResetPreservesBothSlotsAndRememberedSelection() throws Exception {
+        Rar3VmFilter.ProgramState state = new Rar3VmFilter.ProgramState();
+        define(state, 1, 5); define(state, 2, 7);
+        BitWriter record = definition(0, 9);
+        record.writeData(2); record.writeBits(42, 8); // second global byte is missing
+        assertThrows(IOException.class, () -> state.parse(
+                0xa8, record.toByteArray(), 0, 1 << 20));
+        assertEquals(2, state.programCount());
+        assertRemembered(state, 7, 1);
+    }
+
+    @Test public void truncatedReuseCannotChangeSelectionLengthOrUseCount() throws Exception {
+        Rar3VmFilter.ProgramState state = new Rar3VmFilter.ProgramState();
+        define(state, 1, 5); define(state, 2, 7);
+        BitWriter record = new BitWriter();
+        record.writeData(1); record.writeData(0); record.writeData(9);
+        record.writeData(2); record.writeBits(42, 8);
+        assertThrows(IOException.class, () -> state.parse(
+                0xa8, record.toByteArray(), 0, 1 << 20));
+        assertRemembered(state, 7, 1); // slot one is still selected
+        BitWriter firstSlot = new BitWriter(); firstSlot.writeData(1); firstSlot.writeData(0);
+        Rar3VmFilter.PendingFilter first = state.parse(
+                0x80, firstSlot.toByteArray(), 0, 1 << 20).filter;
+        assertEquals(5, first.blockLength);
+        assertEquals(1, first.initR[5]);
+    }
+
+    @Test public void truncatedNewProgramDoesNotReserveASlot() throws Exception {
+        Rar3VmFilter.ProgramState state = new Rar3VmFilter.ProgramState();
+        define(state, 1, 5);
+        BitWriter record = definition(2, 9);
+        record.writeData(2); record.writeBits(42, 8);
+        assertThrows(IOException.class, () -> state.parse(
+                0xa8, record.toByteArray(), 0, 1 << 20));
+        assertEquals(1, state.programCount());
+        assertRemembered(state, 5, 1);
+        define(state, 2, 9);
+        assertEquals(2, state.programCount());
+    }
+
+    @Test public void completeResetReplacesThePreviousProgramState() throws Exception {
+        Rar3VmFilter.ProgramState state = new Rar3VmFilter.ProgramState();
+        define(state, 1, 5); define(state, 2, 7);
+        Rar3VmFilter.ProgramState.Parsed parsed = state.parse(
+                0xa0, definition(0, 9).toByteArray(), 0, 1 << 20);
+        assertTrue(parsed.resetProgramSlots);
+        assertEquals(1, state.programCount());
+        assertEquals(0, parsed.filter.initR[5]);
+        assertRemembered(state, 9, 1);
+    }
+
+    @Test public void legacyClassicCollectorDoesNotDiscardFiltersOnSlotReset() throws Exception {
+        java.lang.reflect.Constructor<Rar3ClassicLzEngine> constructor = Rar3ClassicLzEngine.class.getDeclaredConstructor(
+                RarBitInput.class, RarLzWindow.class, long.class, int[].class, Rar3VmFilter.ProgramState.class);
+        constructor.setAccessible(true);
+        Rar3ClassicLzEngine engine = constructor.newInstance(new RarBitInput(new byte[0]),
+                new RarLzWindow(16, new ByteArrayOutputStream()), 0L, null, new Rar3VmFilter.ProgramState());
+        java.lang.reflect.Method add = Rar3ClassicLzEngine.class.getDeclaredMethod("addVMCode", int.class, byte[].class);
+        add.setAccessible(true);
+        add.invoke(engine, 0xa0, definition(0, 5).toByteArray());
+        Rar3VmFilter.PendingFilter first = engine.filters().get(0);
+        add.invoke(engine, 0xa0, definition(0, 5).toByteArray());
+        assertEquals(2, engine.filters().size());
+        org.junit.Assert.assertSame(first, engine.filters().get(0));
+    }
+
+    private static BitWriter definition(int selector, int length) {
+        BitWriter record = new BitWriter();
+        record.writeData(selector); record.writeData(0); record.writeData(length);
+        record.writeData(E8_PROGRAM.length); record.writeBytes(E8_PROGRAM);
+        return record;
+    }
+
+    private static void define(Rar3VmFilter.ProgramState state, int selector, int length)
+            throws IOException {
+        state.parse(0xa0, definition(selector, length).toByteArray(), 0, 1 << 20);
+    }
+
+    private static void assertRemembered(Rar3VmFilter.ProgramState state, int length, int uses)
+            throws IOException {
+        BitWriter record = new BitWriter(); record.writeData(0);
+        Rar3VmFilter.PendingFilter filter = state.parse(0, record.toByteArray(), 0, 1 << 20).filter;
+        assertEquals(length, filter.blockLength);
+        assertEquals(uses, filter.initR[5]);
     }
 
     private static final class BitWriter {

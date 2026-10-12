@@ -119,7 +119,7 @@ final class Rar3CheckedForwardReader implements ArchiveSupport.ForwardArchiveRea
         decode(false);
         try {
             clearSpool();
-        } catch (IOException failure) {
+        } catch (IOException | RuntimeException | Error failure) {
             retire(failure);
             throw failure;
         }
@@ -130,22 +130,29 @@ final class Rar3CheckedForwardReader implements ArchiveSupport.ForwardArchiveRea
         failed = true;
         decoder.retire();
         try { clearSpool(); }
-        catch (IOException | RuntimeException cleanup) { failure.addSuppressed(cleanup); }
+        catch (IOException | RuntimeException | Error cleanup) {
+            if (cleanup != failure) failure.addSuppressed(cleanup);
+        }
     }
 
     private void clearSpool() throws IOException {
-        IOException failure = null;
-        try { if (input != null) input.close(); }
-        catch (IOException error) { failure = error; }
-        finally { input = null; remainingBytes = verifiedSize = 0; }
+        Throwable failure = null;
+        try { if (input != null) { input.close(); input = null; } }
+        catch (IOException | RuntimeException | Error cleanup) { failure = cleanup; }
+        finally { remainingBytes = verifiedSize = 0; }
         if (spool != null) {
-            if (spool.exists() && !spool.delete()) {
-                IOException cleanup = new IOException("Cannot delete checked RAR spool");
-                if (failure == null) failure = cleanup;
-                else failure.addSuppressed(cleanup);
-            } else spool = null;
+            try {
+                if (spool.exists() && !spool.delete()) throw new IOException("Cannot delete verified RAR spool");
+                spool = null;
+            } catch (IOException | RuntimeException | Error cleanup) {
+                Throwable deletion = cleanup;
+                if (failure == null) failure = deletion;
+                else if (failure != deletion) failure.addSuppressed(deletion);
+            }
         }
-        if (failure != null) throw failure;
+        if (failure instanceof IOException) throw (IOException) failure;
+        if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+        if (failure instanceof Error) throw (Error) failure;
     }
 
     @Override public void close() throws IOException {

@@ -3,15 +3,17 @@ package com.readwide.manager.util;
 /**
  * Runtime state for an in-flight large-TXT partition switch.
  *
- * Rapid page taps can arrive while the next partition is still loading. This
- * object keeps the visible pending page and the queued page delta together so
- * the reader does not derive them from separate Activity fields.
+ * Rapid page taps can arrive while the next partition is still loading.
+ * Page numbers are presentation hints; the destination is an absolute character
+ * and remains valid when an estimated page model becomes exact.
  */
 public final class LargeTextPartitionSwitchState {
     private boolean inProgress;
     private int pendingDisplayPage;
     private int pendingTotalPages;
-    private int queuedPageDelta;
+    private int pendingTargetChar = -1;
+    private int queuedTargetChar = -1;
+    private boolean viewportHandoff;
 
     public boolean isInProgress() {
         return inProgress;
@@ -25,11 +27,37 @@ public final class LargeTextPartitionSwitchState {
         return pendingTotalPages;
     }
 
-    public boolean hasQueuedDelta() {
-        return queuedPageDelta != 0;
+    public boolean hasQueuedTarget() {
+        return queuedTargetChar >= 0;
+    }
+
+    public int destinationChar() {
+        return hasQueuedTarget() ? queuedTargetChar : pendingTargetChar;
+    }
+
+    /** Relocation of the disk-read target must not overwrite a newer page tap. */
+    public void setPendingTargetChar(int position) {
+        if (inProgress) pendingTargetChar = Math.max(0, position);
+    }
+
+    /** Automatic window replacement keeps the visible position, not a page-start jump. */
+    public void markViewportHandoff() {
+        if (inProgress) viewportHandoff = true;
+    }
+
+    public boolean shouldPreserveVisiblePosition() {
+        return inProgress && viewportHandoff && !hasQueuedTarget();
+    }
+
+    public boolean isViewportHandoff() {
+        return inProgress && viewportHandoff;
     }
 
     public void begin(int displayPage, int totalPages, int fallbackDisplayPage, int fallbackTotalPages) {
+        // A new request replaces both the original read and any queued taps.
+        clearQueuedTarget();
+        pendingTargetChar = -1;
+        viewportHandoff = false;
         int stableTotal = totalPages > 0 ? totalPages : fallbackTotalPages;
         stableTotal = Math.max(1, stableTotal);
         int stablePage = displayPage > 0 ? displayPage : fallbackDisplayPage;
@@ -42,31 +70,30 @@ public final class LargeTextPartitionSwitchState {
         inProgress = false;
         pendingDisplayPage = 0;
         pendingTotalPages = 0;
+        pendingTargetChar = -1;
+        viewportHandoff = false;
     }
 
-    public void clearQueuedDelta() {
-        queuedPageDelta = 0;
+    public void clearQueuedTarget() {
+        queuedTargetChar = -1;
     }
 
     public void reset() {
         clearPending();
-        clearQueuedDelta();
+        clearQueuedTarget();
     }
 
-    public void queuePageDelta(int direction, int totalPages, int fallbackCurrentPage) {
-        if (direction == 0) return;
+    public void queueTarget(int charPosition, int page, int totalPages) {
+        if (!inProgress || charPosition < 0) return;
         int total = Math.max(1, totalPages);
-        int pendingPage = pendingDisplayPage > 0 ? pendingDisplayPage : fallbackCurrentPage;
-        pendingPage = LargeTextPageModelMath.clampPage(pendingPage, total);
-        int target = LargeTextPageModelMath.clampPage(pendingPage + direction, total);
-        queuedPageDelta += target - pendingPage;
+        queuedTargetChar = charPosition;
         pendingTotalPages = total;
-        pendingDisplayPage = target;
+        pendingDisplayPage = LargeTextPageModelMath.clampPage(page, total);
     }
 
-    public int consumeQueuedDelta() {
-        int delta = queuedPageDelta;
-        queuedPageDelta = 0;
-        return delta;
+    public int consumeQueuedTarget() {
+        int target = queuedTargetChar;
+        clearQueuedTarget();
+        return target;
     }
 }

@@ -3,17 +3,25 @@ package com.readwide.manager.util;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.readwide.manager.archive.ArchiveCancellation;
+
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 /**
  * State and validation for main-screen cut/copy/paste file operations.
  *
  * This controller intentionally has no Android UI dependency. MainActivity owns
  * dialogs, toasts, navigation, bookmark rebinding, and visible-list refreshes.
+ * Queue selection and busy flags belong to the UI thread. Workers receive a
+ * captured PendingItem and use only its immutable source/copy fields; they must
+ * not resolve the active queue selection again after submission.
  */
 public final class FileClipboardController {
 
@@ -121,8 +129,10 @@ public final class FileClipboardController {
     }
 
     public void cancel() {
-        pendingItems.clear();
-        activeItem = null;
+        // Queue editing is not worker cancellation. Keep claimed items until
+        // their worker finishes; otherwise a second operation can claim them.
+        pendingItems.removeIf(item -> !item.inProgress);
+        if (!pendingItems.contains(activeItem)) activeItem = null;
     }
 
     public void cancel(long id) {
@@ -130,6 +140,7 @@ public final class FileClipboardController {
         while (it.hasNext()) {
             PendingItem item = it.next();
             if (item.id == id) {
+                if (item.inProgress) return;
                 it.remove();
                 if (activeItem == item) activeItem = pendingItems.isEmpty() ? null : pendingItems.get(0);
                 return;
@@ -139,12 +150,24 @@ public final class FileClipboardController {
 
     public void clearAfterSuccess() {
         if (activeItem != null) {
-            cancel(activeItem.id);
+            clearAfterSuccess(activeItem);
         }
     }
 
     public void clearAfterSuccess(@NonNull PendingItem item) {
-        cancel(item.id);
+        pendingItems.remove(item);
+        if (activeItem == item) activeItem = pendingItems.isEmpty() ? null : pendingItems.get(0);
+    }
+
+    /** Retire committed batch items in one pass, without dropping failed claims. */
+    public void clearAfterSuccess(@NonNull List<PendingItem> items) {
+        Set<PendingItem> completed = new HashSet<>(items);
+        pendingItems.removeIf(completed::contains);
+        if (completed.contains(activeItem)) activeItem = pendingItems.isEmpty() ? null : pendingItems.get(0);
+    }
+
+    public boolean isPending(@Nullable PendingItem item) {
+        return item != null && pendingItems.contains(item);
     }
 
     public boolean hasPending() {
@@ -184,14 +207,10 @@ public final class FileClipboardController {
     }
 
     public void setItemsInProgress(@NonNull List<PendingItem> items, boolean inProgress) {
-        for (PendingItem target : items) {
-            if (target == null) continue;
-            for (PendingItem item : pendingItems) {
-                if (item.id == target.id) {
-                    item.inProgress = inProgress;
-                    break;
-                }
-            }
+        // Claim/release a batch in linear time, by the captured object identity.
+        Set<PendingItem> targets = new HashSet<>(items);
+        for (PendingItem item : pendingItems) {
+            if (targets.contains(item)) item.inProgress = inProgress;
         }
     }
 
@@ -207,7 +226,10 @@ public final class FileClipboardController {
     }
 
     public boolean canOverwrite(@NonNull File target) {
-        PendingItem item = getActiveItem();
+        return canOverwrite(getActiveItem(), target);
+    }
+
+    public boolean canOverwrite(@Nullable PendingItem item, @NonNull File target) {
         return item != null && FileSystemOps.canTransfer(item.source, target, true);
     }
 
@@ -245,8 +267,13 @@ public final class FileClipboardController {
                 && FileSystemOps.isSameOrDescendant(destination, source)) {
             return new PastePlan(PasteStatus.DIRECTORY_INTO_SELF, source, destinationDir, destination);
         }
-        if (destination.exists()) {
-            return new PastePlan(PasteStatus.CONFLICT, source, destinationDir, destination);
+        try {
+            if (FileTreeWalk.existsNoFollow(destination)) {
+                return new PastePlan(PasteStatus.CONFLICT, source, destinationDir, destination);
+            }
+        } catch (IOException | SecurityException unavailable) {
+            ArchiveCancellation.restoreIfCancelled(unavailable, null);
+            return new PastePlan(PasteStatus.DESTINATION_UNAVAILABLE, source, destinationDir, destination);
         }
         return new PastePlan(PasteStatus.READY, source, destinationDir, destination);
     }
@@ -296,13 +323,20 @@ public final class FileClipboardController {
         }
         for (int i = 1; i < 10000; i++) {
             File candidate = new File(destinationDir, base + " (" + i + ")" + ext);
-            if (!candidate.exists()) return candidate;
+            try {
+                // A dangling link still occupies a name. Never select it for a
+                // copy, or convert an inspection failure into permission to write.
+                if (!FileTreeWalk.existsNoFollow(candidate)) return candidate;
+            } catch (IOException | SecurityException unavailable) {
+                ArchiveCancellation.restoreIfCancelled(unavailable, null);
+                return null;
+            }
         }
         return null;
     }
 
     @Nullable
-    private PendingItem getActiveItem() {
+    public PendingItem getActiveItem() {
         if (activeItem != null && pendingItems.contains(activeItem)) return activeItem;
         activeItem = pendingItems.isEmpty() ? null : pendingItems.get(0);
         return activeItem;

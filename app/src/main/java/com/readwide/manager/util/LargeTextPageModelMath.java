@@ -11,6 +11,14 @@ package com.readwide.manager.util;
 public final class LargeTextPageModelMath {
     private LargeTextPageModelMath() {}
 
+    /** Do not present an unvalidated saved count as exact or call validation a recount. */
+    public static String pageNumberLabel(int page, boolean largeTextActive, boolean exactReady,
+                                         boolean checkingCache, boolean hasEstimate) {
+        if (largeTextActive && !exactReady && checkingCache) return "\u2026";
+        String value = Integer.toString(page);
+        return largeTextActive && !exactReady && hasEstimate ? "~" + value : value;
+    }
+
     public static final class OffsetState {
         public final int totalPages;
         public final int basePageOffset;
@@ -29,11 +37,11 @@ public final class LargeTextPageModelMath {
                                           int estimatedTotalPages,
                                           int localTotalPages) {
         if (largeTextActive) {
-            if (partitionSwitchInProgress && pendingTotalPages > 0) {
-                return Math.max(1, pendingTotalPages);
-            }
             if (exactIndexReady && exactAnchorCount > 0) {
                 return Math.max(1, exactAnchorCount);
+            }
+            if (partitionSwitchInProgress && pendingTotalPages > 0) {
+                return Math.max(1, pendingTotalPages);
             }
             if (estimatedTotalPages > 0) {
                 return Math.max(1, estimatedTotalPages);

@@ -121,6 +121,7 @@ final class LibarchiveNativeBridge {
 
     @NonNull
     static String listEntries(@NonNull String[] archivePaths, @Nullable char[] password) throws IOException {
+        ArchiveCancellation.checkpoint(null);
         ensureAvailable();
         Reader reader = null;
         try {
@@ -128,8 +129,9 @@ final class LibarchiveNativeBridge {
             StringBuilder out = new StringBuilder(RarLibarchiveFallback.LISTING_HEADER);
             long entry;
             while ((entry = nextHeaderEntry(reader.archive)) != 0L) {
+                ArchiveCancellation.checkpoint(null);
                 String path = normalizedEntryPath(entry);
-                if (path != null) {
+                if (path != null && (isDirectory(entry) || isRegularFile(entry))) {
                     boolean directory = isDirectory(entry);
                     long size = ArchiveEntry.sizeIsSet(entry) ? ArchiveEntry.size(entry) : -1L;
                     long timeMillis = ArchiveEntry.mtimeIsSet(entry) ? ArchiveEntry.mtime(entry) * 1000L : 0L;
@@ -154,6 +156,7 @@ final class LibarchiveNativeBridge {
     }
 
     static boolean requiresPassword(@NonNull String[] archivePaths) throws IOException {
+        ArchiveCancellation.checkpoint(null);
         ensureAvailable();
         Reader reader = null;
         try {
@@ -162,6 +165,7 @@ final class LibarchiveNativeBridge {
             if (encrypted > 0) return true;
             long entry;
             while ((entry = nextHeaderEntry(reader.archive)) != 0L) {
+                ArchiveCancellation.checkpoint(null);
                 if (ArchiveEntry.isEncrypted(entry)
                         || ArchiveEntry.isDataEncrypted(entry)
                         || ArchiveEntry.isMetadataEncrypted(entry)) {
@@ -171,6 +175,7 @@ final class LibarchiveNativeBridge {
             }
             return false;
         } catch (ArchiveException e) {
+            ArchiveCancellation.rethrowIfCancelled(e, null);
             String msg = lower(e.getMessage());
             if (msg.contains("password") || msg.contains("passphrase") || msg.contains("encrypted")) return true;
             return false;
@@ -192,19 +197,27 @@ final class LibarchiveNativeBridge {
                                   @Nullable char[] password,
                                   @Nullable FileOperationProgress progress,
                                   @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
         ensureAvailable();
-        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
         File root = new File(targetDir).getCanonicalFile();
-        if (!root.exists() && !root.mkdirs()) throw new IOException("Cannot create output directory");
+        RarOutputFileGuard.ensureDirectory(root);
 
         Reader reader = null;
         try {
             reader = openReader(validateArchivePaths(archivePaths), password);
             long entry;
             while ((entry = nextHeaderEntry(reader.archive)) != 0L) {
-                if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+                ArchiveCancellation.checkpoint(progress);
                 String path = normalizedEntryPath(entry);
-                if (path == null) {
+                if (path == null && isDirectory(entry)
+                        && isRelativeRootMarker(ArchiveEntry.pathnameUtf8(entry))) {
+                    Archive.readDataSkip(reader.archive);
+                    continue;
+                }
+                if (path == null) throw new IOException("Unsafe or empty archive member path");
+                if (!isDirectory(entry) && !isRegularFile(entry)) {
+                    // Links/devices are not payload files, even when a hardlink's
+                    // file type is reported as regular by the container decoder.
                     Archive.readDataSkip(reader.archive);
                     continue;
                 }
@@ -217,17 +230,10 @@ final class LibarchiveNativeBridge {
                 }
                 File out = safeOutputFile(root, path);
                 if (directory) {
-                    if (!out.exists() && !out.mkdirs()) throw new IOException("Cannot create directory: " + out);
+                    RarOutputFileGuard.ensureDirectory(out);
                     Archive.readDataSkip(reader.archive);
-                } else if (isRegularFile(entry)) {
-                    File parent = out.getParentFile();
-                    if (parent != null && !parent.exists() && !parent.mkdirs()) {
-                        throw new IOException("Cannot create output directory: " + parent);
-                    }
-                    extractCurrentEntry(reader.archive, out, progress);
                 } else {
-                    // Do not materialize symlinks/devices from archives in the app sandbox.
-                    Archive.readDataSkip(reader.archive);
+                    extractCurrentEntry(reader.archive, entry, out, progress);
                 }
             }
             return true;
@@ -268,21 +274,22 @@ final class LibarchiveNativeBridge {
                                                 @Nullable char[] password,
                                                 @Nullable FileOperationProgress progress,
                                                 boolean primeSkippedRegularFiles) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
         ensureAvailable();
         String wanted = normalizeForCompare(entryPath);
         if (wanted == null) throw new IOException("Invalid archive entry path");
         File outFile = new File(outPath).getCanonicalFile();
-        File parent = outFile.getParentFile();
-        if (parent != null && !parent.exists() && !parent.mkdirs()) {
-            throw new IOException("Cannot create output directory");
-        }
 
         Reader reader = null;
         try {
             reader = openReader(validateArchivePaths(archivePaths), password);
             long entry;
             while ((entry = nextHeaderEntry(reader.archive)) != 0L) {
-                if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+                ArchiveCancellation.checkpoint(progress);
+                if (!isDirectory(entry) && !isRegularFile(entry)) {
+                    Archive.readDataSkip(reader.archive);
+                    continue;
+                }
                 String path = normalizedEntryPath(entry);
                 String comparePath = path == null ? null : normalizeForCompare(path);
                 if (comparePath == null || !wanted.equals(comparePath)) {
@@ -296,7 +303,7 @@ final class LibarchiveNativeBridge {
                 if (isDirectory(entry)) throw new IOException("Archive entry is a directory");
                 if (!isRegularFile(entry)) throw new IOException("Unsupported archive entry type");
                 if (progress != null) progress.setDetail(new File(path).getName());
-                extractCurrentEntry(reader.archive, outFile, progress);
+                extractCurrentEntry(reader.archive, entry, outFile, progress);
                 return true;
             }
             return false;
@@ -310,11 +317,13 @@ final class LibarchiveNativeBridge {
     @NonNull
     private static Reader openReader(@NonNull String[] archivePaths, @Nullable char[] password)
             throws ArchiveException, IOException {
+        ArchiveCancellation.checkpoint(null);
         String[] validated = validateArchivePaths(archivePaths);
         IOException fileOpenFailure = null;
         try {
             return openReaderWithFileNames(validated, password);
         } catch (IOException | SecurityException e) {
+            ArchiveCancellation.rethrowIfCancelled(e, null);
             fileOpenFailure = e instanceof IOException
                     ? (IOException) e
                     : new IOException(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(), e);
@@ -423,51 +432,58 @@ final class LibarchiveNativeBridge {
         }
     }
 
-    private static long nextHeaderEntry(long archive) throws ArchiveException {
+    private static long nextHeaderEntry(long archive) throws IOException {
+        ArchiveCancellation.checkpoint(null);
         // libarchive-android's sample reader uses readNextHeader(), which returns an owned
         // entry pointer and 0 at EOF. Do not treat the returned long as an ARCHIVE_* status
         // code: native pointers can look like large negative Java long values on Android.
         return Archive.readNextHeader(archive);
     }
 
-    private static void extractCurrentEntry(long archive,
+    private static void extractCurrentEntry(long archive, long entry,
                                             @NonNull File outFile,
                                             @Nullable FileOperationProgress progress)
             throws IOException, ArchiveException {
-        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        ArchiveCancellation.checkpoint(progress);
+        boolean knownSize = ArchiveEntry.sizeIsSet(entry);
+        long expected = knownSize ? ArchiveEntry.size(entry) : -1L;
+        if (knownSize && expected < 0L) throw new IOException("Invalid archive entry size");
         ByteBuffer block = ByteBuffer.allocateDirect(BLOCK_SIZE);
         byte[] decoded = new byte[BLOCK_SIZE];
-        try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
-            while (true) {
-                if (progress != null && !progress.checkpoint()) {
-                    throw new IOException("RAR extraction cancelled");
+        long total = 0L;
+        try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
+            try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
+                while (true) {
+                    ArchiveCancellation.checkpoint(progress);
+                    block.clear();
+                    Archive.readData(archive, block);
+                    int produced = block.position();
+                    if (produced <= 0) break;
+                    total = ArchiveSupport.checkedAddDecodedStreamBytes(total, produced);
+                    if (expected >= 0L && total > expected) throw new IOException("Archive entry exceeds declared size");
+                    block.flip();
+                    block.get(decoded, 0, produced);
+                    // The operation-wide budget is charged by this guarded output
+                    // before each physical write, including entries whose header did
+                    // not declare an unpacked size.
+                    out.write(decoded, 0, produced);
+                    if (progress != null) progress.addDoneBytes(produced);
                 }
-                block.clear();
-                Archive.readData(archive, block);
-                int produced = block.position();
-                if (produced <= 0) break;
-                block.flip();
-                block.get(decoded, 0, produced);
-                // The operation-wide budget is charged by this guarded output
-                // before each physical write, including entries whose header did
-                // not declare an unpacked size.
-                out.write(decoded, 0, produced);
-                if (progress != null) progress.addDoneBytes(produced);
+                if (expected >= 0L && total != expected) throw new IOException("Truncated archive entry");
+                out.flush();
             }
-            out.flush();
+            guard.commit();
         }
     }
 
     private static void drainCurrentRegularEntryForSequentialDecoder(long archive,
                                                                      @Nullable FileOperationProgress progress)
             throws IOException, ArchiveException {
-        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        ArchiveCancellation.checkpoint(progress);
         ByteBuffer block = ByteBuffer.allocateDirect(BLOCK_SIZE);
         long decodedBytes = 0L;
         while (true) {
-            if (progress != null && !progress.checkpoint()) {
-                throw new IOException("RAR extraction cancelled");
-            }
+            ArchiveCancellation.checkpoint(progress);
             block.clear();
             Archive.readData(archive, block);
             int produced = block.position();
@@ -482,24 +498,16 @@ final class LibarchiveNativeBridge {
 
     @Nullable
     private static String normalizedEntryPath(long entry) {
-        String path = ArchiveEntry.pathnameUtf8(entry);
-        if (path == null) return null;
-        path = path.replace('\\', '/').trim();
-        while (path.startsWith("/")) path = path.substring(1);
-        while (path.startsWith("./")) path = path.substring(2);
-        if (path.isEmpty()) return null;
-        if (path.equals("..") || path.startsWith("../") || path.contains("/../") || path.endsWith("/..")) return null;
-        if (path.matches("^[A-Za-z]:.*")) return null;
-        return path;
+        return normalizeForCompare(ArchiveEntry.pathnameUtf8(entry));
     }
 
     @Nullable
     private static String normalizeForCompare(@Nullable String input) {
-        if (input == null) return null;
-        String path = input.replace('\\', '/').trim();
-        while (path.startsWith("/")) path = path.substring(1);
-        while (path.startsWith("./")) path = path.substring(2);
-        return path;
+        return ArchiveSupport.sanitizeEntryPathForList(input);
+    }
+
+    private static boolean isRelativeRootMarker(@Nullable String path) {
+        return path != null && path.replace('\\', '/').matches("(?:\\./)+|\\.");
     }
 
     private static boolean isDirectory(long entry) {
@@ -507,7 +515,8 @@ final class LibarchiveNativeBridge {
     }
 
     private static boolean isRegularFile(long entry) {
-        return (ArchiveEntry.filetype(entry) & ArchiveEntry.AE_IFMT) == ArchiveEntry.AE_IFREG;
+        return (ArchiveEntry.filetype(entry) & ArchiveEntry.AE_IFMT) == ArchiveEntry.AE_IFREG
+                && !ArchiveEntry.hardlinkIsSet(entry);
     }
 
     @NonNull
@@ -574,6 +583,8 @@ final class LibarchiveNativeBridge {
     private static IOException toIOException(@NonNull String prefix,
                                              @Nullable String message,
                                              @Nullable Throwable cause) {
+        try { ArchiveCancellation.rethrowIfCancelled(cause, null); }
+        catch (java.io.InterruptedIOException cancelled) { return cancelled; }
         String lower = lower(message);
         if (isPasswordOrEncryptionError(lower)) {
             return new ArchiveSupport.PasswordRequiredException();
@@ -672,15 +683,28 @@ final class LibarchiveNativeBridge {
     @NonNull
     static ForwardStream openForwardStream(@NonNull String[] archivePaths, @Nullable char[] password)
             throws IOException {
+        ArchiveCancellation.checkpoint(null);
         ensureAvailable();
-        Reader reader = openReader(archivePaths, password);
+        String[] paths = validateArchivePaths(archivePaths);
+        ArchiveSupport.ForwardArchiveReader supplemental = SevenZNativeForwardAdapter.open(paths, password);
+        if (supplemental != null) {
+            try { return new ForwardStream(supplemental); }
+            catch (RuntimeException | Error failure) {
+                try { supplemental.close(); }
+                catch (IOException | RuntimeException | Error cleanup) {
+                    if (cleanup != failure) failure.addSuppressed(cleanup);
+                }
+                throw failure;
+            }
+        }
+        Reader reader = openReader(paths, password);
         boolean handed = false;
         try {
             ForwardStream stream = new ForwardStream(reader);
             handed = true;
             return stream;
         } finally {
-            // The ForwardStream field initializer allocates a direct ByteBuffer, which can fail with
+            // The native ForwardStream constructor allocates a direct ByteBuffer, which can fail with
             // an OutOfMemoryError after the native reader handle is already open. Mirror the
             // opened/finally guard the other openReader* paths use so the native handle (and any
             // volume input) is freed rather than leaked if construction does not complete.
@@ -695,6 +719,7 @@ final class LibarchiveNativeBridge {
      */
     @NonNull
     static ForwardStream openRawForwardStream(@NonNull String archivePath) throws IOException {
+        ArchiveCancellation.checkpoint(null);
         ensureAvailable();
         String[] paths = validateArchivePaths(new String[]{archivePath});
         Reader reader = openRawReader(paths[0]);
@@ -711,14 +736,16 @@ final class LibarchiveNativeBridge {
     @NonNull
     private static Reader openRawReader(@NonNull String archivePath)
             throws ArchiveException, IOException {
+        if (new File(archivePath).length() == 0L) throw new IOException("Missing Zstandard frame");
         long archive = Archive.readNew();
         boolean opened = false;
         try {
             Archive.setCharset(archive, StandardCharsets.UTF_8.name().getBytes(StandardCharsets.UTF_8));
-            // A raw reader would otherwise accept arbitrary uncompressed bytes as one
-            // synthetic entry. Register only the requested codec and, after libarchive
-            // has bid/opened the stream, require that Zstandard was actually selected.
+            // A raw reader must apply one Zstd layer, not recursively decode a .zst
+            // payload inside it. The forced decoder still rejects malformed frames;
+            // an empty decoded frame is valid, but a missing packed frame is not.
             Archive.readSupportFilterZstd(archive);
+            Archive.readAppendFilter(archive, Archive.FILTER_ZSTD);
             try {
                 Archive.readSupportFormatRaw(archive);
                 Archive.readSupportFormatEmpty(archive);
@@ -772,13 +799,24 @@ final class LibarchiveNativeBridge {
      * caller (a session-scoped sequential reader) serializes access under its own lock.
      */
     static final class ForwardStream {
-        @NonNull private final Reader reader;
-        private final ByteBuffer block = ByteBuffer.allocateDirect(BLOCK_SIZE);
+        @Nullable private final Reader reader;
+        @Nullable private final ArchiveSupport.ForwardArchiveReader supplemental;
+        private final ByteBuffer block;
         private boolean haveCurrentEntry;
         private boolean closed;
+        private boolean cleanupComplete;
+        @Nullable private IOException failure;
 
         private ForwardStream(@NonNull Reader reader) {
             this.reader = reader;
+            supplemental = null;
+            block = ByteBuffer.allocateDirect(BLOCK_SIZE);
+        }
+
+        private ForwardStream(@NonNull ArchiveSupport.ForwardArchiveReader supplemental) {
+            reader = null;
+            this.supplemental = supplemental;
+            block = null;
         }
 
         /**
@@ -788,7 +826,24 @@ final class LibarchiveNativeBridge {
          */
         @Nullable
         ForwardStreamEntry nextEntry() throws IOException {
+            try {
+                checkpoint();
+                ForwardStreamEntry entry = advance();
+                checkpoint();
+                return entry;
+            } catch (IOException error) { throw retire(error); }
+            catch (RuntimeException | Error error) { retire(error); throw error; }
+        }
+
+        @Nullable
+        private ForwardStreamEntry advance() throws IOException {
             if (closed) return null;
+            if (supplemental != null) {
+                ArchiveSupport.ForwardEntry entry = supplemental.nextEntry();
+                haveCurrentEntry = entry != null;
+                return entry == null ? null : new ForwardStreamEntry(entry.path, entry.directory,
+                        entry.hasData, false, -1L);
+            }
             try {
                 long entry = nextHeaderEntry(reader.archive);
                 if (entry == 0L) {
@@ -800,8 +855,9 @@ final class LibarchiveNativeBridge {
                         || ArchiveEntry.isDataEncrypted(entry)
                         || ArchiveEntry.isMetadataEncrypted(entry);
                 long size = ArchiveEntry.sizeIsSet(entry) ? ArchiveEntry.size(entry) : -1L;
-                return new ForwardStreamEntry(normalizedEntryPath(entry), isDirectory(entry),
-                        isRegularFile(entry), encrypted, size);
+                boolean directory = isDirectory(entry), regular = isRegularFile(entry);
+                return new ForwardStreamEntry(directory || regular ? normalizedEntryPath(entry) : null,
+                        directory, regular, encrypted, size);
             } catch (ArchiveException e) {
                 throw toIOException("Could not read next archive header with libarchive", e);
             }
@@ -814,7 +870,23 @@ final class LibarchiveNativeBridge {
          * advance, marks the end of the current entry's data).
          */
         int read(@NonNull byte[] out) throws IOException {
-            if (closed || !haveCurrentEntry || out.length == 0) return -1;
+            java.util.Objects.requireNonNull(out, "out");
+            try {
+                checkpoint();
+                if (out.length == 0) return 0;
+                int count = readCurrent(out);
+                checkpoint();
+                if (count < -1 || count == 0 || count > out.length) {
+                    throw new IOException("Invalid forward archive read count");
+                }
+                return count;
+            } catch (IOException error) { throw retire(error); }
+            catch (RuntimeException | Error error) { retire(error); throw error; }
+        }
+
+        private int readCurrent(byte[] out) throws IOException {
+            if (closed || !haveCurrentEntry) return -1;
+            if (supplemental != null) return supplemental.read(out);
             block.clear();
             if (out.length < block.capacity()) {
                 block.limit(out.length);
@@ -837,20 +909,38 @@ final class LibarchiveNativeBridge {
          * extra direct-buffer-to-byte-array copy used by {@link #read(byte[])}.
          */
         boolean drainCurrentEntry(long maxDecodedBytes) throws IOException {
+            try {
+                checkpoint();
+                boolean drained = drain(maxDecodedBytes);
+                checkpoint();
+                return drained;
+            } catch (IOException error) { throw retire(error); }
+            catch (RuntimeException | Error error) { retire(error); throw error; }
+        }
+
+        private boolean drain(long maxDecodedBytes) throws IOException {
             if (closed || !haveCurrentEntry) return true;
+            if (supplemental != null) {
+                boolean drained = supplemental.drainCurrentEntry(maxDecodedBytes < 0 ? Long.MAX_VALUE : maxDecodedBytes);
+                if (drained) haveCurrentEntry = false;
+                return drained;
+            }
             long total = 0L;
             while (true) {
+                checkpoint();
                 block.clear();
                 try {
                     Archive.readData(reader.archive, block);
                 } catch (ArchiveException e) {
                     throw toIOException("Could not drain archive entry data with libarchive", e);
                 }
+                checkpoint();
                 int produced = block.position();
                 if (produced <= 0) {
                     haveCurrentEntry = false;
                     return true;
                 }
+                if (total > Long.MAX_VALUE - produced) throw new IOException("Archive drain byte count overflow");
                 total += produced;
                 if (maxDecodedBytes >= 0L && total > maxDecodedBytes) {
                     throw new IOException("Sequential archive entry exceeds the extraction safety limit");
@@ -858,11 +948,28 @@ final class LibarchiveNativeBridge {
             }
         }
 
-        void close() {
-            if (closed) return;
+        private void checkpoint() throws IOException {
+            if (failure != null) throw failure;
+            ArchiveCancellation.checkpoint(null);
+        }
+
+        private IOException retire(Throwable error) {
+            if (failure == null) failure = error instanceof IOException
+                    ? (IOException) error : new IOException("Forward archive reader failed", error);
+            try { close(); }
+            catch (IOException | RuntimeException | Error cleanup) {
+                if (cleanup != error) error.addSuppressed(cleanup);
+            }
+            return failure;
+        }
+
+        void close() throws IOException {
+            if (cleanupComplete) return;
             closed = true;
             haveCurrentEntry = false;
-            closeQuietly(reader);
+            if (supplemental != null) supplemental.close();
+            else closeQuietly(reader);
+            cleanupComplete = true;
         }
     }
 
@@ -885,15 +992,19 @@ final class LibarchiveNativeBridge {
         private long totalLength;
         private int currentIndex = -1;
         private RandomAccessFile currentFile;
+        private boolean closed;
+        private ArchiveException failure;
 
         VolumeInput(@NonNull String[] archivePaths) throws IOException {
             for (int i = 0; i < archivePaths.length; i++) {
+                ArchiveCancellation.checkpoint(null);
                 File file = new File(archivePaths[i]).getCanonicalFile();
                 if (!file.isFile()) throw new IOException("Missing archive file: " + file);
                 long offset = i == 0 && shouldScanForEmbeddedRarSignature(file)
                         ? findRarSignatureOffset(file)
                         : 0L;
                 long readable = Math.max(0L, file.length() - offset);
+                if (readable > Long.MAX_VALUE - totalLength) throw new IOException("Archive volume size overflow");
                 volumes.add(new Volume(i, file, offset, totalLength, readable));
                 totalLength += readable;
             }
@@ -902,66 +1013,94 @@ final class LibarchiveNativeBridge {
 
         @Nullable
         ByteBuffer read() throws ArchiveException {
-            buffer.clear();
-            if (position >= totalLength) {
-                buffer.flip();
-                return buffer;
-            }
             try {
+                requireReadable();
+                buffer.clear();
+                Volume checked = null;
                 while (buffer.hasRemaining() && position < totalLength) {
+                    ArchiveCancellation.checkpoint(null);
                     Volume volume = volumeForPosition(position);
+                    if (checked != volume) { volume.check(); checked = volume; }
                     ensureOpen(volume);
                     long inVolume = position - volume.logicalStart;
                     long realOffset = volume.fileOffset + inVolume;
                     currentFile.seek(realOffset);
                     int max = (int) Math.min(buffer.remaining(), volume.length - inVolume);
                     int count = currentFile.read(scratch, 0, Math.min(scratch.length, max));
-                    if (count < 0) break;
+                    if (count <= 0) throw new IOException("Truncated or stalled archive volume");
                     buffer.put(scratch, 0, count);
                     position += count;
-                    if (count == 0) break;
                 }
+                if (checked != null) checked.check();
                 buffer.flip();
                 return buffer;
             } catch (IOException e) {
-                throw new ArchiveException(Archive.ERRNO_FATAL, "Archive read failed", e);
+                throw retire(e);
             }
         }
 
-        long skip(long request) {
-            if (request <= 0L) return 0L;
-            long skipped = Math.min(request, Math.max(0L, totalLength - position));
-            position += skipped;
-            return skipped;
+        long skip(long request) throws ArchiveException {
+            try {
+                requireReadable();
+                if (request <= 0L) return 0L;
+                long skipped = Math.min(request, totalLength - position);
+                // A metadata skip must not hide a shortened source volume.
+                long end = position + skipped;
+                for (Volume volume : volumes) {
+                    if (volume.logicalStart < end && volume.logicalStart + volume.length > position) volume.check();
+                }
+                position = end;
+                return skipped;
+            } catch (IOException error) { throw retire(error); }
         }
 
         long seek(long offset, int whence) throws ArchiveException {
-            long base;
-            if (whence == OsConstants.SEEK_SET) {
-                base = 0L;
-            } else if (whence == OsConstants.SEEK_CUR) {
-                base = position;
-            } else if (whence == OsConstants.SEEK_END) {
-                base = totalLength;
-            } else {
-                throw new ArchiveException(Archive.ERRNO_FATAL, "Unsupported archive seek mode");
-            }
-            long next = base + offset;
-            if (next < 0L) throw new ArchiveException(Archive.ERRNO_FATAL, "Negative archive seek");
-            position = Math.min(next, totalLength);
-            return position;
-        }
-
-        void close() {
-            closeQuietly();
-        }
-
-        void closeQuietly() {
-            if (currentFile != null) {
-                try {
-                    currentFile.close();
-                } catch (IOException ignored) {
+            try {
+                requireReadable();
+                long base;
+                if (whence == OsConstants.SEEK_SET) {
+                    base = 0L;
+                } else if (whence == OsConstants.SEEK_CUR) {
+                    base = position;
+                } else if (whence == OsConstants.SEEK_END) {
+                    base = totalLength;
+                } else {
+                    throw new ArchiveException(Archive.ERRNO_FATAL, "Unsupported archive seek mode");
                 }
+                if (offset > 0L && base > Long.MAX_VALUE - offset) throw new IOException("Archive seek overflow");
+                long next = base + offset;
+                if (next < 0L) throw new ArchiveException(Archive.ERRNO_FATAL, "Negative archive seek");
+                position = Math.min(next, totalLength);
+                return position;
+            } catch (IOException error) { throw retire(error); }
+        }
+
+        private void requireReadable() throws IOException {
+            if (failure != null) throw failure;
+            if (closed) throw new IOException("Archive volume input is closed");
+            ArchiveCancellation.checkpoint(null);
+        }
+
+        private ArchiveException retire(IOException error) {
+            if (failure == null) failure = error instanceof ArchiveException ? (ArchiveException) error
+                    : new ArchiveException(Archive.ERRNO_FATAL, "Archive input failed", error);
+            try { close(); } catch (ArchiveException cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
+            }
+            return failure;
+        }
+
+        void close() throws ArchiveException {
+            closed = true;
+            try { closeCurrentFile(); }
+            catch (IOException error) { throw new ArchiveException(Archive.ERRNO_FATAL, "Archive input close failed", error); }
+        }
+
+        void closeQuietly() { try { close(); } catch (ArchiveException ignored) {} }
+
+        private void closeCurrentFile() throws IOException {
+            if (currentFile != null) {
+                currentFile.close();
                 currentFile = null;
                 currentIndex = -1;
             }
@@ -980,9 +1119,11 @@ final class LibarchiveNativeBridge {
 
         private void ensureOpen(@NonNull Volume volume) throws IOException {
             if (currentIndex == volume.index && currentFile != null) return;
-            closeQuietly();
+            closeCurrentFile();
             currentFile = new RandomAccessFile(volume.file, "r");
             currentIndex = volume.index;
+            volume.check();
+            if (currentFile.length() != volume.fileOffset + volume.length) throw new IOException("Archive volume changed");
         }
     }
 
@@ -992,6 +1133,7 @@ final class LibarchiveNativeBridge {
         final long fileOffset;
         final long logicalStart;
         final long length;
+        final long modified;
 
         Volume(int index, @NonNull File file, long fileOffset, long logicalStart, long length) {
             this.index = index;
@@ -999,6 +1141,14 @@ final class LibarchiveNativeBridge {
             this.fileOffset = fileOffset;
             this.logicalStart = logicalStart;
             this.length = length;
+            this.modified = file.lastModified();
+        }
+
+        void check() throws IOException {
+            ArchiveCancellation.checkpoint(null);
+            if (!file.isFile() || file.length() != fileOffset + length || file.lastModified() != modified) {
+                throw new IOException("Archive volume changed while reading");
+            }
         }
     }
 }

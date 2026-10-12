@@ -23,6 +23,9 @@ final class DocumentPageLoadController {
 
     void loadFromIntent(Intent intent) {
         final int generation = ++activity.loadGeneration;
+        activity.documentLoadAccepted = false;
+        activity.beginDocumentViewportLoad();
+        final String host = activity.documentLoadHost();
         // Invalidate old document captures/settling before the new book is parsed.
         activity.documentAnchorPageGeneration++;
         activity.invalidateDocumentPageLoad(activity.webView);
@@ -54,35 +57,42 @@ final class DocumentPageLoadController {
         activity.clearDocumentSearchState(false);
 
         activity.submitDocumentTask(() -> {
+            DocumentPageActivity.ParsedDocument parsed = new DocumentPageActivity.ParsedDocument(host);
+            boolean delivered = false;
             try {
-                resolveLocalFile(intent);
-                activity.filePath = activity.localFile.getAbsolutePath();
-                activity.fileName = activity.localFile.getName();
-                String lower = activity.fileName.toLowerCase(Locale.ROOT);
-                activity.pages.clear();
+                if (activity.activityDestroyed || generation != activity.loadGeneration) return;
+                File file = resolveLocalFile(intent);
+                String name = file.getName();
+                String lower = name.toLowerCase(Locale.ROOT);
 
                 if (lower.endsWith(".epub")) {
-                    activity.docType = "EPUB";
-                    activity.loadEpubPages(activity.localFile);
-                } else if (FileUtils.isMarkdownFile(activity.fileName)) {
-                    activity.docType = "Markdown";
-                    activity.loadMarkdownPage(activity.localFile);
-                } else if (FileUtils.isHwpFile(activity.fileName)) {
-                    activity.docType = "HWP";
-                    activity.loadHwpPages(activity.localFile);
-                } else if (FileUtils.isWordFile(activity.fileName)) {
-                    activity.docType = "Word";
-                    activity.loadWordPages(activity.localFile);
+                    parsed.docType = "EPUB";
+                    parsed.loadEpubPages(file);
+                } else if (FileUtils.isMarkdownFile(name)) {
+                    parsed.docType = "Markdown";
+                    parsed.loadMarkdownPage(file);
+                } else if (FileUtils.isHwpFile(name)) {
+                    parsed.docType = "HWP";
+                    parsed.loadHwpPages(file);
+                } else if (FileUtils.isWordFile(name)) {
+                    parsed.docType = "Word";
+                    parsed.loadWordPages(file);
                 } else {
-                    throw new IOException("Unsupported document type: " + activity.fileName);
+                    throw new IOException("Unsupported document type: " + name);
                 }
 
-                if (activity.pages.isEmpty()) throw new IOException("No renderable pages found");
-                activity.currentPage = resolveInitialPage(intent);
+                if (parsed.pages.isEmpty()) throw new IOException("No renderable pages found");
 
                 if (activity.activityDestroyed || generation != activity.loadGeneration) return;
                 activity.runOnUiThread(() -> {
-                    if (activity.activityDestroyed || generation != activity.loadGeneration) return;
+                    if (activity.activityDestroyed || generation != activity.loadGeneration) {
+                        parsed.close();
+                        return;
+                    }
+                    activity.adoptParsedDocument(parsed, file);
+                    activity.currentPage = resolveInitialPage(intent);
+                    activity.documentLoadAccepted = true;
+                    activity.rememberOpeningDocumentViewport();
                     if (activity.getSupportActionBar() != null) {
                         activity.getSupportActionBar().setTitle(activity.fileName);
                     }
@@ -99,27 +109,37 @@ final class DocumentPageLoadController {
                             activity.findViewById(R.id.document_content_column));
                     activity.showPage(activity.currentPage, 0);
                 });
+                delivered = true;
             } catch (Exception e) {
-                if (activity.activityDestroyed || generation != activity.loadGeneration) return;
-                activity.runOnUiThread(() -> {
-                    if (!activity.activityDestroyed && generation == activity.loadGeneration) {
-                        showLoadError(e);
-                    }
-                });
+                reportLoadFailure(generation, e);
+            } catch (OutOfMemoryError | StackOverflowError e) {
+                // A fallback parse would repeat heavy work after resource exhaustion.
+                // Unwind once, close the unadopted ParsedDocument in finally, and use
+                // the existing load-error UI instead of leaving its spinner active.
+                reportLoadFailure(generation, new IOException("Document exceeds available memory or nesting depth", e));
+            } finally {
+                if (!delivered) parsed.close();
             }
         });
     }
 
-    private void resolveLocalFile(Intent intent) throws IOException {
+    private void reportLoadFailure(int generation, Exception failure) {
+        if (activity.activityDestroyed || generation != activity.loadGeneration) return;
+        activity.runOnUiThread(() -> {
+            if (!activity.activityDestroyed && generation == activity.loadGeneration) showLoadError(failure);
+        });
+    }
+
+    private File resolveLocalFile(Intent intent) throws IOException {
         String path = intent.getStringExtra(DocumentPageActivity.EXTRA_FILE_PATH);
         String uriString = intent.getStringExtra(DocumentPageActivity.EXTRA_FILE_URI);
         if (path != null && !path.isEmpty()) {
-            activity.localFile = new File(path);
+            return new File(path);
         } else if (uriString != null && !uriString.isEmpty()) {
             Uri uri = Uri.parse(uriString);
             String displayName = FileUtils.getFileNameFromUri(activity, uri);
             if (displayName == null || displayName.trim().isEmpty()) displayName = "document";
-            activity.localFile = FileUtils.copyUriToLocal(activity, uri, displayName);
+            return FileUtils.copyUriToLocal(activity, uri, displayName);
         } else {
             throw new IOException("No file path or URI supplied");
         }
@@ -129,6 +149,7 @@ final class DocumentPageLoadController {
         int jump = intent.getIntExtra(DocumentPageActivity.EXTRA_JUMP_TO_PAGE, -1);
         if (activity.isMarkdownDocument()) {
             int sourceJump = intent.getIntExtra(DocumentPageActivity.EXTRA_MARKDOWN_SOURCE_OFFSET, -1);
+            int scrollJump = intent.getIntExtra(DocumentPageActivity.EXTRA_MARKDOWN_SCROLL_Y, -1);
             String contentAnchorJson = intent.getStringExtra(DocumentPageActivity.EXTRA_CONTENT_ANCHOR_JSON);
             if (sourceJump < 0 && contentAnchorJson != null && !contentAnchorJson.trim().isEmpty()) {
                 try {
@@ -141,6 +162,8 @@ final class DocumentPageLoadController {
             if (sourceJump >= 0) {
                 activity.pendingMarkdownRestoreSourceOffset = sourceJump;
                 if (jump >= 0) activity.pendingMarkdownRestorePage = jump;
+            } else if (scrollJump >= 0) {
+                activity.pendingMarkdownRestoreScrollY = scrollJump;
             } else if (jump >= 0) {
                 // Legacy Markdown bookmarks from the early visual-page implementation
                 // used EXTRA_JUMP_TO_PAGE directly. Keep that as a visual fallback.

@@ -1,6 +1,7 @@
 package com.readwide.manager.archive;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
@@ -8,9 +9,9 @@ import java.io.IOException;
 /**
  * Mutable state holder for the first-party RAR3/RAR4 compressed unpacker.
  *
- * <p>The current app still keeps libarchive as the primary RAR compressed backend. This context
- * intentionally starts small so the future LZ/Huffman decoder and solid dictionary continuation
- * can be added without growing {@link RarArchiveReader} again.</p>
+ * <p>libarchive remains primary. This context owns LZ/PPMd state for checked plain decode plans
+ * or one independent logical AES/split payload. Logical streams never infer solid history;
+ * plain solid plans pass their explicitly retained state through a separate factory.</p>
  */
 final class Rar3UnpackContext {
     private static final int DEFAULT_WINDOW_SIZE = 4 * 1024 * 1024;
@@ -37,10 +38,58 @@ final class Rar3UnpackContext {
     private int retained;
     private final Rar3MixedPpmdState mixedPpmd = new Rar3MixedPpmdState();
     private boolean requireFileBoundary;
+    private Rar3PackedPayload logicalPayload;
+    private boolean logicalPayloadClaimed;
 
     void requireFileBoundary() { requireFileBoundary = true; }
     boolean requiresFileBoundary() { return requireFileBoundary; }
     Rar3MixedPpmdState mixedPpmd() { return solidState != null ? solidState.mixedPpmd() : mixedPpmd; }
+
+    /** One already-open, independently decoded logical stream; no solid history is inferred. */
+    static Rar3UnpackContext forLogicalPayload(RarArchiveReader.RarEntry head,
+                                               Rar3PackedPayload payload) throws IOException {
+        if (head.solid) throw new IOException("Invalid independent RAR logical payload");
+        validateLogicalPayload(head, payload);
+        // AES has already been removed by the bounded input layer; its padding
+        // remains in the packed range but never becomes decoded output.
+        Rar3UnpackContext context = new Rar3UnpackContext(head.sourceArchive, head.dataOffset,
+                payload.packedSize, payload.checksumEntry.unpackedSize, head.method,
+                false, false, false, false, payload.checksumEntry.dataCrc, null);
+        context.logicalPayload = payload;
+        return context;
+    }
+
+    /** Checked mixed solid history over already decrypted/concatenated logical bytes. */
+    static Rar3UnpackContext forLogicalSolidPayload(RarArchiveReader.RarEntry head,
+            Rar3PackedPayload payload, Rar3SolidState solidState) throws IOException {
+        validateLogicalPayload(head, payload);
+        if (solidState == null) throw new IOException("Missing RAR3 solid state");
+        solidState.ensureUsable();
+        if (head.solid != solidState.initialized()) {
+            throw new IOException("RAR3 logical solid entry requires the correct reset/primer state");
+        }
+        Rar3UnpackContext context = new Rar3UnpackContext(head.sourceArchive, head.dataOffset,
+                payload.packedSize, payload.checksumEntry.unpackedSize, head.method,
+                true, false, false, false, payload.checksumEntry.dataCrc, solidState);
+        context.logicalPayload = payload;
+        context.requireFileBoundary();
+        return context;
+    }
+
+    private static void validateLogicalPayload(RarArchiveReader.RarEntry head,
+            Rar3PackedPayload payload) throws IOException {
+        if (head.sourceArchive == null || head.rarVersion != 4 || head.directory
+                || head.splitBefore || !RarCompressedPayloadDecoder.isRar3Or4CompressionMethod(head.method)
+                || payload.packedSize <= 0 || payload.packedSize > Long.MAX_VALUE / 8
+                || payload.checksumEntry.unpackedSize < 0
+                || payload.checksumEntry.dataCrc < 0 || payload.checksumEntry.dataCrc > 0xffffffffL) {
+            throw new IOException("Invalid independent RAR logical payload");
+        }
+    }
+
+    void finishPackedPayload(com.readwide.manager.util.FileOperationProgress progress) throws IOException {
+        if (logicalPayload != null) logicalPayload.finish(progress);
+    }
 
     private Rar3UnpackContext(@NonNull File archive,
                               long dataOffset,
@@ -93,15 +142,15 @@ final class Rar3UnpackContext {
                                       long expectedCrc) throws IOException {
         if (encrypted) {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
-                    "RAR3/RAR4 encrypted compressed payloads are handled by the visible-header rewrite path when possible; remaining cases require the unfinished first-party unpacker");
+                    "Encrypted RAR3/RAR4 input requires the logical-payload or rewrite route, not the plain-file context");
         }
         if (solid) {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
-                    "RAR3/RAR4 compressed solid payloads require dictionary continuation in the unfinished first-party solid-state unpacker");
+                    "Solid RAR3/RAR4 input requires an explicitly retained solid-sequence context");
         }
         if (splitBefore || splitAfter) {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
-                    "RAR3/RAR4 compressed split payloads are handled by the split rewrite path when possible; remaining cases require the unfinished first-party unpacker");
+                    "Split RAR3/RAR4 input requires the logical-payload or rewrite route, not the plain-file context");
         }
         validateCompressedPayloadBounds(archive, dataOffset, packedSize, unpackedSize, method);
         return new Rar3UnpackContext(
@@ -131,11 +180,11 @@ final class Rar3UnpackContext {
                                            @NonNull Rar3SolidState solidState) throws IOException {
         if (encrypted) {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
-                    "RAR3/RAR4 encrypted solid compressed payloads require the unfinished first-party solid-state unpacker");
+                    "The mixed RAR3/RAR4 solid-state context does not admit encrypted payloads");
         }
         if (splitBefore || splitAfter) {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
-                    "RAR3/RAR4 split solid compressed payloads require the unfinished first-party solid-state unpacker");
+                    "The mixed RAR3/RAR4 solid-state context does not admit split payloads");
         }
         validateCompressedPayloadBounds(archive, dataOffset, packedSize, unpackedSize, method);
         return new Rar3UnpackContext(
@@ -165,11 +214,11 @@ final class Rar3UnpackContext {
                                                    @NonNull Rar3SolidState solidState) throws IOException {
         if (encrypted) {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
-                    "RAR3/RAR4 encrypted solid-sequence compressed payloads require the unfinished first-party solid-state unpacker");
+                    "The mixed RAR3/RAR4 solid-sequence context does not admit encrypted payloads");
         }
         if (splitBefore || splitAfter) {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
-                    "RAR3/RAR4 split solid-sequence compressed payloads require the unfinished first-party solid-state unpacker");
+                    "The mixed RAR3/RAR4 solid-sequence context does not admit split payloads");
         }
         validateCompressedPayloadBounds(archive, dataOffset, packedSize, unpackedSize, method);
         return new Rar3UnpackContext(
@@ -234,6 +283,11 @@ final class Rar3UnpackContext {
         if (solidState != null) solidState.invalidate();
     }
 
+    @Nullable
+    Rar3PpmdFilterOutput.DeferredFilters deferredFilters() {
+        return solidState == null ? null : solidState.deferredFilters();
+    }
+
     @NonNull
     RarLzWindow openWindow(@NonNull java.io.OutputStream out) {
         return openWindow(RarOutputStreamDecodedOutput.wrapOrMemory(out));
@@ -281,11 +335,16 @@ final class Rar3UnpackContext {
         }
     }
 
-    /** Bounded plain payload; the segment type also serves unencrypted RAR readers. */
+    /** Bounded plain-file input or the single-use, already decrypted logical payload. */
     @NonNull
     java.io.BufferedInputStream openPackedPayload(
             com.readwide.manager.util.FileOperationProgress progress) throws IOException {
         ensureUsable();
+        if (logicalPayload != null) {
+            if (logicalPayloadClaimed) throw new IOException("RAR logical payload was already consumed");
+            logicalPayloadClaimed = true;
+            return logicalPayload.input;
+        }
         return new java.io.BufferedInputStream(new RarPackedInputStream(
                 java.util.Collections.singletonList(new RarCryptoStreams.EncryptedSegment(
                         archive, dataOffset, packedSize)), progress), 64 * 1024);

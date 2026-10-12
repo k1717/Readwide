@@ -9,8 +9,9 @@ import java.io.IOException;
  *
  * <p>RAR's PPMd stream is not just literal bytes. The escape byte introduces control commands
  * for ending a PPM block/file, embedding LZ matches, and scheduling VM filters. This class covers
- * that RAR-specific control layer so the future PPMd model/range coder can plug into a small,
- * tested surface instead of growing {@link Rar3Unpacker} or {@link RarArchiveReader}.</p>
+ * that RAR-specific control layer for callers supplying symbols. Live archive PPMd
+ * decoding also uses {@link Rar3PpmdSolidStreamDecoder}; this helper's unsupported
+ * controls are not app-wide PPMd limitations.</p>
  */
 final class Rar3PpmdBlockDecoder {
     private Rar3PpmdBlockDecoder() {}

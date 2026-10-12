@@ -96,7 +96,7 @@ public class ExtractedReaderMathTest {
     }
 
     @Test
-    public void textAnchorHelpers_matchOriginalLogic() {
+    public void textAnchorHelpers_matchExhaustiveAnchorRankingAndOriginalTextHelpers() {
         Random random = new Random(0xA11CE5L);
         for (int round = 0; round < 5000; round++) {
             String content = randomContent(random);
@@ -316,14 +316,14 @@ public class ExtractedReaderMathTest {
         if (content == null) return -1;
         String before = anchorBefore != null ? anchorBefore : "";
         String after = anchorAfter != null ? anchorAfter : "";
+        // Deliberately enumerate every position: anchors, unlike tokenized words,
+        // may overlap. Keep the original context/distance ranking as the oracle.
         if (after.length() >= 8) {
             int bestIndex = -1;
-            int bestScore = Integer.MAX_VALUE;
-            int searchFrom = 0;
-            while (searchFrom <= content.length()) {
-                int idx = content.indexOf(after, searchFrom);
-                if (idx < 0) break;
-                int score = Math.abs(idx - fallbackLocalPosition);
+            long bestScore = Long.MAX_VALUE;
+            for (int idx = 0; idx <= content.length() - after.length(); idx++) {
+                if (!content.startsWith(after, idx)) continue;
+                long score = Math.abs((long) idx - fallbackLocalPosition);
                 if (!before.isEmpty()) {
                     int beforeStart = Math.max(0, idx - before.length());
                     String actualBefore = content.substring(beforeStart, idx);
@@ -337,24 +337,20 @@ public class ExtractedReaderMathTest {
                     bestScore = score;
                     bestIndex = idx;
                 }
-                searchFrom = idx + Math.max(1, after.length());
             }
             if (bestIndex >= 0) return bestIndex;
         }
         if (before.length() >= 8) {
             int bestIndex = -1;
-            int bestScore = Integer.MAX_VALUE;
-            int searchFrom = 0;
-            while (searchFrom <= content.length()) {
-                int idx = content.indexOf(before, searchFrom);
-                if (idx < 0) break;
+            long bestScore = Long.MAX_VALUE;
+            for (int idx = 0; idx <= content.length() - before.length(); idx++) {
+                if (!content.startsWith(before, idx)) continue;
                 int candidate = Math.min(content.length(), idx + before.length());
-                int score = Math.abs(candidate - fallbackLocalPosition);
+                long score = Math.abs((long) candidate - fallbackLocalPosition);
                 if (score < bestScore) {
                     bestScore = score;
                     bestIndex = candidate;
                 }
-                searchFrom = idx + Math.max(1, before.length());
             }
             if (bestIndex >= 0) return bestIndex;
         }

@@ -10,15 +10,15 @@ import java.util.Queue;
 import java.util.zip.CRC32;
 
 /**
- * Delayed output buffer for future first-party RAR3/RAR4 VM-filter wiring.
+ * Legacy delayed-output scaffold for first-party RAR3/RAR4 filter diagnostics.
  *
- * <p>The current live RAR extractor still reports VM-filtered streams as an unsupported first-party
- * gap. This buffer is the next safe building block: bytes can be written in normal output order,
+ * <p>Live extraction uses {@link Rar3PpmdFilterOutput}. In this scaffold, bytes are written in normal output order,
  * filter ranges can be queued ahead of the bytes they transform, and flushes will not release a
  * range until the full filter input is available and transformed.</p>
  */
 final class RarFilteredOutputBuffer extends OutputStream {
-    static final int DEFAULT_MAX_DELAYED_BYTES = 64 * 1024 * 1024;
+    // Array indexing bound, not an archive/output quota. Live VM/window bounds are separate.
+    static final int DEFAULT_MAX_DELAYED_BYTES = Integer.MAX_VALUE;
 
     private final OutputStream out;
     private final ByteArrayOutputStream pending = new ByteArrayOutputStream();

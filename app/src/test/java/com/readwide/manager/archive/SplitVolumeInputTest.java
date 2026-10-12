@@ -3,6 +3,7 @@ package com.readwide.manager.archive;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 
 import org.junit.Rule;
@@ -22,6 +23,71 @@ import java.util.List;
 /** Source regressions for the raw stream shared by ALZ and EGG; no codec claims. */
 public class SplitVolumeInputTest {
     @Rule public TemporaryFolder temp = new TemporaryFolder();
+
+    @Test public void littleEndianScalarsPreserveAllWidthsAcrossEveryVolumeBoundary() throws Exception {
+        File data = file(90, 0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x81, 91);
+        for (int width = 1; width <= 8; width++) {
+            long expected = width == 8 ? 0x8123456789abcdefL : 0x8123456789abcdefL & ((1L << (8 * width)) - 1);
+            for (int split = 0; split <= width; split++) {
+                try (SplitVolumeInput in = input(segment(data, 1, split), segment(data, 1 + split, 0),
+                        segment(data, 1 + split, width - split))) {
+                    assertEquals(expected, in.readLittleEndian(width));
+                    assertEquals(width, in.getFilePointer());
+                    assertEquals(-1, in.read());
+                }
+            }
+        }
+    }
+
+    @Test public void scalarScratchDoesNotMixWithIndependentSingleByteViews() throws Exception {
+        File data = file(255, 2, 128, 4, 5, 6, 7, 8);
+        try (SplitVolumeInput in = input(segment(data, 0, 8)); InputStream child = in.boundedStream(2, 4)) {
+            assertEquals(0x02ffL, in.readLittleEndian(2));
+            assertEquals(128, child.read());
+            assertEquals(0x06050480L, in.readLittleEndian(4));
+            assertEquals(4, child.read());
+            assertEquals(7, in.readUnsignedByte());
+            assertEquals(8, in.readLittleEndian(1));
+        }
+    }
+
+    @Test public void scalarRejectsInvalidWidthsAndTruncationWithoutPadding() throws Exception {
+        File data = file(1, 2, 3);
+        try (SplitVolumeInput in = input(segment(data, 0, 3))) {
+            for (int width : new int[]{-1, 0, 9, Integer.MAX_VALUE}) {
+                assertThrows(IllegalArgumentException.class, () -> in.readLittleEndian(width));
+                assertEquals(0L, in.getFilePointer());
+            }
+            assertThrows(java.io.EOFException.class, () -> in.readLittleEndian(4));
+            assertEquals(3L, in.getFilePointer());
+            in.seek(0);
+            assertEquals(0x030201L, in.readLittleEndian(3));
+        }
+    }
+
+    @Test public void interruptedOrClosedScalarReadsDoNotBypassOwnerState() throws Exception {
+        File data = file(1, 2);
+        try (SplitVolumeInput in = input(segment(data, 0, 2))) {
+            Thread.currentThread().interrupt();
+            try { assertThrows(InterruptedIOException.class, () -> in.readLittleEndian(2)); }
+            finally { Thread.interrupted(); }
+            expectIo(() -> in.readLittleEndian(2));
+        }
+        try (SplitVolumeInput in = input(segment(data, 0, 2))) {
+            in.close();
+            expectIo(() -> in.readLittleEndian(2));
+        }
+    }
+
+    @Test public void scalarPhysicalFailureRetiresOwnerEvenWhenNextVolumeIsRepaired() throws Exception {
+        File first = file(1, 2), second = file(3, 4);
+        try (SplitVolumeInput in = input(segment(first, 0, 2), segment(second, 0, 2))) {
+            Files.write(second.toPath(), new byte[0]);
+            expectIo(() -> in.readLittleEndian(4));
+            Files.write(second.toPath(), new byte[]{3, 4});
+            expectIo(() -> in.readLittleEndian(4));
+        }
+    }
 
     @Test public void physicalSlicesCrossVolumesWithoutFramingBytes() throws Exception {
         File first = file(90, 1, 2, 91);

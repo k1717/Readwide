@@ -12,9 +12,7 @@ import java.nio.charset.Charset;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.zip.CRC32;
 
 import com.readwide.manager.util.FileOperationProgress;
@@ -60,6 +58,7 @@ final class RarArchiveReader {
     private static final int EXTRA_FILE_ENCRYPTION = 0x01;
     private static final int EXTRA_FILE_HASH = 0x02;
     private static final int EXTRA_FILE_TIME = 0x03;
+    private static final int EXTRA_FILE_REDIRECTION = 0x05;
     private static final int RAR5_ENCRYPTION_VERSION_AES256 = 0;
     private static final int RAR5_ENCRYPTION_CHECK_VALUE = 0x0001;
 
@@ -73,6 +72,7 @@ final class RarArchiveReader {
     @NonNull
     static List<ArchiveSupport.EntryInfo> listEntries(@NonNull File archive,
                                                       @Nullable char[] password) throws IOException {
+        ArchiveCancellation.checkpoint(null);
         IOException libarchiveFailure = null;
         ArchiveSupport.PasswordRequiredException libarchivePasswordRequired = null;
 
@@ -88,6 +88,7 @@ final class RarArchiveReader {
             } catch (ArchiveSupport.PasswordRequiredException e) {
                 throw e;
             } catch (IOException | SecurityException e) {
+                ArchiveCancellation.rethrowIfCancelled(e, null);
                 libarchiveFailure = asIOException(e);
             }
         }
@@ -101,8 +102,10 @@ final class RarArchiveReader {
                 // are in clear (data-only encryption). First-party header
                 // parsing can still enumerate such archives, so defer this and
                 // try it before surfacing the password prompt.
+                ArchiveCancellation.rethrowIfCancelled(e, null);
                 libarchivePasswordRequired = e;
             } catch (IOException | SecurityException e) {
+                ArchiveCancellation.rethrowIfCancelled(e, null);
                 libarchiveFailure = asIOException(e);
                 // Keep first-party metadata parsing as a safe fallback for store-only or
                 // partially supported RAR4 files when the native backend rejects the file.
@@ -113,6 +116,7 @@ final class RarArchiveReader {
         try {
             entries = readEntries(archive, password);
         } catch (UnsupportedRarFeatureException e) {
+            ArchiveCancellation.rethrowIfCancelled(e, null);
             List<ArchiveSupport.EntryInfo> headerDecrypted = RarHeaderEncryptedArchiveSupport.tryListEntries(archive, password);
             if (headerDecrypted != null) return headerDecrypted;
             RarHeaderEncryptionDetector.throwIfHeaderEncryptedNeedsUnsupportedPath(
@@ -130,6 +134,7 @@ final class RarArchiveReader {
         } catch (ArchiveSupport.PasswordRequiredException e) {
             throw e;
         } catch (IOException e) {
+            ArchiveCancellation.rethrowIfCancelled(e, null);
             List<ArchiveSupport.EntryInfo> headerDecrypted = RarHeaderEncryptedArchiveSupport.tryListEntries(archive, password);
             if (headerDecrypted != null) return headerDecrypted;
             RarHeaderEncryptionDetector.throwIfHeaderEncryptedNeedsUnsupportedPath(
@@ -141,13 +146,15 @@ final class RarArchiveReader {
     }
 
     @NonNull
-    private static List<ArchiveSupport.EntryInfo> toEntryInfoList(@NonNull List<RarEntry> entries) {
+    private static List<ArchiveSupport.EntryInfo> toEntryInfoList(@NonNull List<RarEntry> entries) throws IOException {
         List<ArchiveSupport.EntryInfo> result = new ArrayList<>();
+        java.util.Set<String> files = new java.util.HashSet<>();
         for (RarEntry entry : entries) {
             if (entry == null || entry.splitBefore) continue;
+            if (!entry.directory && !files.add(entry.path)) continue;
             result.add(new ArchiveSupport.EntryInfo(entry.path, entry.directory, entry.unpackedSize, entry.timeMillis));
         }
-        return withSyntheticDirectories(result);
+        return ArchiveSupport.withSyntheticDirectories(result);
     }
 
     static boolean requiresPasswordForExtraction(@NonNull File archive) {
@@ -191,6 +198,7 @@ final class RarArchiveReader {
                                                @Nullable char[] password,
                                                @Nullable FileOperationProgress progress,
                                                @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
         IOException libarchiveFailure = null;
         ArchiveSupport.PasswordRequiredException libarchivePasswordRequired = null;
         if (shouldPreferLibarchiveForRar(archive)) {
@@ -198,6 +206,7 @@ final class RarArchiveReader {
                 return RarLibarchiveFallback.extractArchiveIntoDirectory(
                         archive, targetDir, password, progress, entryProgress);
             } catch (ArchiveSupport.PasswordRequiredException e) {
+                ArchiveCancellation.rethrowIfCancelled(e, progress);
                 // libarchive may report PasswordRequired for RAR5 encryption
                 // variants it cannot verify even with a correct password. With
                 // a password present, fall through to the first-party
@@ -208,10 +217,10 @@ final class RarArchiveReader {
                 }
                 libarchivePasswordRequired = e;
             } catch (IOException | SecurityException e) {
+                ArchiveCancellation.rethrowIfCancelled(e, progress);
                 libarchiveFailure = asIOException(e);
                 // libarchive is the primary RAR backend. Only fall through to the
-                // Java reader for stored entries and explicitly scoped special-case
-                // work. Do not pretend the unfinished generic RAR3 unpacker is usable.
+                // Java reader's scoped payload/solid plans after an ordinary failure.
             }
         }
 
@@ -219,6 +228,7 @@ final class RarArchiveReader {
         try {
             entries = readEntries(archive, password);
         } catch (UnsupportedRarFeatureException e) {
+            ArchiveCancellation.rethrowIfCancelled(e, progress);
             if (RarHeaderEncryptedArchiveSupport.tryExtractArchive(
                     archive, targetDir, password, progress, entryProgress)) {
                 return true;
@@ -237,6 +247,7 @@ final class RarArchiveReader {
         } catch (ArchiveSupport.PasswordRequiredException e) {
             throw e;
         } catch (IOException e) {
+            ArchiveCancellation.rethrowIfCancelled(e, progress);
             if (RarHeaderEncryptedArchiveSupport.tryExtractArchive(
                     archive, targetDir, password, progress, entryProgress)) {
                 return true;
@@ -245,6 +256,7 @@ final class RarArchiveReader {
                     archive, password, libarchiveFailure);
             throw e;
         }
+        ArchiveOutputPreflight.rar(targetDir, entries);
         if (RarFeatureClassifier.hasUnsupportedRar3Or4Payload(entries)) {
             requirePasswordIfNeeded(entries, password);
             if (Rar3Or4SpecialCaseExtractor.tryExtractArchiveWithDecryptedCopy(
@@ -260,6 +272,9 @@ final class RarArchiveReader {
             if (Rar3PpmdSolidArchiveExtractor.tryExtractArchivePpmdSolid(entries, targetDir, password, progress, entryProgress)) {
                 return true;
             }
+            if (Rar3LogicalSolidArchiveExtractor.tryExtractArchive(entries, targetDir, password, progress, entryProgress)) {
+                return true;
+            }
             if (libarchiveFailure != null || !RarLibarchiveFallback.isAvailable()) {
                 throw RarFeatureClassifier.libarchivePrimaryRarFailure(entries, libarchiveFailure);
             }
@@ -273,6 +288,7 @@ final class RarArchiveReader {
             }
             throw RarFeatureClassifier.rar5CompressedFallbackFailure(entries, libarchiveFailure);
         }
+        RarVolumeChain.Index storedChains = RarVolumeChain.index(entries);
         if (progress != null) progress.setTotalBytes(sumUnpackedBytes(entries));
         boolean sawEntry = false;
         for (RarEntry entry : entries) {
@@ -286,10 +302,10 @@ final class RarArchiveReader {
             if (out == null) return false;
             sawEntry = true;
             if (entry.directory || entry.path.endsWith("/")) {
-                if (!out.exists() && !out.mkdirs()) return false;
+                RarOutputFileGuard.ensureDirectory(out);
                 continue;
             }
-            extractStoredEntry(entry, out, password, entries, progress);
+            extractStoredEntry(entry, out, password, storedChains.chain(entry), progress);
         }
         return sawEntry;
     }
@@ -304,6 +320,7 @@ final class RarArchiveReader {
                                       @NonNull String entryPath,
                                       @NonNull File outFile,
                                       @Nullable char[] password) throws IOException {
+        ArchiveCancellation.checkpoint(null);
         String normalized = sanitizeEntryPath(entryPath);
         if (normalized == null || normalized.endsWith("/")) return false;
 
@@ -314,6 +331,7 @@ final class RarArchiveReader {
                 return RarLibarchiveFallback.extractSingleEntry(
                         archive, normalized, outFile, password, null);
             } catch (ArchiveSupport.PasswordRequiredException e) {
+                ArchiveCancellation.rethrowIfCancelled(e, null);
                 // libarchive can report "password required" on encryption
                 // variants it cannot verify, even when a password was given.
                 // With a password in hand, let the first-party RAR5 path try
@@ -322,18 +340,20 @@ final class RarArchiveReader {
                     throw e;
                 }
                 libarchivePasswordRequired = e;
+            } catch (java.io.InterruptedIOException e) {
+                throw e; // Cancellation must not activate another selected-entry decoder.
             } catch (IOException | SecurityException e) {
+                ArchiveCancellation.rethrowIfCancelled(e, null);
                 libarchiveFailure = asIOException(e);
-                // Allow only stored-entry Java fallback. Compressed RAR3/RAR4 is
-                // libarchive-owned unless it is moved into the explicit solid/encrypted
-                // first-party engine.
+                // Keep the eligible first-party routes below available after native failure.
             }
         }
 
         List<RarEntry> entries;
         try {
-            entries = readEntries(archive, password);
+            entries = scanEntries(archive, password).forSelectedEntry(normalized);
         } catch (UnsupportedRarFeatureException e) {
+            ArchiveCancellation.rethrowIfCancelled(e, null);
             if (RarHeaderEncryptedArchiveSupport.tryExtractSingleEntry(
                     archive, normalized, outFile, password, null)) {
                 return true;
@@ -353,6 +373,7 @@ final class RarArchiveReader {
         } catch (ArchiveSupport.PasswordRequiredException e) {
             throw e;
         } catch (IOException e) {
+            ArchiveCancellation.rethrowIfCancelled(e, null);
             if (RarHeaderEncryptedArchiveSupport.tryExtractSingleEntry(
                     archive, normalized, outFile, password, null)) {
                 return true;
@@ -377,10 +398,13 @@ final class RarArchiveReader {
                 if (Rar3Or4SpecialCaseExtractor.tryExtractSplitEntryWithRewrittenCopy(entry, entries, outFile, null)) {
                     return true;
                 }
-                if (Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entry, entries, outFile, null)) {
+                if (Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entry, entries, outFile, password, null)) {
                     return true;
                 }
                 if (Rar3PpmdSolidArchiveExtractor.tryExtractSolidPpmdEntry(entry, entries, outFile, password, null)) {
+                    return true;
+                }
+                if (Rar3LogicalSolidArchiveExtractor.tryExtractEntry(entry, entries, outFile, password, null)) {
                     return true;
                 }
                 if (libarchiveFailure != null || !RarLibarchiveFallback.isAvailable()) {
@@ -410,13 +434,47 @@ final class RarArchiveReader {
     @NonNull
     static List<RarEntry> readEntries(@NonNull File archive,
                                               @Nullable char[] password) throws IOException {
+        return scanEntries(archive, password).requireComplete();
+    }
+
+    /** A readable prefix is recovery data, never evidence of a complete archive. */
+    static final class EntryScan {
+        final List<RarEntry> entries = new ArrayList<>();
+        boolean hasRedirections;
+        IOException failure;
+
+        List<RarEntry> requireComplete() throws IOException {
+            if (failure != null) throw failure;
+            return entries;
+        }
+
+        List<RarEntry> forSelectedEntry(String path) throws IOException {
+            if (failure != null) {
+                // Required split parts and solid predecessors are validated by the selected
+                // extraction plan. An unrelated later volume need not prevent recovery.
+                for (RarEntry entry : entries) {
+                    if (!entry.directory && !entry.splitBefore && path.equals(entry.path)) return entries;
+                }
+                throw failure;
+            }
+            return entries;
+        }
+    }
+
+    static EntryScan scanEntries(File archive, char[] password) throws IOException {
         List<File> volumes = RarArchiveLocator.collectReadableVolumes(archive);
-        List<RarEntry> result = new ArrayList<>();
+        EntryScan result = new EntryScan();
         for (File volume : volumes) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new java.io.InterruptedIOException("RAR metadata scan cancelled");
+            }
             try (RandomAccessFile raf = new RandomAccessFile(volume, "r")) {
-                result.addAll(readSingleVolumeEntries(volume, raf, password));
+                result.entries.addAll(readSingleVolumeEntries(volume, raf, password, result));
+            } catch (java.io.InterruptedIOException cancelled) {
+                throw cancelled;
             } catch (IOException e) {
-                if (result.isEmpty()) throw e;
+                if (Thread.currentThread().isInterrupted()) throw e;
+                result.failure = e;
                 break;
             }
         }
@@ -432,7 +490,8 @@ final class RarArchiveReader {
     @NonNull
     private static List<RarEntry> readSingleVolumeEntries(@NonNull File archive,
                                                           @NonNull RandomAccessFile raf,
-                                                          @Nullable char[] password) throws IOException {
+                                                          @Nullable char[] password,
+                                                          @NonNull EntryScan scan) throws IOException {
             RarArchiveLocator.Signature signature = RarArchiveLocator.findSignature(raf);
             if (signature == null) throw new IOException("Not a RAR archive");
             List<RarEntry> entries;
@@ -441,7 +500,7 @@ final class RarArchiveReader {
                 entries = readRar4Entries(raf, password);
             } else {
                 raf.seek(signature.offset + RarArchiveLocator.signatureLength(signature.version));
-                entries = readRar5Entries(raf, password);
+                entries = readRar5Entries(raf, password, scan);
             }
             for (RarEntry entry : entries) entry.sourceArchive = archive;
             return entries;
@@ -581,9 +640,11 @@ final class RarArchiveReader {
 
     @NonNull
     private static List<RarEntry> readRar5Entries(@NonNull RandomAccessFile raf,
-                                                  @Nullable char[] password) throws IOException {
+                                                  @Nullable char[] password,
+                                                  @NonNull EntryScan scan) throws IOException {
         List<RarEntry> result = new ArrayList<>();
         Rar5Crypto.Secrets headerSecrets = null;
+        boolean archiveSolid = false;
         while (raf.getFilePointer() < raf.length()) {
             HeaderBlock block = headerSecrets == null
                     ? readRar5Header(raf)
@@ -599,8 +660,13 @@ final class RarArchiveReader {
                 headerSecrets = deriveRar5HeaderSecrets(block, password);
                 continue;
             }
-            if (block.type == HEADER_FILE) {
-                RarEntry entry = parseRar5FileBlock(block);
+            if (block.type == HEADER_MAIN) {
+                ByteCursor main = new ByteCursor(block.headerData, block.fieldsStart, block.extraStart);
+                long archiveFlags = main.readVInt();
+                if ((archiveFlags & 0x0002L) != 0) main.readVInt(); // Optional volume number.
+                archiveSolid = (archiveFlags & 0x0004L) != 0;
+            } else if (block.type == HEADER_FILE) {
+                RarEntry entry = parseRar5FileBlock(block, archiveSolid, scan);
                 if (entry != null) result.add(entry);
             }
             long next = block.dataOffset + block.dataSize;
@@ -784,14 +850,20 @@ final class RarArchiveReader {
     }
 
     @Nullable
-    private static RarEntry parseRar5FileBlock(@NonNull HeaderBlock block) throws IOException {
+    private static RarEntry parseRar5FileBlock(@NonNull HeaderBlock block,
+                                             boolean archiveSolid,
+                                             @NonNull EntryScan scan) throws IOException {
         ByteCursor cursor = new ByteCursor(block.headerData, block.fieldsStart, block.extraStart);
         long fileFlags = cursor.readVInt();
         boolean directory = (fileFlags & FILE_FLAG_DIRECTORY) != 0;
-        if ((fileFlags & FILE_FLAG_UNKNOWN_UNPACKED_SIZE) != 0) {
-            throw new UnsupportedRarFeatureException("Unknown RAR unpacked size is not supported");
-        }
         long unpackedSize = cursor.readVInt();
+        if ((fileFlags & FILE_FLAG_UNKNOWN_UNPACKED_SIZE) != 0) {
+            // The field is present but has no size semantics, including on the final part.
+            if (directory) throw new UnsupportedRarFeatureException("Unknown RAR directory size");
+            unpackedSize = -1L;
+        } else if (unpackedSize < 0L) {
+            throw new IOException("RAR unpacked size exceeds the supported numeric range");
+        }
         cursor.readVInt(); // Attributes.
         long timeMillis = 0L;
         if ((fileFlags & FILE_FLAG_UNIX_MTIME) != 0) {
@@ -809,15 +881,27 @@ final class RarArchiveReader {
         }
         String path = new String(cursor.readBytes((int) nameLength), StandardCharsets.UTF_8);
         String sanitized = sanitizeEntryPath(path);
-        if (sanitized == null) return null;
 
         ExtraInfo extra = parseFileExtra(block.headerData, block.extraStart, block.extraSize);
+        // Like the native bridge, expose only actual files/directories, never link
+        // targets. A file-copy record is a reference, not an empty stored file.
+        if (extra.redirection) {
+            if (block.dataSize != 0L) {
+                throw new UnsupportedRarFeatureException("RAR5 redirection payloads are not supported");
+            }
+            scan.hasRedirections = true;
+            return null;
+        }
+        if (sanitized == null) return null;
         if (extra.timeMillis > 0L) timeMillis = extra.timeMillis;
 
         int method = (int) ((compressionInfo & 0x0380L) >> 7);
         boolean solid = (compressionInfo & 0x0040L) != 0;
         boolean splitBefore = (block.flags & HEADER_FLAG_DATA_CONTINUES_PREVIOUS) != 0;
         boolean splitAfter = (block.flags & HEADER_FLAG_DATA_CONTINUES_NEXT) != 0;
+        // Preserve unknown sizes in metadata. The stored extractor requires a
+        // unique checksum-resolved AES tail before committing; rejecting it here
+        // would also hide the archive's unrelated readable members.
         return new RarEntry(
                 sanitized,
                 directory,
@@ -832,7 +916,7 @@ final class RarArchiveReader {
                 extra.encryption,
                 dataCrc,
                 timeMillis,
-                compressionInfo, extra.blake2sp);
+                compressionInfo, extra.blake2sp, archiveSolid);
     }
 
     @NonNull
@@ -867,11 +951,30 @@ final class RarArchiveReader {
                 }
             } else if (recordType == EXTRA_FILE_TIME) {
                 info.timeMillis = parseFileTimeRecord(record);
+            } else if (recordType == EXTRA_FILE_REDIRECTION) {
+                if (info.redirection) throw new IOException("Duplicate RAR5 redirection record");
+                validateFileRedirectionRecord(record);
+                info.redirection = true;
             }
             cursor.setPosition(recordEnd);
             if (cursor.position() <= recordStart) throw new IOException("Invalid RAR extra cursor");
         }
         return info;
+    }
+
+    private static void validateFileRedirectionRecord(@NonNull ByteCursor cursor) throws IOException {
+        long type = cursor.readVInt();
+        long flags = cursor.readVInt();
+        // Unix/Windows symlink, junction, hard link and file copy, respectively.
+        if (type < 1L || type > 5L || (flags & ~1L) != 0L) {
+            throw new UnsupportedRarFeatureException("Unsupported RAR5 redirection metadata");
+        }
+        long targetLength = cursor.readVInt();
+        if (targetLength <= 0L || targetLength > cursor.remaining()) {
+            throw new IOException("Invalid RAR5 redirection target length");
+        }
+        // Validate record-local bounds without allocating or resolving the target.
+        cursor.setPosition(cursor.position() + (int) targetLength);
     }
 
     @NonNull
@@ -935,13 +1038,16 @@ final class RarArchiveReader {
                 return;
             }
             if (tryExtractRar3Or4EntryWithLibarchiveFallback(entry, outFile, password, progress)) {
-                RarStoredPayloadIO.verifyCrc(entry, outFile);
+                RarStoredPayloadIO.verifyCrc(entry, outFile, null, progress);
                 return;
             }
-            if (Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entry, allEntries, outFile, progress)) {
+            if (Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entry, allEntries, outFile, password, progress)) {
                 return;
             }
             if (Rar3PpmdSolidArchiveExtractor.tryExtractSolidPpmdEntry(entry, allEntries, outFile, password, progress)) {
+                return;
+            }
+            if (Rar3LogicalSolidArchiveExtractor.tryExtractEntry(entry, allEntries, outFile, password, progress)) {
                 return;
             }
             throw RarFeatureClassifier.libarchivePrimaryRarFailure(entry, null);
@@ -964,16 +1070,12 @@ final class RarArchiveReader {
             }
             throw new UnsupportedRarFeatureException("Compressed RAR3/RAR4 entries are not supported in this build");
         }
-        if (!entry.encrypted() && !entry.splitBefore && !entry.splitAfter
-                && entry.packedSize != entry.unpackedSize) {
-            throw new UnsupportedRarFeatureException("Stored RAR size mismatch");
-        }
-
         if (entry.splitAfter) {
             RarSplitStoredExtractor.extract(entry, outFile, password, allEntries, progress);
             return;
         }
 
+        RarStoredPayloadIO.resolvedUnpackedSize(entry, entry.packedSize);
         try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(outFile)) {
             Rar5Crypto.Secrets checksumSecrets = null;
             if (entry.encrypted()) {
@@ -987,7 +1089,7 @@ final class RarArchiveReader {
                     extractPlainStoredEntry(raf, entry, outFile, progress);
                 }
             }
-            RarStoredPayloadIO.verifyCrc(entry, outFile, checksumSecrets);
+            RarStoredPayloadIO.verifyCrc(entry, outFile, checksumSecrets, progress);
             guard.commit();
         }
     }
@@ -1026,8 +1128,10 @@ final class RarArchiveReader {
                         progress,
                         entryProgress);
             } catch (ArchiveSupport.PasswordRequiredException e) {
+                ArchiveCancellation.rethrowIfCancelled(e, progress);
                 throw e;
             } catch (IOException | SecurityException e) {
+                ArchiveCancellation.rethrowIfCancelled(e, progress);
                 libarchiveFailure = asIOException(e);
             }
         }
@@ -1038,6 +1142,7 @@ final class RarArchiveReader {
         } catch (ArchiveSupport.PasswordRequiredException e) {
             throw e;
         } catch (IOException e) {
+            ArchiveCancellation.rethrowIfCancelled(e, progress);
             if (RarHeaderEncryptedArchiveSupport.tryExtractArchive(
                     archive, targetDir, password, progress, entryProgress)) {
                 return true;
@@ -1048,8 +1153,12 @@ final class RarArchiveReader {
             throw e;
         }
         requirePasswordIfNeeded(entries, password);
+        ArchiveOutputPreflight.rar(targetDir, entries);
         if (RarFeatureClassifier.hasUnsupportedRar3Or4Payload(entries)) {
             if (Rar3PpmdSolidArchiveExtractor.tryExtractArchivePpmdSolid(entries, targetDir, password, progress, entryProgress)) {
+                return true;
+            }
+            if (Rar3LogicalSolidArchiveExtractor.tryExtractArchive(entries, targetDir, password, progress, entryProgress)) {
                 return true;
             }
             throw RarFeatureClassifier.libarchivePrimaryRarFailure(entries, libarchiveFailure);
@@ -1179,11 +1288,13 @@ final class RarArchiveReader {
             // first-party decrypt+decode path before surfacing this; only
             // rethrow if no password is available or the first-party path
             // also cannot handle it.
+            ArchiveCancellation.rethrowIfCancelled(e, progress);
             if (password == null || password.length == 0) {
                 throw e;
             }
             backendPasswordRequired = e;
         } catch (IOException e) {
+            ArchiveCancellation.rethrowIfCancelled(e, progress);
             backendFailure = e;
         }
         if (extracted) {
@@ -1205,7 +1316,8 @@ final class RarArchiveReader {
         return entry.rarVersion >= 5
                 && !entry.directory
                 && entry.method != 0
-                && (entry.encrypted() || entry.solid || entry.splitBefore || entry.splitAfter);
+                && (entry.encrypted() || entry.solid || entry.splitBefore || entry.splitAfter
+                    || (entry.archiveSolid && entry.packedSize == 0));
     }
 
     @NonNull
@@ -1268,19 +1380,19 @@ final class RarArchiveReader {
         }
     }
 
-    private static long sumUnpackedBytes(@NonNull List<RarEntry> entries) {
+    /** Progress only: each complete logical file contributes its final part's size. */
+    static long sumUnpackedBytes(@NonNull List<RarEntry> entries) {
         long total = 0L;
-        boolean unknown = false;
         for (RarEntry entry : entries) {
-            if (entry == null || entry.directory || entry.splitBefore) continue;
-            if (entry.unpackedSize < 0L) {
-                unknown = true;
-                continue;
-            }
-            if (Long.MAX_VALUE - total < entry.unpackedSize) return Long.MAX_VALUE;
+            // A split head can contain only a partial size or an ignored placeholder.
+            // Do not count it instead of the final part, or count any file twice.
+            if (entry == null || entry.directory || entry.splitAfter) continue;
+            // A partial sum is not a total: keep byte progress indeterminate until
+            // completion rather than hitting 100% while unknown-size work remains.
+            if (entry.unpackedSize < 0L || Long.MAX_VALUE - total < entry.unpackedSize) return -1L;
             total += entry.unpackedSize;
         }
-        return total > 0L ? total : (unknown ? -1L : 0L);
+        return total;
     }
 
     @NonNull
@@ -1320,12 +1432,15 @@ final class RarArchiveReader {
         }
 
         if (encryption.isRar5Aes256()) {
-            if (entry.unpackedSize < 0L) throw new IOException("Invalid decrypted RAR stored size");
-            Rar5Crypto.Secrets secrets = Rar5Crypto.deriveSecrets(password, encryption.kdfCount, encryption.salt);
+            Rar5Crypto.Secrets secrets = Rar5Crypto.deriveSecrets(password, encryption.kdfCount, encryption.salt, progress);
             if (!Rar5Crypto.passwordMatches(secrets, encryption.check)) {
                 throw new ArchiveSupport.PasswordRequiredException();
             }
             Cipher cipher = Rar5Crypto.createAesCbcDecryptCipher(secrets, encryption.iv);
+            if (entry.unpackedSize == -1L) {
+                RarStoredPayloadIO.decryptUnknownSizeToFile(raf, entry, cipher, secrets, outFile, progress);
+                return secrets;
+            }
             RarCryptoStreams.decryptToFile(
                     raf,
                     entry.packedSize,
@@ -1346,7 +1461,7 @@ final class RarArchiveReader {
                                                            @NonNull char[] password,
                                                            @NonNull EncryptionInfo encryption,
                                                            @Nullable FileOperationProgress progress) throws IOException {
-        Cipher cipher = Rar3Crypto.createAesCbcDecryptCipher(password, encryption.salt);
+        Cipher cipher = Rar3Crypto.createAesCbcDecryptCipher(password, encryption.salt, progress);
         RarCryptoStreams.decryptToFile(
                 raf,
                 entry.packedSize,
@@ -1482,20 +1597,7 @@ final class RarArchiveReader {
 
     @Nullable
     private static String sanitizeEntryPath(String rawEntryName) {
-        if (rawEntryName == null) return null;
-        String entryName = rawEntryName.trim().replace('\\', '/');
-        while (entryName.startsWith("./")) entryName = entryName.substring(2);
-        while (entryName.contains("//")) entryName = entryName.replace("//", "/");
-        if (entryName.length() == 0) return null;
-        if (entryName.startsWith("/")
-                || entryName.equals("..")
-                || entryName.startsWith("../")
-                || entryName.contains("/../")
-                || entryName.endsWith("/..")
-                || entryName.matches("^[A-Za-z]:.*")) {
-            return null;
-        }
-        return entryName;
+        return ArchiveSupport.sanitizeEntryPathForList(rawEntryName);
     }
 
     private static boolean isSameOrDescendant(@NonNull File ancestor, @NonNull File candidate) throws IOException {
@@ -1506,22 +1608,6 @@ final class RarArchiveReader {
             current = current.getParentFile();
         }
         return false;
-    }
-
-    @NonNull
-    private static List<ArchiveSupport.EntryInfo> withSyntheticDirectories(@NonNull List<ArchiveSupport.EntryInfo> entries) {
-        Map<String, ArchiveSupport.EntryInfo> map = new LinkedHashMap<>();
-        for (ArchiveSupport.EntryInfo entry : entries) {
-            String path = entry.path;
-            int slash = path.indexOf('/');
-            while (slash >= 0) {
-                String dir = path.substring(0, slash + 1);
-                if (!map.containsKey(dir)) map.put(dir, new ArchiveSupport.EntryInfo(dir, true, -1L, 0L));
-                slash = path.indexOf('/', slash + 1);
-            }
-            map.put(path, entry);
-        }
-        return new ArrayList<>(map.values());
     }
 
     private static long windowsFileTimeToMillis(long fileTime) {
@@ -1698,6 +1784,8 @@ final class RarArchiveReader {
         final int rarVersion;
         final int method;
         final boolean solid;
+        /** RAR5 main-header flag; distinct from this file's solid continuation flag. */
+        final boolean archiveSolid;
         final boolean splitBefore;
         final boolean splitAfter;
         @Nullable final EncryptionInfo encryption;
@@ -1748,6 +1836,16 @@ final class RarArchiveReader {
                  long dataOffset, int rarVersion, int method, boolean solid, boolean splitBefore,
                  boolean splitAfter, @Nullable EncryptionInfo encryption, long dataCrc,
                  long timeMillis, long rar5CompressionInfo, @Nullable byte[] blake2sp) {
+            this(path, directory, unpackedSize, packedSize, dataOffset, rarVersion, method,
+                    solid, splitBefore, splitAfter, encryption, dataCrc, timeMillis,
+                    rar5CompressionInfo, blake2sp, false);
+        }
+
+        RarEntry(@NonNull String path, boolean directory, long unpackedSize, long packedSize,
+                 long dataOffset, int rarVersion, int method, boolean solid, boolean splitBefore,
+                 boolean splitAfter, @Nullable EncryptionInfo encryption, long dataCrc,
+                 long timeMillis, long rar5CompressionInfo, @Nullable byte[] blake2sp,
+                 boolean archiveSolid) {
             this.path = directory && !path.endsWith("/") ? path + "/" : path;
             this.directory = directory;
             this.unpackedSize = unpackedSize;
@@ -1756,6 +1854,7 @@ final class RarArchiveReader {
             this.rarVersion = rarVersion;
             this.method = method;
             this.solid = solid;
+            this.archiveSolid = archiveSolid;
             this.splitBefore = splitBefore;
             this.splitAfter = splitAfter;
             this.encryption = encryption;
@@ -1773,6 +1872,7 @@ final class RarArchiveReader {
     private static final class ExtraInfo {
         @Nullable EncryptionInfo encryption;
         @Nullable byte[] blake2sp;
+        boolean redirection;
         long timeMillis;
     }
 

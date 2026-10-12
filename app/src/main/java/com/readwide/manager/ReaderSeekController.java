@@ -39,7 +39,7 @@ final class ReaderSeekController {
             @Override
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
                 if (!fromUser || suppressSeekCallback || activity.fileContent.isEmpty()) return;
-                int pages = activity.getDisplayedTotalPageCount();
+                int pages = Math.max(1, sb.getMax() + 1);
                 pendingPage = Math.max(1, Math.min(pages, progress + 1));
                 previewToolbarSeekPage(pendingPage, pages);
             }
@@ -50,8 +50,8 @@ final class ReaderSeekController {
                 toolbarSeekTracking = true;
                 pendingToolbarSeekJump = false;
                 activity.handler.removeCallbacks(pendingToolbarSeekTimeoutRunnable);
-                int pages = activity.getDisplayedTotalPageCount();
-                pendingPage = Math.max(1, Math.min(pages, activity.getDisplayedCurrentPageNumber()));
+                int pages = Math.max(1, sb.getMax() + 1);
+                pendingPage = Math.max(1, Math.min(pages, activity.getStatusCurrentPageNumber()));
                 previewToolbarSeekPage(pendingPage, pages);
             }
 
@@ -108,7 +108,18 @@ final class ReaderSeekController {
     boolean showPendingPositionIfNeeded(int currentPage, int totalPages) {
         if ((!toolbarSeekTracking && !pendingToolbarSeekJump) || pendingToolbarSeekPage <= 0) return false;
 
-        int pendingTotal = Math.max(1, Math.max(totalPages, pendingToolbarSeekTotalPages));
+        if (!toolbarSeekTracking && activity.largeTextEstimateActive) {
+            // After release, the partition request owns the destination (and
+            // rebases its label when exact anchors arrive). A second numeric
+            // overlay would otherwise show the old estimate for up to 10 s.
+            clearPendingToolbarSeekJump();
+            return false;
+        }
+
+        // Keep the touched scale stable until release. Exact indexing may
+        // finish mid-drag, but must not move the thumb under the user's finger.
+        int pendingTotal = Math.max(1, toolbarSeekTracking
+                ? pendingToolbarSeekTotalPages : Math.max(totalPages, pendingToolbarSeekTotalPages));
         int pendingPage = Math.max(1, Math.min(pendingTotal, pendingToolbarSeekPage));
         if (!toolbarSeekTracking && currentPage == pendingPage) {
             clearPendingToolbarSeekJump();

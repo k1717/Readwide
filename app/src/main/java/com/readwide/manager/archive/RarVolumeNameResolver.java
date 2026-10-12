@@ -16,9 +16,11 @@ import java.util.regex.Pattern;
 /** Metadata-only RAR catalogue; callers must require a readable chain before decoding. */
 final class RarVolumeNameResolver {
     private static final Pattern NEW_STYLE_PART = Pattern.compile(
-            "^(.*)\\.part([0-9]+)\\.rar$", Pattern.CASE_INSENSITIVE);
-    private static final Pattern OLD_STYLE_PART = Pattern.compile(
-            "^(.*)\\.r([0-9]{2,3})$", Pattern.CASE_INSENSITIVE);
+            "^(.*)\\.part([0-9]+)\\.(rar|cbr)$", Pattern.CASE_INSENSITIVE);
+    // Old-style names advance from .r99 to .s00, up to .z99.
+    // Retain the previously accepted decimal .r100 alias; duplicate ordinals fail closed.
+    static final Pattern OLD_STYLE_PART = Pattern.compile(
+            "^(.*)\\.(r[0-9]{2,3}|[s-z][0-9]{2})$", Pattern.CASE_INSENSITIVE);
 
     private RarVolumeNameResolver() {}
 
@@ -86,18 +88,19 @@ final class RarVolumeNameResolver {
             Chain chain = collectNewStyle(siblings, prefix);
             if (index < 1) chain.problem = "Invalid RAR volume number: " + name;
             File first = chain.volumes.isEmpty()
-                    ? expectedNewStyleFirstVolume(parent, prefix, numbered.group(2)) : chain.volumes.get(0);
+                    ? expectedNewStyleFirstVolume(parent, prefix, numbered.group(2), numbered.group(3)) : chain.volumes.get(0);
             return new Result(Style.NEW_STYLE_PART, selected, first, chain, index, index > 1, prefix);
         }
         Matcher legacy = OLD_STYLE_PART.matcher(name);
         if (legacy.matches()) {
             String prefix = legacy.group(1);
-            int index = parseNonNegativeInt(legacy.group(2));
+            int index = oldStyleIndex(legacy.group(2));
             Chain chain = collectOldStyle(siblings, prefix, selected);
             File first = chain.volumes.isEmpty() ? new File(parent, prefix + ".rar") : chain.volumes.get(0);
             return new Result(Style.OLD_STYLE_RAR_PLUS_RNN, selected, first, chain, index, true, prefix);
         }
-        if (name.toLowerCase(Locale.ROOT).endsWith(".rar")) {
+        String lowerName = name.toLowerCase(Locale.ROOT);
+        if (lowerName.endsWith(".rar") || lowerName.endsWith(".cbr")) {
             String prefix = name.substring(0, name.length() - 4);
             Chain chain = collectOldStyle(siblings, prefix, selected);
             if (chain.maxSeenIndex >= 0) {
@@ -105,18 +108,18 @@ final class RarVolumeNameResolver {
                 return new Result(Style.BASE_RAR_WITH_OLD_STYLE_COMPANIONS,
                         selected, first, chain, 0, false, prefix);
             }
-            // A base .rar is a different identity from a coexisting .partN.rar set.
+            // A standalone .rar/.cbr is a different identity from a coexisting .partN.rar/.cbr set.
             // A missing selected file is an error at the strict boundary, not an alias.
         }
         return single(selected, null);
     }
 
-    private static File expectedNewStyleFirstVolume(File parent, String prefix, String digits) {
+    private static File expectedNewStyleFirstVolume(File parent, String prefix, String digits, String extension) {
         // Width affects only diagnostics when part 1 is absent; there is no ordinal probing loop.
         StringBuilder first = new StringBuilder(digits.length());
         for (int i = 1; i < digits.length(); i++) first.append('0');
         first.append('1');
-        return new File(parent, prefix + ".part" + first + ".rar");
+        return new File(parent, prefix + ".part" + first + "." + extension);
     }
 
     private static Result single(File selected, @Nullable String problem) {
@@ -132,6 +135,8 @@ final class RarVolumeNameResolver {
             if (file == null) continue;
             Matcher match = NEW_STYLE_PART.matcher(file.getName());
             if (!match.matches() || !match.group(1).equalsIgnoreCase(prefix)) continue;
+            // Renaming either end to CBR keeps the same numbered chain; duplicate
+            // RAR/CBR spellings of an ordinal remain ambiguous.
             int index = parseNonNegativeInt(match.group(2));
             if (index <= 0) { problem = "Invalid RAR volume number: " + file.getName(); continue; }
             File prior = byIndex.putIfAbsent(index, file);
@@ -147,17 +152,21 @@ final class RarVolumeNameResolver {
         String problem = null;
         TreeMap<Integer, File> byIndex = new TreeMap<>();
         String baseName = prefix + ".rar";
+        String comicBaseName = prefix + ".cbr";
         for (File file : files) {
             if (Thread.currentThread().isInterrupted()) { problem = "RAR volume discovery interrupted"; break; }
             if (file == null) continue;
-            if (file.getName().equalsIgnoreCase(baseName)) {
+            // A renamed comic archive remains the first RAR volume. Competing bases
+            // are ambiguous whenever continuations exist; never choose one silently.
+            if (file.getName().equalsIgnoreCase(baseName)
+                    || file.getName().equalsIgnoreCase(comicBaseName)) {
                 if (first != null) ambiguousBase = true;
                 if (first == null || file.equals(selected)) first = file;
                 continue;
             }
             Matcher match = OLD_STYLE_PART.matcher(file.getName());
             if (!match.matches() || !match.group(1).equalsIgnoreCase(prefix)) continue;
-            int index = parseNonNegativeInt(match.group(2));
+            int index = oldStyleIndex(match.group(2));
             File prior = byIndex.putIfAbsent(index, file);
             if (prior != null) problem = "Ambiguous RAR continuation " + index + ": "
                     + prior.getName() + " / " + file.getName();
@@ -184,6 +193,11 @@ final class RarVolumeNameResolver {
         int nextMissing = byIndex.isEmpty() ? -1 : expected > Integer.MAX_VALUE ? -1 : (int) expected;
         int maxSeen = byIndex.isEmpty() ? -1 : byIndex.lastKey();
         return new Chain(result, nextMissing, maxSeen, problem);
+    }
+
+    private static int oldStyleIndex(String suffix) {
+        int range = Character.toLowerCase(suffix.charAt(0)) - 'r';
+        return range * 100 + Integer.parseInt(suffix.substring(1));
     }
 
     private static int parseNonNegativeInt(String value) {

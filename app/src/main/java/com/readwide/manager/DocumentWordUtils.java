@@ -283,6 +283,53 @@ final class DocumentWordUtils {
         if (run) out.append(runSuffix);
     }
 
+    /** Select one preview-compatible OOXML alternative, before traversing text, images or breaks. */
+    static void selectMarkupAlternatives(Node root) {
+        if (root == null) return;
+        java.util.ArrayDeque<Node> pending = new java.util.ArrayDeque<>();
+        pending.push(root);
+        while (!pending.isEmpty()) {
+            Node node = pending.pop();
+            if ("AlternateContent".equals(node.getLocalName())
+                    && "http://schemas.openxmlformats.org/markup-compatibility/2006".equals(node.getNamespaceURI())) {
+                Node selected = null;
+                Node fallback = null;
+                for (Node child = node.getFirstChild(); child != null; child = child.getNextSibling()) {
+                    if (!node.getNamespaceURI().equals(child.getNamespaceURI())) continue;
+                    if ("Fallback".equals(child.getLocalName())) fallback = child;
+                    if (selected == null && "Choice".equals(child.getLocalName()) && supportsChoice(child)) selected = child;
+                }
+                if (selected == null) selected = fallback;
+                // Keep the namespace-declaring ancestors in place. The layout reader
+                // unwraps these containers; discarded alternatives cannot leak breaks/text.
+                for (Node child = node.getFirstChild(); child != null;) {
+                    Node next = child.getNextSibling();
+                    if (child != selected) node.removeChild(child);
+                    child = next;
+                }
+                if (selected != null) pending.push(selected);
+                continue;
+            }
+            for (Node child = node.getLastChild(); child != null; child = child.getPreviousSibling()) pending.push(child);
+        }
+    }
+
+    private static boolean supportsChoice(Node choice) {
+        String requires = DocumentArchiveUtils.attr(choice, "Requires", "Requires");
+        if (requires == null || requires.trim().isEmpty()) return false;
+        for (String prefix : requires.trim().split("\\s+")) {
+            String namespace = choice.lookupNamespaceURI(prefix);
+            // These namespaces have reading-order preview handlers, not full Office layout parity.
+            if (!"http://schemas.openxmlformats.org/wordprocessingml/2006/main".equals(namespace)
+                    && !"http://schemas.openxmlformats.org/drawingml/2006/main".equals(namespace)
+                    && !"http://schemas.openxmlformats.org/drawingml/2006/picture".equals(namespace)
+                    && !"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing".equals(namespace)
+                    && !"http://schemas.microsoft.com/office/word/2010/wordprocessingShape".equals(namespace)
+                    && !"urn:schemas-microsoft-com:vml".equals(namespace)) return false;
+        }
+        return true;
+    }
+
     private static void appendWordTextBoxes(Node node, StringBuilder out,
                                             Map<String, String> wordRelationships, String localHost) {
         if (node == null) return;

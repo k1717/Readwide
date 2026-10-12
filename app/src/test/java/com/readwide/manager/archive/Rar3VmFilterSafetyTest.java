@@ -20,10 +20,60 @@ public class Rar3VmFilterSafetyTest {
     }
 
     @Test public void negativeRgbPositionAndOverflowingWidthAreRejectedAsIoErrors() throws Exception {
-        for (int[] registers : new int[][]{{6,-1,0,0,0,0,0},{Integer.MIN_VALUE,0,0,0,0,0,0}}) {
+        for (int[] registers : new int[][]{{6,-1,0,0,0,0,0},{6,3,0,0,0,0,0},
+                {0,0,0,0,0,0,0},{1,0,0,0,0,0,0},{2,0,0,0,0,0,0},
+                {Integer.MIN_VALUE,0,0,0,0,0,0}}) {
             try { Rar3VmFilter.apply(Rar3VmFilter.StandardFilter.RGB,new byte[9],9,registers,0); fail(); }
             catch (IOException expected) { assertTrue(expected.getMessage().contains("invalid params")); }
         }
+    }
+
+    @Test public void rgbAcceptsPartialPixelsAndRowsShorterThanTheirStride() throws Exception {
+        for (int stride : new int[]{3, 12, Integer.MAX_VALUE}) {
+            int[] registers = new int[7]; registers[0] = stride;
+            assertArrayEquals(new byte[0], Rar3VmFilter.apply(
+                    Rar3VmFilter.StandardFilter.RGB, new byte[0], 0, registers, 0));
+            assertArrayEquals(new byte[]{-1}, Rar3VmFilter.apply(
+                    Rar3VmFilter.StandardFilter.RGB, new byte[]{1}, 1, registers, 0));
+            assertArrayEquals(new byte[]{-1,-2}, Rar3VmFilter.apply(
+                    Rar3VmFilter.StandardFilter.RGB, new byte[]{1,2}, 2, registers, 0));
+            assertArrayEquals(new byte[]{-3,-2,-5}, Rar3VmFilter.apply(
+                    Rar3VmFilter.StandardFilter.RGB, new byte[]{1,2,3}, 3, registers, 0));
+        }
+    }
+
+    @Test public void rgbWideRowAndMinimumStrideKeepDistinctPredictionRules() throws Exception {
+        byte[] raw = {1,2,3,4,5,6};
+        int[] registers = new int[7]; registers[0] = 12;
+        assertArrayEquals(new byte[]{-4,-3,-8,-10,-7,-18}, Rar3VmFilter.apply(
+                Rar3VmFilter.StandardFilter.RGB, raw, raw.length, registers, 0));
+        registers[0] = 3;
+        assertArrayEquals(new byte[]{-4,-3,-8,-6,-4,-10}, Rar3VmFilter.apply(
+                Rar3VmFilter.StandardFilter.RGB, raw, raw.length, registers, 0));
+        assertArrayEquals(new byte[]{1,2,3,4,5,6}, raw);
+    }
+
+    @Test public void rgbOrdinaryRowsKeepTheirUpperLeftPrediction() throws Exception {
+        int[] registers = new int[7]; registers[0] = 6;
+        assertArrayEquals(new byte[]{-5,-4,-11,-12,-9,-24,-21,-15,-39}, Rar3VmFilter.apply(
+                Rar3VmFilter.StandardFilter.RGB, new byte[]{1,2,3,4,5,6,7,8,9}, 9, registers, 0));
+    }
+
+    @Test public void inPlaceFiltersReuseExactBlocksButNeverExposeTheirTail() throws Exception {
+        for (Rar3VmFilter.StandardFilter type : new Rar3VmFilter.StandardFilter[]{
+                Rar3VmFilter.StandardFilter.E8, Rar3VmFilter.StandardFilter.E8E9,
+                Rar3VmFilter.StandardFilter.ITANIUM}) {
+            byte[] exact = new byte[22];
+            assertSame(exact, Rar3VmFilter.apply(type, exact, exact.length, new int[7], 0));
+            byte[] oversized = new byte[24]; oversized[22] = 42; oversized[23] = 43;
+            byte[] filtered = Rar3VmFilter.apply(type, oversized, 22, new int[7], 0);
+            assertNotSame(oversized, filtered);
+            assertEquals(22, filtered.length);
+            assertEquals(42, oversized[22]); assertEquals(43, oversized[23]);
+        }
+        byte[] call = {(byte)0xe8,100,0,0,0};
+        assertSame(call, Rar3VmFilter.apply(Rar3VmFilter.StandardFilter.E8, call, 5, new int[7], 0));
+        assertArrayEquals(new byte[]{(byte)0xe8,99,0,0,0}, call);
     }
 
     @Test public void badInputBoundsAndRegistersFailBeforeMutation() throws Exception {

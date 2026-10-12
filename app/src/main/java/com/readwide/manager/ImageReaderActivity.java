@@ -71,6 +71,7 @@ import com.readwide.manager.util.FileSortUtils;
 import com.readwide.manager.util.FileClipboardController;
 import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.archive.ArchiveSupport;
+import com.readwide.manager.archive.ArchiveSourceSnapshot;
 import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.util.BookmarkManager;
 import com.readwide.manager.util.PrefsManager;
@@ -109,11 +110,23 @@ public class ImageReaderActivity extends AppCompatActivity {
     public static final String EXTRA_SOURCE_ENTRY_PATHS = "source_entry_paths";
     public static final String EXTRA_SOURCE_ARCHIVE_PATH = "source_archive_path";
     public static final String EXTRA_SEQUENCE_HANDOFF_TOKEN = "sequence_handoff_token";
+    public static final String EXTRA_SOURCE_ENTRY_PATH = "source_entry_path";
+    public static final String EXTRA_SEQUENCE_PREFIX = "sequence_prefix";
+    public static final String EXTRA_SEQUENCE_QUERY = "sequence_query";
+    public static final String EXTRA_SEQUENCE_PREVIEW_ORDER = "sequence_preview_order";
+    public static final String EXTRA_SEQUENCE_SORT = "sequence_sort";
+    private static final String STATE_CURRENT_IMAGE_PATH = "current_image_path";
+    private static final String STATE_CURRENT_ARCHIVE_ENTRY = "current_archive_entry";
+    private String restoredArchiveEntry;
+    private boolean restoringArchiveSequence;
+    private androidx.appcompat.app.AlertDialog restorePasswordDialog;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ExecutorService sequenceExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService detailExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService imageExportExecutor = Executors.newSingleThreadExecutor();
+    // Metadata-only work must not wait behind a solid-archive extraction or image decode.
+    private final ExecutorService sourceCheckExecutor = Executors.newSingleThreadExecutor();
     // Parallel pool for pre-decoding neighbor pages into the bitmap cache. Kept
     // separate from extraction (sequenceExecutor) and from the on-demand decode
     // (executor) so prefetch decoding runs concurrently instead of queuing behind
@@ -123,6 +136,9 @@ public class ImageReaderActivity extends AppCompatActivity {
     private final Object archiveExtractLock = new Object();
     private final Object deferredSequenceLock = new Object();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    // Resource-owning deliveries must survive mainHandler's teardown cancellation.
+    // Their existing destroyed/generation guards recycle results and release tickets.
+    private final Handler imageResultHandler = new Handler(Looper.getMainLooper());
     private volatile boolean destroyed;
     private boolean backgroundStopped;
     private long backgroundStoppedAtElapsedRealtime = -1L;
@@ -143,6 +159,7 @@ public class ImageReaderActivity extends AppCompatActivity {
      * switch, even though the process and task were still healthy.
      */
     private boolean backgroundImageMemoryReleased;
+    private boolean imageSurfaceNeedsRebind;
     private final ArrayList<String> imagePaths = new ArrayList<>();
     private final ArrayList<String> sourceDisplayNames = new ArrayList<>();
     private final ArrayList<String> sourceEntryPaths = new ArrayList<>();
@@ -150,6 +167,7 @@ public class ImageReaderActivity extends AppCompatActivity {
     private final Object sequentialReaderLock = new Object();
     private SequentialArchiveImageReader sequentialImageReader;
     private boolean sequentialReaderClosed;
+    private int sequentialReaderEpoch;
     // Raised while an on-demand extraction (the page the user is on, or its detail
     // pass) is using the shared forward reader. Sequential prefetch checks this and
     // yields, so a background read-ahead never delays the page the user asked for.
@@ -169,6 +187,9 @@ public class ImageReaderActivity extends AppCompatActivity {
     private String filePath;
     private String fileUri;
     private String sourceArchivePath;
+    @Nullable private volatile ArchiveSourceSnapshot sourceArchiveSnapshot;
+    private final java.util.concurrent.atomic.AtomicBoolean archiveSourceChanged =
+            new java.util.concurrent.atomic.AtomicBoolean();
     private String sequenceHandoffToken;
     private char[] sourceArchivePassword;
     private ImageSequenceHandoffStore.Sequence pendingDeferredSequence;
@@ -194,6 +215,8 @@ public class ImageReaderActivity extends AppCompatActivity {
     private final android.util.SparseIntArray portraitPageByIndex =
             new android.util.SparseIntArray();
     private volatile int imageLoadGeneration;
+    // Main-thread ownership of a visible load, including asynchronous cache admission.
+    private int activeImageLoadGeneration = -1;
     // Consecutive same-direction navigation intents (including two-entry spreads);
     // sustained motion deepens the file-extraction look-ahead in that direction.
     private int pagingStreak;
@@ -213,6 +236,9 @@ public class ImageReaderActivity extends AppCompatActivity {
     private int displayedImageIndex = -1;
     private String displayedImagePath;
     private String displayedImageEntryPath;
+    // Survives surface eviction; requested pages are not reading progress until displayed.
+    private String acceptedImagePath;
+    private String acceptedImageEntryPath;
     @Nullable private Uri pendingImageExportSource;
 
     private final ActivityResultLauncher<Intent> imageExportLauncher =
@@ -231,7 +257,7 @@ public class ImageReaderActivity extends AppCompatActivity {
     // shown instantly (no re-decode) and keeps prefetched neighbors ready. The
     // cache OWNS these bitmaps: they are recycled only on eviction/clear, never
     // by the normal display swap, so a cached page is always safe to re-show.
-    private android.util.LruCache<Integer, Bitmap> decodedBitmapCache;
+    private volatile android.util.LruCache<Integer, Bitmap> decodedBitmapCache;
     /**
      * Indexes whose cached bitmap is already full quality (an original-quality
      * preview, or a completed detail decode), so a cache hit can skip the
@@ -302,7 +328,11 @@ public class ImageReaderActivity extends AppCompatActivity {
 
         filePath = getIntent().getStringExtra(EXTRA_FILE_PATH);
         fileUri = getIntent().getStringExtra(EXTRA_FILE_URI);
+        restoredArchiveEntry = getIntent().getStringExtra(EXTRA_SOURCE_ENTRY_PATH);
         if (savedInstanceState != null) {
+            filePath = savedInstanceState.getString(STATE_CURRENT_IMAGE_PATH, filePath);
+            restoredArchiveEntry = savedInstanceState.getString(
+                    STATE_CURRENT_ARCHIVE_ENTRY, restoredArchiveEntry);
             String pendingSource = savedInstanceState.getString(
                     STATE_PENDING_IMAGE_EXPORT_SOURCE);
             if (pendingSource != null && !pendingSource.trim().isEmpty()) {
@@ -341,9 +371,17 @@ public class ImageReaderActivity extends AppCompatActivity {
 
         initializeImagePathList();
         buildUi();
-        if (sequenceHandoffToken != null && sequenceHandoffToken.trim().length() > 0) {
+        if (savedInstanceState != null && sourceArchivePath != null && !sourceArchivePath.isEmpty()) {
+            ImageSequenceHandoffStore.discard(sequenceHandoffToken);
+            sequenceHandoffToken = null;
+            restoreArchiveSequenceAsync(null);
+        } else if (sequenceHandoffToken != null && sequenceHandoffToken.trim().length() > 0) {
             setLoading(true, null);
             loadDeferredImageSequenceAsync();
+        } else if (sourceArchivePath != null && !sourceArchivePath.isEmpty()) {
+            // Legacy intents have no identity certificate. Rebuild off-thread instead
+            // of trusting paths from a possibly replaced archive's old cache.
+            restoreArchiveSequenceAsync(null);
         } else {
             loadImageAsync();
         }
@@ -375,6 +413,11 @@ public class ImageReaderActivity extends AppCompatActivity {
         if (isFinishing()) return;
         ViewerWindowPreferences.applyKeepScreenOn(getWindow(), prefs.getKeepScreenOn());
         applyImageSystemBarVisibility();
+        restoreMissingImageSurface();
+        if (sourceArchiveSnapshot != null && !archiveSourceChanged.get()) {
+            try { sourceCheckExecutor.execute(() -> checkArchiveSource(true)); }
+            catch (java.util.concurrent.RejectedExecutionException stopped) { /* teardown */ }
+        }
     }
 
     @Override
@@ -394,6 +437,7 @@ public class ImageReaderActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         super.onStop();
+        imageSurfaceNeedsRebind = true;
         mainHandler.removeCallbacks(archiveViewerBackgroundTimeoutRunnable);
         if (!isChangingConfigurations() && !isFinishing() && !destroyed) {
             backgroundStopped = true;
@@ -409,6 +453,14 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     @Override
     protected void onSaveInstanceState(@NonNull Bundle outState) {
+        int accepted = acceptedProgressIndex();
+        outState.putString(STATE_CURRENT_IMAGE_PATH,
+                accepted >= 0 ? imagePaths.get(accepted) : filePath);
+        String entry = ImageSequenceState.entryPathAt(sourceEntryPaths,
+                accepted >= 0 ? accepted : currentIndex);
+        outState.putString(STATE_CURRENT_ARCHIVE_ENTRY,
+                entry != null && !entry.isEmpty() ? entry : restoredArchiveEntry);
+        // Keep the Bundle small; credentials and whole image lists are never serialized.
         if (pendingImageExportSource != null) {
             outState.putString(
                     STATE_PENDING_IMAGE_EXPORT_SOURCE,
@@ -484,7 +536,13 @@ public class ImageReaderActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        if (restorePasswordDialog != null) {
+            restorePasswordDialog.dismiss();
+            restorePasswordDialog = null;
+        }
         mainHandler.removeCallbacksAndMessages(null);
+        // Do not clear imageResultHandler: queued decoded results still own bitmaps.
+        // They must run their stale-result cleanup after destroyed was set above.
         ImageSequenceHandoffStore.discard(sequenceHandoffToken);
         sequenceHandoffToken = null;
         synchronized (deferredSequenceLock) {
@@ -502,17 +560,13 @@ public class ImageReaderActivity extends AppCompatActivity {
         sequenceExecutor.shutdownNow();
         detailExecutor.shutdownNow();
         imageExportExecutor.shutdownNow();
+        sourceCheckExecutor.shutdownNow();
         prefetchDecodeExecutor.shutdownNow();
         bitmapPrefetchRequests.clear();
         sequenceSnapshots.clear();
         archiveSpreadPrepareInFlight.clear();
         archiveSpreadNavigator.clear();
-        SequentialArchiveImageReader readerToClose;
-        synchronized (sequentialReaderLock) {
-            sequentialReaderClosed = true;
-            readerToClose = sequentialImageReader;
-            sequentialImageReader = null;
-        }
+        SequentialArchiveImageReader readerToClose = detachSequentialReader(true);
         final String closingArchivePath = sourceArchivePath;
         if (readerToClose != null || (closingArchivePath != null && !closingArchivePath.isEmpty())) {
             // close() waits for a forward decode's lock. A native codec may
@@ -618,39 +672,167 @@ public class ImageReaderActivity extends AppCompatActivity {
                 mainHandler.post(() -> {
                     if (!destroyed && token.equals(sequenceHandoffToken)) {
                         sequenceHandoffToken = null;
-                        if (!backgroundImageMemoryReleased) loadImageAsync();
+                        if (sourceArchivePath != null && !sourceArchivePath.isEmpty()) {
+                            restoreArchiveSequenceAsync(null);
+                        } else {
+                            initializeImagePathList();
+                            if (!backgroundImageMemoryReleased) loadImageAsync();
+                        }
                     }
                 });
                 return;
             }
-            synchronized (deferredSequenceLock) {
-                if (destroyed) {
-                    sequence.clearSensitiveData();
-                    return;
-                }
-                if (pendingDeferredSequence != null) pendingDeferredSequence.clearSensitiveData();
-                pendingDeferredSequence = sequence;
-            }
-            boolean posted = mainHandler.post(() -> {
-                ImageSequenceHandoffStore.Sequence pending;
-                synchronized (deferredSequenceLock) {
-                    pending = pendingDeferredSequence;
-                    pendingDeferredSequence = null;
-                }
-                if (destroyed) {
-                    if (pending != null) pending.clearSensitiveData();
-                    return;
-                }
-                if (token.equals(sequenceHandoffToken)) sequenceHandoffToken = null;
-                applyDeferredImageSequence(pending);
-            });
-            if (!posted) {
-                synchronized (deferredSequenceLock) {
-                    if (pendingDeferredSequence == sequence) pendingDeferredSequence = null;
-                }
-                sequence.clearSensitiveData();
-            }
+            postDeferredImageSequence(sequence);
         });
+    }
+
+    private void postDeferredImageSequence(@NonNull ImageSequenceHandoffStore.Sequence sequence) {
+        synchronized (deferredSequenceLock) {
+            if (destroyed) {
+                sequence.clearSensitiveData();
+                return;
+            }
+            if (pendingDeferredSequence != null) pendingDeferredSequence.clearSensitiveData();
+            pendingDeferredSequence = sequence;
+        }
+        boolean posted = mainHandler.post(() -> {
+            ImageSequenceHandoffStore.Sequence pending;
+            synchronized (deferredSequenceLock) {
+                pending = pendingDeferredSequence;
+                pendingDeferredSequence = null;
+            }
+            if (destroyed) {
+                if (pending != null) pending.clearSensitiveData();
+                return;
+            }
+            sequenceHandoffToken = null;
+            applyDeferredImageSequence(pending);
+        });
+        if (!posted) {
+            synchronized (deferredSequenceLock) {
+                if (pendingDeferredSequence == sequence) pendingDeferredSequence = null;
+            }
+            sequence.clearSensitiveData();
+        }
+    }
+
+    /** Rebuild from the archive, not from cache files that Android may have removed. */
+    private void restoreArchiveSequenceAsync(@Nullable char[] password) {
+        if (destroyed || isFinishing()) {
+            PasswordChars.clear(password);
+            return;
+        }
+        restoringArchiveSequence = true;
+        invalidateImageSequenceWork(true);
+        closePreparedResourceAsync(detachSequentialReader(false));
+        setLoading(true, null);
+        final File archive = new File(sourceArchivePath);
+        final String requestedEntry = restoredArchiveEntry != null && !restoredArchiveEntry.isEmpty()
+                ? restoredArchiveEntry : prefs.getArchiveLastImageEntryPath(sourceArchivePath);
+        final String prefix = getIntent().getStringExtra(EXTRA_SEQUENCE_PREFIX);
+        final String query = getIntent().getStringExtra(EXTRA_SEQUENCE_QUERY);
+        final boolean previewOrder = getIntent().getBooleanExtra(EXTRA_SEQUENCE_PREVIEW_ORDER, false);
+        final int sort = getIntent().getIntExtra(EXTRA_SEQUENCE_SORT, PrefsManager.SORT_NAME_ASC);
+        try {
+            sequenceExecutor.execute(() -> {
+                ArchiveImageSequenceLoader.Result loaded = null;
+                try {
+                    if (destroyed || Thread.currentThread().isInterrupted()) return;
+                    List<ArchiveSupport.EntryInfo> entries = ArchiveSupport.listEntries(archive, password);
+                    List<ArchiveSupport.EntryInfo> images = ArchiveEntryListController.restoreImageSequence(
+                            entries, prefix, query, previewOrder, sort, requestedEntry);
+                    if (images.isEmpty()) throw new java.io.IOException("No archive images");
+                    int target = 0;
+                    for (int i = 0; i < images.size(); i++) {
+                        if (images.get(i).path.equals(requestedEntry)) { target = i; break; }
+                    }
+                    loaded = ArchiveImageSequenceLoader.loadLazy(
+                            getApplicationContext(), archive, images, target, password);
+                    if (!loaded.selectedReady) {
+                        ArchiveSupport.ExtractionResult failure = loaded.extractionResult;
+                        boolean needsPassword = needsArchivePassword(failure);
+                        mainHandler.post(() -> handleArchiveRestoreFailure(needsPassword, failure));
+                        return;
+                    }
+                    final String selected = loaded.entryPaths.get(loaded.selectedIndex);
+                    mainHandler.post(() -> { if (!destroyed) restoredArchiveEntry = selected; });
+                    postDeferredImageSequence(new ImageSequenceHandoffStore.Sequence(
+                            loaded.imagePaths, loaded.displayNames, loaded.entryPaths, password,
+                            loaded.takePreparedReader(), loaded.snapshotVerifiedSensitivePaths(),
+                            loaded.archivePathSnapshot, loaded.archiveLengthSnapshot,
+                            loaded.archiveLastModifiedSnapshot, loaded.sourceSnapshot));
+                } catch (ArchiveSupport.PasswordRequiredException e) {
+                    mainHandler.post(() -> handleArchiveRestoreFailure(true, null));
+                } catch (Exception e) {
+                    ArchiveSupport.ExtractionFailure kind = ArchiveSupport.classifyOperationFailure(e);
+                    boolean needsPassword = kind == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED
+                            || kind == ArchiveSupport.ExtractionFailure.BAD_PASSWORD;
+                    ArchiveSupport.ExtractionResult failure = ArchiveSupport.ExtractionResult.failed(kind, null);
+                    mainHandler.post(() -> handleArchiveRestoreFailure(needsPassword, failure));
+                } finally {
+                    if (loaded != null) loaded.closePreparedReader();
+                    PasswordChars.clear(password);
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            PasswordChars.clear(password);
+        }
+    }
+
+    private void handleArchiveRestoreFailure(boolean needsPassword,
+                                             @Nullable ArchiveSupport.ExtractionResult failure) {
+        if (destroyed || isFinishing()) return;
+        setLoading(false, null);
+        if (!needsPassword) {
+            ShortToast.show(this, failure == null ? R.string.archive_open_failed
+                    : ArchiveFailureMessages.entryFailureMessageRes(new File(sourceArchivePath), failure));
+            finish();
+            return;
+        }
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        input.setHint(R.string.archive_password_hint);
+        input.setSaveEnabled(false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        }
+        restorePasswordDialog = new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(R.string.archive_password_title)
+                .setMessage(failure != null && failure.failure == ArchiveSupport.ExtractionFailure.BAD_PASSWORD
+                        ? R.string.archive_bad_password : R.string.archive_password_message)
+                .setView(input)
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    android.text.Editable text = input.getText();
+                    char[] entered = new char[text != null ? text.length() : 0];
+                    if (text != null) { text.getChars(0, text.length(), entered, 0); text.clear(); }
+                    restoreArchiveSequenceAsync(entered);
+                })
+                .setNegativeButton(android.R.string.cancel, (dialog, which) -> finish())
+                .setOnCancelListener(dialog -> finish())
+                .create();
+        restorePasswordDialog.setOnDismissListener(dialog -> input.setText(""));
+        restorePasswordDialog.show();
+    }
+
+    /** Only foreground failures may prompt. Prefetch must never open a password dialog. */
+    private void handleArchivePageFailure(@Nullable ArchiveSupport.ExtractionResult failure,
+                                          @Nullable String entryPath) {
+        if (needsArchivePassword(failure)) {
+            restoredArchiveEntry = entryPath;
+            restoringArchiveSequence = true;
+            handleArchiveRestoreFailure(true, failure);
+        } else {
+            setLoading(false, getString(failure == null || TextUtils.isEmpty(sourceArchivePath)
+                    ? R.string.image_open_failed
+                    : ArchiveFailureMessages.entryFailureMessageRes(new File(sourceArchivePath), failure)));
+        }
+    }
+
+    static boolean needsArchivePassword(@Nullable ArchiveSupport.ExtractionResult failure) {
+        return failure != null && !failure.success
+                && (failure.failure == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED
+                || failure.failure == ArchiveSupport.ExtractionFailure.BAD_PASSWORD);
     }
 
     private void applyDeferredImageSequence(@Nullable ImageSequenceHandoffStore.Sequence sequence) {
@@ -661,11 +843,16 @@ public class ImageReaderActivity extends AppCompatActivity {
                 fallbackToSingleImageAfterDeferredSequenceFailure();
                 return;
             }
+            if (sourceArchivePath != null && !sourceArchivePath.isEmpty()
+                    && sequence.sourceSnapshot == null) {
+                restoreArchiveSequenceAsync(PasswordChars.cloneOf(sequence.archivePassword));
+                return;
+            }
             if (!sequence.matchesSourceArchiveSnapshot(sourceArchivePath)) {
                 // The archive was replaced after its preview paths were prepared.
                 // Never attach the old cache sequence or its positioned reader to
                 // the new source identity; the finally block closes that resource.
-                fallbackToSingleImageAfterDeferredSequenceFailure();
+                handleArchiveRestoreFailure(false, null);
                 return;
             }
             String currentPath = filePath != null ? new File(filePath).getAbsolutePath() : null;
@@ -675,6 +862,9 @@ public class ImageReaderActivity extends AppCompatActivity {
             }
 
             int found = sequence.paths.indexOf(currentPath);
+            if (restoringArchiveSequence && restoredArchiveEntry != null) {
+                found = sequence.entryPaths.indexOf(restoredArchiveEntry);
+            }
             if (found < 0) {
                 fallbackToSingleImageAfterDeferredSequenceFailure();
                 return;
@@ -686,6 +876,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             sourceDisplayNames.addAll(sequence.displayNames);
             sourceEntryPaths.clear();
             sourceEntryPaths.addAll(sequence.entryPaths);
+            sourceArchiveSnapshot = sequence.sourceSnapshot;
             ImageSequenceState.normalizeMetadataLists(imagePaths, sourceDisplayNames, sourceEntryPaths);
             invalidateImageSequenceWork(true);
             synchronized (archiveExtractLock) {
@@ -698,6 +889,8 @@ public class ImageReaderActivity extends AppCompatActivity {
             currentIndex = ImageSequenceNavigationMath.clampIndex(found, imagePaths.size());
             filePath = imagePaths.get(currentIndex);
             fileUri = null;
+            restoredArchiveEntry = sourceEntryPaths.get(currentIndex);
+            restoringArchiveSequence = false;
             adoptPreparedSequentialReader(sequence.takePreparedResource());
             updateToolbarTitle();
             applied = true;
@@ -713,6 +906,10 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     private void fallbackToSingleImageAfterDeferredSequenceFailure() {
         if (destroyed) return;
+        if (restoringArchiveSequence) {
+            handleArchiveRestoreFailure(false, null);
+            return;
+        }
         invalidateImageSequenceWork(true);
         sequenceHandoffToken = null;
         imagePaths.clear();
@@ -732,6 +929,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         // of forcing archive-entry extraction with an empty entry-path list.
         if (sourceArchivePath != null && sourceArchivePath.trim().length() > 0) {
             sourceArchivePath = null;
+            sourceArchiveSnapshot = null;
             sourceArchiveForwardReadable = null;
             synchronized (archiveExtractLock) {
                 PasswordChars.clear(sourceArchivePassword);
@@ -1105,8 +1303,10 @@ public class ImageReaderActivity extends AppCompatActivity {
                 target = archiveSpreadNavigator.forward(
                         currentIndex, imagePaths.size(), archiveSpreadVisible);
             } else {
-                target = archiveSpreadNavigator.backward(
-                        currentIndex, imagePaths.size(), buildKnownPairStarts());
+                target = archiveSpreadNavigator.backwardWithPairLookup(
+                        currentIndex, imagePaths.size(), start ->
+                                portraitPageByIndex.get(start, -1) == 1
+                                        && portraitPageByIndex.get(start + 1, -1) == 1);
             }
         } else {
             archiveSpreadNavigator.clear();
@@ -1124,7 +1324,7 @@ public class ImageReaderActivity extends AppCompatActivity {
     }
 
     private void showImageAtIndexInternal(int targetIndex, int navigationDirection) {
-        if (imagePaths.isEmpty()) return;
+        if (imagePaths.isEmpty() || restoringArchiveSequence) return;
         int next = ImageSequenceNavigationMath.clampIndex(targetIndex, imagePaths.size());
         if (next == currentIndex) {
             refreshArchiveSpreadPresentation();
@@ -1138,8 +1338,6 @@ public class ImageReaderActivity extends AppCompatActivity {
         currentIndex = next;
         filePath = imagePaths.get(currentIndex);
         fileUri = null;
-        persistArchiveImageProgress();
-        scheduleImageReadingProgressSave();
         updateToolbarTitle();
         // Instant path: if this page's bitmap is already decoded and cached, show
         // it immediately without queuing a decode. This is what makes rapid taps
@@ -1153,7 +1351,36 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     /** Displays a cached decoded bitmap for the index if present. */
     private boolean showCachedBitmapIfAvailable(int index) {
+        if (archiveSourceChanged.get()) return false;
         if (decodedBitmapCache == null) return false;
+        Bitmap cached = decodedBitmapCache.get(index);
+        if (cached == null || cached.isRecycled()) return false;
+        if (sourceArchiveSnapshot != null) {
+            // Stat known volumes off the UI thread even on a bitmap-cache hit.
+            // Do not capture this bitmap: cache ownership may change while waiting.
+            final int generation = ++imageLoadGeneration;
+            activeImageLoadGeneration = generation;
+            final String path = filePath;
+            final String entry = ImageSequenceState.entryPathAt(sourceEntryPaths, index);
+            try {
+                sourceCheckExecutor.execute(() -> {
+                    if (!isCurrentImageLoadGeneration(generation) || !checkArchiveSource(false)) return;
+                    mainHandler.post(() -> {
+                        if (!isActiveImageRequest(generation, index, path, entry)) return;
+                        if (!displayCachedBitmap(index)) loadImageAsync();
+                    });
+                });
+                return true;
+            } catch (java.util.concurrent.RejectedExecutionException stopped) {
+                activeImageLoadGeneration = -1;
+                return false;
+            }
+        }
+        return displayCachedBitmap(index);
+    }
+
+    private boolean displayCachedBitmap(int index) {
+        if (archiveSourceChanged.get() || decodedBitmapCache == null) return false;
         Bitmap cached = decodedBitmapCache.get(index);
         if (cached == null || cached.isRecycled()) return false;
         // Bump the load generation so any in-flight decode for the old page
@@ -1178,7 +1405,10 @@ public class ImageReaderActivity extends AppCompatActivity {
     }
 
     private void loadImageAsync() {
+        if (destroyed || backgroundImageMemoryReleased || restoringArchiveSequence
+                || !TextUtils.isEmpty(sequenceHandoffToken) || archiveSourceChanged.get()) return;
         final int generation = ++imageLoadGeneration;
+        activeImageLoadGeneration = generation;
         detailRequestGeneration = -1;
         archivePreviewUpgradeGeneration = -1;
         currentImageDetailLoaded = false;
@@ -1192,63 +1422,106 @@ public class ImageReaderActivity extends AppCompatActivity {
                 && !sourceArchivePath.trim().isEmpty();
         setLoading(true, null);
         updateToolbarTitle();
-        executor.execute(() -> {
-            if (!isCurrentImageLoadGeneration(generation)) return;
-            LoadedImage loaded = null;
-            try {
-                if (ensureArchiveImageExtracted(index, path)
-                        && isCurrentImageLoadGeneration(generation)) {
-                    loaded = archiveBacked
-                            ? ImageDecodeHelper.decodeArchivePreview(
-                            appContext, path, uri, displayName)
-                            : ImageDecodeHelper.decodePreview(
-                            appContext, path, uri, displayName);
-                }
-            } catch (Exception ignored) {
-                loaded = null;
-            }
-            if (!isCurrentImageLoadGeneration(generation)) {
-                recycleLoadedImage(loaded);
-                return;
-            }
-            LoadedImage result = loaded;
-            mainHandler.post(() -> {
-                if (!isActiveImageRequest(generation, index, path, entryPath)) {
-                    recycleLoadedImage(result);
-                    return;
-                }
-                if (result != null && (result.bitmap != null || result.drawable != null)) {
-                    // Present first, then offer the bitmap to the cache. A preview
-                    // can be larger than the cache budget on a low-memory device;
-                    // LruCache evicts such a value from inside put(). Presenting it
-                    // first makes entryRemoved recognize it as the live surface and
-                    // prevents an immediate recycle-before-display.
-                    applyLoadedImage(result, false, index, path, entryPath);
-                    if (result.bitmap != null) {
-                        cacheDecodedBitmap(
-                                index,
-                                result.bitmap,
-                                result.originalQuality,
-                                true);
+        final int sequenceGeneration = imageSequenceGeneration.get();
+        final com.readwide.manager.util.ImagePrefetchRequests.Ticket decodeTicket =
+                bitmapPrefetchRequests.acquireForeground(sequenceGeneration, index, () ->
+                        mainHandler.post(() -> {
+                            if (imageSequenceGeneration.get() != sequenceGeneration
+                                    || !isActiveImageRequest(generation, index, path, entryPath)) return;
+                            if (showCachedBitmapIfAvailable(index)) {
+                                prefetchAdjacentImages(index);
+                            } else {
+                                loadImageAsync(); // failed/uncacheable warm-up: normal foreground fallback
+                            }
+                        }));
+        if (decodeTicket == null) return; // running decode will notify after UI cache publication
+        try {
+            executor.execute(() -> {
+                boolean handedOffToMain = false;
+                try {
+                    if (!isCurrentImageLoadGeneration(generation)) return;
+                    LoadedImage loaded = null;
+                    ArchiveSupport.ExtractionResult extraction = null;
+                    boolean memoryFailure = false;
+                    try {
+                        extraction = ensureArchiveImageExtractedDetailed(index, path);
+                        if (extraction.success && isCurrentImageLoadGeneration(generation)) {
+                            loaded = archiveBacked
+                                    ? ImageDecodeHelper.decodeArchivePreview(
+                                    appContext, path, uri, displayName)
+                                    : ImageDecodeHelper.decodePreview(
+                                    appContext, path, uri, displayName);
+                        }
+                    } catch (OutOfMemoryError exhausted) {
+                        memoryFailure = true;
+                    } catch (Exception ignored) {
+                        loaded = null;
                     }
-                    currentImageDetailLoaded = result.originalQuality;
-                    persistArchiveImageProgress();
-                    scheduleImageReadingProgressSave();
-                    ensureArchiveSpreadCompanionReady();
-                    prefetchAdjacentImages(index);
-                    setLoading(false, null);
-                } else {
-                    discardArchiveImageCacheAfterDecodeFailure(index, path);
-                    // Keeping the old page visible while the next page decodes avoids
-                    // flicker, but a terminal failure must not leave that old page on
-                    // screen under the new page number.
-                    if (!isDisplayedImage(index, path, entryPath)) {
-                        clearCurrentImageSurface(true);
+                    if (!isCurrentImageLoadGeneration(generation) || !checkArchiveSource(false)) {
+                        recycleLoadedImage(loaded);
+                        return;
                     }
-                    setLoading(false, getString(R.string.image_open_failed));
+                    if (loaded == null && !memoryFailure && extraction != null && extraction.success
+                            && isCurrentImageLoadGeneration(generation)) {
+                        // May wait for an extractor's output lock; never do this on the UI.
+                        try { discardArchiveImageCacheAfterDecodeFailure(entryPath, path); }
+                        catch (RuntimeException ignored) { /* Report the decode failure even if cleanup fails. */ }
+                    }
+                    LoadedImage result = loaded;
+                    ArchiveSupport.ExtractionResult failure = extraction != null && !extraction.success
+                            ? extraction : null;
+                    handedOffToMain = imageResultHandler.post(() -> {
+                        try {
+                            if (!isActiveImageRequest(generation, index, path, entryPath)) {
+                                recycleLoadedImage(result);
+                                return;
+                            }
+                            activeImageLoadGeneration = -1;
+                            if (result != null && (result.bitmap != null || result.drawable != null)) {
+                                // Present first, then offer the bitmap to the cache. A preview
+                                // can be larger than the cache budget on a low-memory device;
+                                // LruCache evicts such a value from inside put(). Presenting it
+                                // first makes entryRemoved recognize it as the live surface and
+                                // prevents an immediate recycle-before-display.
+                                applyLoadedImage(result, false, index, path, entryPath);
+                                if (result.bitmap != null) {
+                                    cacheDecodedBitmap(
+                                            index,
+                                            result.bitmap,
+                                            result.originalQuality,
+                                            true);
+                                }
+                                currentImageDetailLoaded = result.originalQuality;
+                                ensureArchiveSpreadCompanionReady();
+                                prefetchAdjacentImages(index);
+                                setLoading(false, null);
+                            } else {
+                                // Keeping the old page visible while the next page decodes avoids
+                                // flicker, but a terminal failure must not leave that old page on
+                                // screen under the new page number.
+                                if (!isDisplayedImage(index, path, entryPath)) {
+                                    clearCurrentImageSurface(true);
+                                }
+                                handleArchivePageFailure(failure, entryPath);
+                            }
+                        } finally {
+                            bitmapPrefetchRequests.release(decodeTicket);
+                        }
+                    });
+                    if (!handedOffToMain) recycleLoadedImage(result);
+                } finally {
+                    if (!handedOffToMain) {
+                        bitmapPrefetchRequests.release(decodeTicket);
+                        mainHandler.post(() -> {
+                            if (activeImageLoadGeneration == generation) activeImageLoadGeneration = -1;
+                        });
+                    }
                 }
             });
-        });
+        } catch (java.util.concurrent.RejectedExecutionException stopped) {
+            if (activeImageLoadGeneration == generation) activeImageLoadGeneration = -1;
+            bitmapPrefetchRequests.release(decodeTicket);
+        }
     }
 
     /**
@@ -1285,12 +1558,12 @@ public class ImageReaderActivity extends AppCompatActivity {
             } catch (Exception ignored) {
                 loaded = null;
             }
-            if (!isCurrentImageLoadGeneration(generation)) {
+            if (!isCurrentImageLoadGeneration(generation) || !checkArchiveSource(false)) {
                 recycleLoadedImage(loaded);
                 return;
             }
             LoadedImage result = loaded;
-            mainHandler.post(() -> {
+            boolean posted = imageResultHandler.post(() -> {
                 if (!isActiveImageRequest(generation, index, path, entryPath)) {
                     recycleLoadedImage(result);
                     return;
@@ -1311,6 +1584,7 @@ public class ImageReaderActivity extends AppCompatActivity {
                 currentImageDetailLoaded = result.originalQuality;
                 ensureArchiveSpreadCompanionReady();
             });
+            if (!posted) recycleLoadedImage(result);
         });
     }
 
@@ -1336,12 +1610,12 @@ public class ImageReaderActivity extends AppCompatActivity {
             } catch (Exception ignored) {
                 loaded = null;
             }
-            if (!isCurrentImageLoadGeneration(generation)) {
+            if (!isCurrentImageLoadGeneration(generation) || !checkArchiveSource(false)) {
                 recycleLoadedImage(loaded);
                 return;
             }
             LoadedImage result = loaded;
-            mainHandler.post(() -> {
+            boolean posted = imageResultHandler.post(() -> {
                 if (!isActiveImageRequest(generation, index, path, entryPath)) {
                     recycleLoadedImage(result);
                     return;
@@ -1365,6 +1639,7 @@ public class ImageReaderActivity extends AppCompatActivity {
                     }
                 }
             });
+            if (!posted) recycleLoadedImage(result);
         });
     }
 
@@ -1372,14 +1647,14 @@ public class ImageReaderActivity extends AppCompatActivity {
                                          int requestIndex,
                                          @Nullable String requestPath,
                                          @Nullable String requestEntryPath) {
-        if (destroyed || generation != imageLoadGeneration) return false;
+        if (destroyed || archiveSourceChanged.get() || generation != imageLoadGeneration) return false;
         if (requestIndex != currentIndex) return false;
         if (!TextUtils.equals(requestPath, filePath)) return false;
         return TextUtils.equals(requestEntryPath, ImageSequenceState.entryPathAt(sourceEntryPaths, currentIndex));
     }
 
     private boolean isCurrentImageLoadGeneration(int generation) {
-        return !destroyed && generation == imageLoadGeneration;
+        return !destroyed && !archiveSourceChanged.get() && generation == imageLoadGeneration;
     }
 
     private boolean isDisplayedImage(int index,
@@ -1391,10 +1666,36 @@ public class ImageReaderActivity extends AppCompatActivity {
                 && (currentBitmap != null || currentDrawable != null);
     }
 
+    private boolean hasUsableCurrentSurface() {
+        if (imageView == null || imageView.getDrawable() == null
+                || !isDisplayedImage(currentIndex, filePath,
+                ImageSequenceState.entryPathAt(sourceEntryPaths, currentIndex))) return false;
+        if (archiveSpreadVisible) {
+            return visibleSpreadFirstBitmap != null && !visibleSpreadFirstBitmap.isRecycled()
+                    && visibleSpreadSecondBitmap != null && !visibleSpreadSecondBitmap.isRecycled();
+        }
+        return currentBitmap != null ? !currentBitmap.isRecycled() : currentDrawable != null;
+    }
+
+    /** Recover an empty/released surface on return, without restarting a healthy load or zoom. */
+    private void restoreMissingImageSurface() {
+        if (destroyed || isFinishing() || imageView == null || backgroundImageMemoryReleased
+                || restoringArchiveSequence || !TextUtils.isEmpty(sequenceHandoffToken)
+                || archiveSourceChanged.get()) return;
+        if (hasUsableCurrentSurface()) {
+            if (imageSurfaceNeedsRebind) imageView.restoreImageReady();
+            else imageView.invalidate();
+            imageSurfaceNeedsRebind = false;
+            return;
+        }
+        if (activeImageLoadGeneration == imageLoadGeneration) return;
+        if (!showCachedBitmapIfAvailable(currentIndex)) loadImageAsync();
+    }
+
     private boolean isCurrentSequenceItem(int index,
                                           @Nullable String path,
                                           @Nullable String entryPath) {
-        return index >= 0
+        return !archiveSourceChanged.get() && index >= 0
                 && index < imagePaths.size()
                 && TextUtils.equals(path, imagePaths.get(index))
                 && TextUtils.equals(entryPath,
@@ -1404,6 +1705,7 @@ public class ImageReaderActivity extends AppCompatActivity {
     /** Invalidates asynchronous work whose index keys belong to an older mapping. */
     private void invalidateImageSequenceWork(boolean clearDecodedCache) {
         ++imageLoadGeneration;
+        activeImageLoadGeneration = -1;
         detailRequestGeneration = -1;
         archivePreviewUpgradeGeneration = -1;
         imageSequenceGeneration.incrementAndGet();
@@ -1450,6 +1752,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         displayedImageIndex = requestIndex;
         displayedImagePath = requestPath;
         displayedImageEntryPath = requestEntryPath;
+        acceptDisplayedImageProgress();
         // Only recycle the previous bitmap if the cache does not own it. Cached
         // bitmaps are recycled exclusively on eviction/clear.
         if (oldBitmap != null && oldBitmap != currentBitmap && !oldBitmap.isRecycled()
@@ -1483,16 +1786,18 @@ public class ImageReaderActivity extends AppCompatActivity {
             singlePageProfileCachedIndices.remove(index);
             return false;
         }
+        // put() may immediately evict/recycle an oversized off-screen bitmap.
+        boolean portrait = ArchiveImageSpreadMath.isTallPage(bitmap.getWidth(), bitmap.getHeight());
         decodedBitmapCache.put(index, bitmap);
-        portraitPageByIndex.put(index, ArchiveImageSpreadMath.isTallPage(
-                bitmap.getWidth(), bitmap.getHeight()) ? 1 : 0);
+        portraitPageByIndex.put(index, portrait ? 1 : 0);
         boolean retained = decodedBitmapCache.get(index) == bitmap && !bitmap.isRecycled();
         if (retained && fullQuality) {
             fullQualityCachedIndices.add(index);
         } else {
             fullQualityCachedIndices.remove(index);
         }
-        if (retained && singlePageProfile) {
+        // A full-resolution warm-up already meets every preview profile.
+        if (retained && (singlePageProfile || fullQuality)) {
             singlePageProfileCachedIndices.add(index);
         } else {
             singlePageProfileCachedIndices.remove(index);
@@ -1560,6 +1865,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         displayedImagePath = filePath;
         displayedImageEntryPath = ImageSequenceState.entryPathAt(
                 sourceEntryPaths, currentIndex);
+        acceptDisplayedImageProgress();
         currentImageDetailLoaded = true;
         releasePreparedSpreadCompanionReference(second);
         // The on-demand preview can be larger than the LRU budget. In that case
@@ -1675,16 +1981,6 @@ public class ImageReaderActivity extends AppCompatActivity {
         if (recycleBitmap) recycleReleasedSpreadBitmap(old);
     }
 
-    @NonNull
-    private boolean[] buildKnownPairStarts() {
-        boolean[] pairs = new boolean[Math.max(0, imagePaths.size())];
-        for (int i = 0; i + 1 < pairs.length; i++) {
-            pairs[i] = portraitPageByIndex.get(i, -1) == 1
-                    && portraitPageByIndex.get(i + 1, -1) == 1;
-        }
-        return pairs;
-    }
-
     private void recycleReleasedSpreadBitmap(@Nullable Bitmap bitmap) {
         if (bitmap == null || bitmap.isRecycled()
                 || bitmap == currentBitmap
@@ -1732,16 +2028,24 @@ public class ImageReaderActivity extends AppCompatActivity {
 
 
     private boolean ensureArchiveImageExtracted(int index, @Nullable String expectedPath) {
-        if (expectedPath == null || expectedPath.trim().isEmpty()) return fileUri != null && fileUri.trim().length() > 0;
+        return ensureArchiveImageExtractedDetailed(index, expectedPath).success;
+    }
+
+    private ArchiveSupport.ExtractionResult ensureArchiveImageExtractedDetailed(
+            int index, @Nullable String expectedPath) {
+        if (expectedPath == null || expectedPath.trim().isEmpty()) {
+            return imageReadyResult(fileUri != null && !fileUri.trim().isEmpty());
+        }
         File outFile = new File(expectedPath);
         if (sourceArchivePath == null || sourceArchivePath.trim().isEmpty()) {
-            return ArchiveImageEntryCache.isUsableFile(outFile);
+            return imageReadyResult(ArchiveImageEntryCache.isUsableFile(outFile));
         }
-        if (index < 0 || index >= sourceEntryPaths.size()) return false;
+        if (!checkArchiveSource(false)) return imageReadyResult(false);
+        if (index < 0 || index >= sourceEntryPaths.size()) return imageReadyResult(false);
         String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, index);
-        if (entryPath == null || entryPath.trim().isEmpty()) return false;
+        if (entryPath == null || entryPath.trim().isEmpty()) return imageReadyResult(false);
         File archive = new File(sourceArchivePath);
-        if (!archive.exists() || !archive.isFile()) return false;
+        if (!archive.exists() || !archive.isFile()) return imageReadyResult(false);
         char[] passwordSnapshot;
         synchronized (archiveExtractLock) {
             passwordSnapshot = PasswordChars.cloneOf(sourceArchivePassword);
@@ -1751,7 +2055,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         try {
             boolean sensitiveCache = PasswordChars.hasPassword(passwordSnapshot);
             SequentialArchiveImageReader reader = ensureSequentialReader(archive);
-            return SequentialArchiveImageReader.ensureImageReady(
+            ArchiveSupport.ExtractionResult ready = SequentialArchiveImageReader.ensureImageReady(
                     getApplicationContext(),
                     archive,
                     entryPath,
@@ -1759,11 +2063,44 @@ public class ImageReaderActivity extends AppCompatActivity {
                     passwordSnapshot,
                     sensitiveCache,
                     verifiedSensitiveArchiveCachePaths,
-                    reader).success;
+                    reader);
+            if (!checkArchiveSource(false)) {
+                if (archiveSourceChanged.get() && !Thread.currentThread().isInterrupted()) {
+                    ArchiveImageEntryCache.discardReady(outFile);
+                }
+                return imageReadyResult(false);
+            }
+            return ready;
         } finally {
             if (forwardReadable) onDemandReaderWaiters.decrementAndGet();
             PasswordChars.clear(passwordSnapshot);
         }
+    }
+
+    private static ArchiveSupport.ExtractionResult imageReadyResult(boolean ready) {
+        return ready ? ArchiveSupport.ExtractionResult.success()
+                : ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, null);
+    }
+
+    /** Worker-only. Failure retires the whole session, never mixes source versions. */
+    private boolean checkArchiveSource(boolean resolveVolumes) {
+        if (destroyed || Thread.currentThread().isInterrupted() || archiveSourceChanged.get()) return false;
+        if (sourceArchivePath == null || sourceArchivePath.isEmpty()) return true;
+        ArchiveSourceSnapshot snapshot = sourceArchiveSnapshot;
+        if (snapshot == null) return false; // sequence adoption has not finished
+        File archive = new File(sourceArchivePath);
+        boolean current = resolveVolumes ? snapshot.matches(archive) : snapshot.matchesKnownFiles(archive);
+        if (current) return !archiveSourceChanged.get();
+        if (Thread.currentThread().isInterrupted()) return false; // cancellation is not a source edit
+        if (archiveSourceChanged.compareAndSet(false, true)) {
+            mainHandler.post(() -> {
+                if (destroyed) return;
+                invalidateImageSequenceWork(true);
+                clearCurrentImageSurface(true);
+                setLoading(false, getString(R.string.archive_open_failed));
+            });
+        }
+        return false;
     }
 
     /** Memoized: is the source archive a solid/sequential forward-readable type? */
@@ -1897,15 +2234,17 @@ public class ImageReaderActivity extends AppCompatActivity {
                     || !new File(path).exists()) {
                 return;
             }
+            if (!checkArchiveSource(false)) return;
             decoded = ImageDecodeHelper.decodeArchivePreview(
                     appContext, path, null, displayName);
+            if (!checkArchiveSource(false)) { recycleLoadedImage(decoded); return; }
             if (decoded == null || decoded.bitmap == null || decoded.bitmap.isRecycled()) {
                 recycleLoadedImage(decoded);
                 return;
             }
             final Bitmap bitmap = decoded.bitmap;
             final boolean fullQuality = decoded.originalQuality;
-            boolean posted = mainHandler.post(() -> {
+            boolean posted = imageResultHandler.post(() -> {
                 try {
                     if (destroyed
                             || decodedBitmapCache == null
@@ -1961,27 +2300,52 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     @Nullable
     private SequentialArchiveImageReader ensureSequentialReader(File archive) {
+        final int epoch;
         synchronized (sequentialReaderLock) {
             if (sequentialReaderClosed) return null;
             if (sequentialImageReader != null) return sequentialImageReader;
-            if (!isSourceArchiveForwardReadable()) return null;
-            char[] passwordSnapshot;
-            synchronized (archiveExtractLock) {
-                passwordSnapshot = PasswordChars.cloneOf(sourceArchivePassword);
-            }
-            try {
-                boolean sensitiveCache = PasswordChars.hasPassword(passwordSnapshot);
-                sequentialImageReader = SequentialArchiveImageReader.openIfSupported(
-                        getApplicationContext(),
-                        archive,
-                        passwordSnapshot,
-                        sensitiveCache,
-                        verifiedSensitiveArchiveCachePaths);
-            } finally {
-                PasswordChars.clear(passwordSnapshot);
-            }
-            return sequentialImageReader;
+            epoch = sequentialReaderEpoch;
         }
+        // Header/volume/cache I/O must not hold a lock needed by onDestroy.
+        if (!isSourceArchiveForwardReadable()) return null;
+        char[] passwordSnapshot;
+        synchronized (archiveExtractLock) {
+            passwordSnapshot = PasswordChars.cloneOf(sourceArchivePassword);
+        }
+        SequentialArchiveImageReader created;
+        try {
+            created = SequentialArchiveImageReader.openIfSupported(getApplicationContext(), archive,
+                    passwordSnapshot, PasswordChars.hasPassword(passwordSnapshot), verifiedSensitiveArchiveCachePaths);
+        } finally {
+            PasswordChars.clear(passwordSnapshot);
+        }
+        SequentialArchiveImageReader selected = null;
+        synchronized (sequentialReaderLock) {
+            if (!sequentialReaderClosed && sequentialReaderEpoch == epoch) {
+                if (sequentialImageReader == null) sequentialImageReader = created;
+                selected = sequentialImageReader;
+            }
+        }
+        if (created != null && created != selected) created.close(); // worker only
+        return selected;
+    }
+
+    @Nullable
+    private SequentialArchiveImageReader detachSequentialReader(boolean closing) {
+        synchronized (sequentialReaderLock) {
+            sequentialReaderEpoch++;
+            if (closing) sequentialReaderClosed = true;
+            SequentialArchiveImageReader previous = sequentialImageReader;
+            sequentialImageReader = null;
+            return previous;
+        }
+    }
+
+    private static void closePreparedResourceAsync(@Nullable java.io.Closeable resource) {
+        if (resource == null) return;
+        Thread closer = new Thread(() -> closePreparedResource(resource), "ReadwideImageReaderClose");
+        closer.setDaemon(true);
+        closer.start();
     }
 
     private void adoptPreparedSequentialReader(@Nullable java.io.Closeable resource) {
@@ -2017,18 +2381,17 @@ public class ImageReaderActivity extends AppCompatActivity {
         }
     }
 
-    private void discardArchiveImageCacheAfterDecodeFailure(int index, @Nullable String expectedPath) {
+    private void discardArchiveImageCacheAfterDecodeFailure(@Nullable String entryPath,
+                                                            @Nullable String expectedPath) {
         if (sourceArchivePath == null || sourceArchivePath.trim().isEmpty()) return;
         if (expectedPath == null || expectedPath.trim().isEmpty()) return;
-        if (index < 0 || index >= sourceEntryPaths.size()) return;
-        String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, index);
         if (entryPath == null || entryPath.trim().isEmpty()) return;
         ArchiveImageEntryCache.discardReady(new File(expectedPath));
         verifiedSensitiveArchiveCachePaths.remove(new File(expectedPath).getAbsolutePath());
     }
 
     private void prefetchAdjacentImages(int centerIndex) {
-        if (imagePaths.size() <= 1) return;
+        if (archiveSourceChanged.get() || imagePaths.size() <= 1) return;
         final boolean fromArchive = sourceArchivePath != null
                 && !sourceArchivePath.trim().isEmpty()
                 && !sourceEntryPaths.isEmpty();
@@ -2063,9 +2426,9 @@ public class ImageReaderActivity extends AppCompatActivity {
         }
 
         // Archive source: each neighbor must be extracted from the archive before
-        // it can be decoded. Extraction is sequential (it shares archive state), so
-        // run it on the sequence executor and then hand decoding to the parallel
-        // pool so it does not block the next extraction.
+        // it can be decoded. Keep prefetch sequential on its existing executor;
+        // eligible independent ZIP reads may overlap the foreground worker, while
+        // stateful/solid readers remain serialized. Hand bitmap decoding to its pool.
         final String archivePathSnapshot = sourceArchivePath;
         final boolean forwardSequential = isSourceArchiveForwardReadable();
         final char[] passwordSnapshot;
@@ -2117,10 +2480,11 @@ public class ImageReaderActivity extends AppCompatActivity {
      * would create a one-plan hole with no replacement decode.
      */
     private void queuePrefetchDecode(int index, ImageSequenceState.Snapshot snapshot) {
-        if (destroyed || decodedBitmapCache == null
+        android.util.LruCache<Integer, Bitmap> cache = decodedBitmapCache;
+        if (destroyed || cache == null
                 || imageSequenceGeneration.get() != snapshot.generation
                 || index < 0 || index >= snapshot.paths.size()
-                || decodedBitmapCache.get(index) != null) return;
+                || cache.get(index) != null) return;
         com.readwide.manager.util.ImagePrefetchRequests.Ticket ticket =
                 bitmapPrefetchRequests.acquire(snapshot.generation, index);
         if (ticket == null) return;
@@ -2135,15 +2499,18 @@ public class ImageReaderActivity extends AppCompatActivity {
             com.readwide.manager.util.ImagePrefetchRequests.Ticket ticket) {
         boolean handedOffToMain = false;
         try {
+            if (!bitmapPrefetchRequests.tryStart(ticket)) return;
             int sequenceGeneration = snapshot.generation;
-            if (destroyed || decodedBitmapCache == null
+            android.util.LruCache<Integer, Bitmap> cache = decodedBitmapCache;
+            if (destroyed || cache == null
                     || imageSequenceGeneration.get() != sequenceGeneration) return;
-            if (decodedBitmapCache.get(index) != null) return;
+            if (cache.get(index) != null) return;
             final String path = snapshot.paths.get(index);
             final String entryPath = ImageSequenceState.entryPathAt(snapshot.entryPaths, index);
             final String displayName = path != null ? new File(path).getName() : null;
             final Context appContext = getApplicationContext();
             if (path == null || !new File(path).exists()) return;
+            if (!checkArchiveSource(false)) return;
             // Archive prefetch may fail while a stale or partial path is still
             // present. Only a committed ready entry is eligible for decode;
             // local filesystem sequences have an empty entry path and are
@@ -2155,10 +2522,11 @@ public class ImageReaderActivity extends AppCompatActivity {
             }
             LoadedImage decoded = ImageDecodeHelper.decodePrefetch(
                     appContext, path, null, displayName);
+            if (!checkArchiveSource(false)) { recycleLoadedImage(decoded); return; }
             if (decoded == null || decoded.bitmap == null || decoded.bitmap.isRecycled()) return;
             final Bitmap bmp = decoded.bitmap;
             final boolean fullQuality = decoded.originalQuality;
-            boolean posted = mainHandler.post(() -> {
+            boolean posted = imageResultHandler.post(() -> {
                 try {
                     if (destroyed
                             || decodedBitmapCache == null
@@ -2205,7 +2573,8 @@ public class ImageReaderActivity extends AppCompatActivity {
                                               @Nullable Set<String> verifiedSensitivePaths,
                                               int planGeneration,
                                               int sequenceGeneration) {
-        if (index < 0 || index >= imagePaths.size() || index >= entryPaths.size()) return false;
+        if (!checkArchiveSource(false)
+                || index < 0 || index >= imagePaths.size() || index >= entryPaths.size()) return false;
         String expectedPath = imagePaths.get(index);
         String entryPath = ImageSequenceState.entryPathAt(entryPaths, index);
         if (expectedPath == null || expectedPath.trim().isEmpty()
@@ -2229,19 +2598,28 @@ public class ImageReaderActivity extends AppCompatActivity {
             // instead, so a background fetch never holds the reader lock for a single-entry decode
             // while an on-demand page waits. This keeps the reading frontier, not the whole
             // archive, as the extraction bound.
-            return reader.ensureExtracted(entryPath, false, () ->
+            boolean ready = reader.ensureExtracted(entryPath, false, () ->
                     !destroyed
+                            && !archiveSourceChanged.get()
                             && imageSequenceGeneration.get() == sequenceGeneration
                             && prefetchPlanGeneration.get() == planGeneration
                             && onDemandReaderWaiters.get() == 0);
+            return checkArchiveSource(false) && ready;
         }
-        return ArchiveImageEntryCache.ensureReady(
+        boolean ready = ArchiveImageEntryCache.ensureReady(
                 archive,
                 entryPath,
                 outFile,
                 password,
                 sensitiveCache,
                 verifiedSensitivePaths).success;
+        if (!checkArchiveSource(false)) {
+            if (archiveSourceChanged.get() && !Thread.currentThread().isInterrupted()) {
+                ArchiveImageEntryCache.discardReady(outFile);
+            }
+            return false;
+        }
+        return ready;
     }
 
     private void setLoading(boolean loading, @Nullable String message) {
@@ -2252,10 +2630,29 @@ public class ImageReaderActivity extends AppCompatActivity {
     }
 
     private void persistArchiveImageProgress() {
+        if (restoringArchiveSequence || archiveSourceChanged.get()) return;
         if (prefs == null || sourceArchivePath == null || sourceArchivePath.trim().isEmpty()) return;
-        String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, currentIndex);
+        int accepted = acceptedProgressIndex();
+        String entryPath = ImageSequenceState.entryPathAt(sourceEntryPaths, accepted);
         if (entryPath == null || entryPath.trim().isEmpty()) return;
         prefs.setArchiveLastImageEntryPath(sourceArchivePath, entryPath);
+    }
+
+    private void acceptDisplayedImageProgress() {
+        activeImageLoadGeneration = -1;
+        imageSurfaceNeedsRebind = false;
+        acceptedImagePath = displayedImagePath;
+        acceptedImageEntryPath = displayedImageEntryPath;
+        persistArchiveImageProgress();
+        scheduleImageReadingProgressSave();
+    }
+
+    private int acceptedProgressIndex() {
+        if (sourceArchivePath != null && !sourceArchivePath.trim().isEmpty()) {
+            return TextUtils.isEmpty(acceptedImageEntryPath) ? -1
+                    : sourceEntryPaths.indexOf(acceptedImageEntryPath);
+        }
+        return acceptedImagePath == null ? -1 : imagePaths.indexOf(acceptedImagePath);
     }
 
     // Persist a reading-progress state for the image viewer so the recent list
@@ -2274,13 +2671,16 @@ public class ImageReaderActivity extends AppCompatActivity {
     }
 
     private void persistImageReadingProgress() {
+        if (restoringArchiveSequence || archiveSourceChanged.get()) return;
+        int accepted = acceptedProgressIndex();
+        if (accepted < 0) return;
         int total = imagePaths.size();
         if (total < 2) return;
         boolean fromArchive = sourceArchivePath != null && sourceArchivePath.trim().length() > 0;
-        String targetPath = fromArchive ? sourceArchivePath : filePath;
+        String targetPath = fromArchive ? sourceArchivePath : acceptedImagePath;
         if (targetPath == null || targetPath.trim().isEmpty()) return;
         ReaderState state = new ReaderState(targetPath);
-        state.setPageNumber(currentIndex + 1);
+        state.setPageNumber(accepted + 1);
         state.setTotalPages(total);
         try {
             BookmarkManager.getInstance(this).saveReadingState(state);
@@ -2871,6 +3271,7 @@ public class ImageReaderActivity extends AppCompatActivity {
                         && TextUtils.equals(displayedImagePath, file.getAbsolutePath())) {
                     displayedImagePath = filePath;
                 }
+                if (TextUtils.equals(acceptedImagePath, file.getAbsolutePath())) acceptedImagePath = filePath;
                 updateToolbarTitle();
                 ShortToast.show(this, R.string.renamed);
                 dialog.dismiss();

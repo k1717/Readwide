@@ -92,6 +92,7 @@ final class ReaderSearchController {
     void startLargeTextSearchTotalCountInBackground(@NonNull String query,
                                                             @Nullable TextView matchStatus) {
         if (!activity.largeTextEstimateActive || activity.filePath == null || query.isEmpty()) return;
+        if (!activity.ensureLoadedTextCurrent()) return;
         if (getCachedLargeTextSearchTotal(query) >= 0) return;
 
         final String expectedPath = activity.filePath;
@@ -133,6 +134,7 @@ final class ReaderSearchController {
                     return;
                 }
 
+                if (!activity.ensureLoadedTextCurrent()) return;
                 if (finalError != null || finalTotal < 0) {
                     return;
                 }
@@ -156,6 +158,9 @@ final class ReaderSearchController {
         if (bodyEnd <= 0) return null;
 
         int localStart = startPosition - Math.max(0, activity.largeTextPreviewBaseCharOffset);
+        // A remote search target can already be selected while its partition is
+        // loading. Clamping it into this old window skips intervening matches.
+        if (localStart < 0 || localStart >= bodyEnd) return null;
         com.readwide.manager.util.SearchMatcher matcher =
                 com.readwide.manager.util.SearchMatcher.compile(query, activity.currentSearchOptions());
         if (matcher == null) return null;
@@ -170,11 +175,8 @@ final class ReaderSearchController {
         } else {
             if (localStart < 0) return null;
             int from = Math.min(bodyEnd - 1, localStart);
-            com.readwide.manager.util.SearchMatcher.Match hit = matcher.lastUpTo(activity.fileContent, from);
-            while (hit != null && hit.end > bodyEnd) {
-                if (hit.start <= 0) { hit = null; break; }
-                hit = matcher.lastUpTo(activity.fileContent, hit.start - 1);
-            }
+            com.readwide.manager.util.SearchMatcher.Match hit =
+                    matcher.lastUpTo(activity.fileContent, from, bodyEnd);
             if (hit != null) {
                 idx = hit.start;
             }
@@ -206,7 +208,9 @@ final class ReaderSearchController {
                 : activity.estimateDisplayedPageForLargeTextLine(result.lineNumber, totalPages);
 
         activity.largeTextEstimatedTotalPages = Math.max(activity.largeTextEstimatedTotalPages, totalPages);
+        activity.cancelLargeTextPartitionSwitchForLocalJump();
         activity.scrollToSearchResultPosition(result.charPosition);
+        activity.textContentReadyForPersistence = true;
         int localPage = Math.max(1, activity.readerView != null ? activity.readerView.getCurrentPageNumber() : 1);
         activity.largeTextEstimatedBasePageOffset = Math.max(0, displayPage - localPage);
         activity.updatePositionLabel();
@@ -225,6 +229,8 @@ final class ReaderSearchController {
 
     void performLargeTextSearchMove(@NonNull String query, boolean forward, TextView matchStatus, int targetOccurrence) {
         if (activity.filePath == null || query.isEmpty()) return;
+        if (activity.readerView == null || !activity.readerView.hasCurrentTextLayout()) return;
+        if (!activity.ensureLoadedTextCurrent()) return;
 
         boolean queryChanged = !query.equals(activity.activeSearchQuery);
         if (queryChanged) {
@@ -293,6 +299,7 @@ final class ReaderSearchController {
                     return;
                 }
 
+                if (!activity.ensureLoadedTextCurrent()) return;
                 if (finalError != null) {
                     if (matchStatus != null) matchStatus.setText("0 / 0");
                     ShortToast.show(activity, activity.getString(R.string.error_prefix) + finalError);
@@ -334,9 +341,12 @@ final class ReaderSearchController {
                         : activity.estimateDisplayedPageForLargeTextLine(finalResult.lineNumber, totalPages);
                 int partitionStart = activity.getLargeTextPartitionStartLineForLine(finalResult.lineNumber);
 
-                if (activity.isAbsoluteCharPositionInCurrentLargeTextBody(finalResult.charPosition)) {
+                if (activity.isAbsoluteCharPositionInCurrentLargeTextBody(finalResult.charPosition)
+                        && activity.readerView != null && activity.readerView.hasCurrentTextLayout()) {
                     activity.largeTextEstimatedTotalPages = Math.max(activity.largeTextEstimatedTotalPages, totalPages);
+                    activity.cancelLargeTextPartitionSwitchForLocalJump();
                     activity.scrollToSearchResultPosition(finalResult.charPosition);
+                    activity.textContentReadyForPersistence = true;
                     int localPage = Math.max(1, activity.readerView != null ? activity.readerView.getCurrentPageNumber() : 1);
                     activity.largeTextEstimatedBasePageOffset = Math.max(0, displayPage - localPage);
                     activity.updatePositionLabel();

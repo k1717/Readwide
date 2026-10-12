@@ -11,9 +11,7 @@ import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Enumeration;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CompletionService;
@@ -53,7 +51,7 @@ final class LightweightZipArchiveReader {
         for (ZipEntryInfo entry : readEntries(archive)) {
             result.add(new ArchiveSupport.EntryInfo(entry.path, entry.directory, entry.size, entry.timeMillis));
         }
-        return withSyntheticDirectories(result);
+        return ArchiveSupport.withSyntheticDirectories(result);
     }
 
     static boolean extractArchiveIntoDirectory(@NonNull File archive,
@@ -69,7 +67,7 @@ final class LightweightZipArchiveReader {
             if (out == null) return false;
             sawEntry = true;
             if (entry.directory || entry.path.endsWith("/")) {
-                if (!out.exists() && !out.mkdirs()) return false;
+                RarOutputFileGuard.ensureDirectory(out);
             } else {
                 if (!isSupportedMethod(entry.method)) return false;
                 files.add(entry);
@@ -233,20 +231,12 @@ final class LightweightZipArchiveReader {
     }
 
     private static void validateOutputTargets(File targetDir, List<ZipEntryInfo> entries) throws IOException {
-        Map<String, Boolean> targets = new LinkedHashMap<>();
+        ArchiveOutputPreflight preflight = new ArchiveOutputPreflight(targetDir);
+        Set<File> targets = new HashSet<>();
         for (ZipEntryInfo entry : entries) {
             checkCancelled();
-            File output = resolveOutput(targetDir, entry.path);
-            if (output == null) throw new IOException("Unsafe ZIP output path");
-            String canonical = output.getCanonicalPath();
-            if (targets.put(canonical, entry.directory) != null) throw new IOException("Conflicting ZIP output paths");
-        }
-        for (String path : targets.keySet()) {
-            for (File parent = new File(path).getParentFile(); parent != null; parent = parent.getParentFile()) {
-                if (Boolean.FALSE.equals(targets.get(parent.getPath()))) {
-                    throw new IOException("ZIP file conflicts with an output directory");
-                }
-            }
+            File output = preflight.add(entry.path, entry.directory);
+            if (!targets.add(output)) throw new IOException("Conflicting ZIP output paths");
         }
     }
 
@@ -264,20 +254,7 @@ final class LightweightZipArchiveReader {
 
     @Nullable
     private static String sanitizeEntryPath(String rawEntryName) {
-        if (rawEntryName == null) return null;
-        String entryName = rawEntryName.trim().replace('\\', '/');
-        while (entryName.startsWith("./")) entryName = entryName.substring(2);
-        while (entryName.contains("//")) entryName = entryName.replace("//", "/");
-        if (entryName.length() == 0 || entryName.indexOf('\0') >= 0) return null;
-        if (entryName.startsWith("/")
-                || entryName.equals("..")
-                || entryName.startsWith("../")
-                || entryName.contains("/../")
-                || entryName.endsWith("/..")
-                || entryName.matches("^[A-Za-z]:.*")) {
-            return null;
-        }
-        return entryName;
+        return ArchiveSupport.sanitizeEntryPathForList(rawEntryName);
     }
 
     private static boolean isSameOrDescendant(@NonNull File ancestor, @NonNull File candidate) throws IOException {
@@ -288,22 +265,6 @@ final class LightweightZipArchiveReader {
             current = current.getParentFile();
         }
         return false;
-    }
-
-    @NonNull
-    private static List<ArchiveSupport.EntryInfo> withSyntheticDirectories(@NonNull List<ArchiveSupport.EntryInfo> entries) {
-        Map<String, ArchiveSupport.EntryInfo> map = new LinkedHashMap<>();
-        for (ArchiveSupport.EntryInfo entry : entries) {
-            String path = entry.path;
-            int slash = path.indexOf('/');
-            while (slash >= 0) {
-                String dir = path.substring(0, slash + 1);
-                if (!map.containsKey(dir)) map.put(dir, new ArchiveSupport.EntryInfo(dir, true, -1L, 0L));
-                slash = path.indexOf('/', slash + 1);
-            }
-            map.put(path, entry);
-        }
-        return new ArrayList<>(map.values());
     }
 
     private static final class ZipEntryInfo {

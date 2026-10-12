@@ -22,6 +22,7 @@ import com.readwide.manager.util.LatestValueDispatcher;
 
 final class MainFileOperationProgressController {
     private final MainActivity activity;
+    private final ProgressQueue queue = new ProgressQueue();
     @Nullable private android.app.Dialog dialog;
     @Nullable private FileOperationProgress activeProgress;
     @Nullable private LatestValueDispatcher<FileOperationProgress.Snapshot> progressUpdates;
@@ -32,16 +33,24 @@ final class MainFileOperationProgressController {
 
     @NonNull
     FileOperationProgress show(@NonNull String titleText, @Nullable String initialDetail) {
-        dismissActiveDialogOnly();
         FileOperationProgress progress = new FileOperationProgress(titleText, null);
-        activeProgress = progress;
         if (initialDetail != null) progress.setDetail(initialDetail);
-        showDialogFor(progress);
+        if (activity.activityDestroyed) {
+            progress.cancel();
+            return progress;
+        }
+        // The executor is serial. A new queued job must not hide the controls
+        // needed to resume the paused job in front of it.
+        queue.add(progress);
+        dismissActiveDialogOnly();
+        activeProgress = queue.current();
+        showDialogFor(activeProgress);
         activity.updateMainOverflowButtonVisibility();
         return progress;
     }
 
     boolean showActiveProgressDialog() {
+        if (activity.activityDestroyed) return false;
         FileOperationProgress progress = activeProgress;
         if (progress == null || progress.isComplete()) return false;
         dismissActiveDialogOnly();
@@ -57,11 +66,44 @@ final class MainFileOperationProgressController {
     }
 
     void finish(@Nullable FileOperationProgress progress) {
-        if (progress == null || progress == activeProgress) {
-            if (progress != null) progress.markComplete();
+        FileOperationProgress finished = progress == null ? activeProgress : progress;
+        queue.finish(finished);
+        if (finished == activeProgress) {
+            boolean wasVisible = dialog != null && dialog.isShowing();
             dismissActiveDialogOnly();
-            activeProgress = null;
+            activeProgress = queue.current();
+            if (wasVisible && activeProgress != null && !activity.activityDestroyed) {
+                showDialogFor(activeProgress);
+            }
             activity.updateMainOverflowButtonVisibility();
+        }
+    }
+
+    void close() {
+        dismissActiveDialogOnly();
+        activeProgress = null;
+        queue.cancelAll();
+    }
+
+    /** UI-thread ownership only; tokens themselves synchronize with their workers. */
+    static final class ProgressQueue {
+        private final java.util.ArrayDeque<FileOperationProgress> pending = new java.util.ArrayDeque<>();
+
+        void add(FileOperationProgress progress) { pending.addLast(progress); }
+        @Nullable FileOperationProgress current() { return pending.peekFirst(); }
+
+        void finish(@Nullable FileOperationProgress progress) {
+            if (progress == null) return;
+            pending.remove(progress);
+            progress.markComplete();
+        }
+
+        void cancelAll() {
+            FileOperationProgress progress;
+            while ((progress = pending.pollFirst()) != null) {
+                progress.setListener(null);
+                progress.cancel();
+            }
         }
     }
 
@@ -206,12 +248,16 @@ final class MainFileOperationProgressController {
         progressUpdates = updates;
         progress.setListener(updates::offer);
 
-        pause.setOnClickListener(v -> progress.setPaused(!progress.isPaused()));
+        pause.setOnClickListener(v -> {
+            if (progressUpdates == updates && !activity.activityDestroyed) progress.setPaused(!progress.isPaused());
+        });
         background.setOnClickListener(v -> {
+            if (progressUpdates != updates || activity.activityDestroyed) return;
             dismissActiveDialogOnly();
             activity.updateMainOverflowButtonVisibility();
         });
         cancel.setOnClickListener(v -> {
+            if (progressUpdates != updates || activity.activityDestroyed) return;
             progress.cancel();
             dismissActiveDialogOnly();
             activity.updateMainOverflowButtonVisibility();
@@ -228,6 +274,7 @@ final class MainFileOperationProgressController {
         if (preShowWindow != null) preShowWindow.setWindowAnimations(0);
         dialog.setCanceledOnTouchOutside(false);
         dialog.setOnCancelListener(d -> {
+            if (progressUpdates != updates || activity.activityDestroyed) return;
             dismissActiveDialogOnly();
             activity.updateMainOverflowButtonVisibility();
         });

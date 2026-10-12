@@ -17,6 +17,16 @@ final class RarBlake2sp {
         for (int i = 0; i < leaves.length; i++) leaves[i] = new Node(i, 0, i == 7);
     }
 
+    private RarBlake2sp(RarBlake2sp source) {
+        if (source.finished) throw new IllegalStateException("BLAKE2sp already finalized");
+        lane = source.lane;
+        laneBytes = source.laneBytes;
+        for (int i = 0; i < leaves.length; i++) leaves[i] = new Node(source.leaves[i]);
+    }
+
+    /** Finalize a detached state without consuming the streaming prefix. */
+    byte[] snapshotDigest() { return new RarBlake2sp(this).digest(); }
+
     void update(byte[] input, int offset, int length) {
         if (finished) throw new IllegalStateException("BLAKE2sp already finalized");
         if (offset < 0 || length < 0 || offset > input.length - length) throw new IndexOutOfBoundsException();
@@ -64,6 +74,15 @@ final class RarBlake2sp {
             h[0] ^= 0x02080020; // digest=32, key=0, fanout=8, depth=2
             h[2] ^= nodeOffset;
             h[3] ^= (depth << 16) | (32 << 24);
+        }
+
+        Node(Node source) {
+            lastNode = source.lastNode;
+            used = source.used;
+            bytes = source.bytes;
+            System.arraycopy(source.h, 0, h, 0, h.length);
+            System.arraycopy(source.block, 0, block, 0, block.length);
+            // v and m are scratch arrays overwritten by every compress call.
         }
 
         void update(byte[] input, int offset, int length) {

@@ -23,11 +23,21 @@ final class MatchOffsetIndex {
     /** Number of hits strictly before the given original-text boundary. */
     int rank(long boundary) {
         if (!isComplete()) throw new IllegalStateException("Partial offset index");
+        return rankIfKnown(boundary);
+    }
+
+    /** Exact rank within the retained prefix (or at text bounds); -1 if unknown. */
+    int rankIfKnown(long boundary) {
         if (boundary <= 0L) return 0;
         if (boundary >= textLength) return count;
         int position = (int) boundary;
         if (words == null) {
-            int low = 0, high = count;
+            // Starts are strictly increasing integers. The boundary immediately
+            // after the last retained start is still exact, but later ranks may
+            // include uncached hits and must fall back to the prepared scan.
+            if (!isComplete() && (starts.length == 0
+                    || boundary > starts[starts.length - 1] + 1L)) return -1;
+            int low = 0, high = starts.length;
             while (low < high) {
                 int mid = (low + high) >>> 1;
                 if (starts[mid] < position) low = mid + 1;

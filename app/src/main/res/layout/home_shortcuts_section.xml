@@ -10,12 +10,12 @@
         android:paddingStart="16dp" android:paddingEnd="8dp">
         <TextView android:id="@+id/home_shortcuts_title"
             android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:minHeight="42dp" android:gravity="center_vertical" android:paddingEnd="8dp"
+            android:minHeight="38dp" android:gravity="center_vertical" android:paddingEnd="8dp"
             android:includeFontPadding="false"
             android:background="@android:color/transparent" android:clickable="true" android:focusable="true"
             android:contentDescription="@string/home_shortcuts_expand"
             android:accessibilityHeading="true" android:text="@string/home_shortcuts_title"
-            android:textSize="15sp" android:textStyle="bold" android:textColor="?attr/colorOnPrimary" />
+            android:textSize="12sp" android:textStyle="bold" android:textColor="?attr/colorOnPrimary" />
     </LinearLayout>
     <androidx.recyclerview.widget.RecyclerView android:id="@+id/home_shortcuts_list"
         android:layout_width="match_parent" android:layout_height="wrap_content"

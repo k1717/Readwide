@@ -23,6 +23,7 @@ import java.util.zip.ZipFile;
 
 import com.readwide.manager.util.SecureXml;
 import com.readwide.manager.util.UriPathCodec;
+import com.readwide.manager.util.EpubBindingRewriter;
 
 import javax.xml.parsers.DocumentBuilder;
 
@@ -296,9 +297,8 @@ final class DocumentArchiveUtils {
     }
 
     /**
-     * Detects EPUBs whose active publisher styles use vertical writing. This is
-     * intentionally broader than the spine HTML alone because most books keep
-     * writing-mode in an external stylesheet.
+     * Archive-wide diagnostic retained for compatibility checks. Viewer layout
+     * uses EpubChapterStyles instead, so unrelated chapters cannot set its hint.
      */
     static boolean detectEpubVerticalWritingLike(ZipFile zip) {
         if (zip == null) return false;
@@ -314,12 +314,105 @@ final class DocumentArchiveUtils {
                 if (!(lower.endsWith(".css") || isEpubHtmlPath(lower))) continue;
                 scanned++;
                 String text = readZipEntryPreviewString(zip, entry);
-                if (EpubCssCompatibility.detectsVerticalWriting(text)) return true;
+                if (lower.endsWith(".css")
+                        ? EpubCssCompatibility.detectsVerticalWriting(text)
+                        : EpubCssCompatibility.detectsVerticalWritingInHtml(text)) return true;
             }
         } catch (Throwable ignored) {
             // A failed hint must never make an otherwise readable EPUB fail.
         }
         return false;
+    }
+
+    /** Per-open-book, bounded summaries of only the styles reachable from a chapter. */
+    static final class EpubChapterStyles {
+        private final ZipFile zip;
+        private final Map<String, StyleSummary> cache = new LinkedHashMap<String, StyleSummary>(32, .75f, true) {
+            @Override protected boolean removeEldestEntry(Map.Entry<String, StyleSummary> eldest) {
+                return size() > 256;
+            }
+        };
+
+        EpubChapterStyles(ZipFile zip) { this.zip = zip; }
+
+        boolean isVertical(String chapterPath, String html) {
+            boolean[] vertical = {false};
+            LinkedHashSet<String> pending = new LinkedHashSet<>();
+            EpubBindingRewriter.inspectDocumentStyles(html, css -> {
+                vertical[0] |= EpubCssCompatibility.detectsVerticalWriting(css);
+                for (String ref : EpubCssCompatibility.importedStylesheets(css)) {
+                    enqueue(pending, chapterPath, ref);
+                }
+            }, ref -> enqueue(pending, chapterPath, ref));
+            if (vertical[0]) return true;
+            Set<String> visited = new HashSet<>();
+            while (!pending.isEmpty() && visited.size() < 200) {
+                if (Thread.currentThread().isInterrupted()) return false;
+                java.util.Iterator<String> next = pending.iterator();
+                String path = next.next();
+                next.remove();
+                if (!visited.add(path)) continue;
+                StyleSummary summary = cache.get(path);
+                if (summary == null) {
+                    String css = "";
+                    try {
+                        ZipEntry entry = zip != null ? zip.getEntry(path) : null;
+                        if (entry != null && !entry.isDirectory()) css = readZipEntryPreviewString(zip, entry);
+                    } catch (IOException ignored) {
+                        // One broken optional stylesheet must not hide another valid one.
+                    }
+                    summary = new StyleSummary(EpubCssCompatibility.detectsVerticalWriting(css),
+                            EpubCssCompatibility.importedStylesheets(css));
+                    cache.put(path, summary);
+                }
+                if (summary.vertical) return true;
+                for (String ref : summary.imports) enqueue(pending, path, ref);
+            }
+            return false;
+        }
+
+        private static void enqueue(Set<String> pending, String base, String reference) {
+            String path = resolveStylesheetPath(base, reference);
+            // Bound the queue as well as visited nodes in hostile import graphs.
+            if (path != null && pending.size() < 200) pending.add(path);
+        }
+
+        private static final class StyleSummary {
+            final boolean vertical;
+            final List<String> imports;
+            StyleSummary(boolean vertical, List<String> imports) {
+                this.vertical = vertical;
+                this.imports = imports;
+            }
+        }
+    }
+
+    static String resolveStylesheetPath(String chapterPath, String reference) {
+        if (reference == null) return null;
+        String raw = reference.trim();
+        int suffix = raw.length();
+        int query = raw.indexOf('?'), fragment = raw.indexOf('#');
+        if (query >= 0) suffix = Math.min(suffix, query);
+        if (fragment >= 0) suffix = Math.min(suffix, fragment);
+        String path = decodeHref(raw.substring(0, suffix)).replace('\\', '/');
+        if (path.isEmpty() || path.startsWith("/") || path.indexOf(':') >= 0 || path.indexOf('\0') >= 0) return null;
+        // chapterPath is already a decoded ZIP name. Decode only the new reference.
+        String base = parentPath(chapterPath);
+        ArrayList<String> parts = new ArrayList<>();
+        String combined = base.isEmpty() ? path : base + "/" + path;
+        for (String part : combined.split("/")) {
+            if (part.isEmpty() || ".".equals(part)) continue;
+            if ("..".equals(part)) {
+                if (parts.isEmpty()) return null;
+                parts.remove(parts.size() - 1);
+            } else parts.add(part);
+        }
+        StringBuilder result = new StringBuilder();
+        for (String part : parts) {
+            if (result.length() > 0) result.append('/');
+            result.append(part);
+        }
+        return result.toString();
     }
 
     static List<String> findEpubSpinePaths(ZipFile zip) {

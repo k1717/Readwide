@@ -239,11 +239,13 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     PrefsManager prefs;
     BookmarkManager bookmarkManager;
     boolean lockChecked = false;
+    boolean awaitingUnlock = false;
     // An external ACTION_VIEW URI deferred until after a successful unlock, so app lock
     // gates external "open with Readwide" too instead of being bypassed.
     @Nullable Uri pendingExternalUri;
     boolean returnToViewerMode = false;
     File initialBrowseDirectory;
+    final MainNavigationState navigationState = new MainNavigationState(this);
     final FileClipboardController fileClipboardController = FileClipboardController.getShared();
     private long lastBackPressedTime = 0L;
     /** Toolbar reference cached so onResume can re-apply the theme cheaply. */
@@ -489,6 +491,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
 
     final ActivityResultLauncher<Intent> lockLauncher =
             registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+                awaitingUnlock = false;
                 if (result.getResultCode() == RESULT_OK) {
                     lockChecked = true;
                     if (pendingExternalUri != null) {
@@ -512,10 +515,17 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         prefs.applyLanguage(prefs.getLanguageMode());
         prefs.applyDarkMode(prefs.getDarkMode());
         super.onCreate(savedInstanceState);
+        navigationState.read(savedInstanceState);
         startup().onCreateAfterSuper();
         if (savedInstanceState == null) {
             getWindow().getDecorView().post(this::maybeShowTtsResumePrompt);
         }
+    }
+
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle state) {
+        navigationState.save(state);
+        super.onSaveInstanceState(state);
     }
 
     @Override
@@ -560,6 +570,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     protected void onResume() {
         super.onResume();
         activityDestroyed = false;
+        if (awaitingUnlock) return;
         if (drawerLayout != null) {
             drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED, GravityCompat.START);
             updateDrawerGestureExclusion();
@@ -579,6 +590,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         if (mainSearchFilterController != null) {
             mainSearchFilterController.applySavedFileTypeOrder();
             mainSearchFilterController.updateFileTypeChips();
+            mainSearchFilterController.refreshSavedSearchPreferences();
         }
 
         final boolean restoreViewerBrowseState = shouldPreserveBrowseStateOnResume();
@@ -684,10 +696,12 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
 
     @Override
     protected void onDestroy() {
+        if (mainRecentFilesController != null) mainRecentFilesController.close();
         if (mainHomeShortcutsController != null) mainHomeShortcutsController.close();
         if (mainImageOpenController != null) mainImageOpenController.onDestroy();
         else hideImageOpenLoadingWindow();
         activityDestroyed = true;
+        if (mainFileOperationProgressController != null) mainFileOperationProgressController.close();
         pendingDrawerNavigationEntry = null;
         drawerNavigationPending = false;
         clearSearchDebounce();
@@ -713,7 +727,9 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
 
         fileSearchExecutor.shutdownNow();
         folderValidationExecutor.shutdownNow();
-        fileOperationExecutor.shutdownNow();
+        for (Runnable pending : fileOperationExecutor.shutdownNow()) {
+            if (pending instanceof PendingFileOperation) ((PendingFileOperation) pending).discard();
+        }
         if (mainFolderLoadController != null) mainFolderLoadController.shutdownNow();
         super.onDestroy();
     }
@@ -786,14 +802,14 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         if (recyclerView == null) return;
 
         recyclerView.stopScroll();
-        recyclerView.post(() -> {
-            RecyclerView.LayoutManager lm = recyclerView.getLayoutManager();
-            if (lm instanceof LinearLayoutManager) {
-                ((LinearLayoutManager) lm).scrollToPositionWithOffset(0, 0);
-            } else {
-                recyclerView.scrollToPosition(0);
-            }
-        });
+        // LayoutManager retains this request until layout; a posted callback could
+        // instead reset a different folder/search reached before the next frame.
+        RecyclerView.LayoutManager lm = recyclerView.getLayoutManager();
+        if (lm instanceof LinearLayoutManager) {
+            ((LinearLayoutManager) lm).scrollToPositionWithOffset(0, 0);
+        } else {
+            recyclerView.scrollToPosition(0);
+        }
     }
 
     void applyFileDisplayMode(int mode) {
@@ -1668,6 +1684,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     // -------------------------------------------------------------------------
 
     void showHomeMode() {
+        navigationState.navigating();
         refreshHomeShortcuts();
         // Save the visible browse folder before leaving Browse mode so returning
         // to it can reuse the adapter list and RecyclerView position when the
@@ -1698,6 +1715,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     void showBrowseMode(@NonNull File dir) {
+        navigationState.navigating();
         if (mainHomeShortcutsController != null) mainHomeShortcutsController.cancelPendingOpen();
         // Capture the current browse folder even when switching through Home or
         // drawer shortcuts. This enables A -> B -> A -> B folder-state reuse.
@@ -1725,6 +1743,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     void showBrowseModeFromDrawerShortcut(@NonNull File dir) {
+        navigationState.navigating();
         if (mainHomeShortcutsController != null) mainHomeShortcutsController.cancelPendingOpen();
         // Drawer shortcut taps should never block on a full directory signature scan.
         // Save the outgoing visible list with the already-known load signature, then
@@ -1750,6 +1769,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     void showInitialMainMode() {
+        if (navigationState.restore()) { initialBrowseDirectory = null; return; }
         if (initialBrowseDirectory != null
                 && initialBrowseDirectory.exists()
                 && initialBrowseDirectory.isDirectory()
@@ -1941,12 +1961,52 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         mainFolderLoad().resortVisibleFileListAsync(sortMode);
     }
 
-    void executeFolderBackgroundTask(@NonNull Runnable task) {
-        if (activityDestroyed || fileOperationExecutor.isShutdown()) return;
+    boolean executeFolderBackgroundTask(@NonNull Runnable task) {
+        if (activityDestroyed || fileOperationExecutor.isShutdown()) return false;
         try {
             fileOperationExecutor.execute(task);
+            return true;
         } catch (java.util.concurrent.RejectedExecutionException ignored) {
-            // Executor shut down between check and submit; nothing to do.
+            // Owners of sensitive inputs can release them when no worker took ownership.
+            return false;
+        }
+    }
+
+    boolean executeFolderBackgroundTask(@NonNull Runnable task, @NonNull Runnable onDiscard) {
+        PendingFileOperation pending = new PendingFileOperation(task, onDiscard);
+        if (executeFolderBackgroundTask(pending)) return true;
+        pending.discard();
+        return false;
+    }
+
+    /** Exactly one owner: a running worker, or cleanup of a never-started task. */
+    static final class PendingFileOperation implements Runnable {
+        private Runnable task;
+        private Runnable onDiscard;
+
+        PendingFileOperation(Runnable task, Runnable onDiscard) {
+            this.task = java.util.Objects.requireNonNull(task);
+            this.onDiscard = java.util.Objects.requireNonNull(onDiscard);
+        }
+
+        @Override public void run() {
+            Runnable action;
+            synchronized (this) {
+                action = task;
+                task = null;
+                onDiscard = null;
+            }
+            if (action != null) action.run();
+        }
+
+        void discard() {
+            Runnable cleanup;
+            synchronized (this) {
+                cleanup = onDiscard;
+                task = null;
+                onDiscard = null;
+            }
+            if (cleanup != null) cleanup.run();
         }
     }
 
@@ -1956,6 +2016,10 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     void finishFileOperationProgress(@Nullable FileOperationProgress progress) {
+        if (activityDestroyed) {
+            if (progress != null) progress.markComplete();
+            return;
+        }
         mainFileOperationProgress().finish(progress);
     }
 

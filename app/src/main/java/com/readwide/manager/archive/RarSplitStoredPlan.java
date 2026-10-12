@@ -40,6 +40,7 @@ final class RarSplitStoredPlan {
 
     @NonNull
     static RarSplitStoredPlan fromChain(@NonNull List<RarArchiveReader.RarEntry> chain) throws IOException {
+        checkpoint();
         if (chain.isEmpty()) {
             throw new RarArchiveReader.UnsupportedRarFeatureException("Empty RAR split chain");
         }
@@ -54,6 +55,7 @@ final class RarSplitStoredPlan {
         long totalPackedSize = 0L;
 
         for (int i = 0; i < chain.size(); i++) {
+            checkpoint();
             RarArchiveReader.RarEntry part = chain.get(i);
             validateCommonPart(first, part, i, chain.size(), encrypted);
             validateKind(kind, first.encryption, part);
@@ -63,9 +65,9 @@ final class RarSplitStoredPlan {
             totalPackedSize += part.packedSize;
         }
 
-        long unpackedSize = last.unpackedSize;
-        if (unpackedSize < 0L) {
-            throw new IOException("Invalid RAR split stored unpacked size");
+        long unpackedSize = RarStoredPayloadIO.resolvedUnpackedSize(last, totalPackedSize);
+        if (encrypted && ((totalPackedSize % 16L) != 0L || unpackedSize > totalPackedSize)) {
+            throw new IOException("Invalid encrypted RAR split stored size or AES alignment");
         }
         return new RarSplitStoredPlan(chain, kind, totalPackedSize, unpackedSize);
     }
@@ -193,6 +195,10 @@ final class RarSplitStoredPlan {
         if (encryption.isRar5Aes256()) return Kind.RAR5_AES_STORED;
         throw new RarArchiveReader.UnsupportedRarFeatureException(
                 "Encrypted split RAR payload is not supported yet");
+    }
+
+    private static void checkpoint() throws java.io.InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("RAR split planning cancelled");
     }
 
     private static boolean isStoredMethod(@NonNull RarArchiveReader.RarEntry entry) {

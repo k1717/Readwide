@@ -381,12 +381,12 @@ final class ReaderToolsDialogController {
                     String pStr = inputPercent.getText().toString().trim();
                     String lStr = inputLine.getText().toString().trim();
                     if (!pStr.isEmpty()) {
-                        try { activity.scrollToPercent(Float.parseFloat(pStr) / 100f); }
+                        try { new ReaderPageJumpController(activity).scrollToDocumentPercent(Float.parseFloat(pStr) / 100f); }
                         catch (NumberFormatException ignored) {}
                     } else if (!lStr.isEmpty()) {
                         try {
                             int targetLine = Math.max(1, Integer.parseInt(lStr));
-                            activity.scrollToCharPosition(activity.findCharForLine(targetLine));
+                            new ReaderPageJumpController(activity).scrollToDocumentLine(targetLine);
                         } catch (NumberFormatException ignored) {}
                     }
                     activity.updatePositionLabel();

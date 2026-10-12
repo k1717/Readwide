@@ -145,7 +145,7 @@ void showBookmarksForFile() {
         currentInfo.setText(activity.getString(R.string.all_bookmarks_status,
                 adapter.getFolderCount(),
                 allBookmarks.size(),
-                activity.getDisplayedCurrentPageNumber(),
+                activity.getStatusCurrentPageNumber(),
                 activity.getDisplayedTotalPageCount()));
 
         // When the first bookmark is added, RecyclerView/content height can change.
@@ -173,6 +173,9 @@ void showBookmarksForFile() {
             LinearLayout.LayoutParams.WRAP_CONTENT));
 
     TextView closeButton = activity.dialogStyler().makeReaderDialogActionText(activity.getString(R.string.close), sub, Gravity.CENTER);
+    // Raise the centered label by 8 dp while preserving its 50 dp touch target
+    // and the measured dialog/list geometry.
+    closeButton.setPadding(closeButton.getPaddingLeft(), 0, closeButton.getPaddingRight(), activity.dpToPx(16));
     dialogPanel.addView(closeButton, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             activity.dpToPx(50)));

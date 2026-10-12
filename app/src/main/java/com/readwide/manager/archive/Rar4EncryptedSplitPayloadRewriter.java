@@ -46,35 +46,43 @@ final class Rar4EncryptedSplitPayloadRewriter {
     static File buildSingleEntryDecryptedCopy(@NonNull File firstArchive,
                                               long firstDataOffset,
                                               @NonNull List<RarCryptoStreams.EncryptedSegment> segments,
+                                              long unpackedCrc,
                                               @NonNull char[] password,
                                               @Nullable FileOperationProgress progress) throws IOException {
+        Rar4EncryptedPayloadRewriter.checkpoint(progress);
+        if (unpackedCrc < 0 || unpackedCrc > 0xffff_ffffL) throw new IOException("Invalid RAR4 final payload checksum");
         if (password.length == 0) throw new ArchiveSupport.PasswordRequiredException();
         if (segments.isEmpty()) throw new IOException("RAR split chain has no payload segments");
-        HeaderBlock sourceBlock = findFileHeaderForDataOffset(firstArchive, firstDataOffset);
+        HeaderBlock sourceBlock = findFileHeaderForDataOffset(firstArchive, firstDataOffset, progress);
         RewrittenFileBlock rewritten = prepareSplitFileBlock(sourceBlock.flags, sourceBlock.headerData, totalEncryptedSize(segments));
+        // Preserve the final decoded-file CRC, not the first part's ciphertext CRC.
+        putUInt32(rewritten.headerData, 9, unpackedCrc);
 
         File temp = File.createTempFile("textview-rar4-split-decrypted-", ".rar");
         boolean success = false;
-        try (FileOutputStream out = new FileOutputStream(temp)) {
-            out.write(RAR4_SIGNATURE);
-            writeRar4Header(out, RAR4_HEADER_MAIN, 0, new byte[6]);
-            writeRar4Header(out, RAR4_HEADER_FILE, rewritten.flags, rewritten.headerData);
+        try {
+            try (FileOutputStream out = new FileOutputStream(temp)) {
+                out.write(RAR4_SIGNATURE);
+                writeRar4Header(out, RAR4_HEADER_MAIN, 0, new byte[6]);
+                writeRar4Header(out, RAR4_HEADER_FILE, rewritten.flags, rewritten.headerData);
 
-            Cipher cipher = Rar3Crypto.createAesCbcDecryptCipher(password, rewritten.block.salt);
-            long plaintextLimit = rewritten.block.method == RAR4_METHOD_STORE ? rewritten.block.unpackedSize : -1L;
-            long remaining = RarCryptoStreams.decryptSegmentsToStream(
-                    segments,
-                    cipher,
-                    out,
-                    plaintextLimit,
-                    "RAR3/RAR4 AES split rewrite failed",
-                    progress,
-                    false);
-            if (plaintextLimit >= 0L && remaining != 0L) {
-                throw new IOException("Invalid decrypted RAR4 split stored size");
+                Cipher cipher = Rar3Crypto.createAesCbcDecryptCipher(password, rewritten.block.salt, progress);
+                long plaintextLimit = rewritten.block.method == RAR4_METHOD_STORE ? rewritten.block.unpackedSize : -1L;
+                long remaining = RarCryptoStreams.decryptSegmentsToStream(
+                        segments,
+                        cipher,
+                        out,
+                        plaintextLimit,
+                        "RAR3/RAR4 AES split rewrite failed",
+                        progress,
+                        false);
+                if (plaintextLimit >= 0L && remaining != 0L) {
+                    throw new IOException("Invalid decrypted RAR4 split stored size");
+                }
+
+                writeRar4Header(out, RAR4_HEADER_END, 0, new byte[0]);
             }
-
-            writeRar4Header(out, RAR4_HEADER_END, 0, new byte[0]);
+            Rar4EncryptedPayloadRewriter.checkpoint(progress);
             success = true;
             return temp;
         } finally {
@@ -83,12 +91,15 @@ final class Rar4EncryptedSplitPayloadRewriter {
     }
 
     @NonNull
-    private static HeaderBlock findFileHeaderForDataOffset(@NonNull File archive, long dataOffset) throws IOException {
+    private static HeaderBlock findFileHeaderForDataOffset(@NonNull File archive, long dataOffset,
+            @Nullable FileOperationProgress progress) throws IOException {
+        Rar4EncryptedPayloadRewriter.checkpoint(progress);
         try (RandomAccessFile in = new RandomAccessFile(archive, "r")) {
             long signatureOffset = findRar4SignatureOffset(in);
             if (signatureOffset < 0) throw new IOException("RAR4 signature not found");
             in.seek(signatureOffset + RAR4_SIGNATURE.length);
             while (in.getFilePointer() < in.length()) {
+                Rar4EncryptedPayloadRewriter.checkpoint(progress);
                 long headerStart = in.getFilePointer();
                 if (in.length() - headerStart < 7) break;
                 readUInt16LE(in); // source header CRC is advisory here; rewritten header is recalculated.
@@ -101,8 +112,11 @@ final class Rar4EncryptedSplitPayloadRewriter {
                 byte[] headerData = new byte[headerSize - 7];
                 in.readFully(headerData);
                 long currentDataOffset = headerStart + headerSize;
-                long dataSize = type == RAR4_HEADER_FILE ? parseFileBlock(flags, headerData).packedSize : 0L;
+                long dataSize = type == RAR4_HEADER_FILE
+                        ? parseFileBlock(flags, headerData).packedSize
+                        : Rar4EncryptedPayloadRewriter.dataSizeForHeader(type, flags, headerData);
                 if (type == RAR4_HEADER_FILE && currentDataOffset == firstPositive(dataOffset)) {
+                    Rar4EncryptedPayloadRewriter.checkpoint(progress);
                     return new HeaderBlock(flags, headerData);
                 }
                 long next = currentDataOffset + dataSize;
@@ -138,13 +152,20 @@ final class Rar4EncryptedSplitPayloadRewriter {
         }
 
         long newPackedSize = block.method == RAR4_METHOD_STORE ? block.unpackedSize : totalEncryptedSize;
+        if (newPackedSize < 0L || (block.method == RAR4_METHOD_STORE && newPackedSize > totalEncryptedSize)) {
+            throw new IOException("Invalid RAR4 decrypted payload size");
+        }
         byte[] rewrittenHeaderData = removeRange(headerData, block.saltOffset, 8);
-        writePackedSize(rewrittenHeaderData, newPackedSize, (flags & RAR4_FILE_LARGE) != 0);
         int rewrittenFlags = flags
                 & ~RAR4_FILE_PASSWORD
                 & ~RAR4_FILE_SALT
                 & ~RAR4_FILE_SPLIT_BEFORE
                 & ~RAR4_FILE_SPLIT_AFTER;
+        if (newPackedSize > 0xffff_ffffL && (rewrittenFlags & RAR4_FILE_LARGE) == 0) {
+            rewrittenHeaderData = Rar4SplitPayloadRewriter.addLargeSizeFields(rewrittenHeaderData);
+            rewrittenFlags |= RAR4_FILE_LARGE;
+        }
+        writePackedSize(rewrittenHeaderData, newPackedSize, (rewrittenFlags & RAR4_FILE_LARGE) != 0);
         return new RewrittenFileBlock(rewrittenFlags, rewrittenHeaderData, block);
     }
 

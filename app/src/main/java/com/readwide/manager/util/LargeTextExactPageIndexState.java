@@ -14,23 +14,51 @@ public final class LargeTextExactPageIndexState {
     private ArrayList<CustomReaderView.PageTextAnchor> anchors = new ArrayList<>();
     private boolean ready;
     private boolean building;
+    // A fresh load checks saved anchors before deciding whether a recount is needed.
+    private boolean checkingCache = true;
     private boolean failed;
     private String failure = "";
     private String signature = "";
 
     public void invalidate() {
-        generation.incrementAndGet();
+        synchronized (lock) {
+            generation.incrementAndGet();
+            // A cancelled worker cannot block a later same-signature restart.
+            building = false;
+            checkingCache = false;
+        }
     }
 
     public void reset() {
-        generation.incrementAndGet();
         synchronized (lock) {
+            generation.incrementAndGet();
             anchors = new ArrayList<>();
             ready = false;
             building = false;
+            checkingCache = true;
             failed = false;
             failure = "";
             signature = "";
+        }
+    }
+
+    /**
+     * Retire a different page model before the debounced replacement starts.
+     * Matching layout notifications keep both ready anchors and in-flight cache
+     * validation. An uninitialized state has no old model to retire.
+     */
+    public boolean invalidateIfSignatureChanged(@NonNull String currentSignature) {
+        synchronized (lock) {
+            if (signature.isEmpty() || currentSignature.equals(signature)) return false;
+            generation.incrementAndGet();
+            anchors = new ArrayList<>();
+            ready = false;
+            building = false;
+            checkingCache = false;
+            failed = false;
+            failure = "";
+            signature = currentSignature;
+            return true;
         }
     }
 
@@ -42,6 +70,7 @@ public final class LargeTextExactPageIndexState {
             ready = false;
             anchors = new ArrayList<>();
             building = true;
+            checkingCache = true;
             failed = false;
             failure = "";
             signature = nextSignature;
@@ -51,6 +80,21 @@ public final class LargeTextExactPageIndexState {
 
     public boolean isGenerationCurrent(int expectedGeneration) {
         return expectedGeneration == generation.get();
+    }
+
+    public boolean isCheckingCache() {
+        synchronized (lock) {
+            return checkingCache && !ready && !failed;
+        }
+    }
+
+    /** Only the current worker may turn cache validation into a genuine recount. */
+    public boolean beginCalculation(int expectedGeneration, @NonNull String expectedSignature) {
+        synchronized (lock) {
+            if (!building || expectedGeneration != generation.get() || !expectedSignature.equals(signature)) return false;
+            checkingCache = false;
+            return true;
+        }
     }
 
     public boolean isCurrent(int expectedGeneration, @NonNull String expectedSignature) {
@@ -64,6 +108,7 @@ public final class LargeTextExactPageIndexState {
             if (expectedGeneration != generation.get() || !expectedSignature.equals(signature)) return;
             building = false;
             ready = false;
+            checkingCache = false;
             anchors = new ArrayList<>();
             failed = false;
             failure = "";
@@ -81,6 +126,7 @@ public final class LargeTextExactPageIndexState {
                 return new CommitResult(false, false, 0);
             }
             building = false;
+            checkingCache = false;
             if (builtAnchors == null || builtAnchors.isEmpty()) {
                 ready = false;
                 anchors = new ArrayList<>();
@@ -123,12 +169,64 @@ public final class LargeTextExactPageIndexState {
         }
     }
 
+    public int findPageForChar(int position) {
+        synchronized (lock) {
+            return LargeTextAnchorMath.findExactPageForChar(anchors, position);
+        }
+    }
+
+    /** Read-only lookup: no anchor copy, no guessed page from a previous layout. */
+    public int[] pageForCharIfUsable(@NonNull String currentSignature, int position) {
+        synchronized (lock) {
+            if (currentSignature.isEmpty() || !ready || anchors.isEmpty()
+                    || !currentSignature.equals(signature)) return new int[] { 0, 0 };
+            return new int[] { LargeTextAnchorMath.findExactPageForChar(anchors, position), anchors.size() };
+        }
+    }
+
+    @Nullable public CustomReaderView.PageTextAnchor anchorForPage(int page) {
+        synchronized (lock) {
+            if (anchors.isEmpty()) return null;
+            return anchors.get(Math.max(0, Math.min(anchors.size() - 1, page - 1)));
+        }
+    }
+
     @Nullable
     public ArrayList<CustomReaderView.PageTextAnchor> copyAnchorsIfUsable(@NonNull String currentSignature) {
         if (currentSignature.isEmpty()) return null;
         synchronized (lock) {
             if (!ready || anchors.isEmpty() || !currentSignature.equals(signature)) return null;
             return new ArrayList<>(anchors);
+        }
+    }
+
+    /** Select one destination under the lock instead of copying every page per tap. */
+    @Nullable
+    public TapTarget tapTargetIfUsable(@NonNull String currentSignature, int currentAbs, int direction) {
+        synchronized (lock) {
+            if (currentSignature.isEmpty() || !ready || anchors.isEmpty()
+                    || !currentSignature.equals(signature)) return null;
+            int index = LargeTextAnchorMath.findTapTargetAnchorIndex(anchors, currentAbs, direction);
+            if (index < 0) return new TapTarget(0, anchors.size(), null);
+            // Keep the existing queued-delta arithmetic and final-page behavior.
+            if (Math.abs(direction) > 1) {
+                int extraSteps = Math.abs(direction) - 1;
+                index += direction > 0 ? extraSteps : -extraSteps;
+                index = Math.max(0, Math.min(anchors.size() - 1, index));
+            }
+            return new TapTarget(index + 1, anchors.size(), anchors.get(index));
+        }
+    }
+
+    public static final class TapTarget {
+        public final int page;
+        public final int total;
+        @Nullable public final CustomReaderView.PageTextAnchor anchor;
+
+        private TapTarget(int page, int total, @Nullable CustomReaderView.PageTextAnchor anchor) {
+            this.page = page;
+            this.total = total;
+            this.anchor = anchor;
         }
     }
 

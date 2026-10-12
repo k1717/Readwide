@@ -6,56 +6,53 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 /**
- * Covers the predicate that decides whether the large-TXT save path replaces
- * the current char position and anchors with the pending page's exact anchor.
- * The bug it guards: during a partition switch the persisted page number is the
- * pending page, so the persisted position/anchors must come from that same page
- * or a mid-switch pause saves an inconsistent state.
+ * Pending character ownership is independent of whether page numbers are still
+ * estimated or an exact index has become ready during the partition read.
  */
 public class ReaderSaveAnchorMathTest {
 
     @Test
-    public void usesPendingAnchorWhenSwitchingWithReadyIndexAndAnchor() {
-        assertTrue(ReaderSaveAnchorMath.shouldUsePendingPageAnchor(
-                true,  // largeTextActive
-                true,  // partitionSwitchInProgress
-                true,  // exactPageIndexReady
-                7,     // pendingDisplayPage
-                true)); // pendingAnchorAvailable
+    public void usesOwnedDestinationRegardlessOfPageIndexReadiness() {
+        // The contract has no index-readiness input: the original character is
+        // authoritative both before and after a page-index result arrives.
+        assertTrue(ReaderSaveAnchorMath.shouldUsePendingTarget(
+                true, true, false, 120));
+        assertTrue(ReaderSaveAnchorMath.shouldUsePendingTarget(
+                true, true, false, Integer.MAX_VALUE));
+    }
+
+    @Test
+    public void acceptsStartOfFileAsARealDestination() {
+        assertTrue(ReaderSaveAnchorMath.shouldUsePendingTarget(
+                true, true, false, 0));
     }
 
     @Test
     public void keepsCurrentPositionWhenNotSwitching() {
         // The common, non-switch save must be untouched.
-        assertFalse(ReaderSaveAnchorMath.shouldUsePendingPageAnchor(
-                true, false, true, 3, true));
+        assertFalse(ReaderSaveAnchorMath.shouldUsePendingTarget(
+                true, false, false, 120));
     }
 
     @Test
-    public void keepsCurrentPositionWhenExactIndexNotReady() {
-        // Without the exact index there is no correct char position for the
-        // pending page, so we must not override (and must not crash).
-        assertFalse(ReaderSaveAnchorMath.shouldUsePendingPageAnchor(
-                true, true, false, 7, true));
+    public void automaticHandoffKeepsVisiblePosition() {
+        assertFalse(ReaderSaveAnchorMath.shouldUsePendingTarget(
+                true, true, true, 120));
+        assertFalse(ReaderSaveAnchorMath.shouldUsePendingTarget(
+                true, true, true, 0));
     }
 
     @Test
-    public void keepsCurrentPositionWhenNoPendingPage() {
-        assertFalse(ReaderSaveAnchorMath.shouldUsePendingPageAnchor(
-                true, true, true, 0, true));
-        assertFalse(ReaderSaveAnchorMath.shouldUsePendingPageAnchor(
-                true, true, true, -1, true));
-    }
-
-    @Test
-    public void keepsCurrentPositionWhenAnchorMissing() {
-        assertFalse(ReaderSaveAnchorMath.shouldUsePendingPageAnchor(
-                true, true, true, 7, false));
+    public void keepsCurrentPositionWhenDestinationIsUnavailable() {
+        assertFalse(ReaderSaveAnchorMath.shouldUsePendingTarget(
+                true, true, false, -1));
+        assertFalse(ReaderSaveAnchorMath.shouldUsePendingTarget(
+                true, true, false, Integer.MIN_VALUE));
     }
 
     @Test
     public void keepsCurrentPositionWhenNotLargeText() {
-        assertFalse(ReaderSaveAnchorMath.shouldUsePendingPageAnchor(
-                false, true, true, 7, true));
+        assertFalse(ReaderSaveAnchorMath.shouldUsePendingTarget(
+                false, true, false, 120));
     }
 }

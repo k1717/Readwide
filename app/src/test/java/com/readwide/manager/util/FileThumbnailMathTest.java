@@ -7,6 +7,26 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class FileThumbnailMathTest {
+    @Test public void coverEligibilityDoesNotRejectLargeOrUnknownEntries() {
+        for (long size : new long[] {-1, 1, 129L * 1024 * 1024, Long.MAX_VALUE}) {
+            assertTrue(FileThumbnailMath.hasPossibleImageData(size));
+        }
+        assertFalse(FileThumbnailMath.hasPossibleImageData(0));
+        assertFalse(FileThumbnailMath.hasPossibleImageData(-2));
+    }
+
+    @Test public void splitCoverSuffixesAreExactAndCaseInsensitive() {
+        for (String name : new String[] {"a.ZIP.001", "a.ZipX.001", "a.7Z.001", "a.CB7.001"}) {
+            assertTrue(FileThumbnailMath.isThumbnailArchiveName(name));
+            assertTrue(FileThumbnailMath.isThumbnailCandidateName(name));
+        }
+        for (String name : new String[] {"a.zip.002", "a.zip.001.tmp", "a.zip.0001",
+                "a.rar.001", "a.cbz.001", "a.zipx001", "a.001", "", null}) {
+            assertFalse(FileThumbnailMath.isThumbnailArchiveName(name));
+            assertFalse(FileThumbnailMath.isThumbnailCandidateName(name));
+        }
+    }
+
     @Test public void choosesAlphabeticallyFirstImage() {
         assertEquals(2, FileThumbnailMath.firstImageIndex(
                 new String[] {"notes.txt", "002.PNG", "001.jpg"}));

@@ -3,6 +3,8 @@ package com.readwide.manager.util;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import com.readwide.manager.model.LargeTextLinePartitionResult;
@@ -12,6 +14,36 @@ import org.junit.Test;
 import java.util.ArrayList;
 
 public class LargeTextContinuityRegressionTest {
+    @Test
+    public void backwardHandoff_movesBeforeTheWindowIncludingLookbehind() {
+        // One character plus a separator per logical line: window 3601, body 4001.
+        int base = 3600 * 2;
+        int target = LargeTextContinuityMath.backwardHandoffTargetAbs(base);
+        assertEquals(7199, target);
+        assertTrue(target < base);
+        assertEquals(0, LargeTextContinuityMath.backwardHandoffTargetAbs(0));
+        assertEquals(0, LargeTextContinuityMath.backwardHandoffTargetAbs(-1));
+    }
+
+    @Test
+    public void loadedCharLookup_preservesLogicalLineAndSeparatorOwnership() {
+        String text = "a\nb\nc\nd";
+        assertEquals(1, LargeTextContinuityMath.partitionStartLineForLoadedChar(text, 100, 3999, 103, 4000, 4));
+        assertEquals(4001, LargeTextContinuityMath.partitionStartLineForLoadedChar(text, 100, 3999, 104, 4000, 4));
+        assertEquals(-1, LargeTextContinuityMath.partitionStartLineForLoadedChar(text, 100, 3999, 99, 4000, 4));
+        assertEquals(-1, LargeTextContinuityMath.partitionStartLineForLoadedChar(text, 100, 3999, 107, 4000, 4));
+    }
+
+    @Test
+    public void loadedCharLookup_doesNotGuessThroughDisplayRuleLineBreaks() {
+        // Three emitted logical lines, but the first display rule adds a newline.
+        assertEquals(-1, LargeTextContinuityMath.partitionStartLineForLoadedChar(
+                "a\ninserted\nb\nc", 100, 3999, 113, 4000, 3));
+        assertEquals(4001, LargeTextContinuityMath.partitionStartLineForLoadedChar(
+                "a\n\nc", 100, 3999, 103, 4000, 3));
+        assertEquals(-1, LargeTextContinuityMath.partitionStartLineForLoadedChar(null, 0, 1, 0, 4000, 1));
+    }
+
     @Test
     public void canonicalPartitionStart_usesFixedLineWindows() {
         assertEquals(1, LargeTextContinuityMath.partitionStartLineForLine(-10, 4000));
@@ -153,13 +185,13 @@ public class LargeTextContinuityRegressionTest {
         LargeTextLinePartitionResult handoff = new LargeTextLinePartitionResult(
                 repeated('b', 140), 140, 101, 200, 200, 80, 20, 120, 81, true, 220);
 
-        assertTrue(cache.markNormalPrefetchPending(1, 100));
-        assertFalse(cache.markNormalPrefetchPending(1, 100));
+        assertNotNull(cache.acquirePrefetch(1, 100, false, 1));
+        assertNull(cache.acquirePrefetch(1, 100, false, 1));
         cache.cache(normal);
-        assertFalse(cache.markNormalPrefetchPending(1, 100));
+        assertNull(cache.acquirePrefetch(1, 100, false, 1));
         assertEquals(normal, cache.getNormalByStartLine(99, 100));
 
-        assertTrue(cache.markManualHandoffPrefetchPending(101, 100));
+        assertNotNull(cache.acquirePrefetch(101, 100, true, 1));
         cache.cache(handoff);
         assertEquals(handoff, cache.getManualHandoffByStartLine(101, 100));
 
@@ -179,6 +211,49 @@ public class LargeTextContinuityRegressionTest {
         lines.add("");
         lines.add("fourth");
         assertEquals("first\nsecond\n\nfourth", LargeTextPartitionReader.joinWindow(lines));
+    }
+
+    @Test
+    public void highCoordinateWindow_doesNotWrapItsBodyOrLookahead() {
+        LargeTextContinuityMath.PartitionWindow window =
+                LargeTextContinuityMath.partitionWindowForStartLine(
+                        Integer.MAX_VALUE, Integer.MAX_VALUE, 4000, 400, 400, true);
+        assertEquals(2147480001, window.startLine);
+        assertEquals(Integer.MAX_VALUE, window.bodyEndLine);
+        assertEquals(Integer.MAX_VALUE, window.captureEndLine);
+        assertEquals(2147479601, window.windowStartLine);
+        LargeTextContinuityMath.PartitionWindow wide =
+                LargeTextContinuityMath.partitionWindowForStartLine(
+                        1, Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE, 0, false);
+        assertEquals(Integer.MAX_VALUE, wide.bodyEndLine);
+        assertEquals(Integer.MAX_VALUE, wide.captureEndLine);
+    }
+
+    @Test
+    public void highCoordinateHandoff_neverWrapsBackToDocumentStart() {
+        assertEquals(Integer.MAX_VALUE,
+                LargeTextContinuityMath.forwardHandoffTargetAbs(Integer.MAX_VALUE - 2, 2, 2));
+        assertEquals(Integer.MAX_VALUE,
+                LargeTextContinuityMath.forwardHandoffTargetAbs(Integer.MAX_VALUE - 2, 4, 1));
+        assertFalse(LargeTextContinuityMath.isAbsoluteCharInsideCurrentBody(
+                Integer.MIN_VALUE, Integer.MAX_VALUE, 10, 0, 10));
+        assertEquals(0, LargeTextContinuityMath.clampAbsolutePositionToKnownText(50, Integer.MIN_VALUE));
+    }
+
+    @Test
+    public void highLogicalLineLookup_rejectsAnUnrepresentableInferredLine() {
+        assertEquals(Integer.MAX_VALUE, LargeTextContinuityMath.partitionStartLineForLoadedChar(
+                "a\nb", 0, Integer.MAX_VALUE, 0, 1, 2));
+        assertEquals(-1, LargeTextContinuityMath.partitionStartLineForLoadedChar(
+                "a\nb", 0, Integer.MAX_VALUE, 2, 1, 2));
+    }
+
+    @Test
+    public void highCoordinateEstimates_keepLastPageAndLineAtTheEnd() {
+        assertEquals(Integer.MAX_VALUE, LargeTextContinuityMath.estimateDisplayedPageForLine(
+                Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE));
+        assertEquals(Integer.MAX_VALUE, LargeTextContinuityMath.targetLineForEstimatedPage(
+                Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE));
     }
 
     private static String repeated(char value, int count) {

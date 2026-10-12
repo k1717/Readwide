@@ -3,6 +3,8 @@ package com.readwide.manager.archive;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.readwide.manager.util.FileTreeWalk;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.UUID;
@@ -32,8 +34,11 @@ final class RarOutputFileGuard implements AutoCloseable {
     static RarOutputFileGuard forTarget(@NonNull File outFile) throws IOException {
         ensureParentDirectory(outFile);
         File backup = null, directory = null;
-        if (outFile.exists()) {
-            if (!outFile.isFile()) throw new IOException("Extraction output target is not a file: " + outFile.getName());
+        FileTreeWalk.Kind kind = FileTreeWalk.kind(outFile);
+        if (kind != FileTreeWalk.Kind.MISSING) {
+            // exists()/isFile() follow links. In particular, a dangling link can
+            // look absent and redirect the subsequent output write elsewhere.
+            if (kind != FileTreeWalk.Kind.FILE) throw new IOException("Extraction output target is not a regular file: " + outFile.getName());
             // mkdir atomically reserves a namespace; exists()+rename to an
             // unreserved random filename can overwrite another caller's file.
             // A fixed short name also works for nearly NAME_MAX-sized targets.
@@ -72,7 +77,7 @@ final class RarOutputFileGuard implements AutoCloseable {
             rollbackStarted = true;
             // Missing recovery data is an error. Do not delete the current file
             // and falsely report restoration when the backup disappeared.
-            if (backupFile != null && !backupFile.isFile()) {
+            if (backupFile != null && FileTreeWalk.kind(backupFile) != FileTreeWalk.Kind.FILE) {
                 throw new IOException("Extraction backup is unavailable: " + backupFile);
             }
             deletePartial(outFile);
@@ -89,7 +94,7 @@ final class RarOutputFileGuard implements AutoCloseable {
 
     static void deletePartial(@NonNull File outFile) throws IOException {
         try {
-            if (!outFile.exists()) return;
+            if (FileTreeWalk.kind(outFile) == FileTreeWalk.Kind.MISSING) return;
             if (outFile.delete()) return;
             throw new IOException("Failed to remove extraction temporary output: " + outFile);
         } catch (SecurityException denied) {
@@ -100,7 +105,12 @@ final class RarOutputFileGuard implements AutoCloseable {
     static void ensureParentDirectory(@NonNull File outFile) throws IOException {
         File parent = outFile.getParentFile();
         if (parent == null) throw new IOException("Output file has no parent");
-        if (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
+        ensureDirectory(parent);
+    }
+
+    /** Existence alone is not sufficient: a file must never satisfy a directory entry. */
+    static void ensureDirectory(@NonNull File directory) throws IOException {
+        if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory()) {
             throw new IOException("Cannot create output directory");
         }
     }

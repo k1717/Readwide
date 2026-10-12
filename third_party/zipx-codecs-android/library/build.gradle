@@ -5,43 +5,48 @@ plugins {
 def readwideExternalBuildDir = System.getenv('READWIDE_APP_BUILD_DIR')
 def nativeStagingDir = readwideExternalBuildDir == null || readwideExternalBuildDir.trim().isEmpty()
         ? layout.buildDirectory.dir('.cxx').get().asFile
-        : file("${readwideExternalBuildDir}/native-staging/zipxCodecsAndroid")
+        : file("${readwideExternalBuildDir}/cxx/zipx")
 
 android {
-    namespace 'com.readwide.codecs'
-    compileSdk 35
-    ndkVersion '29.0.14206865'
+    namespace = 'com.readwide.codecs'
+    compileSdk = 35
+    ndkVersion = '29.0.14206865'
 
     defaultConfig {
-        minSdk 24
-        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        minSdk = 24
+        testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
         consumerProguardFiles 'proguard-rules.pro'
         ndk {
             abiFilters 'armeabi-v7a', 'arm64-v8a'
         }
         externalNativeBuild {
             cmake {
-                arguments '-DANDROID_STL=none'
+                // LZHAM is C++; keep its runtime private to its JNI library.
+                arguments '-DANDROID_STL=c++_static'
             }
         }
     }
 
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled = false
         }
     }
 
+    // Reuse attributed archive fixtures in the instrumentation APK only.
+    sourceSets.androidTest.assets.srcDir '../../../app/src/test/resources/archives/cab-multipart'
+    sourceSets.androidTest.assets.srcDir '../../../app/src/test/resources/archives/zip-ppmdi'
+
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     externalNativeBuild {
         cmake {
-            path file('CMakeLists.txt')
-            version '3.22.1'
-            buildStagingDirectory nativeStagingDir
+            path = file('CMakeLists.txt')
+            version = '3.22.1'
+            buildStagingDirectory = nativeStagingDir
         }
     }
 }

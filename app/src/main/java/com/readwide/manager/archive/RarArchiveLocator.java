@@ -31,8 +31,10 @@ final class RarArchiveLocator {
     }
 
     static int detectRarVersion(@NonNull File archive) throws IOException {
+        ArchiveCancellation.checkpoint(null);
         List<File> volumes = collectVolumes(archive);
         for (File volume : volumes) {
+            ArchiveCancellation.checkpoint(null);
             try (RandomAccessFile raf = new RandomAccessFile(volume, "r")) {
                 Signature signature = findSignature(raf);
                 if (signature != null) return signature.version;
@@ -42,6 +44,7 @@ final class RarArchiveLocator {
     }
 
     static long findEmbeddedRarSignatureOffset(@NonNull File archive) throws IOException {
+        ArchiveCancellation.checkpoint(null);
         try (RandomAccessFile raf = new RandomAccessFile(archive, "r")) {
             Signature signature = findSignature(raf);
             return signature == null ? -1L : signature.offset;
@@ -50,10 +53,24 @@ final class RarArchiveLocator {
 
     @Nullable
     static Signature findSignature(@NonNull RandomAccessFile raf) throws IOException {
+        ArchiveCancellation.checkpoint(null);
         raf.seek(0L);
         int scanLimit = (int) Math.min(Math.max(raf.length(), 0L), MAX_SFX_SCAN + RAR5_SIGNATURE.length);
+        byte[] prefix = new byte[Math.min(scanLimit, RAR5_SIGNATURE.length)];
+        raf.readFully(prefix);
+        Signature signature = findSignature(prefix);
+        if (signature != null || scanLimit == prefix.length) return signature;
+        // Ordinary RARs finish at the small probe. Only SFX/unknown prefixes
+        // need the existing bounded search, with the same earliest-match policy.
         byte[] data = new byte[scanLimit];
-        raf.readFully(data);
+        System.arraycopy(prefix, 0, data, 0, prefix.length);
+        raf.readFully(data, prefix.length, data.length - prefix.length);
+        return findSignature(data);
+    }
+
+    @Nullable
+    private static Signature findSignature(@NonNull byte[] data) throws IOException {
+        ArchiveCancellation.checkpoint(null);
         int rar5 = indexOf(data, RAR5_SIGNATURE);
         int rar4 = indexOf(data, RAR4_SIGNATURE);
         if (rar5 < 0 && rar4 < 0) return null;
@@ -76,10 +93,11 @@ final class RarArchiveLocator {
         return RarVolumeChainResolution.resolve(archive);
     }
 
-    private static int indexOf(@NonNull byte[] haystack, @NonNull byte[] needle) {
+    private static int indexOf(@NonNull byte[] haystack, @NonNull byte[] needle) throws IOException {
         if (needle.length == 0 || haystack.length < needle.length) return -1;
         outer:
         for (int i = 0; i <= haystack.length - needle.length; i++) {
+            if ((i & 4095) == 0) ArchiveCancellation.checkpoint(null);
             for (int j = 0; j < needle.length; j++) {
                 if (haystack[i + j] != needle[j]) continue outer;
             }

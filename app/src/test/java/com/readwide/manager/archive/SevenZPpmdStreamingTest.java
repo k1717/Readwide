@@ -12,6 +12,22 @@ import static org.junit.Assert.*;
 
 /** Streaming checks reuse the independently generated plain fixture and its pinned digest. */
 public class SevenZPpmdStreamingTest {
+    @Test public void modelPropertiesAbove256MiBAreAcceptedWithoutAllocation() throws Exception {
+        assertArrayEquals(new int[] {6, 512 * 1024 * 1024},
+                SevenZPpmd7Decoder.validateProperties(new byte[] {6, 0, 0, 0, 32}));
+        // Largest aligned model leaving room for alignment and the 12-byte sentinel.
+        assertArrayEquals(new int[] {6, 0x7fffffec},
+                SevenZPpmd7Decoder.validateProperties(new byte[] {6, (byte) 0xec, -1, -1, 127}));
+    }
+
+    @Test public void modelPropertiesRejectArrayOverflowIncludingSentinel() {
+        for (byte[] properties : new byte[][] {
+                {6, (byte) 0xf0, -1, -1, 127}, {6, 0, 0, 0, (byte) 128}, {6, -1, -1, -1, -1},
+                {6, 0, 0, 0, 0}}) {
+            assertThrows(IOException.class, () -> SevenZPpmd7Decoder.validateProperties(properties));
+        }
+    }
+
     private static final byte[] PROPERTIES = {6, 0, 0, 1, 0}; // Order 6, 64 KiB model.
     private static final int OUTPUT_SIZE = 31600;
 
@@ -137,13 +153,74 @@ public class SevenZPpmdStreamingTest {
         assertEquals(0, packed.reads);
     }
 
-    @Test public void zeroOutputDoesNotCreateModelOrReadInput() throws Exception {
-        TrackingInput packed = new TrackingInput(new byte[0]);
-        try (InputStream decoded = SevenZPpmd7Decoder.decodeStream(packed, PROPERTIES, 0)) {
-            assertEquals(-1, decoded.read());
+    @Test public void zeroOutputValidatesInitializerOnceWithoutCreatingModel() throws Exception {
+        TrackingInput packed = new TrackingInput(new byte[5]);
+        // Even a model above the old 256 MiB policy cap is not allocated for empty output.
+        byte[] properties = {6, 0, 0, 0, 32};
+        try (InputStream decoded = SevenZPpmd7Decoder.decodeStream(packed, properties, 0)) {
             assertEquals(0, packed.reads);
+            assertEquals(0, decoded.read(new byte[1], 0, 0));
+            assertEquals(-1, decoded.read());
+            assertEquals(-1, decoded.read());
+            assertEquals(5, packed.reads);
+            java.lang.reflect.Field model = decoded.getClass().getDeclaredField("decoder");
+            model.setAccessible(true);
+            assertNull(model.get(decoded));
         }
         assertEquals(1, packed.closes);
+    }
+
+    @Test public void emptyArrayConvenienceStillRequiresFinishedInitializer() throws Exception {
+        assertArrayEquals(new byte[0], SevenZPpmd7Decoder.decode(new byte[5], PROPERTIES, 0));
+        for (int size = 0; size < 5; size++) {
+            final byte[] truncated = new byte[size];
+            assertThrows(java.io.EOFException.class,
+                    () -> SevenZPpmd7Decoder.decode(truncated, PROPERTIES, 0));
+        }
+        assertThrows(IOException.class, () -> SevenZPpmd7Decoder.decode(
+                new byte[] {1, 0, 0, 0, 0}, PROPERTIES, 0));
+        assertThrows(IOException.class, () -> SevenZPpmd7Decoder.decode(
+                new byte[] {0, 0, 0, 0, 1}, PROPERTIES, 0));
+    }
+
+    @Test public void unfinishedRangeIsRejectedOnLastReadWithoutRequiringEofRead() throws Exception {
+        // Initial root has 257 frequency units. Both streams decode symbol 0;
+        // only the first has a zero range code after the normalization byte.
+        assertArrayEquals(new byte[] {0}, SevenZPpmd7Decoder.decode(new byte[6], PROPERTIES, 1));
+        TrackingInput packed = new TrackingInput(new byte[] {0, 0, 0, 0, 1, 0});
+        try (InputStream decoded = SevenZPpmd7Decoder.decodeStream(packed, PROPERTIES, 1)) {
+            IOException failure = assertThrows(IOException.class, () -> decoded.read(new byte[1]));
+            assertTrue(failure.getMessage().contains("did not finish"));
+            assertSame(failure, assertThrows(IOException.class, () -> decoded.read()));
+            assertEquals(1, packed.closes);
+        }
+        assertEquals(1, packed.closes);
+    }
+
+    @Test public void unfinishedEmptyRangePreservesFailureWhenCleanupThrows() throws Exception {
+        RuntimeException cleanup = new IllegalStateException("injected close failure");
+        InputStream packed = new ByteArrayInputStream(new byte[] {0, 0, 0, 0, 1}) {
+            @Override public void close() { throw cleanup; }
+        };
+        try (InputStream decoded = SevenZPpmd7Decoder.decodeStream(packed, PROPERTIES, 0)) {
+            IOException failure = assertThrows(IOException.class, () -> decoded.read());
+            assertTrue(failure.getMessage().contains("did not finish"));
+            assertArrayEquals(new Throwable[] {cleanup}, failure.getSuppressed());
+            assertSame(failure, assertThrows(IOException.class, () -> decoded.read()));
+        }
+    }
+
+    @Test public void cancellationBeforeEmptyInitializerDoesNotConsumeInput() throws Exception {
+        TrackingInput packed = new TrackingInput(new byte[5]);
+        try (InputStream decoded = SevenZPpmd7Decoder.decodeStream(packed, PROPERTIES, 0)) {
+            Thread.currentThread().interrupt();
+            try {
+                IOException failure = assertThrows(IOException.class, () -> decoded.read());
+                assertTrue(failure.getMessage().contains("cancelled"));
+            } finally { Thread.interrupted(); }
+            assertEquals(0, packed.reads);
+            assertEquals(1, packed.closes);
+        }
     }
 
     @Test public void invalidPropertiesLeaveInputOwnershipWithCaller() throws Exception {

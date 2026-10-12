@@ -11,6 +11,13 @@ import java.io.IOException;
 import java.util.zip.CRC32;
 
 public class RarFilteredOutputBufferTest {
+    @Test public void defaultScaffoldAcceptsRangeAboveOld64MiBQuotaWithoutAllocation() throws Exception {
+        RarFilteredOutputBuffer buffer = new RarFilteredOutputBuffer(new ByteArrayOutputStream());
+        buffer.queueFilter(new RarVmQueuedFilter(0, 65 * 1024 * 1024, RarVmFilter.StandardFilter.E8, 0));
+        assertEquals(0, buffer.pendingByteCount());
+        assertEquals(Integer.MAX_VALUE, RarFilteredOutputBuffer.DEFAULT_MAX_DELAYED_BYTES);
+    }
+
     @Test
     public void unfilteredOutputIsByteIdentical() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();

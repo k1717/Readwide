@@ -215,15 +215,35 @@ public final class ImageDecodeHelper {
         int reqH = Math.max(
                 context.getResources().getDisplayMetrics().heightPixels * safeDisplayScale,
                 1);
-        Drawable drawable = ImageDecoder.decodeDrawable(source, (decoder, info, imageSource) -> {
-            int sample = calculateInSampleSize(info.getSize().getWidth(), info.getSize().getHeight(), reqW, reqH);
-            sample = Math.max(sample, calculateSampleForPixelCap(info.getSize().getWidth(), info.getSize().getHeight(), pixelCap));
-            if (sample > 1) decoder.setTargetSampleSize(sample);
-        });
+        Drawable drawable = decodeWithMemoryRetry(retryScale ->
+                ImageDecoder.decodeDrawable(source, (decoder, info, imageSource) -> {
+                    int sample = calculateInSampleSize(info.getSize().getWidth(), info.getSize().getHeight(), reqW, reqH);
+                    sample = Math.max(sample, calculateSampleForPixelCap(info.getSize().getWidth(), info.getSize().getHeight(), pixelCap));
+                    sample = (int) Math.min(Integer.MAX_VALUE, (long) sample * retryScale);
+                    if (sample > 1) decoder.setTargetSampleSize(sample);
+                }));
         if (drawable instanceof AnimatedImageDrawable) {
             ((AnimatedImageDrawable) drawable).setRepeatCount(AnimatedImageDrawable.REPEAT_INFINITE);
         }
         return drawable;
+    }
+
+    interface MemoryDecodeAttempt<T> {
+        T decode(int retryScale) throws Exception;
+    }
+
+    /** Shared by GIF/WebP foreground, detail and warm-up; never swallow unrelated errors. */
+    @Nullable
+    static <T> T decodeWithMemoryRetry(MemoryDecodeAttempt<T> attempt) throws Exception {
+        for (int scale = 1; scale <= 128; scale *= 2) {
+            if (Thread.currentThread().isInterrupted()) return null;
+            try {
+                return attempt.decode(scale);
+            } catch (OutOfMemoryError exhausted) {
+                // Retry at a smaller allocation, including static WebP images.
+            }
+        }
+        return null;
     }
 
     @Nullable
@@ -249,6 +269,7 @@ public final class ImageDecodeHelper {
                                                     long directOriginalPixels,
                                                     long maxBitmapPixels,
                                                     boolean useDisplayTarget) throws Exception {
+        if (Thread.currentThread().isInterrupted()) return null;
         int reqW = Math.max(context.getResources().getDisplayMetrics().widthPixels * displayScale, 1);
         int reqH = Math.max(context.getResources().getDisplayMetrics().heightPixels * displayScale, 1);
         BitmapFactory.Options bounds = new BitmapFactory.Options();
@@ -282,6 +303,7 @@ public final class ImageDecodeHelper {
                                                                int initialSample) throws Exception {
         int sample = Math.max(1, initialSample);
         while (sample <= 128) {
+            if (Thread.currentThread().isInterrupted()) return null;
             try {
                 BitmapFactory.Options opts = new BitmapFactory.Options();
                 opts.inSampleSize = sample;

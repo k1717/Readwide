@@ -8,6 +8,148 @@ import org.junit.Test;
 import java.util.Arrays;
 
 public class FixedHtmlRendererSmokeTest {
+    @Test public void scriptsConsumeCommandsGroupsSpacesAndFullUnicodeCharacters() {
+        String html = mathHtml(RenderedRun.text("$x_\\alpha + y^ \\beta + H_{2}O + z^\\frac{1}{2} + a^\uD835\uDC65$"));
+        assertTrue(html.contains("x<sub>\u03b1</sub>"));
+        assertTrue(html.contains("y<sup>\u03b2</sup>"));
+        assertTrue(html.contains("H<sub>2</sub>O"));
+        assertTrue(html.contains("z<sup><span class=\"frac\">"));
+        assertTrue(html.contains("a<sup>\uD835\uDC65</sup>"));
+        assertFalse(html.contains("<sub></sub>"));
+    }
+
+    @Test public void explicitBracketMathAndInlineFractionsShareLayoutStyles() {
+        String html = mathHtml(RenderedRun.text("\\(\\frac {x_1} {y^2}\\) and \\[E=mc^2\\]"));
+        assertTrue(html.contains("<span class=\"rw-inline-math\"><span class=\"frac\">"));
+        assertTrue(html.contains("<span class=\"rw-display-math\">E=mc<sup>2</sup>"));
+        assertTrue(html.contains(".rw-inline-math .frac,.rw-display-math .frac{display:inline-flex;"));
+    }
+
+    @Test public void escapedMarkersAreNotInterpretedAsScriptsOrDelimiters() {
+        String html = mathHtml(RenderedRun.text("literal \\$5; $a\\_b + c\\^d + \\{x\\} + \\$5$"));
+        assertTrue(html.contains("literal \\$5; "));
+        assertTrue(html.contains("a_b + c^d + {x} + $5"));
+        assertFalse(html.contains("<sub>"));
+        assertFalse(html.contains("<sup>"));
+    }
+
+    @Test public void unsupportedMalformedAndPlainNotationRemainLiteralAndHtmlSafe() {
+        String html = mathHtml(RenderedRun.text("file_name x^2 $\\unknown{x_1}$ $x_{2$ $x^$ <script> $x_1$"));
+        assertTrue(html.contains("file_name x^2 $\\unknown{x_1}$ $x_{2$ $x^$ &lt;script&gt;"));
+        assertTrue(html.contains("x<sub>1</sub>"));
+        assertFalse(html.contains("<script>"));
+    }
+
+    @Test public void pairedCurrencyAndProseDoNotBecomeMath() {
+        String html = mathHtml(RenderedRun.text("Costs $5 and $10; $not math$; $x + y$"));
+        assertTrue(html.contains("Costs $5 and $10; $not math$;"));
+        assertTrue(html.contains("<span class=\"rw-inline-math\">x + y</span>"));
+    }
+
+    @Test public void splitFormulaKeepsSurroundingRunStylesAndNativeScripts() {
+        String html = mathHtml(RenderedRun.text("Bold prefix $x_", new TextStyle.Builder().bold(true).build()),
+                RenderedRun.text("{1}$"),
+                RenderedRun.text(" suffix", new TextStyle.Builder().italic(true).build()),
+                RenderedRun.text("2", new TextStyle.Builder().verticalAlign(TextStyle.VerticalAlign.SUPERSCRIPT).build()));
+        assertTrue(html.contains("<span style=\"font-weight:bold;\">Bold prefix </span>"));
+        assertTrue(html.contains("x<sub>1</sub>"));
+        assertTrue(html.contains("<span style=\"font-style:italic;\"> suffix</span>"));
+        assertTrue(html.contains("vertical-align:super;font-size:smaller;\">2</span>"));
+    }
+
+    @Test public void joiningMathNeverErasesNavigationOrAnchorMetadata() {
+        String html = mathHtml(RenderedRun.text("$x_"), RenderedRun.text("1$"),
+                RenderedRun.link("[1]", null, "#note", "ref"),
+                new RenderedRun("Anchor", TextStyle.plain(), 10, 16));
+        assertTrue(html.contains("x<sub>1</sub>"));
+        assertTrue(html.contains("id=\"ref\" href=\"#note\""));
+        assertTrue(html.contains("data-anchor-start=\"10\" data-anchor-end=\"16\""));
+    }
+
+    @Test public void deepFragmentsStayLiteralAndAuthoredScriptSizeUsesRunSize() {
+        StringBuilder deep = new StringBuilder("$");
+        for (int i = 0; i < 30; i++) deep.append("x^{");
+        deep.append('1');
+        for (int i = 0; i < 30; i++) deep.append('}');
+        deep.append('$');
+        String html = mathHtml(RenderedRun.text(deep.toString()), RenderedRun.text("2",
+                new TextStyle.Builder().fontSizePt(20f).verticalAlign(TextStyle.VerticalAlign.SUPERSCRIPT).build()));
+        assertTrue(html.contains(deep.toString()));
+        assertTrue(html.contains("vertical-align:super;font-size:14.40pt;font-size:calc(var(--rw-point,1pt) * 14.40);"));
+    }
+
+    private static String mathHtml(RenderedRun... runs) {
+        return FixedHtmlRenderer.render(RenderedDocument.builder("docx").addPage(RenderedPage.builder(0)
+                .addBlock(RenderedBlock.paragraph(new RenderedParagraph(null, Arrays.asList(runs)))).build()).build());
+    }
+
+    @Test public void authoredGeometryUsesOneScaleForBothAxesAndText() {
+        RenderedDocument doc = RenderedDocument.builder("docx").addPage(RenderedPage.builder(0)
+                .pageSizePt(600f, 800f).marginsPt(40f, 60f, 80f, 20f)
+                .addBlock(RenderedBlock.paragraph(RenderedParagraph.of(RenderedRun.text("Text",
+                        new TextStyle.Builder().fontSizePt(12f).build())))).build()).build();
+        String html = FixedHtmlRenderer.render(doc);
+        assertTrue(html.contains("--rw-point:calc(100vw / 600);"));
+        assertTrue(html.contains("--rw-page-min-height:calc(var(--rw-point) * 800);"));
+        assertTrue(html.contains("padding-top:calc(var(--rw-point,1pt) * 40);"));
+        assertTrue(html.contains("padding-left:calc(var(--rw-point,1pt) * 20);"));
+        assertTrue(html.contains("font-size:calc(var(--rw-point,1pt) * 12);"));
+        assertTrue(html.contains("min-height:var(--rw-page-min-height,100vh)"));
+        assertTrue(html.contains("object-fit:contain"));
+        assertFalse(html.contains("padding-top:clamp("));
+    }
+
+    @Test public void tableDimensionsAlignmentAndHeightReachCssWithoutClipping() {
+        RenderedTableCell cell = RenderedTableCell.builder().minHeightPt(80f)
+                .verticalAlignment(RenderedTableCell.VerticalAlignment.BOTTOM)
+                .addBlock(RenderedBlock.paragraph(RenderedParagraph.of(RenderedRun.text("Cell")))).build();
+        RenderedTable table = new RenderedTable(Arrays.asList(Arrays.asList(cell)), 100f, null,
+                240f, ParagraphStyle.Alignment.RIGHT, 20f);
+        String html = FixedHtmlRenderer.render(RenderedDocument.builder("docx")
+                .addPage(RenderedPage.builder(0).addBlock(RenderedBlock.table(table)).build()).build());
+        assertTrue(html.contains("width:calc(var(--rw-point,1pt) * 240);margin-left:auto;margin-right:0;"));
+        assertTrue(html.contains("height:calc(var(--rw-point,1pt) * 80);vertical-align:bottom;"));
+        assertFalse(html.contains("margin-left:20pt"));
+    }
+
+    @Test public void heuristicLetterDoesNotClaimAuthoredPaperGeometry() {
+        String html = FixedHtmlRenderer.render(RenderedDocument.builder("hwp-official-letter")
+                .addPage(RenderedPage.builder(0).build()).build());
+        assertFalse(html.contains("--rw-point:calc(100vw /"));
+        assertFalse(html.contains("--rw-page-min-height:calc("));
+    }
+
+    @Test public void tableParagraphSpacingAndLongListWrappingArePreserved() {
+        RenderedTable table = RenderedTable.ofRows(Arrays.asList(Arrays.asList(RenderedTableCell.text("column  one\tvalue"))));
+        RenderedDocument doc = RenderedDocument.builder("hwp").addPage(RenderedPage.builder(0)
+                .addBlock(RenderedBlock.table(table)).build()).build();
+        String html = FixedHtmlRenderer.render(doc);
+        assertTrue(html.contains("column  one"));
+        assertTrue(html.contains(".rw-table .rw-p{max-width:100%;white-space:pre-wrap;"));
+        assertTrue(html.contains(".rw-list-content{flex:1 1 auto;min-width:0;}"));
+    }
+
+    @Test public void explicitDefaultsRemainVisibleToStyleMerging() {
+        assertTrue(ParagraphStyle.normal().isDefault());
+        assertFalse(new ParagraphStyle.Builder().alignment(ParagraphStyle.Alignment.LEFT).build().isDefault());
+        assertTrue(TextStyle.plain().isEmpty());
+        assertFalse(new TextStyle.Builder().verticalAlign(TextStyle.VerticalAlign.BASELINE).build().isEmpty());
+        assertFalse(new TextStyle.Builder().highlightColor("none").build().isEmpty());
+    }
+
+    @Test public void clearedHighlightRevealsShadingAndLegacyParagraphSpacingReachesHtml() {
+        TextStyle style = new TextStyle.Builder().backgroundColor("#aabbcc").highlightColor("none").build();
+        RenderedDocument doc = RenderedDocument.builder("doc").addPage(RenderedPage.builder(0)
+                .addBlock(RenderedBlock.paragraph(new RenderedParagraph(new ParagraphStyle.Builder()
+                        .marginTopPt(12f).marginBottomPt(0f).build(), Arrays.asList(new RenderedRun("Body", style, 0, 4)))))
+                .build()).build();
+        String html = FixedHtmlRenderer.render(doc);
+        assertTrue(html.contains("margin-top:calc(var(--rw-point,1pt) * 12);"));
+        assertTrue(html.contains("margin-bottom:calc(var(--rw-point,1pt) * 0);"));
+        assertTrue(html.contains("background-color:#aabbcc;"));
+        assertFalse(html.contains("background-color:none;"));
+    }
+
     @Test
     public void rendersPageParagraphRunTableImageAndEscapesHtml() {
         TextStyle boldRed = new TextStyle.Builder()

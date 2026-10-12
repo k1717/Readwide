@@ -31,9 +31,66 @@ final class NormalizedSearchText {
     static NormalizedSearchText nfc(String text) {
         String normalized = Normalizer.normalize(text, Normalizer.Form.NFC);
         if (normalized.equals(text) || Thread.currentThread().isInterrupted()) return identity(text);
+        ArrayList<Segment> stack = new ArrayList<>();
+        int source = 0, comparison = 0;
+        while (source < text.length()) {
+            if (Thread.currentThread().isInterrupted()) return identity(text);
+            int asciiEnd = source;
+            while (asciiEnd < text.length() && text.charAt(asciiEnd) < 128) {
+                if ((asciiEnd & 1023) == 0 && Thread.currentThread().isInterrupted()) return identity(text);
+                asciiEnd++;
+            }
+            // Keep the last ASCII character with following non-ASCII text: e +
+            // acute composes forward. NFC never composes backward into ASCII.
+            // Never split non-ASCII runs (Hangul Jamo, reordered marks, etc.).
+            int plainEnd = asciiEnd == text.length() ? asciiEnd : Math.max(source, asciiEnd - 1);
+            if (plainEnd > source) {
+                addIdentity(stack, comparison, comparison + plainEnd - source, source, plainEnd);
+                comparison += plainEnd - source;
+                source = plainEnd;
+            }
+            if (source == text.length()) break;
+            int end = asciiEnd;
+            while (end < text.length() && text.charAt(end) >= 128) {
+                if ((end & 1023) == 0 && Thread.currentThread().isInterrupted()) return identity(text);
+                end++;
+            }
+            String run = text.substring(source, end);
+            String folded = Normalizer.normalize(run, Normalizer.Form.NFC);
+            int comparisonEnd = comparison + folded.length();
+            if (run.equals(folded)) {
+                addIdentity(stack, comparison, comparisonEnd, source, end);
+            } else if (!mapChangedSpan(text, normalized, source, end, comparison, comparisonEnd, stack)) {
+                return identity(text);
+            }
+            source = end;
+            comparison = comparisonEnd;
+        }
+        return new NormalizedSearchText(normalized, stack.toArray(new Segment[0]));
+    }
+
+    private static void addIdentity(ArrayList<Segment> stack, int start, int end, int sourceStart, int sourceEnd) {
+        if (!stack.isEmpty()) {
+            Segment previous = stack.get(stack.size() - 1);
+            if (previous.identity && previous.end == start && previous.sourceEnd == sourceStart) {
+                previous.end = end;
+                previous.sourceEnd = sourceEnd;
+                return;
+            }
+        }
+        Segment segment = new Segment(start, end, sourceStart, sourceEnd);
+        segment.identity = true;
+        stack.add(segment);
+    }
+
+    /** Per-code-point provenance is allocated only for changed runs. */
+    private static boolean mapChangedSpan(String text, String normalized,
+                                          int inputStart, int inputEnd, int outputStart, int outputEnd,
+                                          ArrayList<Segment> stack) {
         Map<Integer, Positions> origins = new HashMap<>();
-        for (int offset = 0; offset < text.length();) {
-            if ((offset & 1023) == 0 && Thread.currentThread().isInterrupted()) return identity(text);
+        int checks = 0;
+        for (int offset = inputStart; offset < inputEnd;) {
+            if ((checks++ & 1023) == 0 && Thread.currentThread().isInterrupted()) return false;
             int cp = text.codePointAt(offset);
             String decomposition = decompose(cp);
             for (int at = 0; at < decomposition.length();) {
@@ -43,9 +100,8 @@ final class NormalizedSearchText {
             }
             offset += Character.charCount(cp);
         }
-        ArrayList<Segment> stack = new ArrayList<>();
-        for (int offset = 0; offset < normalized.length();) {
-            if ((offset & 1023) == 0 && Thread.currentThread().isInterrupted()) return identity(text);
+        for (int offset = outputStart; offset < outputEnd;) {
+            if ((checks++ & 1023) == 0 && Thread.currentThread().isInterrupted()) return false;
             int cp = normalized.codePointAt(offset);
             String decomposition = decompose(cp);
             int sourceStart = text.length(), sourceEnd = 0;
@@ -83,7 +139,7 @@ final class NormalizedSearchText {
             stack.add(segment);
             offset += Character.charCount(cp);
         }
-        return new NormalizedSearchText(normalized, stack.toArray(new Segment[0]));
+        return true;
     }
 
     private static String decompose(int cp) {

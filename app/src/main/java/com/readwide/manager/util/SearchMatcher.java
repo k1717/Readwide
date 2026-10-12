@@ -92,11 +92,22 @@ public final class SearchMatcher {
 
     /** Finds the last match at or before {@code from}, or {@code null}. */
     public Match lastUpTo(String text, int from) {
-        if (text == null || text.isEmpty() || from < 0) return null;
-        int cap = Math.min(text.length() - 1, from);
+        return lastUpTo(text, from, text == null ? 0 : text.length());
+    }
+
+    /**
+     * Last match whose start is at most {@code from} and end is at most
+     * {@code maxEndExclusive}. Prepare and scan once, retaining full-text
+     * normalization, whole-word and regex context beyond the accepted boundary.
+     */
+    public Match lastUpTo(String text, int from, int maxEndExclusive) {
+        if (text == null || text.isEmpty() || from < 0 || maxEndExclusive <= 0) return null;
+        int endLimit = Math.min(text.length(), maxEndExclusive);
+        int cap = Math.min(endLimit - 1, from);
         int[] best = {-1, -1};
         prepareText(text).forEachInRange(0, cap + 1, (start, end) -> {
-            best[0] = start; best[1] = end; return true;
+            if (end <= endLimit) { best[0] = start; best[1] = end; }
+            return true;
         });
         return best[0] < 0 ? null : new Match(best[0], best[1]);
     }
@@ -190,7 +201,7 @@ public final class SearchMatcher {
                 int scanStart = view.comparisonStart(start);
                 int scanEnd = view.comparisonStart(end);
                 int limit = (int) Math.min(hay.length(), (long) scanEnd + length - 1L);
-                int lastStart = -1, lastEnd = -1;
+                int lastStart = -1;
                 for (int i = scanStart; i < limit; i++) {
                     if (((i - scanStart) & 1023) == 0 && Thread.currentThread().isInterrupted()) return;
                     char c = hay.charAt(i);
@@ -200,9 +211,12 @@ public final class SearchMatcher {
                         int hit = view.originalStart(i - length + 1);
                         int stop = view.originalEnd(i + 1);
                         if (Thread.currentThread().isInterrupted()) return;
-                        if (hit >= start && hit < end && (hit != lastStart || stop != lastEnd)
+                        // Several normalized hits can cover the same original
+                        // start with different ends. Navigation/indexing identify
+                        // a result by its original start: keep the first valid hit.
+                        if (hit >= start && hit < end && hit > lastStart
                                 && passesWholeWord(text, hit, stop)) {
-                            lastStart = hit; lastEnd = stop;
+                            lastStart = hit;
                             if (!consumer.accept(hit, stop)) return;
                         }
                         matched = literalFallback[length - 1]; // preserve overlapping literal matches

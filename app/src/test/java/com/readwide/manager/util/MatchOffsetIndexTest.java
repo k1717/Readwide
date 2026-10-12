@@ -87,6 +87,31 @@ public class MatchOffsetIndexTest {
         assertEquals(3, index.count());
     }
 
+    @Test public void partialPrefixOnlyReportsRanksItCanProve() {
+        MatchOffsetIndex.Builder builder = new MatchOffsetIndex.Builder(1_000_000, 3);
+        builder.add(0); builder.add(11); builder.add(25); builder.add(26); builder.add(999999);
+        MatchOffsetIndex index = builder.build();
+        assertEquals(0, index.rankIfKnown(Long.MIN_VALUE));
+        assertEquals(1, index.rankIfKnown(11));
+        assertEquals(2, index.rankIfKnown(12));
+        assertEquals(2, index.rankIfKnown(25));
+        assertEquals(3, index.rankIfKnown(26));
+        assertEquals(-1, index.rankIfKnown(27));
+        assertEquals(-1, index.rankIfKnown(999999));
+        assertEquals(5, index.rankIfKnown(1_000_000));
+        assertEquals(5, index.rankIfKnown(Long.MAX_VALUE));
+    }
+
+    @Test public void noRetainedStartsOnlyKnowTextBounds() {
+        MatchOffsetIndex.Builder builder = new MatchOffsetIndex.Builder(100, 0);
+        builder.add(20); builder.add(70);
+        MatchOffsetIndex index = builder.build();
+        assertEquals(0, index.rankIfKnown(0));
+        assertEquals(-1, index.rankIfKnown(1));
+        assertEquals(-1, index.rankIfKnown(99));
+        assertEquals(2, index.rankIfKnown(100));
+    }
+
     @Test public void duplicateAndOutOfOrderOffsetsAreRejected() {
         for (int bad : new int[]{-1, 2, 3, 10}) {
             MatchOffsetIndex.Builder builder = new MatchOffsetIndex.Builder(10, 100);

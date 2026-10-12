@@ -1892,6 +1892,10 @@ lzh_decode_init(struct lzh_stream *strm, const char *method)
 	if (method == NULL || method[0] != 'l' || method[1] != 'h')
 		return (ARCHIVE_FAILED);
 	switch (method[2]) {
+	case '4':
+		/* Readwide: LH4 shares the static Huffman grammar with LH5. */
+		w_bits = 12;/* 4KiB for window */
+		break;
 	case '5':
 		w_bits = 13;/* 8KiB for window */
 		break;

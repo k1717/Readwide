@@ -41,6 +41,7 @@ public final class LoadedTextSnapshot {
     public final long sourceFileLength;
     public final long sourceLastModified;
     public final boolean largeTextActivePartitionUsesLookbehind;
+    public final int appliedLargeTextPartitionMode;
 
     public LoadedTextSnapshot(String sourcePath,
                               String sourceUri,
@@ -76,7 +77,8 @@ public final class LoadedTextSnapshot {
                               int activeSearchOrdinal,
                               long sourceFileLength,
                               long sourceLastModified,
-                              boolean largeTextActivePartitionUsesLookbehind) {
+                              boolean largeTextActivePartitionUsesLookbehind,
+                              int appliedLargeTextPartitionMode) {
         this.sourcePath = sourcePath;
         this.sourceUri = sourceUri;
         this.filePath = filePath;
@@ -112,6 +114,7 @@ public final class LoadedTextSnapshot {
         this.sourceFileLength = sourceFileLength;
         this.sourceLastModified = sourceLastModified;
         this.largeTextActivePartitionUsesLookbehind = largeTextActivePartitionUsesLookbehind;
+        this.appliedLargeTextPartitionMode = appliedLargeTextPartitionMode;
     }
 
     public boolean matches(@NonNull Intent intent,

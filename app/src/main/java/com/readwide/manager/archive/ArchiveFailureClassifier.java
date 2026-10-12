@@ -15,6 +15,10 @@ final class ArchiveFailureClassifier {
 
     @NonNull
     static ArchiveSupport.ExtractionFailure classify(@NonNull Exception e) {
+        // Cancellation wins even beneath a typed password/unsupported wrapper or
+        // in suppressed cleanup errors; it must not invite another password prompt.
+        try { ArchiveCancellation.rethrowIfCancelled(e, null); }
+        catch (java.io.InterruptedIOException cancelled) { return ArchiveSupport.ExtractionFailure.FAILED; }
         // A typed error is more reliable than words in a filename. Walk wrapper
         // causes with identity-based cycle detection before considering messages.
         java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());

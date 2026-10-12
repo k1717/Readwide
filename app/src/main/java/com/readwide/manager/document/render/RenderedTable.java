@@ -8,15 +8,26 @@ public final class RenderedTable {
     public final List<List<RenderedTableCell>> rows;
     public final Float widthPercent;
     public final List<Float> columnWidthPercents;
+    public final Float widthPt;
+    public final ParagraphStyle.Alignment alignment;
+    public final Float indentPt;
 
     public RenderedTable(List<List<RenderedTableCell>> rows, Float widthPercent) {
         this(rows, widthPercent, null);
     }
 
     public RenderedTable(List<List<RenderedTableCell>> rows, Float widthPercent, List<Float> columnWidthPercents) {
+        this(rows, widthPercent, columnWidthPercents, null, null, null);
+    }
+
+    public RenderedTable(List<List<RenderedTableCell>> rows, Float widthPercent, List<Float> columnWidthPercents,
+                         Float widthPt, ParagraphStyle.Alignment alignment, Float indentPt) {
         this.rows = immutableRows(rows);
         this.widthPercent = widthPercent;
         this.columnWidthPercents = immutableFloats(columnWidthPercents);
+        this.widthPt = widthPt != null && widthPt > 0 && !Float.isInfinite(widthPt) ? widthPt : null;
+        this.alignment = alignment;
+        this.indentPt = indentPt != null && !Float.isNaN(indentPt) && !Float.isInfinite(indentPt) ? indentPt : null;
     }
 
     public static RenderedTable ofRows(List<List<RenderedTableCell>> rows) {

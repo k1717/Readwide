@@ -11,6 +11,36 @@ Synthetic and embedded codec fixtures are present in the test sources. See
 
 ## Layout
 
+Local-header DOS timestamps are decoded non-leniently in the local timezone for
+entry listings; absent/invalid calendar values remain unknown (`0`). File-system
+mtime restoration is unchanged. Password probes require an indexed encrypted file;
+a truncated header, missing part or parse error alone is not encryption evidence.
+Listing/extraction still report their actual errors. Three new regression methods
+and the malformed split-probe expectation are uncompiled/unrun.
+
+In 1.0.20, explicitly terminated zero-member ALZ archives list/extract successfully.
+The parser rejects unknown/partial inter-entry records and incomplete central endings
+before publishing an index or writing output. It preserves legacy nonempty exact-EOF
+layouts and the existing treatment of bytes after an accepted terminator; this is
+not a claim of complete truncation detection. Fourteen new regression methods are
+uncompiled/unrun; producer empty/comment/split validation remains pending.
+
+Optional `ELZ\x01` (`0x015a4c45`) comments use the unsigned size in the first metadata
+word of a terminal `CLZ\x01 + size + metadata + CLZ\x02` trailer. The size includes
+the ELZ signature and must end exactly before that trailer. Each comment has a
+four-byte file index, two-byte byte count, then that many text bytes. The parser
+checks these bounds and skips the text without allocating it. It does not display
+comments or interpret embedded signatures as file headers. This implements the
+[published ALZ implementation notes](https://github.com/alkegi/docs/blob/master/alz.md),
+not a producer-validated extension. No extractor code was copied.
+
+The 1.0.20 standard BZip2 path consumes concatenated streams within the declared
+payload, including when only the first leading BZ prefix is stripped. It retains
+decoded-size/CRC/encryption checks and rejects malformed later streams or trailing
+junk. The distinct DLZ variant decoder is unchanged. New encrypted/split and
+rollback regression sources are uncompiled/unrun; producer validation is pending.
+See [decode-boundary notes](ARCHIVE_DECODE_BOUNDARIES_1_0_20.md).
+
 In 1.0.18, listing and single-entry extraction reuse an
 immutable local-header index (including archive-wide name decoding). All ordered
 volume paths/sizes/timestamps participate in invalidation; payload password/CRC
@@ -91,6 +121,26 @@ decrypt first; `plain[11]` must equal the CRC's top byte (or 0 when the
 data-descriptor bit is set). The same keystream continues into the entry's
 data; compression is applied before encryption.
 
+In 1.0.20, `AlzipZipCrypto.checked` preserves the legacy low-byte-per-Java-char
+interpretation first. Non-ASCII passwords can also use strict UTF-8 and MS949
+bytes, but only when the caller enforces a payload CRC. For supported ALZ methods, collect
+distinct header-matching key states; if more than one matches, check each copy
+against decoded length/CRC before opening the output writer. Source views
+are independently bounded and use a 64 KiB working buffer, not a whole-file spool.
+The selected key state is fresh for extraction, which still checks length and CRC.
+Decoder format/length/CRC rejection can advance candidates; tracked source, cancellation, close and unchecked
+errors abort. Probes do not advance extracted-byte progress. A single header match
+avoids the extra read. Temporary encoded password buffers and rejected/probe key
+states are wiped; no immutable password String is created.
+
+The one-byte header and payload CRC are not cryptographic authentication or password
+recovery. The shared factory covers Deflate, standard/stripped BZip2 and DLZ. Source
+failures are recorded below the decoder; resource closure is outside the content-
+rejection catch. EGG now supplies its own multi-block verifier, described in
+[EGG notes](EGG_FORMAT_NOTES.md). Nineteen synthetic
+crypto/container/probe methods are uncompiled/unrun; real non-ASCII producer checks remain
+pending. No new size limit is introduced and free-space protection is unchanged.
+
 ## Split archives
 
 Shared-stream safeguards: `SplitVolumeInput`
@@ -100,9 +150,22 @@ and close state. Raw positional skipping does not verify skipped data; ALZ's
 decoded-length/CRC checks remain separate. Binary-search volume lookup and
 reusable one-byte storage are unbenchmarked, with no codec or size-policy change.
 
-`name.alz` is the first segment; continuations are `name.a00`, `name.a01`,
-... in order. The logical archive is a byte-level cut with per-segment
-framing:
+`name.alz` is the first segment. Continuations advance from `name.a00` through
+`name.a99`, then `name.b00` and onward through the implemented `name.j99` range.
+The [original unalz implementation](https://sources.debian.org/src/unalz/0.65-7/UnAlz.cpp/)
+generates this letter rollover. Readwide also retains its wide decimal `.aNN`
+compatibility names: `.a100` aliases `.b00`, `.a200` aliases `.c00`, and larger
+decimal names remain available beyond the letter range. Two aliases for one
+ordinal fail as ambiguous. Mixed spellings/case can form one contiguous set;
+there is no new volume-count cap or loop through absent ordinal numbers.
+
+First-part routing, extraction, source snapshots and index invalidation use the
+same catalogue. RAR `.r00`/`.s00` suffixes remain separate. Alphabetic suffixes
+beyond `.j99` and noncanonical `.b100` names are not claimed. Twelve new synthetic
+naming/routing regression methods are uncompiled/unrun; ALZip-produced rollover
+sets still need validation. No reference extractor code was copied.
+
+The logical archive is a byte-level cut with per-segment framing:
 
 - every segment of a split set ends with a 16-byte trailer:
   `CLZ\x01 + 8 bytes + CLZ\x03` (more segments follow) or `... + CLZ\x02`
@@ -111,9 +174,11 @@ framing:
   segment header (`sig u32 + version u16 + segment-id u16`) before its
   payload bytes; a continuation without the signature is used as-is.
 
-The current parser removes the first part's trailer when continuations exist;
-it removes header/trailer framing from ALZ-signature continuations and leaves
-unframed continuations unchanged. `SplitVolumeInput` presents the result as one
+The current parser removes intermediate trailers and continuation headers, retains
+the last framed trailer for end/comment checks, and leaves unframed continuations
+unchanged. Retaining that trailer does not move payload offsets or make its bytes
+available as entry data. `SplitVolumeInput` presents the result as one
 seekable stream, so entry data straddling a boundary decodes normally. The
 continuation set must be contiguous from `.a00`; a gap fails cleanly with no
-partial output. Verified (CRC) against a real 76 KB two-segment set.
+partial output. The earlier split implementation was verified (CRC) against a real
+76 KB two-segment set; the new final-trailer/empty/comment paths require revalidation.

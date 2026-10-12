@@ -29,6 +29,35 @@ import static org.junit.Assert.assertTrue;
  */
 public class DocLegacyLayoutExtractorTest {
 
+    @Test public void nestedFieldResultsDoNotEscapeOuterInstructions() throws Exception {
+        String text = "Before \023 IF \023 INNER \024hidden\025 still-code \024Visible "
+                + "\023 NESTED \024result\025 tail\025 after\r";
+        java.util.List<RenderedParagraph> paragraphs = paragraphsForText(text);
+        assertEquals(1, paragraphs.size());
+        assertEquals("Before Visible result tail after", paragraphs.get(0).plainText());
+        RenderedRun run = paragraphs.get(0).runs.get(0);
+        assertEquals(0, run.anchorStart);
+        assertEquals(run.text.length(), run.anchorEnd);
+    }
+
+    @Test public void unmatchedFieldMarkersAndNoResultFieldsStaySafe() throws Exception {
+        assertEquals("ABC", paragraphsForText("A\024B\025\023code-only\025C\r").get(0).plainText());
+        assertEquals("prefix", paragraphsForText("prefix\023unfinished instruction").get(0).plainText());
+        assertEquals("A\u2011B\u00adC\u00a0D", paragraphsForText("A\036B\037C\u00a0D\r").get(0).plainText());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.List<RenderedParagraph> paragraphsForText(String text) throws Exception {
+        Class<?> reconstructed = Class.forName(DocLegacyLayoutExtractor.class.getName() + "$Reconstructed");
+        java.lang.reflect.Constructor<?> ctor = reconstructed.getDeclaredConstructor(String.class, int[].class);
+        ctor.setAccessible(true);
+        Object input = ctor.newInstance(text, new int[text.length()]);
+        java.lang.reflect.Method method = DocLegacyLayoutExtractor.class.getDeclaredMethod("buildStyledParagraphs",
+                reconstructed, DocCharacterProperties.class, DocParagraphProperties.class);
+        method.setAccessible(true);
+        return (java.util.List<RenderedParagraph>) method.invoke(null, input, DocCharacterProperties.none(), DocParagraphProperties.none());
+    }
+
     private static final String PLAIN_DOC = ""
             + "0M8R4KGxGuEAAAAAAAAAAAAAAAAAAAAAOwADAP7/CQAGAAAAAAAAAAAAAAABAAAAEQAAAAAAAAAAEAAAAgAAAAEAAAD+////AAAA"
             + "AAAAAAD/////////////////////////////////////////////////////////////////////////////////////////////"

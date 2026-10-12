@@ -27,19 +27,19 @@ def hasReleaseSigning =
         releaseSecret("KEY_PASSWORD", "") != ""
 
 android {
-    namespace 'com.readwide.manager'
-    compileSdk 35
+    namespace = 'com.readwide.manager'
+    compileSdk = 35
     // Keep the app-level symbol-strip task on the same installed NDK as both
     // source-built native library modules.
-    ndkVersion '29.0.14206865'
+    ndkVersion = '29.0.14206865'
 
     defaultConfig {
-        applicationId "com.readwide.manager"
-        minSdk 24
-        targetSdk 35
-        versionCode 10019
-        versionName "1.0.19"
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        applicationId = "com.readwide.manager"
+        minSdk = 24
+        targetSdk = 35
+        versionCode = 10020
+        versionName = "1.0.20"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Release APKs keep Android ARM ABIs only.
         // This removes x86/x86_64 native payloads from libarchive-android while
@@ -52,43 +52,50 @@ android {
     signingConfigs {
         release {
             if (hasReleaseSigning) {
-                storeFile file(releaseSecret("KEYSTORE_PATH"))
-                storePassword releaseSecret("KEYSTORE_PASSWORD")
-                keyAlias releaseSecret("KEY_ALIAS")
-                keyPassword releaseSecret("KEY_PASSWORD")
+                storeFile = file(releaseSecret("KEYSTORE_PATH"))
+                storePassword = releaseSecret("KEYSTORE_PASSWORD")
+                keyAlias = releaseSecret("KEY_ALIAS")
+                keyPassword = releaseSecret("KEY_PASSWORD")
             }
         }
     }
 
     buildTypes {
         release {
-            minifyEnabled true
-            shrinkResources true
-            debuggable false
-            jniDebuggable false
-            zipAlignEnabled true
+            minifyEnabled = true
+            shrinkResources = true
+            debuggable = false
+            jniDebuggable = false
+            zipAlignEnabled = true
             if (hasReleaseSigning) {
-                signingConfig signingConfigs.release
+                signingConfig = signingConfigs.release
             }
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro',
+                    '../third_party/brotli-java/proguard.pgcfg'
         }
         diagnostic {
             initWith release
             matchingFallbacks = ['release']
-            minifyEnabled false
-            shrinkResources false
-            debuggable true
-            jniDebuggable false
-            zipAlignEnabled true
+            minifyEnabled = false
+            shrinkResources = false
+            debuggable = true
+            jniDebuggable = false
+            zipAlignEnabled = true
             if (hasReleaseSigning) {
-                signingConfig signingConfigs.release
+                signingConfig = signingConfigs.release
             }
         }
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    // Attributed archive fixtures belong only to the instrumentation APK, not the app.
+    sourceSets {
+        androidTest.assets.srcDir 'src/test/resources/archives/cab-multipart'
+        androidTest.assets.srcDir 'src/test/resources/archives/zip-ppmdi'
     }
 
     packaging {
@@ -116,12 +123,16 @@ def textviewRemovedLegacySourceFiles = [
         'src/main/java/com/readwide/manager/archive/Rar3PpmdEngineFixtureProbe.java'
 ]
 
+// Resolve Project-backed paths during configuration, not inside the task action.
+def removedLegacySourceFiles = textviewRemovedLegacySourceFiles.collect { relPath ->
+    layout.projectDirectory.file(relPath).asFile
+}
+
 tasks.register('deleteRemovedLegacySourceFiles') {
     group = 'cleanup'
     description = 'Deletes source files removed from older Readwide builds but possibly left behind by overlay extraction.'
     doLast {
-        textviewRemovedLegacySourceFiles.each { relPath ->
-            def stale = file(relPath)
+        removedLegacySourceFiles.each { stale ->
             if (stale.exists()) {
                 if (!stale.delete()) {
                     throw new GradleException("Could not delete stale removed source file: ${stale}")
@@ -138,6 +149,12 @@ tasks.matching { task ->
     dependsOn(tasks.named('deleteRemovedLegacySourceFiles'))
 }
 
+// Report the exact deprecated API call sites instead of only javac's summary.
+// Retained compatibility APIs must be reviewed individually, not hidden globally.
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs.add('-Xlint:deprecation')
+}
+
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.8.0'
@@ -149,12 +166,16 @@ dependencies {
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.2.0'
     implementation 'com.github.albfernandez:juniversalchardet:2.5.0'
     implementation 'org.apache.commons:commons-compress:1.28.0'
+    // BSD-3-Clause linear-time matching for user-defined TXT contents patterns.
+    implementation 'com.google.re2j:re2j:1.8'
     // Android libarchive 3.8.9 backend, built from the pinned vendored sources.
     implementation project(':libarchiveAndroid')
     // Isolated LGPL-2.1-or-later native module for WinZip JPEG plus BSD-3-Clause
     // WavPack. The app calls the shared library through this small Java API.
     implementation project(':zipxCodecsAndroid')
     implementation 'org.tukaani:xz:1.12'
+    // MIT Google Brotli v1.2.0 Java sources, pinned locally; 7z framing is handled by the app.
+    implementation project(':brotliJava')
     // JVM archive fixtures use zstd-jni. Android Zstandard decoding is provided by
     // the already-bundled libarchive backend, so desktop native resources do not
     // enter the release APK.

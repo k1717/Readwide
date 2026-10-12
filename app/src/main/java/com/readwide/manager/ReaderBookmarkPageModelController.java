@@ -38,9 +38,17 @@ final class ReaderBookmarkPageModelController {
 
     void applyCurrentSavePageModel(@NonNull Bookmark bookmark) {
         String signature = activity.largeTextEstimateActive ? trustedCurrentBookmarkPageSignature() : "";
+        int page = activity.getStatusCurrentPageNumber();
+        // An explicit jump may be pending while the old text is still visible.
+        // A manually saved bookmark owns its saved character, not that jump's label.
+        if (!signature.isEmpty()) {
+            page = activity.findExactLargeTextPageForChar(bookmark.getCharPosition());
+        } else if (!activity.largeTextEstimateActive && activity.readerView != null) {
+            page = activity.readerView.getPageNumberForCharPosition(bookmark.getCharPosition());
+        }
         updateBookmarkPageModelFieldsIfChanged(
                 bookmark,
-                activity.getDisplayedCurrentPageNumber(),
+                page,
                 activity.getDisplayedTotalPageCount(),
                 signature);
     }

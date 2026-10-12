@@ -163,6 +163,145 @@ public class RarPackedInputStreamTest {
         return new RarPackedInputStream(RarVolumeChain.payloadSegments(Arrays.asList(entries)),null);
     }
 
+    @Test public void uncheckedSegmentFailureCannotResumeAtFollowingVolume() throws Exception {
+        for (Throwable problem : new Throwable[]{new IllegalStateException("segment lookup"),
+                new AssertionError("segment allocation")}) {
+            File file = temp.newFile(); Files.write(file.toPath(), new byte[]{42});
+            RarCryptoStreams.EncryptedSegment next = new RarCryptoStreams.EncryptedSegment(file, 0, 1);
+            int[] lookups = {0};
+            java.util.List<RarCryptoStreams.EncryptedSegment> segments =
+                    new java.util.AbstractList<RarCryptoStreams.EncryptedSegment>() {
+                        @Override public int size() { return 2; }
+                        @Override public RarCryptoStreams.EncryptedSegment get(int index) {
+                            lookups[0]++;
+                            if (index == 0) throwUnchecked(problem);
+                            return next;
+                        }
+                    };
+            try (RarPackedInputStream input = new RarPackedInputStream(segments, null)) {
+                assertSame(problem, assertThrows(Throwable.class, input::read));
+                assertSame(problem, assertThrows(Throwable.class, input::read));
+                assertSame(problem, assertThrows(Throwable.class, () -> input.read(new byte[0])));
+                assertEquals(1, lookups[0]);
+            }
+        }
+    }
+
+    @Test public void deniedVolumeOpenRemainsStickyEvenIfAccessLaterSucceeds() throws Exception {
+        File source = temp.newFile(); Files.write(source.toPath(), new byte[]{42});
+        SecurityException denied = new SecurityException("volume denied");
+        boolean[] failOpen = {true};
+        File guarded = new File(source.getPath()) {
+            @Override public String getPath() {
+                if (failOpen[0]) throw denied;
+                return super.getPath();
+            }
+        };
+        try (RarPackedInputStream input = new RarPackedInputStream(Arrays.asList(
+                new RarCryptoStreams.EncryptedSegment(guarded, 0, 1)), null)) {
+            assertSame(denied, assertThrows(SecurityException.class, input::read));
+            failOpen[0] = false;
+            assertSame(denied, assertThrows(SecurityException.class, input::read));
+        }
+    }
+
+    @Test public void readFailureSurvivesCleanupFailureAndCloseRetriesHandle() throws Exception {
+        IOException readFailure = new IOException("payload read");
+        for (Throwable cleanup : new Throwable[]{new IOException("close IO"),
+                new IllegalStateException("close runtime"), new AssertionError("close error"), readFailure}) {
+            // Use a separate read exception except for the explicit self-suppression case.
+            IOException primary = cleanup == readFailure ? readFailure : new IOException("payload read");
+            FaultyHandle handle = new FaultyHandle(temp.newFile(), primary, cleanup);
+            RarPackedInputStream input = new RarPackedInputStream(java.util.Collections.emptyList(), null);
+            setField(input, "file", handle);
+            setField(input, "remaining", 1L);
+            try {
+                assertSame(primary, assertThrows(IOException.class, input::read));
+                assertSame(primary, assertThrows(IOException.class, input::read));
+                assertEquals(cleanup == primary ? 0 : 1, primary.getSuppressed().length);
+                if (cleanup != primary) assertSame(cleanup, primary.getSuppressed()[0]);
+                assertFalse(handle.closedSuccessfully);
+                input.close();
+                assertTrue(handle.closedSuccessfully);
+                assertEquals(2, handle.closeCalls);
+                input.close();
+                assertEquals(2, handle.closeCalls);
+            } finally { input.close(); handle.close(); }
+        }
+    }
+
+    @Test public void transitionCloseFailureDoesNotAdvanceToNextSegment() throws Exception {
+        IOException closeFailure = new IOException("volume close");
+        FaultyHandle handle = new FaultyHandle(temp.newFile(), null, closeFailure);
+        int[] lookups = {0};
+        java.util.List<RarCryptoStreams.EncryptedSegment> segments =
+                new java.util.AbstractList<RarCryptoStreams.EncryptedSegment>() {
+                    @Override public int size() { return 1; }
+                    @Override public RarCryptoStreams.EncryptedSegment get(int index) {
+                        lookups[0]++;
+                        throw new AssertionError("Must not advance after close failure");
+                    }
+                };
+        try (RarPackedInputStream input = new RarPackedInputStream(segments, null)) {
+            setField(input, "file", handle);
+            assertSame(closeFailure, assertThrows(IOException.class, input::read));
+            assertTrue(handle.closedSuccessfully); // Failure cleanup retried the owned handle.
+            assertSame(closeFailure, assertThrows(IOException.class, input::read));
+            assertEquals(0, lookups[0]);
+        } finally { handle.close(); }
+    }
+
+    @Test public void invalidCallerBufferDoesNotPoisonHealthyPackedStream() throws Exception {
+        File source = temp.newFile(); Files.write(source.toPath(), new byte[]{42});
+        try (RarPackedInputStream input = new RarPackedInputStream(Arrays.asList(
+                new RarCryptoStreams.EncryptedSegment(source, 0, 1)), null)) {
+            assertThrows(IndexOutOfBoundsException.class, () -> input.read(new byte[1], 0, 2));
+            assertThrows(NullPointerException.class, () -> input.read(null, 0, 1));
+            assertEquals(0, input.read(new byte[0]));
+            assertEquals(42, input.read());
+            assertEquals(-1, input.read());
+        }
+    }
+
+    private static void throwUnchecked(Throwable problem) {
+        if (problem instanceof RuntimeException) throw (RuntimeException) problem;
+        throw (Error) problem;
+    }
+
+    private static void setField(Object target, String name, Object value) throws Exception {
+        java.lang.reflect.Field field = RarPackedInputStream.class.getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
+
+    private static final class FaultyHandle extends RandomAccessFile {
+        final IOException readFailure;
+        Throwable closeFailure;
+        int closeCalls;
+        boolean closedSuccessfully;
+
+        FaultyHandle(File source, IOException readFailure, Throwable closeFailure) throws IOException {
+            super(source, "r");
+            this.readFailure = readFailure;
+            this.closeFailure = closeFailure;
+        }
+
+        @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+            if (readFailure != null) throw readFailure;
+            return super.read(bytes, offset, length);
+        }
+
+        @Override public void close() throws IOException {
+            closeCalls++;
+            Throwable problem = closeFailure;
+            closeFailure = null;
+            if (problem instanceof IOException) throw (IOException) problem;
+            if (problem != null) throwUnchecked(problem);
+            super.close();
+            closedSuccessfully = true;
+        }
+    }
+
     private RarArchiveReader.RarEntry entry(byte[] packed,int version,boolean before,boolean after,
             long crc,byte[] hash) throws Exception {
         File file = temp.newFile(); Files.write(file.toPath(),packed);

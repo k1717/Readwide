@@ -17,9 +17,33 @@ Readwide advances the wrapper's original native baseline to the official
 libarchive v3.8.9 tag above. The wrapper's small `libarchive.patch` JNI API
 extension is already applied to those vendored files, and the retained patch
 beside the JNI sources records the Android-specific delta for review.
+The same retained patch also records Readwide's local RAR5 redirection correction
+(2026-10-09): classify junctions as directory symlinks, and reject unresolved
+file-copy/unknown redirection types instead of exposing empty regular files.
+Readwide's bridge excludes links; eligible ordinary entries remain available through
+the existing Java fallback. This does not implement file-copy restoration. Native
+compilation and Android execution for this correction remain pending.
+The local patch also bounds native redirection fields to their own extra record,
+counts the actual target-length vint width, rejects duplicate/unknown flags and
+checks 64-bit lengths before conversion to `size_t`. Extra-record size/type fields
+are checked before subtraction; unknown extra record types remain skippable.
+Four new synthetic Android boundary tests are uncompiled/unrun. This does not
+claim a full audit of every native extra-field decoder or producer interoperability.
+The retained patch also admits LHA `-lh4-` (2026-10-10) through the existing static
+Huffman decoder with a 4 KiB history. Position-table bounds and initialization
+derive from that method window; `-lh5-`/`-lh6-`/`-lh7-` are unchanged. No new codec
+source or dependency is imported. Five synthetic Android regression methods remain
+uncompiled/unrun; this does not implement LHA volume continuation or other methods.
+See [source reasoning and references](../../docs/LHA_LH4_INTEGRATION_1_0_20.md).
 `library/CMakeLists.txt` therefore compiles the sources directly without
 requiring a host `patch` executable.
 
 Only files needed by the wrapper's native build, public headers, and license
 texts are vendored. Upstream test suites, samples, generated binaries, and Git
 metadata are intentionally excluded.
+
+Readwide's Gradle wrapper configuration uses Java 17 source/target, matching the
+app without introducing new Java APIs or changing minSdk. External native staging
+uses `cxx/archive` under the configured build root. The maintainer's 2026-10-11
+successful build compiled both native ABIs before these build-setting edits;
+runtime validation and module-specific tests remain separate.

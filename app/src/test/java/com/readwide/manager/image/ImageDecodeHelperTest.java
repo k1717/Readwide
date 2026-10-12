@@ -7,6 +7,44 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public class ImageDecodeHelperTest {
+    @Test public void drawableMemoryRetryReducesAllocationAndReturnsSuccess() throws Exception {
+        java.util.List<Integer> scales = new java.util.ArrayList<>();
+        String result = ImageDecodeHelper.decodeWithMemoryRetry(scale -> {
+            scales.add(scale);
+            if (scale < 4) throw new OutOfMemoryError("synthetic allocation failure");
+            return "ready";
+        });
+        assertEquals("ready", result);
+        assertEquals(java.util.Arrays.asList(1, 2, 4), scales);
+    }
+
+    @Test public void drawableMemoryRetryIsBounded() throws Exception {
+        java.util.List<Integer> scales = new java.util.ArrayList<>();
+        Object result = ImageDecodeHelper.decodeWithMemoryRetry(scale -> {
+            scales.add(scale);
+            throw new OutOfMemoryError("synthetic allocation failure");
+        });
+        org.junit.Assert.assertNull(result);
+        assertEquals(java.util.Arrays.asList(1, 2, 4, 8, 16, 32, 64, 128), scales);
+    }
+
+    @Test public void drawableMemoryRetryDoesNotHideDecodeErrors() {
+        org.junit.Assert.assertThrows(java.io.IOException.class,
+                () -> ImageDecodeHelper.decodeWithMemoryRetry(scale -> { throw new java.io.IOException("bad data"); }));
+        org.junit.Assert.assertThrows(LinkageError.class,
+                () -> ImageDecodeHelper.decodeWithMemoryRetry(scale -> { throw new LinkageError("missing decoder"); }));
+    }
+
+    @Test public void drawableMemoryRetryHonorsCancellationWithoutDecoding() throws Exception {
+        Thread.currentThread().interrupt();
+        try {
+            org.junit.Assert.assertNull(ImageDecodeHelper.decodeWithMemoryRetry(scale -> {
+                throw new AssertionError("cancelled request decoded");
+            }));
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally { Thread.interrupted(); }
+    }
+
     @Test
     public void prefetchProfileHonorsEightMillionPixelCap() {
         int sample = ImageDecodeHelper.chooseBitmapSampleSize(

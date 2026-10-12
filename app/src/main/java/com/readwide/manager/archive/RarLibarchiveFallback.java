@@ -9,15 +9,12 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 
 /**
  * Default FOSS-friendly RAR3/RAR4 backend hook backed by libarchive.
  *
- * <p>The normal 2.2.6 APK bundles the Apache-2.0 libarchive-android AAR instead of
+ * <p>The app builds the bundled libarchive-android backend from source instead of
  * reintroducing Junrar/UnRAR-licensed Java dependencies. Unsupported RAR variants still
  * fail cleanly, but common compressed RAR3/RAR4 files are attempted by default.</p>
  */
@@ -64,7 +61,7 @@ final class RarLibarchiveFallback {
                                                @Nullable FileOperationProgress progress,
                                                @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
         ensureAvailable();
-        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        ArchiveCancellation.checkpoint(progress);
         return LibarchiveNativeBridge.extractArchive(
                 archivePaths(archiveFile),
                 targetDir.getAbsolutePath(),
@@ -86,7 +83,7 @@ final class RarLibarchiveFallback {
                                       @Nullable char[] password,
                                       @Nullable FileOperationProgress progress) throws IOException {
         ensureAvailable();
-        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        ArchiveCancellation.checkpoint(progress);
         File parent = outFile.getParentFile();
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
             throw new IOException("Cannot create output directory");
@@ -121,26 +118,31 @@ final class RarLibarchiveFallback {
 
     @NonNull
     static List<ArchiveSupport.EntryInfo> parseListingRows(@Nullable String listing) throws IOException {
+        ArchiveCancellation.checkpoint(null);
         List<ArchiveSupport.EntryInfo> result = new ArrayList<>();
         if (listing == null || listing.isEmpty()) return result;
         boolean escaped = listing.startsWith(LISTING_HEADER);
-        if (escaped) listing = listing.substring(LISTING_HEADER.length());
-        String[] lines = listing.split("\\n", -1);
-        for (String line : lines) {
+        int start = escaped ? LISTING_HEADER.length() : 0;
+        while (start < listing.length()) {
+            ArchiveCancellation.checkpoint(null);
+            int end = listing.indexOf('\n', start);
+            if (end < 0) end = listing.length();
+            String line = listing.substring(start, end);
+            start = end == listing.length() ? end : end + 1;
             if (line.isEmpty()) continue;
             String[] parts = line.split("\\t", -1);
             if (parts.length != 4 || !("D".equals(parts[0]) || "F".equals(parts[0]))) {
                 throw new IOException("Invalid libarchive listing row");
             }
             boolean directory = "D".equals(parts[0]);
-            String path = sanitizeEntryPath(escaped ? decodeListingPath(parts[1]) : parts[1]);
+            String path = ArchiveSupport.sanitizeEntryPathForList(escaped ? decodeListingPath(parts[1]) : parts[1]);
             if (path == null) continue;
             if (directory && !path.endsWith("/")) path += "/";
             long size = parseLongOrDefault(parts[2], directory ? -1L : 0L);
             long timeMillis = parseLongOrDefault(parts[3], 0L);
             result.add(new ArchiveSupport.EntryInfo(path, directory, size, timeMillis));
         }
-        return withSyntheticDirectories(result);
+        return ArchiveSupport.withFirstFileEntryIdentities(result);
     }
 
     // Version the Java bridge framing: archive paths may contain tabs/newlines.
@@ -179,15 +181,6 @@ final class RarLibarchiveFallback {
         return result.toString();
     }
 
-    @Nullable
-    private static String sanitizeEntryPath(@Nullable String input) {
-        if (input == null) return null;
-        String path = input.replace('\\', '/').trim();
-        while (path.startsWith("/")) path = path.substring(1);
-        if (path.isEmpty() || path.contains("../") || path.equals("..") || path.contains("/../")) return null;
-        return path;
-    }
-
     private static long parseLongOrDefault(@Nullable String value, long fallback) {
         if (value == null) return fallback;
         try {
@@ -197,24 +190,4 @@ final class RarLibarchiveFallback {
         }
     }
 
-    @NonNull
-    private static List<ArchiveSupport.EntryInfo> withSyntheticDirectories(@NonNull List<ArchiveSupport.EntryInfo> input) {
-        Map<String, ArchiveSupport.EntryInfo> out = new LinkedHashMap<>();
-        for (ArchiveSupport.EntryInfo entry : input) {
-            addParentDirectories(out, entry.path);
-            out.put(entry.path, entry);
-        }
-        return new ArrayList<>(out.values());
-    }
-
-    private static void addParentDirectories(@NonNull Map<String, ArchiveSupport.EntryInfo> out,
-                                             @NonNull String path) {
-        int slash = path.indexOf('/');
-        while (slash >= 0) {
-            String dir = path.substring(0, slash + 1);
-            String key = dir;
-            if (!out.containsKey(key)) out.put(key, new ArchiveSupport.EntryInfo(dir, true, -1L, 0L));
-            slash = path.indexOf('/', slash + 1);
-        }
-    }
 }

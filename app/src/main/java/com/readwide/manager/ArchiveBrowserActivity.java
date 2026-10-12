@@ -67,6 +67,8 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Object imageResultHandoffLock = new Object();
+    private final List<ArchiveImageSequenceLoader.Result> pendingImageResults = new ArrayList<>();
 
     private PrefsManager prefs;
     private BookmarkManager bookmarkManager;
@@ -76,6 +78,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
     private char[] pendingAcceptedArchivePassword;
     private String currentPrefix = "";
     private List<ArchiveSupport.EntryInfo> allEntries = new ArrayList<>();
+    private final ArchiveEntryListController.FolderView folderView = new ArchiveEntryListController.FolderView();
 
     private Toolbar toolbar;
     private TextView pathText;
@@ -109,7 +112,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
     private static final int FILTER_EPUB = ArchiveEntryListController.FILTER_EPUB;
     private static final int FILTER_WORD = ArchiveEntryListController.FILTER_WORD;
     private static final int FILTER_IMAGE = ArchiveEntryListController.FILTER_IMAGE;
-    private boolean destroyed = false;
+    private volatile boolean destroyed = false;
     private Dialog archivePreviewLoadingDialog;
 
     @Override
@@ -147,8 +150,14 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         hideArchivePreviewLoadingWindow();
-        destroyed = true;
-        mainHandler.removeCallbacksAndMessages(null);
+        List<ArchiveImageSequenceLoader.Result> abandonedResults;
+        synchronized (imageResultHandoffLock) {
+            destroyed = true;
+            mainHandler.removeCallbacksAndMessages(null);
+            abandonedResults = new ArrayList<>(pendingImageResults);
+            pendingImageResults.clear();
+        }
+        for (ArchiveImageSequenceLoader.Result result : abandonedResults) result.closePreparedReader();
         clearArchivePassword();
         clearPendingAcceptedArchivePassword();
         executor.shutdownNow();
@@ -583,7 +592,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                 ? getString(R.string.archive_root)
                 : currentPrefix;
         pathText.setText(label);
-        List<ArchiveSupport.EntryInfo> visible = ArchiveEntryListController.visibleChildren(
+        List<ArchiveSupport.EntryInfo> visible = folderView.visibleChildren(
                 allEntries, currentPrefix == null ? "" : currentPrefix,
                 archiveSearchQuery, activeArchiveFilter, archiveSortMode);
         adapter.setEntries(visible);
@@ -818,12 +827,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                         sequenceSnapshot,
                         targetIndex,
                         passwordForExtraction);
-                boolean posted = mainHandler.post(() -> handleArchiveImageSequenceResult(
-                        selectedEntry,
-                        useSavedPosition,
-                        result,
-                        finishAfterOpen));
-                if (!posted) result.closePreparedReader();
+                postArchiveImageSequenceResult(selectedEntry, useSavedPosition, result, finishAfterOpen);
             } finally {
                 PasswordChars.clear(passwordForExtraction);
             }
@@ -847,16 +851,41 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
                         sequenceSnapshot,
                         targetIndex,
                         passwordForExtraction);
-                boolean posted = mainHandler.post(() -> handleArchiveImageSequenceResult(
-                        selectedEntry,
-                        useSavedPosition,
-                        result,
-                        finishAfterOpen));
-                if (!posted) result.closePreparedReader();
+                postArchiveImageSequenceResult(selectedEntry, useSavedPosition, result, finishAfterOpen);
             } finally {
                 PasswordChars.clear(passwordForExtraction);
             }
         });
+    }
+
+    private void postArchiveImageSequenceResult(@Nullable ArchiveSupport.EntryInfo selectedEntry,
+                                                boolean useSavedPosition,
+                                                @NonNull ArchiveImageSequenceLoader.Result result,
+                                                boolean finishAfterOpen) {
+        boolean posted = false;
+        try {
+            synchronized (imageResultHandoffLock) {
+                if (!destroyed && !Thread.currentThread().isInterrupted()) {
+                    // Register ownership before posting: onDestroy can remove the
+                    // callback, so the callback cannot be the only cleanup owner.
+                    pendingImageResults.add(result);
+                    posted = mainHandler.post(() -> {
+                        synchronized (imageResultHandoffLock) {
+                            pendingImageResults.remove(result);
+                        }
+                        handleArchiveImageSequenceResult(selectedEntry, useSavedPosition,
+                                result, finishAfterOpen);
+                    });
+                }
+            }
+        } finally {
+            if (!posted) {
+                synchronized (imageResultHandoffLock) {
+                    pendingImageResults.remove(result);
+                }
+                result.closePreparedReader();
+            }
+        }
     }
 
     private void handleArchiveImageSequenceResult(@Nullable ArchiveSupport.EntryInfo selectedEntry,
@@ -1056,6 +1085,15 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         });
         Intent intent = new Intent(this, ImageReaderActivity.class);
         intent.putExtra(ImageReaderActivity.EXTRA_FILE_PATH, imagePaths.get(safeIndex));
+        intent.putExtra(ImageReaderActivity.EXTRA_SOURCE_ENTRY_PATH, entryPaths.get(safeIndex));
+        intent.putExtra(ImageReaderActivity.EXTRA_SEQUENCE_PREFIX, currentPrefix);
+        intent.putExtra(ImageReaderActivity.EXTRA_SEQUENCE_QUERY, archiveSearchQuery);
+        intent.putExtra(ImageReaderActivity.EXTRA_SEQUENCE_SORT, archiveSortMode);
+        List<ArchiveSupport.EntryInfo> previewImages = ArchiveEntryListController.collectPreviewOrderedImageSequence(
+                adapter != null ? adapter.snapshotEntries() : new ArrayList<>(), null);
+        ArrayList<String> previewPaths = new ArrayList<>();
+        for (ArchiveSupport.EntryInfo image : previewImages) previewPaths.add(image.path);
+        intent.putExtra(ImageReaderActivity.EXTRA_SEQUENCE_PREVIEW_ORDER, previewPaths.equals(entryPaths));
         intent.putExtra(ImageReaderActivity.EXTRA_SEQUENCE_HANDOFF_TOKEN, token);
         intent.putExtra(ImageReaderActivity.EXTRA_SOURCE_ARCHIVE_PATH, archiveFile.getAbsolutePath());
         intent.putExtra(ImageReaderActivity.EXTRA_ALLOW_FILE_OPS, false);

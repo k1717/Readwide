@@ -32,9 +32,9 @@ public class TarEntryIndexTest {
         TarEntryIndex.Index first = TarEntryIndex.get(archive);
         File out = temp.newFile("page");
         assertTrue(ArchiveSupport.extractSingleEntryDetailed(archive, "chapter/2.jpg", out, null).success);
-        assertEquals("two", Files.readString(out.toPath()));
+        assertEquals("two", ArchiveTestTextFiles.readString(out.toPath()));
         assertTrue(ArchiveSupport.extractSingleEntryDetailed(archive, "chapter/1.jpg", out, null).success);
-        assertEquals("one", Files.readString(out.toPath()));
+        assertEquals("one", ArchiveTestTextFiles.readString(out.toPath()));
         assertSame(first, TarEntryIndex.get(archive));
         assertFalse(ArchiveSupport.isForwardImageReadableType(archive));
         assertTrue(ArchiveSupport.isForwardImageReadableType(ArchiveSupport.Type.TAR_GZ));
@@ -45,7 +45,7 @@ public class TarEntryIndexTest {
         File archive = fixture("pax.tar", false, false, path, "pax-data");
         File out = temp.newFile("pax-out");
         assertEquals(Boolean.TRUE, TarEntryIndex.extract(archive, path, out));
-        assertEquals("pax-data", Files.readString(out.toPath()));
+        assertEquals("pax-data", ArchiveTestTextFiles.readString(out.toPath()));
     }
 
     @Test public void linksBeforeRegularMembersDoNotAbortTarOrGzipExtraction() throws Exception {
@@ -54,7 +54,7 @@ public class TarEntryIndexTest {
                     "chapter/2.jpg", "two");
             File out = new File(temp.getRoot(), "links-out-" + compressed);
             assertTrue(ArchiveSupport.extractSingleEntryDetailed(archive, "chapter/2.jpg", out, null).success);
-            assertEquals("two", Files.readString(out.toPath()));
+            assertEquals("two", ArchiveTestTextFiles.readString(out.toPath()));
             assertFalse(ArchiveSupport.extractSingleEntryDetailed(archive, "link.jpg", out, null).success);
         }
     }
@@ -63,7 +63,7 @@ public class TarEntryIndexTest {
         File archive = fixture("duplicate.tar", false, false, "./chapter/1.jpg", "second");
         File out = temp.newFile("duplicate-out");
         assertEquals(Boolean.TRUE, TarEntryIndex.extract(archive, "chapter/1.jpg", out));
-        assertEquals("one", Files.readString(out.toPath()));
+        assertEquals("one", ArchiveTestTextFiles.readString(out.toPath()));
         assertEquals(3L, TarEntryIndex.get(archive).listing.get(0).size);
     }
 
@@ -89,28 +89,28 @@ public class TarEntryIndexTest {
         File archive = fixture("truncate.tar", false, false, "chapter/2.jpg", "two");
         TarEntryIndex.Index index = TarEntryIndex.get(archive);
         File out = temp.newFile("existing");
-        Files.writeString(out.toPath(), "existing");
+        ArchiveTestTextFiles.writeString(out.toPath(), "existing");
         try (ArchiveExtractionByteBudget.Scope ignored = ArchiveExtractionByteBudget.begin(1)) {
             try { TarEntryIndex.extract(index, archive, "chapter/2.jpg", out); fail("Expected budget failure"); }
             catch (TarEntryIndex.ExtractionException expected) { }
         }
-        assertEquals("existing", Files.readString(out.toPath()));
+        assertEquals("existing", ArchiveTestTextFiles.readString(out.toPath()));
         try (RandomAccessFile file = new RandomAccessFile(archive, "rw")) { file.setLength(1025); }
         try { TarEntryIndex.extract(index, archive, "chapter/2.jpg", out); fail("Expected changed archive failure"); }
         catch (TarEntryIndex.ExtractionException expected) { }
-        assertEquals("existing", Files.readString(out.toPath()));
+        assertEquals("existing", ArchiveTestTextFiles.readString(out.toPath()));
     }
 
     @Test public void cancellationDoesNotReturnSuccessOrReplaceOutput() throws Exception {
         File archive = fixture("cancel.tar", false, false, "chapter/2.jpg", "two");
         File out = temp.newFile("cancel-out");
-        Files.writeString(out.toPath(), "existing");
+        ArchiveTestTextFiles.writeString(out.toPath(), "existing");
         Thread.currentThread().interrupt();
         try {
             try { TarEntryIndex.extract(archive, "chapter/2.jpg", out); fail("Expected interruption"); }
             catch (IOException expected) { }
         } finally { Thread.interrupted(); }
-        assertEquals("existing", Files.readString(out.toPath()));
+        assertEquals("existing", ArchiveTestTextFiles.readString(out.toPath()));
     }
 
     @Test public void bulkExtractionSkipsLinksAndSpecialMembers() throws Exception {
@@ -119,8 +119,8 @@ public class TarEntryIndexTest {
                     true, "chapter/2.jpg", "two");
             File output = new File(temp.getRoot(), "bulk-" + compressed);
             assertTrue(ArchiveSupport.extractArchive(archive, output, false, null));
-            assertEquals("one", Files.readString(new File(output, "chapter/1.jpg").toPath()));
-            assertEquals("two", Files.readString(new File(output, "chapter/2.jpg").toPath()));
+            assertEquals("one", ArchiveTestTextFiles.readString(new File(output, "chapter/1.jpg").toPath()));
+            assertEquals("two", ArchiveTestTextFiles.readString(new File(output, "chapter/2.jpg").toPath()));
             assertFalse(new File(output, "link.jpg").exists());
             assertFalse(new File(output, "pipe").exists());
         }
@@ -148,21 +148,76 @@ public class TarEntryIndexTest {
     @Test public void truncatedStreamingPayloadPreservesExistingTarget() throws Exception {
         File archive = damagedFixture(true, true);
         File output = temp.newFile();
-        Files.writeString(output.toPath(), "existing");
+        ArchiveTestTextFiles.writeString(output.toPath(), "existing");
         try { extractStreaming(archive, output); fail("Expected truncated member"); }
         catch (TarEntryIndex.ExtractionException expected) { }
-        assertEquals("existing", Files.readString(output.toPath()));
+        assertEquals("existing", ArchiveTestTextFiles.readString(output.toPath()));
     }
 
     @Test public void streamingBudgetFailurePreservesExistingTarget() throws Exception {
         File archive = fixture("stream-budget.tar.gz", true, false, "chapter/2.jpg", "two");
         File output = temp.newFile();
-        Files.writeString(output.toPath(), "existing");
+        ArchiveTestTextFiles.writeString(output.toPath(), "existing");
         try (ArchiveExtractionByteBudget.Scope ignored = ArchiveExtractionByteBudget.begin(1)) {
             try { extractStreaming(archive, output); fail("Expected budget failure"); }
             catch (TarEntryIndex.ExtractionException expected) { }
         }
-        assertEquals("existing", Files.readString(output.toPath()));
+        assertEquals("existing", ArchiveTestTextFiles.readString(output.toPath()));
+    }
+
+    @Test public void cancelledCachedLookupRemainsTyped() throws Exception {
+        File archive = fixture("cached-cancel.tar", false, false, "page", "data");
+        TarEntryIndex.get(archive);
+        Thread.currentThread().interrupt();
+        try { assertThrows(java.io.InterruptedIOException.class, () -> TarEntryIndex.get(archive)); }
+        finally { Thread.interrupted(); }
+    }
+
+    @Test public void cancelledMissingIndexedMemberDoesNotReturnFalse() throws Exception {
+        File archive = fixture("missing-cancel.tar", false, false, "page", "data");
+        TarEntryIndex.Index index = TarEntryIndex.get(archive);
+        File output = temp.newFile();
+        ArchiveTestTextFiles.writeString(output.toPath(), "existing");
+        Thread.currentThread().interrupt();
+        try {
+            assertThrows(java.io.InterruptedIOException.class,
+                    () -> TarEntryIndex.extract(index, archive, "missing", output));
+        } finally { Thread.interrupted(); }
+        assertEquals("existing", ArchiveTestTextFiles.readString(output.toPath()));
+    }
+
+    @Test public void typedIndexCancellationDoesNotFallBackToStreamingListing() throws Exception {
+        File archive = fixture("cancel-list.tar", false, false, "page", "data");
+        java.io.InterruptedIOException cancelled = new java.io.InterruptedIOException("index cancelled");
+        File failing = cancelledCanonicalPath(archive, cancelled);
+        java.lang.reflect.Method method = ArchiveSupport.class.getDeclaredMethod("listTarEntries",
+                File.class, ArchiveSupport.Type.class);
+        method.setAccessible(true);
+        java.lang.reflect.InvocationTargetException failure = assertThrows(java.lang.reflect.InvocationTargetException.class,
+                () -> method.invoke(null, failing, ArchiveSupport.Type.TAR));
+        assertSame(cancelled, failure.getCause());
+        assertFalse(Thread.currentThread().isInterrupted());
+    }
+
+    @Test public void typedIndexCancellationDoesNotFallBackToStreamingExtraction() throws Exception {
+        File archive = fixture("cancel-extract.tar", false, false, "page", "data");
+        java.io.InterruptedIOException cancelled = new java.io.InterruptedIOException("index cancelled");
+        File output = temp.newFile();
+        ArchiveTestTextFiles.writeString(output.toPath(), "existing");
+        java.lang.reflect.Method method = ArchiveSupport.class.getDeclaredMethod("extractSingleTarEntry",
+                File.class, String.class, File.class, ArchiveSupport.Type.class);
+        method.setAccessible(true);
+        java.lang.reflect.InvocationTargetException failure = assertThrows(java.lang.reflect.InvocationTargetException.class,
+                () -> method.invoke(null, cancelledCanonicalPath(archive, cancelled), "chapter/1.jpg", output,
+                        ArchiveSupport.Type.TAR));
+        assertSame(cancelled, failure.getCause());
+        assertEquals("existing", ArchiveTestTextFiles.readString(output.toPath()));
+    }
+
+    private static File cancelledCanonicalPath(File archive, java.io.InterruptedIOException cancelled) {
+        return new File(archive.getPath()) {
+            @Override public String getCanonicalPath() throws IOException { throw cancelled; }
+        };
     }
 
     // Exercise the writer, not the public preview wrapper's disposable-output deletion policy.

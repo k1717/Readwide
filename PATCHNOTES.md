@@ -1,5 +1,158 @@
 # Patch Notes
 
+## Readwide 1.0.20 - 2026-10-11
+
+### TXT exact-page indexes and partition navigation
+
+- Stream saved exact-page indexes with checksums instead of silently rejecting large indexes at the former 8 MiB cache-file boundary. Reuse stable built-in font identities and distinguish cache validation from estimated totals; imported-font reuse remains identity-dependent.
+- Reuse retained partition data and binary anchor lookup, reduce redundant text/statistics reads, and schedule background indexing separately from foreground navigation.
+- Prepare the next partition during normal/fast scrolling, then adopt it with an owned, viewport-preserving handoff. New touch/navigation intent retires stale handoffs; backward lookbehind is not treated as a forward page jump.
+- Use actual loaded-window/document boundaries for sequential paging while totals are estimated. Automatic turning waits for pending loads/layout and stops at true EOF.
+- Remove overlap-only tail pages at true EOF and invalidate old exact indexes through the `txt-v6-eof-overlap` identity. Keep ordinary page-step, overlap, partition sizes, and existing bookmark characters/context.
+- Use one measured visible-row anchor for page/row labels, new bookmarks, and saved progress. Retain a row while at least half remains visible; choose a successor only if it is actually in the drawing clip.
+- Preserve seam baseline geometry and omit an in-page suffix when its origin cannot be measured reliably. Short positive-height viewports retain their available drawing area; zero-area layouts are not ready.
+- Check character/line arithmetic with wide intermediates before converting to supported coordinates. Reject overflow instead of wrapping; this does not introduce a 64-bit document-coordinate model.
+- Accumulate fractional scrolling, cancel unsupported multi-pointer gestures, and preserve continuity when leaving an extended search position.
+- Resolve line-number/percentage moves against the whole large document. Reuse known-line reads when valid, retain full-scan fallback, and freeze slider scale during dragging.
+
+### TXT loading, search, and reading-state ownership
+
+- Initial restoration keeps an unmatched out-of-window character instead of clamping it to the first buffer. Restart the initial-load lifecycle without stale partition hints so the replacement reveals the text, closes loading, and starts exact indexing; matching context and true-EOF clamping remain intact.
+- Handle worker-side TXT decoding/transformation allocation failure through the generation-owned error UI instead of an uncaught worker error. No automatic large-allocation retry or general out-of-memory recovery guarantee is added.
+- Adopt initial text and restored positions only after an owned current-text layout is ready. Superseded loads cannot perform a late landing or enable persistence.
+- Key snapshots and pending work to source identity, applied encoding/transforms, partition policy, and rendering identity. Do not certify old geometry with newly requested preferences.
+- Retain the owned destination/context across source or policy reloads, memory release, and recreation. Drop stale page/pixel/partition hints; saved state takes precedence over an old launch anchor for the same file.
+- Keep picker/SAF launch ownership when reading a resolved local copy, without using an old restore request for another explicit target.
+- Clamp restoration at true document EOF, including shortened files, before marking restoration complete or saving progress.
+- Keep normalized search offsets ordered and deduplicated in original UTF-16 coordinates, use a single bounded backward scan, and invalidate retained matches after incompatible reloads.
+- Check overlapping context matches and selection boundaries without overflowing saved range ends.
+
+### TXT Contents and reader controls
+
+- Add detected and manual Contents entries, search, current-heading navigation, hide/delete actions, rescan, and same-text-version hidden-title restoration.
+- Support English chapter/part/book, Korean episode/chapter/part/volume, Chinese/Japanese numbered, equals-decorated, hyphen-decorated, and arrow-wrapped heading families.
+- Combine eligible markers such as `345===`, `345---`, or `761화` with an immediately following title while retaining the marker's source anchor. Do not impose a fixed chapter-number or heading-count limit.
+- Add per-file format toggles and blank-boundary, repetition, author-note, and two-line detection conditions. All formats off leaves manual entries only.
+- Add optional RE2/J rules: whole trimmed-line matching, group 1 as the title when present, otherwise the full match. Rules are bounded to 8,192 UTF-16 units in total and candidates/titles to 180 units; lookaround, backreferences, scripts, and custom multiline parsing are not provided.
+- Keep automatic index revision/options identity separate from durable options/manual/hidden records. Saving validated options rescans off-thread; cancelling a draft does not change saved settings.
+- Use rounded action/editor surfaces, compact Contents rows, inset help, a 12 dp space below Close, a dedicated Reset/Cancel/Save row, and additional regex-example spacing.
+- Make font cards content-height-aware without horizontal dividers, align the EPUB font picker with language selection, and raise the bookmark Close label within its existing touch area.
+- Reduce Home's Recent files and Pinned folders headings from 15 sp to 12 sp and minimum header rows from 42 dp to 38 dp. Recent-header vertical padding becomes 2 dp per side; its Clear all control retains 34 dp height.
+
+### Settings backup and recovery
+
+- Add optional `txtContents` version 1 data to JSON backup: validated path-hash option records and path/text-version edit records. Never import arbitrary filesystem paths or automatic Contents caches.
+- Validate strict UTF-8, raw numeric types/ranges, finite theme opacity, record identity, coordinates, and regular expressions before changing saved data.
+- Prepare undo records before mutation and hold Contents snapshot/commit/rollback ownership together. Write Contents records before preference publication so failed imports can restore the prior state.
+- Leave local Contents untouched when an older backup omits the section. Replace only its two private durable-record directories; merge matching options/manual IDs and union hidden IDs.
+- Reject corrupt existing records or unsafe linked paths instead of silently replacing them. Keep AtomicFile recovery handling distinct from imported records.
+- Resolve portable bookmark edits with the prospective restored text preferences and shared per-book context. Retain edits for unavailable books; abort if settings drift before commit.
+- Preserve reading characters/context while invalidating unapplied presentation hints, including overlap-dependent hints.
+- Keep valid local folder fallbacks and default safely for missing fonts. Source files, imported font/theme assets, SAF grants, automatic path relocation, and crash-durable multi-store transactions remain outside backup scope.
+
+### Archive image rendering and thumbnails
+
+- Recent-file refresh uses item diffs and targeted progress/cover payloads instead of whole-list invalidation. An already displayed cover stays visible during same-binding archive identity validation; changed metadata, disabled previews, recycling, and rejected volume identities clear it. New holders still wait for archive-cache validation.
+- Separate accepted displayed-page ownership from requested-page ownership. Save only the accepted item, retain it through bitmap release, and map it into the current namespace during recreation.
+- On foreground return, reattach a retained drawable with the existing pan/zoom matrix and restart animation, or reload a missing/recycled surface. Do not duplicate an active foreground load or sequence/password restoration.
+- Preserve typed password failures on later pages and enter the existing password/rebuild flow. Cancelling that flow still closes the viewer; the last accepted progress remains saved.
+- Route foreground allocation failures to error UI and add bounded lower-allocation WebP/GIF retries. Keep successful quality/animation behavior unchanged.
+- Reuse immutable sequence snapshots and prepared archive metadata. Queued prefetch can yield to foreground work; running work is joined where valid, and stale results release only their own resources.
+- Use independent inputs for eligible plain Store/Deflate ZIP/CBZ images; stateful formats retain scoped sequential readers. Solid-folder verification can still delay the first image.
+- Carry archive source-volume identity through cache hits, extraction, decode, and resume. Retire changed sessions and refuse stale progress; thumbnail keys cover resolved split-volume metadata.
+- Cancel obsolete cover tasks only after their last subscriber leaves. Use bounded cover candidate selection and off-thread metadata work.
+- Construct readers outside short retirement locks and reject obsolete publication by epoch. Keep slow close/cache cleanup on workers.
+- The background-black-screen recovery is a source-level fix; its reported device behavior still needs runtime confirmation. Metadata identity cannot detect content edits that preserve size and timestamp.
+
+### PDF rendering and search
+
+- Treat a renderer and its file descriptor as one owned session. Open/retire sessions off the UI thread and check request validity before expensive page allocation/rasterization.
+- Prioritize current portrait-page work during rapid navigation without adding transition animation. An already-running native rasterization is not forcibly interrupted.
+- Search incrementally at page boundaries and reuse bounded glyph data for eligible small documents. Clear failed partial results rather than caching them as complete.
+- Close superseded PDF search documents on workers and retain valid page/highlight coordinates. No OCR or measured device-speedup claim is added.
+
+### DOC, DOCX, and HWP rendering
+
+- Distinguish omitted Word styling from explicit normal/left/baseline values and preserve inherited line height, separate highlight/shading, and unsigned legacy paragraph spacing.
+- Preserve visible content-control/custom-XML wrappers, blank paragraphs, special hyphens, field results, and selected alternate-content branches without duplicate nested text.
+- Reuse same-style text runs and validate legacy DOC piece bounds. Field results are displayed, not recalculated.
+- Improve text boxes, page/margin proportions, table placement/padding/alignment/height, and HWP structural pagination. Do not retry expensive parsing after resource exhaustion.
+- Render supported subscript/superscript and simple scientific notation across split runs while preserving ordinary underscores and unsupported literal input. Full Word/HWP or equation-layout fidelity is not claimed.
+
+### Markdown and EPUB
+
+- Prefer valid WebView scale callbacks for scroll range and Markdown visual height, keeping left/right views and load generations separate. Preserve the uncached initial-scale query when no matching callback exists. Zoom reset keeps its 18-attempt bound and stops when `zoomOut()` reports no further change.
+- Remove duplicate legacy system-bar appearance writes from document/PDF screens; the existing compat controller, background views and older-Android color handling remain in place.
+- Protect Markdown code and generated links with opaque parsing tokens; handle escaped HTML, backtick runs, fence lengths, leading code blanks, and source anchors consistently.
+- Apply EPUB compatibility aliases only to relevant style attributes/blocks, excluding comments and raw-text elements.
+- Resolve local linked/imported styles per chapter, with decoded-path, charset, and root-boundary handling. Bounded hint scanning does not impose an EPUB file-size limit.
+- Parse CSS declarations with quote/comment/function awareness and preserve priority/order. Avoid duplicate aliases and descriptor/animation false positives; exclude known non-screen media conservatively.
+- Keep actual CSS cascade/layout in the WebView. The lightweight Markdown parser and EPUB hint parser are not complete standards engines.
+- Lease document ZIP resources while active, close only superseded owned results, and wait for valid document restoration before saving state. Reject stale JavaScript anchor callbacks and retain native scroll fallback.
+
+### Read-aloud continuity
+
+- Queue bounded source segments with stable utterance IDs and retain source cursors across partial queue acceptance.
+- Keep continuous TXT speech from replaying overlap; preserve single-page range limits and source-identity-aware checkpoints.
+- Isolate callbacks, highlights, pause/restart, finish-sentence timers, and audio focus by playback generation.
+- Reject incompatible legacy relative TTS checkpoints without changing ordinary bookmarks. Stop orphaned service commands and failed restarts; engine/process survival is not guaranteed.
+
+### RAR3/RAR4
+
+- Share bounded plain/AES/split logical input across first-party LZ/PPMd selected, bulk, and verified-forward paths, including admitted mixed-solid runs and stored companions.
+- Plan required solid primers from a one-pass split-chain index and preflight packed sizes, AES alignment, source bounds, and final integrity metadata before output.
+- Keep raw dictionary history separate from filtered final output. Support scoped custom VM programs, within-entry resizing chains, trailing control records, and supported future descriptors across explicit solid boundaries.
+- Reject partially consumed cross-file filters, straddling/late schedules, and other unsupported VM ordering instead of claiming full RAR compatibility.
+- Preserve primary failures, temporary-file ownership, and cancellation through encrypted-header/split rewrites and checksum finalization.
+
+### RAR5/RAR6/RAR7
+
+- Enforce known/unknown-size compressed-end rules, explicit last blocks, AES alignment tails, and empty/reset solid metadata.
+- Plan admitted dictionary growth with retained-history checks and encrypted paging, and improve ordered DELTA/E8/E8E9/ARM filter handling.
+- Resolve plain stored unknown size from packed length; accept encrypted stored unknown size only when CRC/BLAKE2sp, including applicable keyed verification, selects a unique candidate.
+- Classify unsupported links/junctions/file-copy redirections as metadata rather than empty ordinary files. Actual redirection restoration remains unsupported.
+- Keep integrity, cancellation, and source changes terminal across fallback paths.
+
+### 7z/CB7
+
+- Share coder/graph routing across plain/AES, encoded headers, split input, external filename/folder definitions, and additional substreams.
+- Read supported contents of differential archives while skipping anti-items; do not apply backup deletions.
+- Tighten packed/folder/substream integrity, PPMd7 and BCJ2 finalization, and valid LZMA/LZMA2 endings. Use the public LZMA2 ArrayCache API and clear reader-owned reusable buffers.
+- Add admitted supplemental Zstandard, modern/legacy LZ4, LZ5, Lizard, Brotli/Brotli-MT, and LZHAM profiles, including source-built Brotli large-window decoding.
+- Admit LZ4 dictionary IDs only when decoding does not require unavailable external bytes. Unknown/experimental profiles and unsupported graphs still fail explicitly.
+- Do not restart through another engine after payload output, integrity failure, cancellation, or source change.
+
+### ZIP/ZIPX, EGG, ALZ, CAB, LHA, and TAR
+
+- Harden ZIP64/split offsets, canonical/duplicate names, leased metadata indexes, and local/central encryption metadata agreement. Keep ordinary ZIP off unnecessary encrypted-ZIPX probing.
+- Extend admitted ZIP/ZIPX method routes, including independent PPMd-I freeze-profile selection, concatenated XZ/BZip2, and checked AES authentication/CRC. Never infer universal support from a codec's presence.
+- Add EGG LEA-128/256 and authenticated encrypted-solid block ownership, forward parent-directory references, and empty-block integrity. Encrypted EGG names remain unsupported.
+- Validate ambiguous EGG/ALZ ZipCrypto password encodings against decoded size/integrity before committing output. Extend ALZ rollover discovery through later lettered volumes and reject gaps/aliases.
+- Add linked multi-volume CAB through a separately linked source-built libmspack module and guarded verified spools.
+- Add LHA LH4 and admitted Amiga byte-split `.lha/.lzh + .l01/.l02` handling for checked header layouts; undocumented multi-disc layouts and other unimplemented codecs remain excluded.
+- Validate compressed-TAR decoder completion on full extraction. Fast selected-entry reads do not certify an unread archive tail.
+- Remove remaining fixed extraction/preview/model quotas while retaining the 64 MiB free-space reserve, cumulative guarded writes, integrity/overflow checks, and actual allocation/decoder limits.
+
+### Home, settings, and filesystem operations
+
+- Restore compact Home/folder/search state after unlock and list reload. Use Home for unavailable folders; do not serialize running jobs or full result lists.
+- Separate recent-file work from paused file-operation queues, invalidate obsolete recent snapshots, and load font discovery off-thread.
+- Refresh sorting/visibility/search scope after settings changes while preserving intended subfolder search behavior.
+- Rebind saved folder references after successful rename/move and reject destination replacement that would contain an archive source volume.
+- Separate clipboard batch planning, UI claim/completion, queue state, and filesystem staging/commit/rollback. Keep late results owned by their captured item/mode/generation.
+- Handle just-in-time destination conflicts, failed-item retry, case-only rename rollback, cancellation, and partial completion without deleting unrelated targets or discarding committed success.
+- Preserve recoverable temporary rename data if rollback is blocked. No durable filesystem transaction or background-job restoration across process death is claimed.
+
+### Resources, dependencies, and release boundary
+
+- Align the libarchive Java target with the app's Java 17 build, use explicit Gradle property assignments, and resolve legacy-cleanup paths before task execution. Shorten native staging/WavPack probe paths and scope encoder-only declarations and notices to the relevant native build. Decoder behavior and Android minimum versions are unchanged; remaining deprecations are reported with call-site detail rather than hidden.
+- Correct six document-test style constructors to use the existing `new TextStyle.Builder()` API. Preserve style parameters, fixtures and assertions without adding a production API solely for tests.
+- Replace unavailable `Files.readString`/`writeString` calls in local archive tests with a shared strict UTF-8 helper based on `Files.readAllBytes`/`write`. Replace the fixture tool's `Path.of` with `Paths.get`. Existing fixture contents, assertions and application code are unchanged; add helper regression sources for Unicode, truncation and malformed-input behavior.
+- Release date: `2026-10-11`; version `1.0.20 / 10020`. Add localized Contents/reader strings and supported-launcher themed icons.
+- Include RE2/J and source-built decoder notices, corresponding sources, and license boundaries. The app remains locally processing with no ads, analytics, account, cloud sync, or `INTERNET` permission.
+- Runtime checks remain for TXT partition/restore behavior, backup rollback and cross-device use, long-background image return, document layout, rapid PDF navigation, and producer-generated archive combinations.
+- See [development changes](docs/DEV_CHANGES_1_0_20.md), [archive support notes](docs/ARCHIVE_BOUNDARY_SUPPORT_NOTES.md), and [license report](docs/LICENSE_REPORT_READWIDE_1_0_20.md) for implementation boundaries.
+
 ## Readwide 1.0.19 - 2026-09-19
 
 ### Home and settings

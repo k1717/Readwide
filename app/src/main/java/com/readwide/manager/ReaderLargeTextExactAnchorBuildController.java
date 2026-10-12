@@ -3,10 +3,11 @@ package com.readwide.manager;
 import android.text.TextPaint;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import com.readwide.manager.util.FileUtils;
+import com.readwide.manager.util.LargeTextCoordinateMath;
 import com.readwide.manager.util.LargeTextExactAnchorBuilder;
-import com.readwide.manager.util.LargeTextPartitionReader;
 import com.readwide.manager.util.TextDisplayRule;
 import com.readwide.manager.util.TextDisplayRuleManager;
 import com.readwide.manager.util.TxtBlankLineCollapser;
@@ -14,7 +15,13 @@ import com.readwide.manager.view.CustomReaderView;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.Charset;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -41,25 +48,30 @@ final class ReaderLargeTextExactAnchorBuildController {
                                                             int partitionLines,
                                                             int lookaheadLines,
                                                             int indexGeneration,
-                                                            boolean collapseBlankLines) throws IOException {
+                                                            boolean collapseBlankLines,
+                                                            @NonNull String encoding,
+                                                            @NonNull List<TextDisplayRule> activeRules,
+                                                            @Nullable MessageDigest sourceDigest) throws IOException {
         ArrayList<CustomReaderView.PageTextAnchor> result = new ArrayList<>();
         partitionLines = Math.max(1, partitionLines);
         lookaheadLines = Math.max(0, lookaheadLines);
 
         ArrayList<String> windowLines = new ArrayList<>(partitionLines + lookaheadLines + 8);
         ArrayList<Integer> windowStarts = new ArrayList<>(partitionLines + lookaheadLines + 8);
-        int globalChar = 0;
-        int minAllowedExactAnchorChar = 0;
+        long globalChar = 0L;
+        long minAllowedExactAnchorChar = 0L;
         boolean sawAnyLine = false;
 
-        List<TextDisplayRule> activeRules =
-                TextDisplayRuleManager.getActiveRules(activity.getApplicationContext(), loadedFilePath);
         TextDisplayRuleManager.CompiledRules compiledRules =
                 TextDisplayRuleManager.compile(activeRules);
         TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(
                 collapseBlankLines);
-        try (BufferedReader reader = LargeTextPartitionReader.openReader(
-                source, activity.resolveTextEncodingForFile(source))) {
+        Charset charset = Charset.forName(encoding);
+        // Same decoder/buffer as openReader; hash the bytes already being consumed.
+        try (InputStream input = new FileInputStream(source);
+             BufferedReader reader = new BufferedReader(new InputStreamReader(
+                sourceDigest != null ? new DigestInputStream(input, sourceDigest) : input,
+                charset), 64 * 1024)) {
             String lineText;
             while ((lineText = reader.readLine()) != null) {
                 throwIfCancelled(loadedFilePath, indexGeneration);
@@ -70,10 +82,13 @@ final class ReaderLargeTextExactAnchorBuildController {
                 String emitted = collapseFilter.accept(normalized);
                 if (emitted == null) continue;
                 normalized = emitted;
-                windowStarts.add(globalChar);
-                windowLines.add(normalized);
-                globalChar += normalized.length() + 1;
+                int lineStart = LargeTextCoordinateMath.checkedPosition(globalChar);
+                long nextLineStart = LargeTextCoordinateMath.advancePastLine(
+                        globalChar, normalized.length());
 
+                // This next emitted line proves that the buffered window is not
+                // the document tail. Flush before adding it so the canonical
+                // body/lookahead layout input remains exactly the same size.
                 while (windowLines.size() >= partitionLines + lookaheadLines) {
                     minAllowedExactAnchorChar = appendPartitionAnchors(
                             result,
@@ -89,11 +104,15 @@ final class ReaderLargeTextExactAnchorBuildController {
                             markdownHighlightingEnabled,
                             readerTextColor,
                             readerBackgroundColor,
-                            minAllowedExactAnchorChar);
+                            minAllowedExactAnchorChar,
+                            false);
                     int removeCount = Math.min(partitionLines, windowLines.size());
                     windowLines.subList(0, removeCount).clear();
                     windowStarts.subList(0, removeCount).clear();
                 }
+                windowStarts.add(lineStart);
+                windowLines.add(normalized);
+                globalChar = nextLineStart;
             }
         }
 
@@ -115,7 +134,8 @@ final class ReaderLargeTextExactAnchorBuildController {
                     markdownHighlightingEnabled,
                     readerTextColor,
                     readerBackgroundColor,
-                    minAllowedExactAnchorChar);
+                    minAllowedExactAnchorChar,
+                    true);
             int removeCount = Math.min(partitionLines, windowLines.size());
             windowLines.subList(0, removeCount).clear();
             windowStarts.subList(0, removeCount).clear();
@@ -128,14 +148,15 @@ final class ReaderLargeTextExactAnchorBuildController {
     }
 
     private void throwIfCancelled(@NonNull String loadedFilePath, int indexGeneration) throws IOException {
-        if (!activity.largeTextExactPageIndexState.isGenerationCurrent(indexGeneration)
+        if (Thread.currentThread().isInterrupted()
+                || !activity.largeTextExactPageIndexState.isGenerationCurrent(indexGeneration)
                 || activity.activityDestroyed
                 || !loadedFilePath.equals(activity.filePath)) {
-            throw new IOException("cancelled");
+            throw new java.io.InterruptedIOException("cancelled");
         }
     }
 
-    private int appendPartitionAnchors(@NonNull ArrayList<CustomReaderView.PageTextAnchor> result,
+    private long appendPartitionAnchors(@NonNull ArrayList<CustomReaderView.PageTextAnchor> result,
                                        @NonNull ArrayList<String> windowLines,
                                        @NonNull ArrayList<Integer> windowStarts,
                                        int bodyLineCount,
@@ -148,7 +169,8 @@ final class ReaderLargeTextExactAnchorBuildController {
                                        boolean markdownHighlightingEnabled,
                                        int readerTextColor,
                                        int readerBackgroundColor,
-                                       int minAllowedGlobalCharPosition) {
+                                       long minAllowedGlobalCharPosition,
+                                       boolean reachesDocumentEnd) throws IOException {
         return LargeTextExactAnchorBuilder.appendPartitionAnchors(
                 result,
                 windowLines,
@@ -163,6 +185,7 @@ final class ReaderLargeTextExactAnchorBuildController {
                 markdownHighlightingEnabled,
                 readerTextColor,
                 readerBackgroundColor,
-                minAllowedGlobalCharPosition);
+                minAllowedGlobalCharPosition,
+                reachesDocumentEnd);
     }
 }

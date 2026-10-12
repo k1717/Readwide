@@ -22,6 +22,8 @@ final class ReaderBottomControlsController {
     private static final int TXT_TOOLBAR_POPUP_Y_DP = 74;
 
     private final ReaderActivity activity;
+    private android.app.Dialog pageMoveDialog;
+    private PageMoveControls pageMoveControls;
 
     ReaderBottomControlsController(@NonNull ReaderActivity activity) {
         this.activity = activity;
@@ -42,6 +44,7 @@ final class ReaderBottomControlsController {
         activity.readerToolbarController.bindScrollableButton(R.id.btn_find, activity::showTextSearch);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_page_move, this::showPageMoveBubble);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_bookmark, activity::showBookmarksForFile);
+        activity.readerToolbarController.bindScrollableButton(R.id.btn_txt_contents, activity::showTextContents);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_annotations, activity::showAnnotationsDialog);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_auto_page, activity::showAutoPageTurnDialog);
         activity.readerToolbarController.bindScrollableButton(R.id.btn_tts, activity::showTtsDialog);
@@ -61,6 +64,7 @@ final class ReaderBottomControlsController {
     }
 
     void showPageMoveBubble() {
+        dismissPageMoveBubble();
         if (activity.fileContent == null || activity.fileContent.isEmpty()) {
             ShortToast.show(activity, activity.getString(R.string.file_not_loaded));
             return;
@@ -70,7 +74,7 @@ final class ReaderBottomControlsController {
         final int bubbleFg = activity.dialogStyler().readerDialogTextColor(bubbleBg);
         final int bubbleSub = activity.dialogStyler().readerDialogSubTextColor(bubbleBg);
         int totalPages = activity.getDisplayedTotalPageCount();
-        int currentPage = activity.getDisplayedCurrentPageNumber();
+        int currentPage = activity.getStatusCurrentPageNumber();
 
         LinearLayout panel = new LinearLayout(activity);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -180,34 +184,12 @@ final class ReaderBottomControlsController {
                 460,
                 true);
 
-        final int[] pendingPage = new int[]{currentPage};
-        dialogSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
-                if (!fromUser) return;
-                int pages = activity.getDisplayedTotalPageCount();
-                int page = Math.max(1, Math.min(pages, progress + 1));
-                pendingPage[0] = page;
-                label.setText(formatPageMoveLabel(page, pages,
-                        activity.getLineOffsetWithinDisplayedPage(page, pages)));
-                pageInput.setText(String.valueOf(page));
-                pageInput.setSelection(pageInput.getText().length());
-            }
-
-            @Override public void onStartTrackingTouch(SeekBar sb) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar sb) {
-                int pages = activity.getDisplayedTotalPageCount();
-                int page = Math.max(1, Math.min(pages, pendingPage[0]));
-                activity.previewToolbarSeekPage(page, pages);
-                boolean accepted = activity.scrollToPageNumber(page, true, true);
-                if (accepted) {
-                    activity.beginPendingToolbarSeekJump(page, pages);
-                } else {
-                    activity.clearPendingToolbarSeekJump();
-                    activity.updatePositionLabel();
-                }
+        pageMoveDialog = dialog;
+        pageMoveControls = new PageMoveControls(dialogSeek, label, pageInput);
+        dialog.setOnDismissListener(ignored -> {
+            if (pageMoveDialog == dialog) {
+                pageMoveDialog = null;
+                pageMoveControls = null;
             }
         });
 
@@ -240,6 +222,85 @@ final class ReaderBottomControlsController {
         });
 
         dialog.show();
+        refreshPageMoveBubble();
+    }
+
+    void refreshPageMoveBubble() {
+        if (pageMoveControls != null) pageMoveControls.refresh();
+    }
+
+    void dismissPageMoveBubble() {
+        android.app.Dialog old = pageMoveDialog;
+        pageMoveDialog = null;
+        pageMoveControls = null;
+        if (old != null) old.dismiss();
+    }
+
+    /** Keep one page model per drag; publish a new exact range when idle. */
+    final class PageMoveControls implements SeekBar.OnSeekBarChangeListener {
+        private final SeekBar seek;
+        private final TextView label;
+        private final EditText input;
+        private boolean tracking;
+        private int pendingPage;
+        private int shownTotal = -1, shownPage = -1;
+
+        PageMoveControls(SeekBar seek, TextView label, EditText input) {
+            this.seek = seek;
+            this.label = label;
+            this.input = input;
+            seek.setOnSeekBarChangeListener(this);
+            refresh();
+        }
+
+        void refresh() {
+            if (tracking) return;
+            int pages = Math.max(1, activity.getDisplayedTotalPageCount());
+            int page = Math.max(1, Math.min(pages, activity.getStatusCurrentPageNumber()));
+            if (pages != shownTotal || page != shownPage) {
+                shownTotal = pages;
+                shownPage = page;
+                pendingPage = page;
+                seek.setMax(pages - 1);
+                seek.setProgress(page - 1);
+                input.setHint("1 - " + pages);
+                // Never overwrite a number being edited when indexing completes.
+                if (!input.hasFocus()) input.setText(String.valueOf(page));
+            }
+            label.setText(formatPageMoveLabel(page, pages,
+                    activity.getLineOffsetWithinDisplayedPage(page, pages)));
+        }
+
+        @Override public void onStartTrackingTouch(SeekBar sb) {
+            refresh();
+            tracking = true;
+        }
+
+        @Override public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
+            if (!fromUser) return;
+            int pages = sb.getMax() + 1;
+            pendingPage = Math.max(1, Math.min(pages, progress + 1));
+            label.setText(formatPageMoveLabel(pendingPage, pages,
+                    activity.getLineOffsetWithinDisplayedPage(pendingPage, pages)));
+            input.setText(String.valueOf(pendingPage));
+            input.setSelection(input.getText().length());
+        }
+
+        @Override public void onStopTrackingTouch(SeekBar sb) {
+            int pages = Math.max(1, activity.getDisplayedTotalPageCount());
+            int page = Math.max(1, Math.min(pages, pendingPage));
+            tracking = false;
+            activity.previewToolbarSeekPage(page, pages);
+            boolean accepted = activity.scrollToPageNumber(page, true, true);
+            if (accepted) {
+                activity.beginPendingToolbarSeekJump(page, pages);
+            } else {
+                activity.clearPendingToolbarSeekJump();
+                activity.updatePositionLabel();
+            }
+            shownPage = -1;
+            refresh();
+        }
     }
 
     private void suppressSeekBarPressedEffect(View view) {

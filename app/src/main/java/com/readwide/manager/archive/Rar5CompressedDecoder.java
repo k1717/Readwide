@@ -45,6 +45,8 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     private static final int FILTER_E8 = 1;
     private static final int FILTER_E8E9 = 2;
     private static final int FILTER_ARM = 3;
+    // Pending descriptor memory, not an entry/archive payload-size ceiling.
+    static final int MAX_PENDING_FILTERS = 8192;
 
     private static final long BASE_WINDOW_SIZE = 0x20000L; // 128 KiB
     private static final long MAX_DECLARED_WINDOW_SIZE = 1L << 40; // RAR7 field limit: 1 TiB
@@ -53,6 +55,7 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     // ---- canonical Huffman decode table ----
     private static final class DecodeTable {
         int size;
+        int symbolCount;
         int quickBits;
         final int[] decodeLen = new int[16];
         final int[] decodePos = new int[16];
@@ -81,7 +84,7 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     private byte[] input;       // one compressed block + zero padding
     private InputStream packedInput;
     private long writePtr;      // file-relative produced byte count
-    private long expectedOutput;
+    private long expectedOutput; // Exact known size, or signed-position headroom for unknown size.
     private OutputStream output;
     private final byte[] outputChunk = new byte[64 * 1024];
     private int outputCount;
@@ -90,6 +93,7 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     private int blockStart;     // offset of the current block's data in `input`
     private int blockSize;      // size of the current block's data
     private int blockBitSize;   // valid bits in the final byte of the block
+    private int blockBits;      // excludes zero padding used only for lookahead
     private boolean lastBlock;
     private int inAddr;         // bit reader position, relative to blockStart
     private int bitAddr;
@@ -108,7 +112,6 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     /** Discards all solid state; the next entry must be non-solid. */
     void reset() throws IOException {
         Rar5HistoryStore previous = window;
-        window = null;
         windowSize = 0;
         solidOffset = 0;
         java.util.Arrays.fill(distCache, 0);
@@ -116,6 +119,8 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
         primed = false;
         invalidateTables();
         if (previous != null) previous.close();
+        // Keep a failed-cleanup owner reachable so a later close can retry deletion.
+        window = null;
     }
 
     @Override public void close() throws IOException {
@@ -161,11 +166,30 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
         return result.toByteArray();
     }
 
-    /** Streams one entry without retaining its full packed or unpacked payload. */
+    /** Streams one entry; -1 means decode to the explicit last compressed block.
+     * No full packed or unpacked payload is retained.
+     */
     void decodeEntry(InputStream packed, long unpackedSize, long compressionInfo,
                      OutputStream destination) throws IOException {
+        decodeEntry(packed, unpackedSize, compressionInfo, destination, false);
+    }
+
+    /** The extractor may identify a zero-packed-byte file in a solid archive from metadata.
+     * A non-solid file resets history, including when it is empty. A solid file
+     * still requires a primed predecessor; this mode never invents its history.
+     * Never infer it from an unexpected EOF in an ordinary compressed entry.
+     */
+    void decodeEntry(InputStream packed, long unpackedSize, long compressionInfo,
+                     OutputStream destination, boolean emptyPackedEntry) throws IOException {
+        decodeEntry(packed, unpackedSize, compressionInfo, destination, emptyPackedEntry, 0);
+    }
+
+    /** A reset-only storage hint from the complete solid-run metadata, not a match-distance limit. */
+    void decodeEntry(InputStream packed, long unpackedSize, long compressionInfo,
+                     OutputStream destination, boolean emptyPackedEntry, long plannedHistorySize) throws IOException {
         try {
-            decodeEntryInternal(packed, unpackedSize, compressionInfo, destination);
+            decodeEntryInternal(packed, unpackedSize, compressionInfo, destination, emptyPackedEntry,
+                    plannedHistorySize);
         } catch (IOException | RuntimeException | Error failure) {
             try { close(); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
             throw failure;
@@ -176,17 +200,30 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     }
 
     private void decodeEntryInternal(InputStream packed, long unpackedSize, long compressionInfo,
-                                     OutputStream destination) throws IOException {
+                                     OutputStream destination, boolean emptyPackedEntry,
+                                     long plannedHistorySize) throws IOException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new java.io.InterruptedIOException("RAR5 entry decoding cancelled");
+        }
         int algoVersion = (int) (compressionInfo & 0x3F);
         if (algoVersion != 0 && algoVersion != 1) {
             throw new Rar5DataException(
                     "Unsupported RAR5 compression algorithm version: " + algoVersion);
         }
         boolean solid = (compressionInfo & 0x40L) != 0;
+        if (plannedHistorySize < 0 || plannedHistorySize > MAX_DECLARED_WINDOW_SIZE
+                || (solid && plannedHistorySize != 0)) {
+            throw new Rar5DataException("Invalid RAR solid history reservation");
+        }
+        if (emptyPackedEntry) {
+            if (unpackedSize != 0 || readCheckedPackedByte(packed) != -1) {
+                throw new Rar5DataException("RAR5 empty solid entry has inconsistent metadata or payload");
+            }
+        }
         long declaredWindow = declaredWindowSize(compressionInfo);
         int entryDistanceTableSize = usesExtendedDistanceTable(compressionInfo)
                 ? DIST_TABLE_SIZE_V1 : DIST_TABLE_SIZE_V0;
-        if (unpackedSize < 0) {
+        if (unpackedSize < -1) {
             throw new Rar5DataException(
                     "RAR5 entry unpacked size is outside supported bounds: " + unpackedSize);
         }
@@ -197,24 +234,21 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
                         "RAR5 solid entry arrived before any predecessor primed the window; "
                                 + "solid predecessors must be decoded first");
             }
-            if (declaredWindow != windowSize) {
-                // RAR encoders guarantee one dictionary size throughout a
-                // solid stream. Growing it mid-stream makes ring positions
-                // ambiguous and is rejected by the reference decoder too.
-                throw new Rar5DataException(
-                        "RAR5 solid entry declares an incompatible window size ("
-                                + declaredWindow + " vs " + windowSize + ")");
-            }
             if (solidOffset > Long.MAX_VALUE - writePtr
-                    || solidOffset + writePtr > Long.MAX_VALUE - unpackedSize) {
+                    || (unpackedSize >= 0 && solidOffset + writePtr > Long.MAX_VALUE - unpackedSize)) {
                 throw new Rar5DataException("RAR5 solid position overflow");
             }
+            // The header declares a minimum dictionary. Keep a larger allocation;
+            // Planned archive reads reserve the run's maximum before decoding.
+            // Unplanned growth is still rejected if history has already been lost.
+            window.ensureCapacity(declaredWindow);
+            windowSize = Math.max(windowSize, declaredWindow);
             solidOffset += writePtr;
         } else {
             // Retain the full declared logical history using bounded RAM and
             // encrypted temporary pages. No allocation proportional to the header.
             reset();
-            window = new Rar5HistoryStore(declaredWindow);
+            window = new Rar5HistoryStore(Math.max(declaredWindow, plannedHistorySize));
             windowSize = declaredWindow;
             solidOffset = 0;
             java.util.Arrays.fill(distCache, 0);
@@ -226,7 +260,9 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
 
         this.packedInput = packed;
         this.writePtr = 0;
-        this.expectedOutput = unpackedSize;
+        // Unknown output is limited only by representable history positions, not
+        // an arbitrary payload cap. The same emit/match/filter guards prevent overflow.
+        this.expectedOutput = unpackedSize < 0 ? Long.MAX_VALUE - solidOffset : unpackedSize;
         this.output = destination;
         this.outputCount = 0;
         this.filterInput = null;
@@ -235,48 +271,30 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
         this.lastFilterBlockStart = 0;
         this.lastFilterBlockLength = 0;
         this.blockSize = 0;
-        this.lastBlock = false;
+        // A metadata-confirmed empty entry has no compressed block at all.
+        // Still perform ordinary reset/solid setup, overflow checks and completion.
+        this.lastBlock = emptyPackedEntry;
 
-        boolean blockOpen = false;
-
-        while (writePtr < unpackedSize) {
-            if (!blockOpen || blockExhausted()) {
-                if (blockOpen && lastBlock) {
-                    throw new Rar5DataException(
-                            "RAR5 stream ended after " + writePtr + " of " + unpackedSize
-                                    + " bytes");
-                }
-                openBlock();
-                blockOpen = true;
-                continue;
-            }
-            decodeOneSymbol();
+        // A physical EOF is never a successful terminator. Both known and unknown
+        // sizes use the same block grammar and must consume the explicit last block.
+        while (!lastBlock) {
+            openBlock();
+            decodeBlockSymbols();
         }
-
-        // Strict end-of-entry validation: the producing symbol must have been
-        // the final symbol of the final block, otherwise the stream is not
-        // aligned the way a well-formed archive would be.
-        if (writePtr != unpackedSize) {
+        if (unpackedSize >= 0 && writePtr != unpackedSize) {
             throw new Rar5DataException(
-                    "RAR5 stream overshot the declared unpacked size: produced "
+                    "RAR5 stream did not match the declared unpacked size: produced "
                             + writePtr + " of " + unpackedSize);
-        }
-        if (blockOpen && !blockExhausted()) {
-            // Allow trailing filter declarations in the final block.
-            drainTrailingNonDataSymbols();
-        }
-        if (!lastBlock) {
-            // Tolerate trailing empty/filter-only blocks until the last one.
-            while (!lastBlock) {
-                openBlock();
-                drainTrailingNonDataSymbols();
-            }
         }
 
         if (!filters.isEmpty() || filterInput != null) {
             throw new Rar5DataException("Incomplete RAR5 output filter");
         }
+        if (Thread.currentThread().isInterrupted()) {
+            throw new java.io.InterruptedIOException("RAR5 completion cancelled");
+        }
         flushOutputChunk();
+        checkPackedCancellation();
         primed = true;
     }
 
@@ -319,12 +337,14 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     // ---- block management ----
 
     private boolean blockExhausted() {
-        return inAddr > blockSize - 1
-                || (inAddr == blockSize - 1 && bitAddr >= blockBitSize);
+        return inAddr * 8 + bitAddr >= blockBits;
     }
 
     /** Only one format-sized compressed block (at most 0xffffff bytes) is buffered. */
     private void openBlock() throws IOException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new java.io.InterruptedIOException("RAR5 block decoding cancelled");
+        }
         int flags = readPackedByte();
         int checksum = readPackedByte();
         int byteCount = (flags >> 3) & 7;
@@ -343,8 +363,12 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
         if (input == null || input.length < size + 8) input = new byte[size + 8];
         int done = 0;
         while (done < size) {
-            int count = packedInput.read(input, done, size - done);
-            if (count < 0) throw new Rar5DataException("Truncated RAR5 block data");
+            checkPackedCancellation();
+            int requested = size - done;
+            int count = packedInput.read(input, done, requested);
+            checkPackedCancellation();
+            if (count < -1 || count > requested) throw new IOException("Invalid RAR5 packed read count");
+            if (count == -1) throw new Rar5DataException("Truncated RAR5 block data");
             if (count == 0) {
                 input[done++] = (byte) readPackedByte();
             } else {
@@ -356,6 +380,7 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
         this.blockStart = 0;
         this.blockSize = size;
         this.blockBitSize = 1 + (flags & 7);
+        this.blockBits = size == 0 ? 0 : (size - 1) * 8 + blockBitSize;
         this.lastBlock = ((flags >> 6) & 1) != 0;
         this.inAddr = 0;
         this.bitAddr = 0;
@@ -363,23 +388,38 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
         boolean tablePresent = ((flags >> 7) & 1) != 0;
         if (tablePresent) {
             parseTables();
-        } else if (!mainTable.valid || !distTable.valid
-                || distTable.size != distanceTableSize) {
+        } else if (size != 0 && (!mainTable.valid || !distTable.valid
+                || distTable.size != distanceTableSize)) {
             throw new Rar5DataException(
                     "RAR5 block reuses Huffman tables, but no tables are available");
         }
     }
 
     private int readPackedByte() throws IOException {
-        int value = packedInput.read();
+        int value = readCheckedPackedByte(packedInput);
         if (value < 0) throw new Rar5DataException("Truncated RAR5 packed stream");
         return value;
+    }
+
+    /** Source contract failures must not be reinterpreted as compressed symbols. */
+    private static int readCheckedPackedByte(InputStream source) throws IOException {
+        checkPackedCancellation();
+        int value = source.read();
+        checkPackedCancellation();
+        if (value < -1 || value > 255) throw new IOException("Invalid RAR5 packed byte value");
+        return value;
+    }
+
+    private static void checkPackedCancellation() throws java.io.InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new java.io.InterruptedIOException("RAR5 packed decoding cancelled");
+        }
     }
 
     // ---- bit reader (positions relative to blockStart) ----
 
     private int peekBits16() {
-        if (inAddr >= blockSize) {
+        if (blockExhausted()) {
             throw new Rar5DataException("Premature end of RAR5 block data");
         }
         int base = blockStart + inAddr;
@@ -391,6 +431,11 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     }
 
     private void skipBits(int bits) {
+        // Padding makes a short-code peek safe, but it must never complete a
+        // truncated Huffman code, table nibble, distance or filter operand.
+        if (bits < 0 || bits > blockBits - (inAddr * 8 + bitAddr)) {
+            throw new Rar5DataException("RAR5 symbol exceeds declared block bits");
+        }
         int next = bitAddr + bits;
         inAddr += next >> 3;
         bitAddr = next & 7;
@@ -420,13 +465,18 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     // ---- canonical Huffman tables ----
 
     private void createDecodeTable(byte[] bitLength, int off, DecodeTable table, int size) {
+        table.valid = false;
+        table.symbolCount = 0;
         int[] lengthCount = new int[16];
         java.util.Arrays.fill(table.decodeNum, 0, size, 0);
         table.size = size;
         table.quickBits = size == MAIN_TABLE_SIZE ? 10 : 7;
 
         for (int i = 0; i < size; i++) {
-            lengthCount[bitLength[off + i] & 15]++;
+            int length = bitLength[off + i] & 255;
+            if (length > 15) throw new Rar5DataException("Invalid RAR5 Huffman code length");
+            lengthCount[length]++;
+            if (length != 0) table.symbolCount++;
         }
         lengthCount[0] = 0;
         table.decodePos[0] = 0;
@@ -434,6 +484,9 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
         int upperLimit = 0;
         for (int i = 1; i < 16; i++) {
             upperLimit += lengthCount[i];
+            if (upperLimit > (1 << i)) {
+                throw new Rar5DataException("Oversubscribed RAR5 Huffman table");
+            }
             table.decodeLen[i] = upperLimit << (16 - i);
             table.decodePos[i] = table.decodePos[i - 1] + lengthCount[i - 1];
             upperLimit <<= 1;
@@ -469,7 +522,15 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     }
 
     private int decodeNumber(DecodeTable table) {
+        // Unused distance/repetition alphabets may be empty, but decoding one
+        // must not silently manufacture symbol zero from cleared table storage.
+        if (!table.valid || table.symbolCount == 0) {
+            throw new Rar5DataException("RAR5 Huffman decode from empty or unavailable table");
+        }
         int bitField = peekBits16() & 0xFFFE;
+        if (bitField >= table.decodeLen[15]) {
+            throw new Rar5DataException("Invalid RAR5 Huffman code");
+        }
         if (bitField < table.decodeLen[table.quickBits]) {
             int code = bitField >> (16 - table.quickBits);
             skipBits(table.quickLen[code]);
@@ -486,8 +547,8 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
         int dist = bitField - table.decodeLen[bits - 1];
         dist >>= 16 - bits;
         int pos = table.decodePos[bits] + dist;
-        if (pos >= table.size) {
-            pos = 0;
+        if (pos < 0 || pos >= table.symbolCount) {
+            throw new Rar5DataException("Invalid RAR5 Huffman symbol position");
         }
         return table.decodeNum[pos];
     }
@@ -495,26 +556,10 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     /** Parses the Huffman tables from the start of the current block. */
     private void parseTables() {
         byte[] bitLength = new byte[BIT_LENGTH_TABLE_SIZE];
-        int i = 0;
-        int nibbleShift = 4;
         for (int w = 0; w < BIT_LENGTH_TABLE_SIZE; ) {
-            if (i >= blockSize) {
-                throw new Rar5DataException("Truncated RAR5 Huffman bit-length table");
-            }
-            int value = (input[blockStart + i] >> nibbleShift) & 0x0F;
-            if (nibbleShift == 0) {
-                i++;
-            }
-            nibbleShift ^= 4;
+            int value = readBits(4);
             if (value == 15) {
-                if (i >= blockSize) {
-                    throw new Rar5DataException("Truncated RAR5 Huffman bit-length table");
-                }
-                value = (input[blockStart + i] >> nibbleShift) & 0x0F;
-                if (nibbleShift == 0) {
-                    i++;
-                }
-                nibbleShift ^= 4;
+                value = readBits(4);
                 if (value == 0) {
                     bitLength[w++] = 15;
                 } else {
@@ -526,9 +571,6 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
                 bitLength[w++] = (byte) value;
             }
         }
-        inAddr = i;
-        bitAddr = nibbleShift ^ 4;
-
         createDecodeTable(bitLength, 0, bitLengthTable, BIT_LENGTH_TABLE_SIZE);
 
         int allTablesSize = MAIN_TABLE_SIZE + distanceTableSize
@@ -672,7 +714,7 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
     private void emitByte(byte b) throws IOException {
         if (writePtr >= expectedOutput) {
             throw new Rar5DataException(
-                    "RAR5 stream produced more data than the declared unpacked size");
+                    "RAR5 stream exceeded the output size or numeric position bound");
         }
         window.append(b);
         emitOutputByte(b);
@@ -684,9 +726,26 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
             throw new Rar5DataException("RAR5 match distance is outside the window: " + dist);
         }
         long base = solidOffset + writePtr;
-        if (len > expectedOutput - writePtr) {
-            throw new Rar5DataException("RAR5 match overshot the declared unpacked size");
+        if (len < 0 || len > expectedOutput - writePtr) {
+            throw new Rar5DataException("RAR5 match exceeded the output size or numeric position bound");
         }
+        FilterInfo pending = filters.peek();
+        if (len >= 16 && (pending == null || pending.blockStart >= writePtr + len)) {
+            // Share the existing output buffer. History copies are page/ring
+            // bounded and overlap-safe; CRC/output-space guards stay downstream.
+            int remaining = len;
+            while (remaining > 0) {
+                int count = Math.min(remaining, outputChunk.length - outputCount);
+                window.copyMatch(dist, outputChunk, outputCount, count);
+                outputCount += count;
+                writePtr += count;
+                remaining -= count;
+                if (outputCount == outputChunk.length) flushOutputChunk();
+            }
+            return;
+        }
+        // Keep the existing byte-exact filter transition path for matches that
+        // intersect a filter; the dictionary must retain unfiltered bytes.
         for (int i = 0; i < len; i++) {
             long source = base + i - dist;
             byte b = window.read(source);
@@ -694,17 +753,14 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
         }
     }
 
-    /** Consumes remaining non-data symbols (filters / no-op reps) at the end of an entry. */
-    private void drainTrailingNonDataSymbols() {
+    /** Decodes only declared block bits, including filters and no-output repetitions. */
+    private void decodeBlockSymbols() throws IOException {
+        int symbols = 0;
         while (!blockExhausted()) {
-            int num = decodeNumber(mainTable);
-            if (num == 256) {
-                parseFilter();
-                continue;
+            if ((symbols++ & 1023) == 0 && Thread.currentThread().isInterrupted()) {
+                throw new java.io.InterruptedIOException("RAR5 block decoding cancelled");
             }
-            throw new Rar5DataException(
-                    "RAR5 stream desynchronised: data symbol " + num
-                            + " after the declared unpacked size was produced");
+            decodeOneSymbol();
         }
     }
 
@@ -731,25 +787,36 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
             throw new Rar5DataException("RAR5 filter starts beyond the entry output");
         }
         long absStart = writePtr + start;
-        if (length < 4 || length > 0x400000 || type > FILTER_ARM
+        if (length < 1 || length > 0x400000 || type > FILTER_ARM
                 || length > expectedOutput - absStart
-                || !isValidFilterBlockStart(absStart)) {
+                || !isValidFilterRange(absStart, length)) {
             throw new Rar5DataException("Invalid RAR5 filter declaration");
+        }
+        if (filters.size() >= MAX_PENDING_FILTERS) {
+            throw new Rar5DataException("RAR5 pending filter metadata limit");
         }
         FilterInfo filter = new FilterInfo();
         filter.type = type;
         filter.blockStart = absStart;
         filter.blockLength = (int) length;
-        lastFilterBlockStart = filter.blockStart;
-        lastFilterBlockLength = filter.blockLength;
         if (type == FILTER_DELTA) {
             filter.channels = readBits(5) + 1;
         }
+        // Commit only after the entire record (including DELTA channels) is valid.
         filters.add(filter);
+        lastFilterBlockStart = filter.blockStart;
+        lastFilterBlockLength = filter.blockLength;
     }
 
-    private boolean isValidFilterBlockStart(long absStart) {
+    private boolean isValidFilterRange(long absStart, long length) {
         if (lastFilterBlockLength == 0) {
+            return true;
+        }
+        // Same-range records form an ordered chain over one buffered block.
+        // Partial overlaps, different chain lengths and already emitted ranges
+        // must not become a second consumer of those raw bytes.
+        FilterInfo previous = filters.peekLast();
+        if (previous != null && absStart == previous.blockStart && length == previous.blockLength) {
             return true;
         }
         return absStart >= lastFilterBlockStart + lastFilterBlockLength;
@@ -766,9 +833,17 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
             }
             filterInput[filterCount++] = value;
             if (filterCount == filterInput.length) {
-                byte[] transformed = applyFilter(filter, filterInput);
+                long start = filter.blockStart;
+                int length = filter.blockLength;
+                byte[] transformed = filterInput;
+                while ((filter = filters.peek()) != null && filter.blockStart == start
+                        && filter.blockLength == length) {
+                    checkFilterCancellation();
+                    transformed = applyFilter(filter, transformed);
+                    filters.remove();
+                }
+                // Publish once, after all transformations, leaving raw LZ history untouched.
                 output.write(transformed);
-                filters.remove();
                 filterInput = null;
                 filterCount = 0;
             }
@@ -785,66 +860,76 @@ final class Rar5CompressedDecoder implements java.io.Closeable {
         }
     }
 
-    private byte[] applyFilter(FilterInfo filter, byte[] out) {
+    private byte[] applyFilter(FilterInfo filter, byte[] out) throws IOException {
         long start = filter.blockStart;
         int length = filter.blockLength;
         int s = 0;
-        byte[] filtered = new byte[length];
         switch (filter.type) {
             case FILTER_DELTA: {
+                byte[] filtered = new byte[length];
                 int srcPos = 0;
                 for (int channel = 0; channel < filter.channels; channel++) {
                     int prev = 0;
                     for (int destPos = channel; destPos < length;
                             destPos += filter.channels) {
+                        if ((srcPos & 0x3fff) == 0) checkFilterCancellation();
                         prev = (prev - (out[s + srcPos] & 0xFF)) & 0xFF;
                         filtered[destPos] = (byte) prev;
                         srcPos++;
                     }
                 }
-                break;
+                return filtered;
             }
             case FILTER_E8:
             case FILTER_E8E9: {
                 boolean extended = filter.type == FILTER_E8E9;
-                System.arraycopy(out, s, filtered, 0, length);
                 final long fileSize = 0x1000000L;
+                int checkpointAt = 0;
                 for (int i = 0; i < length - 4; ) {
+                    if (i >= checkpointAt) {
+                        checkFilterCancellation();
+                        checkpointAt = i + 16384;
+                    }
                     int b = out[s + i++] & 0xFF;
                     if (b == 0xE8 || (extended && b == 0xE9)) {
                         long offset = (i + start) % fileSize;
                         long addr = readLe32(out, s + i);
                         if ((addr & 0x80000000L) != 0) {
                             if (((addr + offset) & 0x80000000L) == 0) {
-                                writeLe32(filtered, i, addr + fileSize);
+                                writeLe32(out, i, addr + fileSize);
                             }
                         } else {
                             if (((addr - fileSize) & 0x80000000L) != 0) {
-                                writeLe32(filtered, i, addr - offset);
+                                writeLe32(out, i, addr - offset);
                             }
                         }
                         i += 4;
                     }
                 }
-                break;
+                return out;
             }
             case FILTER_ARM: {
-                System.arraycopy(out, s, filtered, 0, length);
                 for (int i = 0; i + 3 < length; i += 4) {
+                    if ((i & 0x3fff) == 0) checkFilterCancellation();
                     if ((out[s + i + 3] & 0xFF) == 0xEB) {
                         long offset = readLe32(out, s + i) & 0x00FFFFFFL;
                         offset -= (i + start) / 4;
                         offset = (offset & 0x00FFFFFFL) | 0xEB000000L;
-                        writeLe32(filtered, i, offset);
+                        writeLe32(out, i, offset);
                     }
                 }
-                break;
+                return out;
             }
             default:
                 throw new Rar5DataException(
                         "Unsupported RAR5 filter type: " + filter.type);
         }
-        return filtered;
+    }
+
+    private static void checkFilterCancellation() throws java.io.InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new java.io.InterruptedIOException("RAR5 filter decoding cancelled");
+        }
     }
 
     private static long readLe32(byte[] buf, int off) {

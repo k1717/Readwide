@@ -8,6 +8,11 @@ import java.util.Locale;
 public final class FileThumbnailMath {
     private FileThumbnailMath() {}
 
+    /** Unknown (-1) and positive sizes may contain a cover; decode bounds decide validity. */
+    public static boolean hasPossibleImageData(long declaredSize) {
+        return declaredSize == -1L || declaredSize > 0L;
+    }
+
     public static int firstImageIndex(@Nullable String[] names) {
         if (names == null || names.length == 0) return -1;
         int best = -1;
@@ -25,7 +30,10 @@ public final class FileThumbnailMath {
 
     public static boolean isThumbnailImageName(@Nullable String name) {
         if (name == null) return false;
-        String lower = name.toLowerCase(Locale.ROOT);
+        return isLowercaseThumbnailImageName(name.toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean isLowercaseThumbnailImageName(String lower) {
         return lower.endsWith(".jpg")
                 || lower.endsWith(".jpeg")
                 || lower.endsWith(".jfif")
@@ -42,8 +50,14 @@ public final class FileThumbnailMath {
 
     public static boolean isThumbnailArchiveName(@Nullable String name) {
         if (name == null) return false;
-        String lower = name.toLowerCase(Locale.ROOT);
-        if (lower.matches(".*\\.(zip|zipx|7z|cb7)\\.001$")) return true;
+        return isLowercaseThumbnailArchiveName(name.toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean isLowercaseThumbnailArchiveName(String lower) {
+        if (lower.endsWith(".001")) {
+            return lower.endsWith(".zip.001") || lower.endsWith(".zipx.001")
+                    || lower.endsWith(".7z.001") || lower.endsWith(".cb7.001");
+        }
         return lower.endsWith(".zip")
                 || lower.endsWith(".zipx")
                 || lower.endsWith(".cbz")
@@ -77,8 +91,8 @@ public final class FileThumbnailMath {
     public static boolean isThumbnailCandidateName(@Nullable String name) {
         if (name == null) return false;
         String lower = name.toLowerCase(Locale.ROOT);
-        return isThumbnailImageName(lower)
-                || isThumbnailArchiveName(lower)
+        return isLowercaseThumbnailImageName(lower)
+                || isLowercaseThumbnailArchiveName(lower)
                 || lower.endsWith(".pdf")
                 || lower.endsWith(".epub");
     }

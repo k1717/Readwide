@@ -16,16 +16,14 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 /**
  * Stage 3 renderer for legacy binary Word (.doc, [MS-DOC]) documents.
  *
- * It reconstructs the main document text from the piece table (CLX) in the OLE2
+ * It reconstructs document text from the piece table (CLX) in the OLE2
  * table stream and maps it to the shared {@link RenderedDocument} model. Stage 1
  * produced readable paragraphs; stage 2 added character formatting (bold,
  * italic, underline, strike, size, color) as styled runs; stage 3 adds
@@ -54,7 +52,13 @@ public final class DocLegacyLayoutExtractor {
     private static final int CHPX_PAIR_INDEX = 12;  // fcPlcfbteChpx / lcbPlcfbteChpx
     private static final int PAPX_PAIR_INDEX = 13;  // fcPlcfbtePapx / lcbPlcfbtePapx
 
-    private static final Charset CP1252 = charset("windows-1252");
+    // MS-DOC 2.9.73 FcCompressed: bytes outside this range map directly to Unicode.
+    // This is deliberately NOT Windows-1252 (notably 0x80, 0x8E and 0x9E differ).
+    private static final String COMPRESSED_C1 =
+            "\u0080\u0081\u201a\u0192\u201e\u2026\u2020\u2021"
+            + "\u02c6\u2030\u0160\u2039\u0152\u008d\u008e\u008f"
+            + "\u0090\u2018\u2019\u201c\u201d\u2022\u2013\u2014"
+            + "\u02dc\u2122\u0161\u203a\u0153\u009d\u009e\u0178";
 
     private DocLegacyLayoutExtractor() {}
 
@@ -123,19 +127,23 @@ public final class DocLegacyLayoutExtractor {
 
     @Nullable
     private static Reconstructed reconstructText(byte[] wd, byte[] table, int fcClx, int lcbClx) throws IOException {
+        requireRange(table, fcClx, lcbClx);
         int i = fcClx;
         int end = fcClx + lcbClx;
         // Skip any Prc entries (0x01 marker, 2-byte length, then that many bytes).
         while (i < end && (table[i] & 0xFF) == 0x01) {
-            if (i + 3 > table.length) throw new IOException("Word piece table Prc out of range");
+            if (end - i < 3) throw new IOException("Word piece table Prc out of range");
             int cb = u16(table, i + 1);
+            if (cb > end - i - 3) throw new IOException("Word piece table Prc out of range");
             i += 3 + cb;
         }
         if (i >= end || (table[i] & 0xFF) != 0x02) throw new IOException("Word piece table has no Pcdt");
-        if (i + 5 > table.length) throw new IOException("Word piece table Pcdt out of range");
+        if (end - i < 5) throw new IOException("Word piece table Pcdt out of range");
         long lcbPlc = u32(table, i + 1);
         i += 5;
-        if (lcbPlc < 4 || (long) i + lcbPlc > table.length) throw new IOException("Word piece table length invalid");
+        if (lcbPlc < 4 || (lcbPlc - 4) % 12 != 0 || lcbPlc > end - i) {
+            throw new IOException("Word piece table length invalid");
+        }
         int plc = i;
         int pieces = (int) ((lcbPlc - 4) / 12);
         if (pieces <= 0) return null;
@@ -143,48 +151,44 @@ public final class DocLegacyLayoutExtractor {
         int cpBase = plc;
         int pcdBase = plc + (pieces + 1) * 4;
 
-        StringBuilder sb = new StringBuilder();
-        int[] fc = new int[256];
-        int fcLen = 0;
-
+        // Validate the entire descriptor table before allocating text or its FC map.
+        // Never silently shorten corrupt pieces or return a successful partial preview.
+        if (i32(table, cpBase) != 0) throw new IOException("Word piece table must start at CP zero");
         for (int k = 0; k < pieces; k++) {
-            if (sb.length() >= MAX_TEXT_CHARS) break;
             int cpStart = i32(table, cpBase + k * 4);
             int cpEnd = i32(table, cpBase + (k + 1) * 4);
-            int chars = cpEnd - cpStart;
-            if (chars <= 0) continue;
+            if (cpStart < 0 || cpEnd <= cpStart || cpEnd > MAX_TEXT_CHARS) {
+                throw new IOException("Word piece character range is invalid or exceeds the preview budget");
+            }
+            long chars = (long) cpEnd - cpStart;
             int fcRaw = i32(table, pcdBase + k * 8 + 2);
             boolean compressed = (fcRaw & 0x40000000) != 0;
             int offset = fcRaw & 0x3FFFFFFF;
-            String piece;
-            int base;
-            int step;
-            if (compressed) {
-                base = offset / 2;
-                step = 1;
-                int avail = Math.max(0, Math.min(chars, wd.length - base));
-                if (avail <= 0) continue;
-                piece = new String(wd, base, avail, CP1252);
-            } else {
-                base = offset;
-                step = 2;
-                int byteLen = chars * 2;
-                int avail = Math.max(0, Math.min(byteLen, wd.length - offset));
-                avail -= (avail % 2);
-                if (avail <= 0) continue;
-                piece = new String(wd, offset, avail, StandardCharsets.UTF_16LE);
+            int base = compressed ? offset / 2 : offset;
+            if ((long) base + chars * (compressed ? 1 : 2) > wd.length) {
+                throw new IOException("Word piece extends beyond the document stream");
             }
-            int pieceLen = piece.length();
-            if (fcLen + pieceLen > fc.length) {
-                fc = Arrays.copyOf(fc, Math.max(fc.length * 2, fcLen + pieceLen));
-            }
-            for (int c = 0; c < pieceLen; c++) {
-                fc[fcLen++] = base + c * step;
-            }
-            sb.append(piece);
         }
-        if (fcLen == 0) return null;
-        return new Reconstructed(sb.toString(), (fcLen == fc.length) ? fc : Arrays.copyOf(fc, fcLen));
+        int totalChars = i32(table, cpBase + pieces * 4);
+        char[] text = new char[totalChars];
+        int[] fc = new int[totalChars];
+        for (int k = 0; k < pieces; k++) {
+            int cpStart = i32(table, cpBase + k * 4);
+            int chars = i32(table, cpBase + (k + 1) * 4) - cpStart;
+            int fcRaw = i32(table, pcdBase + k * 8 + 2);
+            boolean compressed = (fcRaw & 0x40000000) != 0;
+            int offset = fcRaw & 0x3FFFFFFF;
+            int base = compressed ? offset / 2 : offset;
+            int step = compressed ? 1 : 2;
+            for (int c = 0; c < chars; c++) {
+                int position = base + c * step;
+                int value = compressed ? wd[position] & 0xFF : u16(wd, position);
+                text[cpStart + c] = compressed && value >= 0x80 && value <= 0x9F
+                        ? COMPRESSED_C1.charAt(value - 0x80) : (char) value;
+                fc[cpStart + c] = position;
+            }
+        }
+        return new Reconstructed(new String(text), fc);
     }
 
     // ---- paragraph splitting into styled runs with paragraph styles ----
@@ -200,16 +204,33 @@ public final class DocLegacyLayoutExtractor {
         ChpStyle runStyle = ChpStyle.DEFAULT;
         int runAnchorStart = 0;
         int anchor = 0;
-        int fieldState = 0; // 0 normal, 1 inside field code (drop), 2 field result (keep)
+        // Each field owns an instruction/result state. A nested result remains hidden
+        // when any enclosing field is still in its instruction portion.
+        ArrayDeque<Boolean> fieldInstructions = new ArrayDeque<>();
+        int hiddenFieldDepth = 0;
         int paraFirstFc = -1;
         int n = text.length();
 
         for (int idx = 0; idx < n; idx++) {
             char c = text.charAt(idx);
-            if (c == 0x13) { fieldState = 1; continue; }
-            if (c == 0x14) { fieldState = 2; continue; }
-            if (c == 0x15) { fieldState = 0; continue; }
-            if (fieldState == 1) continue;
+            if (c == 0x13) {
+                fieldInstructions.push(Boolean.TRUE);
+                hiddenFieldDepth++;
+                continue;
+            }
+            if (c == 0x14) {
+                if (!fieldInstructions.isEmpty() && fieldInstructions.peek()) {
+                    fieldInstructions.pop();
+                    fieldInstructions.push(Boolean.FALSE);
+                    hiddenFieldDepth--;
+                }
+                continue;
+            }
+            if (c == 0x15) {
+                if (!fieldInstructions.isEmpty() && fieldInstructions.pop()) hiddenFieldDepth--;
+                continue;
+            }
+            if (hiddenFieldDepth > 0) continue;
 
             int cfc = (idx < fc.length) ? fc[idx] : -1;
             if (paraFirstFc < 0) paraFirstFc = cfc;
@@ -228,9 +249,8 @@ public final class DocLegacyLayoutExtractor {
 
             char toAppend;
             if (c == 0x0B) toAppend = '\n';
-            else if (c == 0x1E) toAppend = '-';
-            else if (c == 0x1F) continue;
-            else if (c == '\u00A0') toAppend = ' ';
+            else if (c == 0x1E) toAppend = '\u2011';
+            else if (c == 0x1F) toAppend = '\u00AD';
             else if (c == '\t' || c >= 0x20) toAppend = c;
             else continue;
 
@@ -317,19 +337,12 @@ public final class DocLegacyLayoutExtractor {
 
     private static byte[] readAllBytes(File file) throws IOException {
         try (InputStream in = new FileInputStream(file)) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(1024, (int) Math.min(file.length(), Integer.MAX_VALUE)));
+            // File length is only a capacity hint, not a reason to reserve the whole file up front.
+            ByteArrayOutputStream out = new ByteArrayOutputStream((int) Math.max(1024, Math.min(file.length(), 64 * 1024)));
             byte[] buffer = new byte[8192];
             int read;
             while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
             return out.toByteArray();
-        }
-    }
-
-    private static Charset charset(String name) {
-        try {
-            return Charset.forName(name);
-        } catch (Exception e) {
-            return StandardCharsets.ISO_8859_1;
         }
     }
 

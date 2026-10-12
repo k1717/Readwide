@@ -83,14 +83,24 @@ public final class TextSearchMath {
         // bookmark tied to the same character/passage even when font size,
         // wrapping width, boundary offsets, or line spacing change.
         if (after.length() >= 8) {
+            // At the saved offset, an exact two-sided match (or an after-only
+            // anchor) has the lowest possible score. Avoid rescanning repetitive
+            // text in this common unchanged-document case without bypassing the
+            // context preference when only the after text matches.
+            if (fallbackLocalPosition >= 0 && content.startsWith(after, fallbackLocalPosition)
+                    && (before.isEmpty() || (fallbackLocalPosition >= before.length()
+                    && FileUtils.safeSubstring(content, fallbackLocalPosition - before.length(),
+                    fallbackLocalPosition).equals(before)))) {
+                return fallbackLocalPosition;
+            }
             int bestIndex = -1;
-            int bestScore = Integer.MAX_VALUE;
+            long bestScore = Long.MAX_VALUE;
             int searchFrom = 0;
             while (searchFrom <= content.length()) {
                 int idx = content.indexOf(after, searchFrom);
                 if (idx < 0) break;
 
-                int score = Math.abs(idx - fallbackLocalPosition);
+                long score = Math.abs((long) idx - fallbackLocalPosition);
                 if (!before.isEmpty()) {
                     int beforeStart = Math.max(0, idx - before.length());
                     String actualBefore = FileUtils.safeSubstring(content, beforeStart, idx);
@@ -105,7 +115,8 @@ public final class TextSearchMath {
                     bestScore = score;
                     bestIndex = idx;
                 }
-                searchFrom = idx + Math.max(1, after.length());
+                // Saved anchors can overlap in repeated characters/passages.
+                searchFrom = idx + 1;
             }
             if (bestIndex >= 0) return bestIndex;
         }
@@ -115,18 +126,18 @@ public final class TextSearchMath {
         // the file was slightly edited at the bookmarked text.
         if (before.length() >= 8) {
             int bestIndex = -1;
-            int bestScore = Integer.MAX_VALUE;
+            long bestScore = Long.MAX_VALUE;
             int searchFrom = 0;
             while (searchFrom <= content.length()) {
                 int idx = content.indexOf(before, searchFrom);
                 if (idx < 0) break;
                 int candidate = Math.min(content.length(), idx + before.length());
-                int score = Math.abs(candidate - fallbackLocalPosition);
+                long score = Math.abs((long) candidate - fallbackLocalPosition);
                 if (score < bestScore) {
                     bestScore = score;
                     bestIndex = candidate;
                 }
-                searchFrom = idx + Math.max(1, before.length());
+                searchFrom = idx + 1;
             }
             if (bestIndex >= 0) return bestIndex;
         }
@@ -161,7 +172,7 @@ public final class TextSearchMath {
                         bestScore = score;
                         bestIndex = idx;
                     }
-                    searchFrom = idx + Math.max(1, cAfter.length());
+                    searchFrom = idx + 1;
                 }
                 if (bestIndex >= 0) return srcMap[bestIndex];
             }
@@ -179,7 +190,7 @@ public final class TextSearchMath {
                         bestScore = score;
                         bestIndex = candidate;
                     }
-                    searchFrom = idx + Math.max(1, cBefore.length());
+                    searchFrom = idx + 1;
                 }
                 if (bestIndex >= 0) return srcMap[bestIndex];
             }

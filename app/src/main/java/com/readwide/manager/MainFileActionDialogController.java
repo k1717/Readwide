@@ -20,6 +20,7 @@ import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 
+import com.readwide.manager.archive.ArchiveCancellation;
 import com.readwide.manager.util.FileClipboardController;
 import com.readwide.manager.util.FileOperationProgress;
 import com.readwide.manager.util.FileSystemOps;
@@ -147,6 +148,7 @@ final class MainFileActionDialogController {
     }
 
     void showRenameDialog(File file) {
+        if (activity.activityDestroyed) return;
         final boolean dark = activity.prefs == null || activity.prefs.shouldUseDarkColors(activity);
         final int bg = activity.prefs != null ? activity.prefs.getMainBgColor(activity) : (dark ? Color.rgb(33, 33, 33) : Color.rgb(255, 255, 255));
         final int panel = activity.prefs != null ? activity.prefs.getMainPanelColor(activity) : (dark ? Color.rgb(48, 48, 48) : Color.rgb(245, 245, 245));
@@ -202,11 +204,10 @@ final class MainFileActionDialogController {
 
         final android.app.Dialog[] ref = new android.app.Dialog[1];
         activity.addFileOpsRow(box, activity.getString(R.string.rename), fg, panel, () -> {
+            if (activity.activityDestroyed || ref[0] == null || !ref[0].isShowing()) return;
             String newName = input.getText().toString().trim();
             if (newName.isEmpty()) return;
-            File parent = file.getParentFile();
-            if (parent == null) return;
-            if (FileSystemOps.renameInPlace(file, newName)) {
+            if (renameFileAndReferences(file, newName)) {
                 if (ref[0] != null) ref[0].dismiss();
                 activity.refreshVisibleFileListAfterFileSystemChange();
                 ShortToast.show(activity, activity.getString(R.string.renamed));
@@ -233,6 +234,7 @@ final class MainFileActionDialogController {
             }
             input.requestFocus();
             input.postDelayed(() -> {
+                if (activity.activityDestroyed || !dialog.isShowing() || !input.isAttachedToWindow()) return;
                 android.view.inputmethod.InputMethodManager imm =
                         (android.view.inputmethod.InputMethodManager) activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE);
                 if (imm != null) imm.showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
@@ -240,6 +242,22 @@ final class MainFileActionDialogController {
         });
         cancel.setOnClickListener(v -> dialog.dismiss());
         dialog.show();
+    }
+
+    private boolean renameFileAndReferences(File source, String newName) {
+        File parent = source.getParentFile();
+        if (parent == null) return false;
+        String oldPath = source.getAbsolutePath();
+        String newPath = new File(parent, newName).getAbsolutePath();
+        boolean wasDirectory = source.isDirectory();
+        if (!FileSystemOps.renameInPlace(source, newName)) return false;
+        if (activity.bookmarkManager != null) {
+            activity.bookmarkManager.moveReferences(oldPath, newPath, wasDirectory);
+        }
+        if (wasDirectory && activity.prefs != null) {
+            activity.prefs.moveFolderReferences(oldPath, newPath);
+        }
+        return true;
     }
 
     void showDeleteConfirm(File file) {
@@ -343,6 +361,8 @@ final class MainFileActionDialogController {
         activity.overrideDialogWidth(dialog, activity.compactDeleteConfirmDialogWidthPx());
         cancel.setOnClickListener(v -> dialog.dismiss());
         delete.setOnClickListener(v -> {
+            if (activity.activityDestroyed || !delete.isEnabled()) return;
+            delete.setEnabled(false);
             String deletedPath = file.getAbsolutePath();
             boolean deletedDirectory = file.isDirectory();
             dialog.dismiss();
@@ -351,28 +371,32 @@ final class MainFileActionDialogController {
                     file.getName());
             File parent = file.getParentFile();
             if (parent != null) progress.setFolder(parent.getName().length() > 0 ? parent.getName() : parent.getAbsolutePath());
-            activity.executeFolderBackgroundTask(() -> {
-                boolean deleted = FileSystemOps.delete(file, progress);
-                activity.fileSearchHandler.post(() -> {
-                    activity.finishFileOperationProgress(progress);
-                    if (activity.activityDestroyed) return;
-                    if (progress.isCancelled()) {
-                        activity.refreshVisibleFileListAfterDelete();
-                        ShortToast.show(activity, R.string.file_operation_cancelled);
-                        return;
-                    }
-                    if (deleted) {
-                        if (activity.bookmarkManager != null) {
-                            activity.bookmarkManager.deleteReadingState(deletedPath);
+            boolean accepted = activity.executeFolderBackgroundTask(() -> {
+                boolean deleted = false;
+                try {
+                    deleted = FileSystemOps.delete(file, progress);
+                } catch (RuntimeException failure) {
+                    ArchiveCancellation.restoreIfCancelled(failure, progress);
+                } finally {
+                    final boolean completed = deleted;
+                    activity.runOnUiThread(() -> {
+                        activity.finishFileOperationProgress(progress);
+                        if (completed) {
+                            if (activity.bookmarkManager != null) {
+                                activity.bookmarkManager.deleteReadingState(deletedPath);
+                            }
+                            activity.cleanupNavigationStateAfterDelete(deletedPath, deletedDirectory);
                         }
-                        activity.cleanupNavigationStateAfterDelete(deletedPath, deletedDirectory);
+                        if (activity.activityDestroyed) return;
+                        // A failed recursive delete may still have removed some
+                        // children, so refresh for every worker outcome.
                         activity.refreshVisibleFileListAfterDelete();
-                        ShortToast.show(activity, activity.getString(R.string.deleted));
-                    } else {
-                        ShortToast.show(activity, activity.getString(R.string.delete_failed));
-                    }
-                });
+                        ShortToast.show(activity, completed ? R.string.deleted
+                                : progress.isCancelled() ? R.string.file_operation_cancelled : R.string.delete_failed);
+                    });
+                }
             });
+            if (!accepted) activity.finishFileOperationProgress(progress);
         });
         dialog.show();
     }

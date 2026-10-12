@@ -20,7 +20,9 @@ final class ReaderBookmarkActionController {
     }
 
     void saveCurrentBookmarkTekStyle(Runnable afterSave) {
-        if (activity.filePath == null || activity.fileContent == null || activity.fileContent.isEmpty()) {
+        if (activity.filePath == null || activity.fileContent == null || activity.fileContent.isEmpty()
+                || !activity.textContentReadyForPersistence || activity.readerView == null
+                || !activity.readerView.hasCurrentTextLayout()) {
             ShortToast.show(activity, activity.getString(R.string.file_not_loaded));
             return;
         }
@@ -30,9 +32,9 @@ final class ReaderBookmarkActionController {
         String excerpt = activity.getExcerpt(charPos);
         String anchorBefore = activity.getAnchorTextBefore(charPos);
         String anchorAfter = activity.getAnchorTextAfter(charPos);
-        int bookmarkEndPosition = activity.largeTextEstimateActive
-                ? charPos + Math.max(1, excerpt.length())
-                : Math.min(activity.totalChars, charPos + Math.max(1, excerpt.length()));
+        long excerptEnd = (long) charPos + Math.max(1, excerpt.length());
+        int bookmarkEndPosition = (int) Math.min(Integer.MAX_VALUE,
+                activity.largeTextEstimateActive ? excerptEnd : Math.min(activity.totalChars, excerptEnd));
 
         // Avoid stacking multiple identical bookmarks when the user taps save repeatedly
         // at almost the same location. Original Tek View-style bookmarks are position-based.

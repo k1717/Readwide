@@ -28,6 +28,30 @@ final class ZipVolumeResolver {
         return isFinal(name) || PART.matcher(name).matches();
     }
 
+    static boolean isContinuation(String name) { return PART.matcher(name).matches(); }
+
+    // .zNN also occurs late in old-style RAR sets. Use a matching ZIP final
+    // volume to disambiguate; the strict resolver validates membership later.
+    static boolean hasFinalVolume(File selected) {
+        Matcher part = PART.matcher(selected.getName());
+        if (!part.matches()) return false;
+        File parent = selected.getAbsoluteFile().getParentFile();
+        if (parent == null) return false;
+        try {
+            File[] files = parent.listFiles();
+            if (files == null) return false;
+            for (File file : files) {
+                if (isFinal(file.getName()) && stem(file.getName()).equalsIgnoreCase(part.group(1))) return true;
+            }
+        } catch (SecurityException unavailable) { return false; }
+        return false;
+    }
+
+    static File resolveFinalVolume(File selected) throws IOException {
+        List<File> parts = forSnapshot(selected);
+        return parts.get(parts.size() - 1);
+    }
+
     private static boolean isFinal(String name) {
         String lower = name.toLowerCase(Locale.ROOT);
         return lower.endsWith(".zip") || lower.endsWith(".zipx") || lower.endsWith(".cbz");
@@ -49,7 +73,7 @@ final class ZipVolumeResolver {
             for (File file : siblings) {
                 checkpoint();
                 String name = file.getName();
-                if (isFinal(name) && stem(name).equals(part.group(1))) {
+                if (isFinal(name) && stem(name).equalsIgnoreCase(part.group(1))) {
                     if (endFile != null) throw new IOException("Ambiguous final ZIP volume");
                     endFile = file;
                 }
@@ -68,7 +92,7 @@ final class ZipVolumeResolver {
             for (File file : siblings) {
                 checkpoint();
                 Matcher candidate = PART.matcher(file.getName());
-                if (candidate.matches() && stem(selected.getName()).equals(candidate.group(1))) {
+                if (candidate.matches() && stem(selected.getName()).equalsIgnoreCase(candidate.group(1))) {
                     throw new IOException("Split ZIP has no unambiguous end record");
                 }
             }
@@ -88,17 +112,17 @@ final class ZipVolumeResolver {
         for (File file : siblings) {
             checkpoint();
             Matcher match = PART.matcher(file.getName());
-            if (!match.matches() || !base.equals(match.group(1))) continue;
+            if (!match.matches() || !base.equalsIgnoreCase(match.group(1))) continue;
             long ordinal;
             try { ordinal = Long.parseLong(match.group(2)); }
             catch (NumberFormatException invalid) { throw new IOException("Invalid split ZIP ordinal", invalid); }
             if (ordinal <= 0) throw new IOException("Invalid split ZIP ordinal");
             if (ordinal > disk) continue; // Not a member of the declared set.
-            // Zip4j's actual lookup uses exact stem + lowercase .z + >=2 digits.
-            // Do not cache a permissive alias the decoder cannot open on a
-            // case-sensitive filesystem, or choose between duplicate aliases.
+            // Split reads use the catalogued File objects, preserving actual case
+            // even on case-sensitive filesystems. Keep ordinal spelling strict;
+            // competing case aliases still collide in the ordinal map below.
             String expected = base + ".z" + (ordinal < 10 ? "0" : "") + ordinal;
-            if (!file.getName().equals(expected)) throw new IOException("Noncanonical split ZIP volume name");
+            if (!file.getName().equalsIgnoreCase(expected)) throw new IOException("Noncanonical split ZIP volume name");
             if (!file.isFile() || !file.canRead()) throw new IOException("ZIP volume is unavailable");
             if (found.put(ordinal, file) != null) throw new IOException("Duplicate split ZIP ordinal");
         }

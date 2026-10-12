@@ -36,8 +36,10 @@ public final class ReaderRestoreTargetMath {
                                                 String restoreUri,
                                                 String currentPath,
                                                 String currentUri) {
-        if (!isBlank(restorePath) && !isBlank(currentPath) && restorePath.equals(currentPath)) {
-            return true;
+        // Match the loader's path-first precedence. A retained URI must not
+        // validate a different explicit path when both extras are present.
+        if (!isBlank(currentPath)) {
+            return !isBlank(restorePath) && restorePath.equals(currentPath);
         }
         return !isBlank(restoreUri) && !isBlank(currentUri) && restoreUri.equals(currentUri);
     }

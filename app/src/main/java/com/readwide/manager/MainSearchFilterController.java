@@ -36,6 +36,8 @@ final class MainSearchFilterController {
     private final MainFileSearchRoots searchRoots;
     private final MainFileSearchWalker searchWalker;
     private final Runnable fileTypeFilterSnapRunnable = this::snapFileTypeFilterToSlot;
+    private boolean savedShowHidden;
+    private int savedSortMode;
 
     MainSearchFilterController(@NonNull MainActivity activity) {
         this.activity = activity;
@@ -73,9 +75,11 @@ final class MainSearchFilterController {
         setupFileTypeFilterScrollBehavior();
 
         if (activity.fileSearchInput != null) {
+            activity.fileSearchInput.setSaveEnabled(false);
             activity.fileSearchInput.addTextChangedListener(new TextWatcher() {
                 @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
                 @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    activity.navigationState.cancelScroll();
                     scheduleLiveFileSearch();
                 }
                 @Override public void afterTextChanged(Editable s) {}
@@ -116,6 +120,8 @@ final class MainSearchFilterController {
     private void setupSearchScopeButton() {
         if (activity.prefs != null) {
             activity.fileSearchAllFolders = activity.prefs.getFileSearchAllFolders();
+            savedShowHidden = activity.prefs.getShowHiddenFiles();
+            savedSortMode = activity.prefs.getSortMode();
         }
         updateSearchScopeButton();
         if (activity.fileSearchScopeButton == null) return;
@@ -135,6 +141,22 @@ final class MainSearchFilterController {
         });
     }
 
+    void refreshSavedSearchPreferences() {
+        if (activity.prefs == null) return;
+        boolean scope = activity.prefs.getFileSearchAllFolders();
+        boolean hidden = activity.prefs.getShowHiddenFiles();
+        int sort = activity.prefs.getSortMode();
+        boolean changed = scope != activity.fileSearchAllFolders
+                || hidden != savedShowHidden || sort != savedSortMode;
+        activity.fileSearchAllFolders = scope;
+        savedShowHidden = hidden;
+        savedSortMode = sort;
+        updateSearchScopeButton();
+        if (changed && activity.searchMode) {
+            activity.navigationState.cancelScroll();
+            runLiveFileSearchNow();
+        }
+    }
 
     private void showBriefSearchScopeToast() {
         int messageRes = activity.fileSearchAllFolders
@@ -602,6 +624,7 @@ final class MainSearchFilterController {
                 activity.fileAdapter.setSortModeSilently(sortMode);
                 activity.fileAdapter.setItemsFastPresorted(items);
                 activity.scrollListToTop(activity.fileRecyclerView);
+                activity.navigationState.restoreScroll(false);
                 activity.emptyText.setVisibility(results.isEmpty() ? View.VISIBLE : View.GONE);
                 if (results.isEmpty()) activity.emptyText.setText(activity.getString(R.string.no_file_search_results));
                 activity.updateParentFolderButtonState();
@@ -827,7 +850,10 @@ final class MainSearchFilterController {
                 items.size()));
         activity.fileAdapter.setShowFilePath(true);
         activity.fileAdapter.setItemsFastPresorted(items);
-        if (finalResult) activity.scrollListToTop(activity.fileRecyclerView);
+        if (finalResult) {
+            activity.scrollListToTop(activity.fileRecyclerView);
+            activity.navigationState.restoreScroll(false);
+        }
         // Only show the empty-state message once results are final; while the
         // search is still running the spinner is the single loading indicator.
         boolean showEmptyMessage = finalResult && items.isEmpty();

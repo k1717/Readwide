@@ -30,6 +30,16 @@ public class Rar4EncryptedSplitPayloadRewriterTest {
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
+    @Test public void invalidFinalChecksumIsRejectedBeforeSourceOrKeyDerivation() throws Exception {
+        File absent = new File(tempFolder.getRoot(), "absent.rar");
+        for (long checksum : new long[]{-1, 0x1_0000_0000L}) {
+            java.io.IOException failure = org.junit.Assert.assertThrows(java.io.IOException.class,
+                    () -> Rar4EncryptedSplitPayloadRewriter.buildSingleEntryDecryptedCopy(absent, 0,
+                            java.util.Collections.emptyList(), checksum, new char[]{'p'}, null));
+            assertEquals("Invalid RAR4 final payload checksum", failure.getMessage());
+        }
+    }
+
     @Test
     public void buildSingleEntryDecryptedCopy_compressedSplitClearsSplitAndEncryptionFlags() throws Exception {
         byte[] compressedPayload = new byte[160];
@@ -60,7 +70,7 @@ public class Rar4EncryptedSplitPayloadRewriterTest {
         segments.add(new RarCryptoStreams.EncryptedSegment(second, 0L, secondPart.length));
 
         File rewritten = Rar4EncryptedSplitPayloadRewriter.buildSingleEntryDecryptedCopy(
-                first, dataOffset, segments, password, null);
+                first, dataOffset, segments, 0xffff_ffffL, password, null);
         try {
             byte[] bytes = Files.readAllBytes(rewritten.toPath());
             int offset = 7;
@@ -73,6 +83,10 @@ public class Rar4EncryptedSplitPayloadRewriterTest {
             assertFalse((flags & RAR4_FILE_PASSWORD) != 0);
             assertFalse((flags & RAR4_FILE_SALT) != 0);
             assertEquals(encrypted.length, packedSize);
+            assertEquals(0xffff_ffffL, uint32(bytes, offset + 16));
+            CRC32 headerCrc = new CRC32();
+            headerCrc.update(bytes, offset + 2, headerSize - 2);
+            assertEquals(headerCrc.getValue() & 0xffffL, uint16(bytes, offset));
             assertArrayEquals(compressedPayload,
                     Arrays.copyOfRange(bytes, offset + headerSize, offset + headerSize + packedSize));
         } finally {

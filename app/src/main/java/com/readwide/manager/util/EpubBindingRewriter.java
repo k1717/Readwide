@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.UnaryOperator;
+import java.util.function.Consumer;
 
 /**
  * Pure-Java compatibility helpers for legacy EPUB 3.0 OPF bindings.
@@ -22,6 +24,144 @@ public final class EpubBindingRewriter {
     private static final String EPUB_PREFIX = "/epub/";
 
     private EpubBindingRewriter() {}
+
+    /** Visit only real style blocks/attributes, preserving all other HTML bytes. */
+    public static String transformEmbeddedCss(String source, UnaryOperator<String> transform) {
+        return transformEmbeddedCss(source, transform, null, false);
+    }
+
+    /** Inspect declared chapter styles without loading remote or archive resources. */
+    public static void inspectDocumentStyles(String source, Consumer<String> css,
+                                             Consumer<String> stylesheetHref) {
+        transformEmbeddedCss(source, value -> { css.accept(value); return value; }, stylesheetHref, true);
+    }
+
+    /** Reject only media queries known not to target a screen; do not guess feature values. */
+    public static boolean mayApplyToScreen(String media) {
+        if (media == null || media.trim().isEmpty()) return true;
+        StringBuilder query = new StringBuilder();
+        int depth = 0;
+        char quote = 0;
+        for (int i = 0; i < media.length(); i++) {
+            char ch = media.charAt(i);
+            if (ch == '\\' && i + 1 < media.length()) {
+                query.append(ch).append(media.charAt(++i));
+                continue;
+            }
+            if (quote != 0) {
+                query.append(ch);
+                if (ch == quote) quote = 0;
+                continue;
+            }
+            if (ch == '\'' || ch == '"') { quote = ch; query.append(ch); continue; }
+            if (ch == '/' && i + 1 < media.length() && media.charAt(i + 1) == '*') {
+                int end = media.indexOf("*/", i + 2);
+                if (end < 0) return true;
+                i = end + 1;
+                query.append(' ');
+                continue;
+            }
+            if (ch == '(') depth++;
+            else if (ch == ')') depth = Math.max(0, depth - 1);
+            if (ch == ',' && depth == 0) {
+                if (screenQueryCandidate(query.toString())) return true;
+                query.setLength(0);
+            } else query.append(ch);
+        }
+        return quote != 0 || depth != 0 || screenQueryCandidate(query.toString());
+    }
+
+    private static boolean screenQueryCandidate(String query) {
+        String normalized = query.trim().toLowerCase(Locale.ROOT);
+        boolean negated = false;
+        int end = mediaWordEnd(normalized, 0);
+        String type = normalized.substring(0, end);
+        if ("not".equals(type) || "only".equals(type)) {
+            negated = "not".equals(type);
+            normalized = normalized.substring(end).trim();
+            end = mediaWordEnd(normalized, 0);
+            type = normalized.substring(0, end);
+        }
+        String tail = normalized.substring(end).trim();
+        if (negated) {
+            // `not` negates the entire query, including any feature conditions.
+            return !tail.isEmpty() || !("screen".equals(type) || "all".equals(type));
+        }
+        if (!tail.isEmpty() && !"and".equals(tail.substring(0, mediaWordEnd(tail, 0)))) return true;
+        switch (type) {
+            case "print": case "speech": case "aural": case "braille": case "embossed":
+            case "handheld": case "projection": case "tty": case "tv": return false;
+            default: return true; // screen/all, feature-only, escaped, or unknown conditions
+        }
+    }
+
+    private static int mediaWordEnd(String text, int start) {
+        int end = start;
+        while (end < text.length() && (Character.isLetterOrDigit(text.charAt(end))
+                || text.charAt(end) == '-' || text.charAt(end) == '_' || text.charAt(end) == '\\')) end++;
+        return end;
+    }
+
+    private static String transformEmbeddedCss(String source, UnaryOperator<String> transform,
+                                                Consumer<String> stylesheetHref, boolean screenHints) {
+        if (source == null || source.isEmpty()) return source == null ? "" : source;
+        List<TextReplacement> edits = new ArrayList<>();
+        int cursor = 0;
+        while (true) {
+            Tag tag = nextTag(source, cursor);
+            if (tag == null) break;
+            cursor = tag.end + 1;
+            if (tag.closing || tag.declaration) continue;
+            List<Attribute> orderedAttributes = parseAttributes(source, tag);
+            Map<String, Attribute> attributes = new HashMap<>();
+            for (Attribute attr : orderedAttributes) {
+                if (!attributes.containsKey(attr.normalizedName)) attributes.put(attr.normalizedName, attr);
+            }
+            String styleType = attributeValue(attributes, "type").trim();
+            boolean screenCandidate = mayApplyToScreen(attributeValue(attributes, "media"))
+                    && !attributes.containsKey("disabled");
+            if (stylesheetHref != null && "link".equals(tag.name) && screenCandidate
+                    && (styleType.isEmpty() || "text/css".equalsIgnoreCase(styleType))) {
+                String rel = " " + attributeValue(attributes, "rel").trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ") + " ";
+                if (rel.contains(" stylesheet ") && !rel.contains(" alternate ")) {
+                    String href = attributeValue(attributes, "href");
+                    if (!href.isEmpty()) stylesheetHref.accept(href);
+                }
+            }
+            // Source-order attribute traversal is required by the forward edit emitter.
+            for (Attribute attr : orderedAttributes) {
+                if (!"style".equals(attr.normalizedName)) continue;
+                String css = decodeXmlEntities(attr.value);
+                String updated = transform.apply(css);
+                if (!css.equals(updated)) {
+                    String escaped = escapeAttributeValue(updated, attr.quote);
+                    if (attr.quote == '\0') escaped = "\"" + escaped + "\"";
+                    edits.add(new TextReplacement(attr.valueStart, attr.valueEnd, escaped));
+                }
+            }
+            if (!tag.selfClosing && ("style".equals(tag.name) || "script".equals(tag.name)
+                    || "textarea".equals(tag.name) || "title".equals(tag.name)
+                    || "xmp".equals(tag.name) || "iframe".equals(tag.name))) {
+                Tag close = findRawTextClose(source, cursor, tag.name);
+                int end = close != null ? close.start : source.length();
+                if ("style".equals(tag.name) && (!screenHints || screenCandidate)
+                        && (styleType.isEmpty() || "text/css".equalsIgnoreCase(styleType))) {
+                    String css = source.substring(cursor, end);
+                    String updated = transform.apply(css);
+                    if (!css.equals(updated)) edits.add(new TextReplacement(cursor, end, updated));
+                }
+                cursor = close != null ? close.end + 1 : source.length();
+            }
+        }
+        if (edits.isEmpty()) return source;
+        StringBuilder out = new StringBuilder(source.length() + 128);
+        int copied = 0;
+        for (TextReplacement edit : edits) {
+            out.append(source, copied, edit.start).append(edit.value);
+            copied = edit.end;
+        }
+        return out.append(source, copied, source.length()).toString();
+    }
 
     public static final class RewriteResult {
         public final String html;

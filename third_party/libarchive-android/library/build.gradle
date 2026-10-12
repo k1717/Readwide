@@ -5,15 +5,15 @@ plugins {
 def readwideExternalBuildDir = System.getenv('READWIDE_APP_BUILD_DIR')
 def nativeStagingDir = readwideExternalBuildDir == null || readwideExternalBuildDir.trim().isEmpty()
         ? layout.buildDirectory.dir('.cxx').get().asFile
-        : file("${readwideExternalBuildDir}/native-staging/libarchiveAndroid")
+        : file("${readwideExternalBuildDir}/cxx/archive")
 
 android {
-    namespace 'me.zhanghai.android.libarchive'
-    compileSdk 35
-    ndkVersion '29.0.14206865'
+    namespace = 'me.zhanghai.android.libarchive'
+    compileSdk = 35
+    ndkVersion = '29.0.14206865'
 
     defaultConfig {
-        minSdk 21
+        minSdk = 21
         consumerProguardFiles 'proguard-rules.pro'
         ndk {
             abiFilters 'armeabi-v7a', 'arm64-v8a'
@@ -27,20 +27,20 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled = false
         }
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     externalNativeBuild {
         cmake {
-            path file('CMakeLists.txt')
-            version '3.22.1'
-            buildStagingDirectory nativeStagingDir
+            path = file('CMakeLists.txt')
+            version = '3.22.1'
+            buildStagingDirectory = nativeStagingDir
         }
     }
 }

@@ -48,8 +48,9 @@ final class ReaderActivityStartupController {
 
         applyBrightnessPreference();
 
+        android.content.Intent restoredIntent = activity.readerIntentForRecreation(savedInstanceState);
         if (!activity.restoreLoadedTextSnapshotIfAvailable(activity.getIntent(), savedInstanceState)) {
-            activity.loadFileFromIntent(activity.getIntent());
+            activity.loadFileFromIntent(restoredIntent);
         }
     }
 
@@ -242,11 +243,11 @@ final class ReaderActivityStartupController {
                 activity.handler,
                 new AutoPageTurnController.Callback() {
                     @Override public boolean isDestroyed() { return activity.activityDestroyed; }
-                    @Override public int getDisplayedTotalPageCount() {
-                        return activity.getDisplayedTotalPageCount();
+                    @Override public boolean isReadyForAutoPageTurn() {
+                        return activity.isReadyForAutoPageTurn();
                     }
-                    @Override public int getDisplayedCurrentPageNumber() {
-                        return activity.getDisplayedCurrentPageNumber();
+                    @Override public boolean hasAutoPageTurnReachedEnd() {
+                        return activity.hasAutoPageTurnReachedEnd();
                     }
                     @Override public int getIntervalSeconds() {
                         return activity.prefs != null
@@ -277,10 +278,9 @@ final class ReaderActivityStartupController {
             if (!activity.largeTextEstimateActive) return;
             int width = right - left;
             int height = bottom - top;
-            // Returning from the home screen or another app reattaches the view and
-            // reports old bounds of 0, which is not a real geometry change. Only
-            // restart indexing when the size actually differs from the last indexed one.
-            if (width <= 0 || height <= 0) return;
+            // Ignore duplicate notifications, but remember actual zero-size
+            // transitions too: returning to the same size must restart a worker
+            // that was retired while the view had no usable layout.
             if (width == lastLayoutReindexWidth && height == lastLayoutReindexHeight) return;
             lastLayoutReindexWidth = width;
             lastLayoutReindexHeight = height;
@@ -306,7 +306,7 @@ final class ReaderActivityStartupController {
                 activity.onScrollChanged();
             }
             @Override public void onReaderManualScroll() {
-                activity.stopAutoPageTurnForManualNavigation();
+                activity.onReaderManualScroll();
             }
             @Override public void onReaderManualOverscroll(int direction) {
                 activity.handleLargeTextManualOverscroll(direction);

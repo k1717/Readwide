@@ -5,18 +5,41 @@ import static org.junit.Assert.assertEquals;
 import org.junit.Test;
 
 public class LargeTextPageModelMathTest {
+    @Test public void cacheCheckingIsPendingNotAnEstimateOrAnExactSavedCount() {
+        assertEquals("\u2026", LargeTextPageModelMath.pageNumberLabel(500, true, false, true, true));
+        assertEquals("\u2026", LargeTextPageModelMath.pageNumberLabel(1, true, false, true, false));
+        assertEquals("500", LargeTextPageModelMath.pageNumberLabel(500, true, true, false, true));
+    }
+
+    @Test public void realRecountKeepsEstimateAndNormalFilesStayNumeric() {
+        assertEquals("~500", LargeTextPageModelMath.pageNumberLabel(500, true, false, false, true));
+        assertEquals("500", LargeTextPageModelMath.pageNumberLabel(500, false, false, true, true));
+        assertEquals("1", LargeTextPageModelMath.pageNumberLabel(1, true, false, false, false));
+        assertEquals("500", LargeTextPageModelMath.pageNumberLabel(500, true, true, true, true));
+    }
+
     @Test
     public void displayedTotal_usesOneCanonicalPriorityOrder() {
         assertEquals(7, LargeTextPageModelMath.displayedTotalPages(
                 false, false, 0, true, 99, 88, 7));
-        assertEquals(12, LargeTextPageModelMath.displayedTotalPages(
+        assertEquals(99, LargeTextPageModelMath.displayedTotalPages(
                 true, true, 12, true, 99, 88, 7));
+        assertEquals(12, LargeTextPageModelMath.displayedTotalPages(
+                true, true, 12, false, 99, 88, 7));
+        assertEquals(12, LargeTextPageModelMath.displayedTotalPages(
+                true, true, 12, true, 0, 88, 7));
         assertEquals(99, LargeTextPageModelMath.displayedTotalPages(
                 true, false, 0, true, 99, 88, 7));
         assertEquals(88, LargeTextPageModelMath.displayedTotalPages(
                 true, false, 0, false, 99, 88, 7));
         assertEquals(7, LargeTextPageModelMath.displayedTotalPages(
                 true, false, 0, false, 0, 0, 7));
+    }
+
+    @Test
+    public void newlyExactTotalSupersedesLargerPendingEstimateDuringPartitionLoad() {
+        assertEquals(99, LargeTextPageModelMath.displayedTotalPages(
+                true, true, 200, true, 99, 200, 7));
     }
 
     @Test

@@ -19,7 +19,7 @@ import java.util.List;
  * (istd) and then the SPRM list.
  *
  * This stage decodes the properties that affect visible layout: horizontal
- * alignment and left/right/first-line indents. After construction,
+ * alignment, left/right/first-line indents and explicit spacing before/after. After construction,
  * {@link #styleForFc(int)} returns the effective paragraph style for the file
  * character position of a paragraph.
  */
@@ -33,6 +33,8 @@ final class DocParagraphProperties {
     private static final int SPRM_P_DXA_LEFT1 = 0x8460;  // first-line indent, signed twips, 2 bytes
 
     private static final float TWIPS_PER_POINT = 20f;
+    private static final int SPRM_P_DYA_BEFORE = 0xA413;
+    private static final int SPRM_P_DYA_AFTER = 0xA414;
 
     private final int[] fcStarts;
     private final int[] fcEnds;
@@ -143,6 +145,8 @@ final class DocParagraphProperties {
         boolean hasLeft = false;
         boolean hasRight = false;
         boolean hasFirstLine = false;
+        Float before = null;
+        Float after = null;
         int i = grpStart + 2; // skip the 2-byte istd that precedes the grpprl
         int end = grpStart + grpLen;
         while (i + 2 <= end) {
@@ -171,39 +175,39 @@ final class DocParagraphProperties {
                 case SPRM_P_DXA_LEFT:
                     if (operandLen >= 2) {
                         float v = s16(b, operandStart) / TWIPS_PER_POINT;
-                        if (v != 0f) {
-                            left = v;
-                            hasLeft = true;
-                        }
+                        left = v;
+                        hasLeft = true;
                     }
                     break;
                 case SPRM_P_DXA_RIGHT:
                     if (operandLen >= 2) {
                         float v = s16(b, operandStart) / TWIPS_PER_POINT;
-                        if (v != 0f) {
-                            right = v;
-                            hasRight = true;
-                        }
+                        right = v;
+                        hasRight = true;
                     }
                     break;
                 case SPRM_P_DXA_LEFT1:
                     if (operandLen >= 2) {
                         float v = s16(b, operandStart) / TWIPS_PER_POINT;
-                        if (v != 0f) {
-                            firstLine = v;
-                            hasFirstLine = true;
-                        }
+                        firstLine = v;
+                        hasFirstLine = true;
                     }
+                    break;
+                case SPRM_P_DYA_BEFORE:
+                    if (operandLen >= 2) before = u16(b, operandStart) / TWIPS_PER_POINT;
+                    break;
+                case SPRM_P_DYA_AFTER:
+                    if (operandLen >= 2) after = u16(b, operandStart) / TWIPS_PER_POINT;
                     break;
                 default:
                     break;
             }
             i = operandStart + operandLen;
         }
-        if (alignment < 0 && !hasLeft && !hasRight && !hasFirstLine) {
+        if (alignment < 0 && !hasLeft && !hasRight && !hasFirstLine && before == null && after == null) {
             return ParaStyle.DEFAULT;
         }
-        return new ParaStyle(alignment, left, right, firstLine, hasLeft, hasRight, hasFirstLine);
+        return new ParaStyle(alignment, left, right, firstLine, hasLeft, hasRight, hasFirstLine, before, after);
     }
 
     private static int spraSize(int spra) {
@@ -258,7 +262,7 @@ final class DocParagraphProperties {
 
     /** Immutable snapshot of paragraph layout decoded from a PAPX. */
     static final class ParaStyle {
-        static final ParaStyle DEFAULT = new ParaStyle(-1, 0f, 0f, 0f, false, false, false);
+        static final ParaStyle DEFAULT = new ParaStyle(-1, 0f, 0f, 0f, false, false, false, null, null);
 
         final int alignment;          // -1 default, 0 left, 1 center, 2 right, 3 justify
         final float leftIndentPt;
@@ -267,9 +271,11 @@ final class DocParagraphProperties {
         final boolean hasLeft;
         final boolean hasRight;
         final boolean hasFirstLine;
+        final Float beforePt;
+        final Float afterPt;
 
         ParaStyle(int alignment, float leftIndentPt, float rightIndentPt, float firstLineIndentPt,
-                  boolean hasLeft, boolean hasRight, boolean hasFirstLine) {
+                  boolean hasLeft, boolean hasRight, boolean hasFirstLine, Float beforePt, Float afterPt) {
             this.alignment = alignment;
             this.leftIndentPt = leftIndentPt;
             this.rightIndentPt = rightIndentPt;
@@ -277,10 +283,12 @@ final class DocParagraphProperties {
             this.hasLeft = hasLeft;
             this.hasRight = hasRight;
             this.hasFirstLine = hasFirstLine;
+            this.beforePt = beforePt;
+            this.afterPt = afterPt;
         }
 
         boolean isDefault() {
-            return alignment < 0 && !hasLeft && !hasRight && !hasFirstLine;
+            return alignment < 0 && !hasLeft && !hasRight && !hasFirstLine && beforePt == null && afterPt == null;
         }
 
         @NonNull
@@ -302,6 +310,8 @@ final class DocParagraphProperties {
             if (hasLeft) b.marginLeftPt(leftIndentPt);
             if (hasRight) b.marginRightPt(rightIndentPt);
             if (hasFirstLine) b.textIndentPt(firstLineIndentPt);
+            if (beforePt != null) b.marginTopPt(beforePt);
+            if (afterPt != null) b.marginBottomPt(afterPt);
             return b.build();
         }
     }

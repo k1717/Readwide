@@ -15,6 +15,8 @@ dependencyResolutionManagement {
 
 rootProject.name = "Readwide"
 include ':app'
+include ':brotliJava'
+project(':brotliJava').projectDir = file('third_party/brotli-java')
 include ':libarchiveAndroid'
 project(':libarchiveAndroid').projectDir = file('third_party/libarchive-android/library')
 include ':zipxCodecsAndroid'

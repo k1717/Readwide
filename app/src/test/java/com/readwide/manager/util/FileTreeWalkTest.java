@@ -174,6 +174,57 @@ public class FileTreeWalkTest {
         assertEquals(Long.MAX_VALUE, progress.snapshot().doneBytes);
     }
 
+    @Test public void sharedParentIsCountedWhenItsLaterRootMovesFirst() throws Exception {
+        File shared = temporary.newFolder("shared"), other = temporary.newFolder("other");
+        File first = new File(shared, "a"), second = new File(shared, "b"), third = new File(other, "c");
+        Files.write(first.toPath(), new byte[1]); Files.write(second.toPath(), new byte[2]);
+        Files.write(third.toPath(), new byte[3]);
+        FileOperationProgress progress = progress();
+        FileTreeProgressTracker tracker = FileTreeProgressTracker.create(progress, Arrays.asList(first, second, third));
+        assertTrue(tracker.isReady()); assertEquals(2, tracker.totalFolders());
+        tracker.onMoved(third); tracker.onMoved(second);
+        assertEquals(2, progress.snapshot().folderIndex);
+        assertEquals(2, progress.snapshot().folderTotal);
+        assertEquals(2, progress.snapshot().itemIndex);
+        assertEquals(5L, progress.snapshot().doneBytes);
+    }
+
+    @Test public void rootFolderSetsDoNotInflateGlobalInventory() throws Exception {
+        File parent = temporary.newFolder("shared");
+        File first = new File(parent, "a"), second = new File(parent, "b");
+        Files.write(first.toPath(), new byte[1]); Files.write(second.toPath(), new byte[2]);
+        FileOperationProgress progress = progress();
+        FileTreeProgressTracker tracker = FileTreeProgressTracker.create(progress, Arrays.asList(first, second));
+        assertEquals(1, tracker.totalFolders()); assertEquals(2, tracker.totalFiles());
+        assertEquals(3L, tracker.totalBytes());
+        tracker.onMoved(second); tracker.onMoved(first);
+        assertEquals(1, progress.snapshot().folderIndex);
+        assertEquals(3L, progress.snapshot().doneBytes);
+    }
+
+    @Test public void repeatedFolderNotificationsDoNotAdvanceCountTwice() throws Exception {
+        File parent = temporary.newFolder("shared");
+        File child = new File(parent, "a"); Files.write(child.toPath(), new byte[1]);
+        FileOperationProgress progress = progress();
+        FileTreeProgressTracker tracker = FileTreeProgressTracker.create(progress, parent);
+        tracker.onDirectory(parent); tracker.onDirectory(parent); tracker.onFile(child);
+        assertEquals(1, progress.snapshot().folderIndex);
+        assertEquals(1, progress.snapshot().folderTotal);
+        assertEquals(parent.getName(), progress.snapshot().folder);
+    }
+
+    @Test public void outerBatchFolderCounterStillOwnsVisibleProgress() throws Exception {
+        File parent = temporary.newFolder("shared");
+        File child = new File(parent, "a"); Files.write(child.toPath(), new byte[1]);
+        FileOperationProgress progress = progress();
+        progress.setFolder("batch destination"); progress.setFolderProgress(2, 4);
+        FileTreeProgressTracker tracker = FileTreeProgressTracker.create(progress, parent);
+        tracker.onMoved(parent); tracker.onDirectory(parent);
+        assertEquals(2, progress.snapshot().folderIndex);
+        assertEquals(4, progress.snapshot().folderTotal);
+        assertEquals("batch destination", progress.snapshot().folder);
+    }
+
     private FileOperationProgress progress() { return new FileOperationProgress("operation", null); }
     private static File counted(File root, AtomicInteger listings) {
         return new File(root.getPath()) {

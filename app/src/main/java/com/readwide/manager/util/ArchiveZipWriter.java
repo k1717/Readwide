@@ -1,11 +1,13 @@
 package com.readwide.manager.util;
 
+import com.readwide.manager.archive.ArchiveCancellation;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
@@ -50,6 +52,7 @@ public final class ArchiveZipWriter {
             }
             // Atomically reserve the destination rather than overwriting a competing
             // writer after an exists() check. No deletion unless this call reserved it.
+            checkpoint(progress);
             if (!output.createNewFile()) return false;
             reserved = true;
             Set<String> names = new HashSet<>();
@@ -103,9 +106,11 @@ public final class ArchiveZipWriter {
             }
             // Stream close writes the central directory. Success must be decided
             // AFTER it succeeds, so a finalization error removes the partial ZIP.
+            checkpoint(progress);
             complete = true;
             return true;
         } catch (IOException | SecurityException failure) {
+            ArchiveCancellation.restoreIfCancelled(failure, progress);
             return false;
         } finally {
             if (reserved && !complete) {
@@ -115,8 +120,8 @@ public final class ArchiveZipWriter {
     }
 
     private static void checkpoint(FileOperationProgress progress) throws IOException {
-        if (Thread.currentThread().isInterrupted() || (progress != null && !progress.checkpoint())) {
-            throw new IOException("ZIP creation cancelled");
+        if ((progress != null && !progress.checkpoint()) || Thread.currentThread().isInterrupted()) {
+            throw new InterruptedIOException("ZIP creation cancelled");
         }
     }
 

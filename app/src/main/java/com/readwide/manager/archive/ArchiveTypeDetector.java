@@ -19,8 +19,8 @@ import java.util.regex.Pattern;
 final class ArchiveTypeDetector {
     private ArchiveTypeDetector() {}
 
-    static final Pattern RAR_NEW_STYLE_PART = Pattern.compile("^(.*)\\.part(\\d+)\\.rar$", Pattern.CASE_INSENSITIVE);
-    static final Pattern RAR_OLD_STYLE_PART = Pattern.compile("^(.*)\\.r(\\d{2,3})$", Pattern.CASE_INSENSITIVE);
+    static final Pattern RAR_NEW_STYLE_PART = Pattern.compile("^(.*)\\.part(\\d+)\\.(?:rar|cbr)$", Pattern.CASE_INSENSITIVE);
+    static final Pattern RAR_OLD_STYLE_PART = RarVolumeNameResolver.OLD_STYLE_PART;
     static final Pattern EGG_VOLUME_PART = Pattern.compile("^(.*)\\.vol(\\d+)\\.egg$", Pattern.CASE_INSENSITIVE);
     static final Pattern ALZ_VOLUME_PART = AlzVolumeResolver.CONTINUATION;
 
@@ -37,6 +37,7 @@ final class ArchiveTypeDetector {
         if (!file.isFile()) return null;
         ArchiveSupport.Type splitType = getAlzipSplitArchiveType(file);
         if (splitType != null) return splitType;
+        if (ZipVolumeResolver.hasFinalVolume(file)) return ArchiveSupport.Type.ZIP;
         ArchiveSupport.Type nameType = fromFileName(file.getName());
         if (nameType != null) return nameType;
         return hasEmbeddedRarSignatureForSfx(file) ? ArchiveSupport.Type.RAR : null;
@@ -63,7 +64,8 @@ final class ArchiveTypeDetector {
         if (EGG_VOLUME_PART.matcher(name).matches()) return ArchiveSupport.Type.EGG;
         if (name.endsWith(".zip") || name.endsWith(".zipx") || name.endsWith(".cbz")) return ArchiveSupport.Type.ZIP;
         if (name.endsWith(".rar") || name.endsWith(".cbr")) return ArchiveSupport.Type.RAR;
-        if (name.endsWith(".cab") || name.endsWith(".lha") || name.endsWith(".lzh")) {
+        if (name.endsWith(".cab") || name.endsWith(".lha") || name.endsWith(".lzh")
+                || LhaVolumeResolver.continuationStem(fileName) != null) {
             return ArchiveSupport.Type.LIBARCHIVE;
         }
         if (name.endsWith(".alz")) return ArchiveSupport.Type.ALZ;
@@ -105,7 +107,7 @@ final class ArchiveTypeDetector {
 
     static boolean isRarSplitPart(@NonNull File file) {
         String lower = file.getName().toLowerCase(Locale.ROOT);
-        return lower.endsWith(".rar")
+        return lower.endsWith(".rar") || lower.endsWith(".cbr")
                 || RAR_NEW_STYLE_PART.matcher(lower).matches()
                 || RAR_OLD_STYLE_PART.matcher(lower).matches();
     }
@@ -139,9 +141,13 @@ final class ArchiveTypeDetector {
             lower = name.toLowerCase(Locale.ROOT);
         }
         Matcher eggVolume = EGG_VOLUME_PART.matcher(name);
+        String lhaStem = LhaVolumeResolver.continuationStem(name);
+        if (lhaStem != null) return lhaStem;
         Matcher alzVolume = ALZ_VOLUME_PART.matcher(name);
         if (eggVolume.matches()) return eggVolume.group(1).isEmpty() ? fallback : eggVolume.group(1);
         if (alzVolume.matches()) return alzVolume.group(1).isEmpty() ? fallback : alzVolume.group(1);
+        Matcher oldRarPart = RAR_OLD_STYLE_PART.matcher(name);
+        if (oldRarPart.matches()) return oldRarPart.group(1).isEmpty() ? fallback : oldRarPart.group(1);
         Matcher rarPartMatcher = RAR_NEW_STYLE_PART.matcher(name);
         if (rarPartMatcher.matches()) {
             name = rarPartMatcher.group(1) + ".rar";

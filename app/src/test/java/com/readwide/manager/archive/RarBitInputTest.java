@@ -105,4 +105,57 @@ public class RarBitInputTest {
         catch(java.io.IOException expected) {assertTrue(expected.getMessage().contains("cancelled"));}
         finally {Thread.interrupted();}
     }
+
+    @Test public void uncheckedFailureAfterPartialPeekIsTerminal() throws Exception {
+        for (Throwable failure : new Throwable[]{new IllegalStateException("read"), new AssertionError("read")}) {
+            int[] reads = {0};
+            RarBitInput input = new RarBitInput(new java.io.InputStream() {
+                @Override public int read() {
+                    if (++reads[0] == 1) return 42;
+                    if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+                    throw (Error) failure;
+                }
+            }, 2);
+            assertSame(failure, assertThrows(Throwable.class, () -> input.peekBits(16)));
+            assertEquals(0, input.bitsRead());
+            assertSame(failure, assertThrows(Throwable.class, () -> input.readBits(8)));
+            assertSame(failure, assertThrows(Throwable.class, () -> input.alignedBytes().read()));
+            assertEquals(2, reads[0]);
+        }
+    }
+
+    @Test public void invalidScalarByteCannotContaminateReservoir() {
+        RarBitInput input = new RarBitInput(new java.io.InputStream() {
+            @Override public int read() { return 256; }
+        }, 1);
+        java.io.IOException failure = assertThrows(java.io.IOException.class, () -> input.readBits(8));
+        assertTrue(failure.getMessage().contains("source byte"));
+        assertEquals(0, input.bitsRead());
+        assertEquals(8, input.remainingBits());
+        assertSame(failure, assertThrows(java.io.IOException.class, () -> input.readBits(1)));
+    }
+
+    @Test public void cancellationRemainsTypedAfterThreadFlagIsCleared() throws Exception {
+        RarBitInput input = new RarBitInput(new byte[]{1});
+        Thread.currentThread().interrupt();
+        java.io.InterruptedIOException failure;
+        try { failure = assertThrows(java.io.InterruptedIOException.class, input::readBit); }
+        finally { Thread.interrupted(); }
+        assertSame(failure, assertThrows(java.io.InterruptedIOException.class, input::readBit));
+        assertSame(failure, assertThrows(java.io.InterruptedIOException.class,
+                () -> ArchiveCancellation.rethrowIfCancelled(new java.io.IOException("wrapped", failure), null)));
+    }
+
+    @Test public void interruptionMidPeekRetiresAlreadyFetchedBits() {
+        int[] reads = {0};
+        RarBitInput input = new RarBitInput(new java.io.InputStream() {
+            @Override public int read() { reads[0]++; Thread.currentThread().interrupt(); return 42; }
+        }, 2);
+        java.io.InterruptedIOException failure;
+        try { failure = assertThrows(java.io.InterruptedIOException.class, () -> input.peekBits(16)); }
+        finally { Thread.interrupted(); }
+        assertEquals(1, reads[0]);
+        assertEquals(0, input.bitsRead());
+        assertSame(failure, assertThrows(java.io.InterruptedIOException.class, () -> input.readBits(8)));
+    }
 }

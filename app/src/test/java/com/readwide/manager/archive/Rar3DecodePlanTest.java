@@ -44,9 +44,13 @@ public class Rar3DecodePlanTest {
         assertEquals(3, plan.step(3).runStart);
     }
 
-    @Test public void storedFilesBreakPrimerEligibilityButDirectoriesDoNot() throws Exception {
+    @Test public void storedFilesPreservePrimerButCannotSupplyOne() throws Exception {
         RarArchiveReader.RarEntry stored = entry(0x30, false, 2, 2, 0, 0, false, false, null);
-        assertNull(Rar3DecodePlan.compile(Arrays.asList(compressed(false), stored, directory(), compressed(true)), e -> classic()));
+        Rar3DecodePlan interleaved = Rar3DecodePlan.compile(Arrays.asList(compressed(false), stored, directory(), compressed(true)), e -> classic());
+        assertEquals(START_CHECKED, interleaved.step(0).action);
+        assertEquals(STORED, interleaved.step(1).action);
+        assertEquals(0, interleaved.step(3).runStart);
+        assertNull(Rar3DecodePlan.compile(Arrays.asList(stored, compressed(true)), e -> classic()));
         assertNull(Rar3DecodePlan.compile(Collections.singletonList(compressed(true)), e -> classic()));
         Rar3DecodePlan plan = Rar3DecodePlan.compile(Arrays.asList(compressed(false), stored,
                 compressed(false), compressed(true)), e -> classic());
@@ -75,7 +79,6 @@ public class Rar3DecodePlanTest {
                 entry(0x33, false, 1, 2, 0, 0, true, false, null),
                 entry(0x33, false, 1, 2, 0, 0, false, true, null),
                 entry(0x33, false, 1, 2, 0, 0, false, false, RarArchiveReader.EncryptionInfo.rar4Unsupported(new byte[8])),
-                entry(0x30, true, 2, 2, 0, 0, false, false, null),
                 entry(0x30, false, 3, 2, 0, 0, false, false, null),
                 entry(0x30, false, 2, 2, 0, -1, false, false, null));
         for (RarArchiveReader.RarEntry candidate : invalid) {
@@ -111,7 +114,7 @@ public class Rar3DecodePlanTest {
         assertNull(Rar3DecodePlan.forTarget(Collections.singletonList(target), compressed(false)));
     }
 
-    @Test public void targetSolidPlanKeepsDirectoriesAndCannotCrossStoredBarrier() throws Exception {
+    @Test public void targetSolidPlanKeepsDirectoriesAndCrossesStoredMember() throws Exception {
         File source = temp.newFile(); Files.write(source.toPath(), new byte[]{0,0});
         RarArchiveReader.RarEntry first = compressed(false), target = compressed(true);
         first.sourceArchive = target.sourceArchive = source;
@@ -121,7 +124,19 @@ public class Rar3DecodePlanTest {
         assertEquals(START_CHECKED, plan.step(0).action);
         assertEquals(CONTINUE_CHECKED, plan.step(2).action);
         RarArchiveReader.RarEntry stored = entry(0x30, false, 2, 2, 0, 0, false, false, null);
-        assertNull(Rar3DecodePlan.forTarget(Arrays.asList(first, stored, target), target));
+        Rar3DecodePlan acrossStored = Rar3DecodePlan.forTarget(Arrays.asList(first, stored, target), target);
+        assertNotNull(acrossStored);
+        assertEquals(START_CHECKED, acrossStored.step(0).action);
+        assertEquals(STORED, acrossStored.step(1).action);
+        assertEquals(CONTINUE_CHECKED, acrossStored.step(2).action);
+        assertNull(Rar3DecodePlan.forTarget(Arrays.asList(stored, target), target));
+    }
+
+    @Test public void storedSolidFlagDoesNotEnterCompressedHistory() throws Exception {
+        RarArchiveReader.RarEntry stored = entry(0x30, true, 2, 2, 0, 0, false, false, null);
+        Rar3DecodePlan plan = Rar3DecodePlan.compile(Arrays.asList(compressed(false), stored, compressed(true)), e -> classic());
+        assertEquals(STORED, plan.step(1).action);
+        assertEquals(0, plan.step(2).runStart);
     }
 
     @Test public void planningPreservesCancellation() throws Exception {

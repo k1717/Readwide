@@ -97,7 +97,7 @@ final class RarVolumeChainResolution {
                     + resolverResult.problem() + "; " + diagnostic);
         }
         if (knownGapBeforeSelected || knownGapInDiscoveredChain
-                || (resolverResult.selectedLaterVolume() && !selectedInContiguousChain)) {
+                || !selectedInContiguousChain) {
             throw incompleteChainException();
         }
         if (resolverResult.volumes().isEmpty() || !resolverResult.selected().isFile()

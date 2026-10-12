@@ -75,9 +75,9 @@ try {
     Write-Host ""
     Write-Host "Building release APK..."
     if ($Clean) {
-        .\gradlew.bat clean assembleRelease --offline
+        .\gradlew.bat clean :app:assembleRelease --offline --warning-mode=all
     } else {
-        .\gradlew.bat assembleRelease --offline
+        .\gradlew.bat :app:assembleRelease --offline --warning-mode=all
     }
     # gradlew.bat is a native command; PowerShell does not throw on its non-zero
     # exit, so check explicitly and fail loudly instead of letting the APK listing

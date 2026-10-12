@@ -12,6 +12,77 @@ import static org.junit.Assert.*;
 public class ArchiveSourceSnapshotTest {
     @Rule public TemporaryFolder temp = new TemporaryFolder();
 
+    @Test public void workerStampCheckDetectsLaterVolumeReplacementAndRemoval() throws Exception {
+        File first = part("comic.part1.rar"), second = part("comic.part2.rar");
+        ArchiveSourceSnapshot saved = snapshot(first);
+        assertTrue(saved.matchesKnownFiles(first));
+        long timestamp = second.lastModified();
+        Files.write(second.toPath(), new byte[]{4, 3, 2, 1});
+        assertTrue(second.setLastModified(timestamp));
+        assertFalse(saved.matchesKnownFiles(first));
+        ArchiveSourceSnapshot replacement = snapshot(first);
+        assertTrue(replacement.matchesKnownFiles(first));
+        assertTrue(second.delete());
+        assertFalse(replacement.matchesKnownFiles(first));
+    }
+
+    @Test public void workerStampCheckRejectsAnotherSourceAndFailedCapture() throws Exception {
+        File first = part("one.zip"), other = part("two.zip");
+        assertFalse(snapshot(first).matchesKnownFiles(other));
+        assertFalse(snapshot(new File(temp.getRoot(), "missing.zip")).matchesKnownFiles(first));
+    }
+
+    @Test public void workerStampCheckPreservesInterruption() throws Exception {
+        File archive = part("one.zip");
+        ArchiveSourceSnapshot saved = snapshot(archive);
+        Thread.currentThread().interrupt();
+        try {
+            assertFalse(saved.matchesKnownFiles(archive));
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally { Thread.interrupted(); }
+    }
+
+    @Test public void fullBoundaryCheckDetectsNewChainMembers() throws Exception {
+        File first = part("comic.part1.rar");
+        ArchiveSourceSnapshot saved = snapshot(first);
+        part("comic.part2.rar");
+        assertTrue(saved.matchesKnownFiles(first)); // cheap per-page check only knows prior members
+        assertFalse(saved.matches(first)); // resume and thumbnail checks re-resolve membership
+    }
+
+    @Test public void checkedCancellationDuringStampCaptureRestoresInterrupt() throws Exception {
+        File source = temp.newFile("stamp.dat");
+        File interrupted = new File(source.getPath()) {
+            @Override public String getCanonicalPath() throws java.io.IOException {
+                throw new java.io.InterruptedIOException("stamp cancelled");
+            }
+        };
+        ArchiveSourceSnapshot captured;
+        try {
+            captured = ArchiveSourceSnapshot.capture(interrupted);
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally { Thread.interrupted(); }
+        assertFalse(captured.matches(source));
+    }
+
+    @Test public void interruptionInFinalStampCannotPublishReusableIdentity() throws Exception {
+        File source = temp.newFile("stamp.dat");
+        File interrupted = new File(source.getPath()) {
+            private int stamps;
+            @Override public long lastModified() {
+                long modified = super.lastModified();
+                if (++stamps == 2) Thread.currentThread().interrupt();
+                return modified;
+            }
+        };
+        ArchiveSourceSnapshot captured;
+        try {
+            captured = ArchiveSourceSnapshot.capture(interrupted);
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally { Thread.interrupted(); }
+        assertFalse(captured.matches(source));
+    }
+
     @Test
     public void unchangedRarChainMatches() throws Exception {
         File first = part("comic.part1.rar");
@@ -150,6 +221,39 @@ public class ArchiveSourceSnapshotTest {
         Files.write(file.toPath(), new byte[] {1, 2, 3});
         assertTrue(file.setLastModified(1700000000000L));
         return file;
+    }
+
+    @Test public void replacementProtectionUsesAncestorsNotStringPrefixes() throws Exception {
+        File directory = temp.newFolder("book-old");
+        File archive = new File(directory, "comic.zip"); Files.write(archive.toPath(), new byte[]{1});
+        File sibling = temp.newFolder("book");
+        ArchiveSourceSnapshot saved = snapshot(archive);
+        saved.requireOutsideReplacementTree(sibling);
+        assertThrows(java.io.IOException.class, () -> saved.requireOutsideReplacementTree(directory));
+        assertThrows(java.io.IOException.class, () -> saved.requireOutsideReplacementTree(temp.getRoot()));
+        assertThrows(java.io.IOException.class, () -> saved.requireOutsideReplacementTree(archive));
+    }
+
+    @Test public void replacementProtectionNormalizesDotDotAliases() throws Exception {
+        File directory = temp.newFolder("archive-root");
+        File child = new File(directory, "child"); assertTrue(child.mkdir());
+        File archive = new File(directory, "comic.zip"); Files.write(archive.toPath(), new byte[]{1});
+        ArchiveSourceSnapshot saved = snapshot(archive);
+        assertThrows(java.io.IOException.class,
+                () -> saved.requireOutsideReplacementTree(new File(child, "..")));
+    }
+
+    @Test public void unresolvedSnapshotCannotApproveAReplacementAndCancellationIsRetained() throws Exception {
+        File missing = new File(temp.getRoot(), "missing.zip");
+        ArchiveSourceSnapshot unresolved = snapshot(missing);
+        assertThrows(java.io.IOException.class, () -> unresolved.requireOutsideReplacementTree(temp.getRoot()));
+        File archive = part("comic.zip"), outside = temp.newFolder("outside");
+        ArchiveSourceSnapshot saved = snapshot(archive);
+        Thread.currentThread().interrupt();
+        try {
+            assertThrows(java.io.InterruptedIOException.class, () -> saved.requireOutsideReplacementTree(outside));
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally { Thread.interrupted(); }
     }
 
     private ArchiveSourceSnapshot snapshot(File file) {

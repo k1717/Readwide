@@ -22,6 +22,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.readwide.manager.archive.ArchiveSupport;
+import com.readwide.manager.archive.ArchiveCancellation;
 import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.File;
@@ -54,7 +55,6 @@ final class MainArchiveExtractController {
         for (int i = ready.size() - 1; i >= 0; i--) {
             addPendingArchiveExtraction(ready.get(i));
         }
-        activity.archiveExtractInProgress = false;
         activity.updateMainOverflowButtonVisibility();
         Toast.makeText(activity, R.string.archive_extract_select_destination, Toast.LENGTH_LONG).show();
 
@@ -96,12 +96,12 @@ final class MainArchiveExtractController {
 
     void cancelPendingArchiveExtraction(@Nullable File archive) {
         removePendingArchiveExtraction(archive);
-        activity.archiveExtractInProgress = false;
         activity.updateMainOverflowButtonVisibility();
         ShortToast.show(activity, R.string.archive_extract_cancelled);
     }
 
     void confirmPendingArchiveExtractionToCurrentDirectory() {
+        if (activity.activityDestroyed || activity.archiveExtractInProgress) return;
         File archive = activity.pendingExtractArchive;
         if (archive == null) return;
         if (!archive.exists() || !archive.canRead() || !isSupportedArchive(archive)) {
@@ -120,7 +120,7 @@ final class MainArchiveExtractController {
     }
 
     void confirmAllPendingArchiveExtractionsToCurrentDirectory() {
-        if (activity.archiveExtractInProgress) return;
+        if (activity.activityDestroyed || activity.archiveExtractInProgress) return;
         ArrayList<File> archives = new ArrayList<>(activity.pendingExtractArchives);
         if (archives.isEmpty()) return;
         File destinationRoot = activity.currentDirectory;
@@ -325,6 +325,8 @@ final class MainArchiveExtractController {
                                                                @NonNull File parentDir,
                                                                @NonNull File destinationDir,
                                                                boolean overwrite) {
+        if (activity.activityDestroyed || activity.archiveExtractInProgress
+                || !activity.pendingExtractArchives.contains(archive)) return;
         if (ArchiveSupport.requiresPasswordForExtraction(archive)) {
             showArchivePasswordDialog(password -> continueArchiveExtraction(archive, parentDir, destinationDir, overwrite, password.toCharArray()));
             return;
@@ -337,6 +339,13 @@ final class MainArchiveExtractController {
                                            @NonNull File destinationDir,
                                            boolean overwrite,
                                            char[] password) {
+        // Dialog/password callbacks may arrive after the queue was cancelled or
+        // another extraction started. Only the worker owns the running flag.
+        if (activity.activityDestroyed || activity.archiveExtractInProgress
+                || !activity.pendingExtractArchives.contains(archive)) {
+            PasswordChars.clear(password);
+            return;
+        }
         activity.archiveExtractInProgress = true;
         activity.updateMainOverflowButtonVisibility();
         FileOperationProgress progress = activity.showFileOperationProgress(
@@ -345,19 +354,19 @@ final class MainArchiveExtractController {
         progress.setFolder(destinationDir.getName().length() > 0 ? destinationDir.getName() : destinationDir.getAbsolutePath());
         progress.clearItemProgress();
         progress.clearFolderProgress();
-        activity.executeFolderBackgroundTask(() -> {
-            ArchiveSupport.ExtractionResult result = ArchiveSupport.extractArchiveDetailed(
-                    archive,
-                    destinationDir,
-                    overwrite,
-                    password,
-                    progress);
+        boolean accepted = activity.executeFolderBackgroundTask(() -> {
+            final ArchiveSupport.ExtractionResult result;
+            try {
+                result = extractForUi(archive, destinationDir, overwrite, password, progress);
+            } finally { PasswordChars.clear(password); }
             activity.fileSearchHandler.post(() -> {
                 activity.archiveExtractInProgress = false;
                 activity.finishFileOperationProgress(progress);
-                activity.updateMainOverflowButtonVisibility();
                 if (activity.activityDestroyed) return;
-                if (progress.isCancelled()) {
+                activity.updateMainOverflowButtonVisibility();
+                // The extraction result owns the commit decision. A later UI
+                // cancellation cannot turn committed output back into a queued job.
+                if (!result.success && progress.isCancelled()) {
                     ShortToast.show(activity, R.string.archive_extract_cancelled);
                     return;
                 }
@@ -378,12 +387,27 @@ final class MainArchiveExtractController {
                 activity.rebuildDrawerStorageEntries();
                 ShortToast.show(activity, R.string.archive_extracted);
             });
-        });
+        }, () -> PasswordChars.clear(password));
+        if (!accepted) {
+            activity.archiveExtractInProgress = false;
+            activity.finishFileOperationProgress(progress);
+        }
     }
 
     private void continueAllArchiveExtractions(@NonNull ArrayList<File> archives,
                                                @NonNull File destinationRoot,
                                                @Nullable char[] batchPassword) {
+        if (activity.activityDestroyed || activity.archiveExtractInProgress) {
+            PasswordChars.clear(batchPassword);
+            return;
+        }
+        // Revalidate the confirmation snapshot on the UI thread, before the
+        // worker owns it. Removed queue items must not be extracted by a late dialog.
+        archives.retainAll(activity.pendingExtractArchives);
+        if (archives.isEmpty()) {
+            PasswordChars.clear(batchPassword);
+            return;
+        }
         activity.archiveExtractInProgress = true;
         activity.updateMainOverflowButtonVisibility();
         FileOperationProgress progress = activity.showFileOperationProgress(
@@ -391,7 +415,7 @@ final class MainArchiveExtractController {
                 activity.getString(R.string.extract_all_here));
         progress.setFolder(destinationRoot.getName().length() > 0 ? destinationRoot.getName() : destinationRoot.getAbsolutePath());
 
-        activity.executeFolderBackgroundTask(() -> {
+        boolean accepted = activity.executeFolderBackgroundTask(() -> {
             int successCount = 0;
             int failedCount = 0;
             int unsupportedCount = 0;
@@ -400,50 +424,58 @@ final class MainArchiveExtractController {
             String firstUnsupportedDetail = null;
             final int totalArchives = archives.size();
             int archiveIndex = 0;
-            for (File archive : archives) {
-                archiveIndex++;
-                if (progress.isCancelled()) break;
-                if (archive == null || !archive.exists() || !archive.canRead() || !isSupportedArchive(archive)) {
-                    failedCount++;
-                    continue;
+            ArrayList<File> completedArchives = new ArrayList<>();
+            try {
+                for (File archive : archives) {
+                    archiveIndex++;
+                    if (!progress.checkpoint()) break;
+                    if (archive == null || !archive.exists() || !archive.canRead() || !isSupportedArchive(archive)) {
+                        failedCount++;
+                        continue;
+                    }
+                    String baseName = getArchiveOutputBaseName(archive);
+                    File destination = new File(destinationRoot, baseName);
+                    if (destination.exists()) {
+                        destination = MainArchiveExtractionPlanner.numberedDirectoryDestination(destinationRoot, baseName, activity.getString(R.string.extracted_folder_fallback));
+                    }
+                    if (destination == null) {
+                        failedCount++;
+                        continue;
+                    }
+                    progress.setDetail(archive.getName());
+                    progress.clearItemProgress();
+                    progress.setFolder(destination.getName());
+                    if (totalArchives > 1) {
+                        progress.setFolderProgress(archiveIndex, totalArchives);
+                    } else {
+                        progress.clearFolderProgress();
+                    }
+                    boolean passwordRequired = ArchiveSupport.requiresPasswordForExtraction(archive);
+                    char[] password = passwordRequired ? batchPassword : null;
+                    ArchiveSupport.ExtractionResult result = password == null && passwordRequired
+                            ? ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED, null)
+                            : extractForUi(archive, destination, false, password, progress);
+                    if (result.success) {
+                        successCount++;
+                        completedArchives.add(archive);
+                    } else if (!progress.isCancelled()) {
+                        failedCount++;
+                        if (result.failure == ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE) {
+                            unsupportedCount++;
+                            if (firstUnsupportedDetail == null && result.detail != null && result.detail.length() > 0) {
+                                firstUnsupportedArchiveName = archive.getName();
+                                firstUnsupportedDetail = result.detail;
+                            }
+                        } else if (result.failure == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED
+                                || result.failure == ArchiveSupport.ExtractionFailure.BAD_PASSWORD) passwordFailedCount++;
+                    }
                 }
-                String baseName = getArchiveOutputBaseName(archive);
-                File destination = new File(destinationRoot, baseName);
-                if (destination.exists()) {
-                    destination = MainArchiveExtractionPlanner.numberedDirectoryDestination(destinationRoot, baseName, activity.getString(R.string.extracted_folder_fallback));
-                }
-                if (destination == null) {
-                    failedCount++;
-                    continue;
-                }
-                progress.setDetail(archive.getName());
-                progress.clearItemProgress();
-                progress.setFolder(destination.getName());
-                if (totalArchives > 1) {
-                    progress.setFolderProgress(archiveIndex, totalArchives);
-                } else {
-                    progress.clearFolderProgress();
-                }
-                boolean passwordRequired = ArchiveSupport.requiresPasswordForExtraction(archive);
-                char[] password = passwordRequired ? batchPassword : null;
-                ArchiveSupport.ExtractionResult result = password == null && passwordRequired
-                        ? ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED, null)
-                        : ArchiveSupport.extractArchiveDetailed(archive, destination, false, password, progress);
-                if (result.success) {
-                    successCount++;
-                    removePendingArchiveExtraction(archive);
-                } else if (!progress.isCancelled()) {
-                    failedCount++;
-                    if (result.failure == ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE) {
-                        unsupportedCount++;
-                        if (firstUnsupportedDetail == null && result.detail != null && result.detail.length() > 0) {
-                            firstUnsupportedArchiveName = archive.getName();
-                            firstUnsupportedDetail = result.detail;
-                        }
-                    } else if (result.failure == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED
-                            || result.failure == ArchiveSupport.ExtractionFailure.BAD_PASSWORD) passwordFailedCount++;
-                }
-            }
+            } catch (RuntimeException failure) {
+                // Destination/password preflight sits outside extractForUi.
+                // Do not strand progress or lose already committed batch results.
+                ArchiveCancellation.restoreIfCancelled(failure, progress);
+                failedCount++;
+            } finally { PasswordChars.clear(batchPassword); }
 
             final int finalSuccessCount = successCount;
             final int finalFailedCount = failedCount;
@@ -453,10 +485,12 @@ final class MainArchiveExtractController {
             final String finalFirstUnsupportedDetail = firstUnsupportedDetail;
             final int totalCount = archives.size();
             activity.fileSearchHandler.post(() -> {
+                // The pending queue belongs to the UI thread, not the decoder worker.
+                for (File completed : completedArchives) removePendingArchiveExtraction(completed);
                 activity.archiveExtractInProgress = false;
                 activity.finishFileOperationProgress(progress);
-                activity.updateMainOverflowButtonVisibility();
                 if (activity.activityDestroyed) return;
+                activity.updateMainOverflowButtonVisibility();
                 if (progress.isCancelled()) {
                     ShortToast.show(activity, R.string.archive_extract_cancelled);
                     return;
@@ -500,7 +534,24 @@ final class MainArchiveExtractController {
                             totalCount));
                 }
             });
-        });
+        }, () -> PasswordChars.clear(batchPassword));
+        if (!accepted) {
+            activity.archiveExtractInProgress = false;
+            activity.finishFileOperationProgress(progress);
+        }
+    }
+
+    /** Contain nonfatal decoder failures at the UI boundary after core rollback. */
+    static ArchiveSupport.ExtractionResult extractForUi(File archive, File destination,
+                                                       boolean overwrite, char[] password,
+                                                       FileOperationProgress progress) {
+        try {
+            return ArchiveSupport.extractArchiveDetailed(archive, destination, overwrite, password, progress);
+        } catch (RuntimeException failure) {
+            ArchiveCancellation.restoreIfCancelled(failure, progress);
+            return ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED,
+                    failure.getMessage());
+        }
     }
 
     private void showArchiveExtractionFailure(@NonNull File archive,
@@ -709,10 +760,15 @@ final class MainArchiveExtractController {
 
     private void continueAllArchiveExtractionsWithPasswordPreflight(@NonNull ArrayList<File> archives,
                                                                     @NonNull File destinationRoot) {
+        if (activity.activityDestroyed || activity.archiveExtractInProgress) return;
+        archives.retainAll(activity.pendingExtractArchives);
+        if (archives.isEmpty()) return;
         activity.executeFolderBackgroundTask(() -> {
             boolean needsPassword = MainArchiveExtractionPlanner.hasPasswordProtectedArchive(archives);
             activity.fileSearchHandler.post(() -> {
-                if (activity.activityDestroyed) return;
+                if (activity.activityDestroyed || activity.archiveExtractInProgress) return;
+                archives.retainAll(activity.pendingExtractArchives);
+                if (archives.isEmpty()) return;
                 if (needsPassword) {
                     showArchivePasswordDialog(password -> continueAllArchiveExtractions(
                             archives,

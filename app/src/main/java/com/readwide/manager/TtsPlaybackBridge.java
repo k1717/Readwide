@@ -25,14 +25,24 @@ final class TtsPlaybackBridge {
         }
     }
 
-    static boolean dispatch(String action) {
+    private static TtsHost liveHost() {
         TtsHost host;
         synchronized (TtsPlaybackBridge.class) {
             host = activeHost.get();
         }
         if (host == null || host.ttsHostActivity().isFinishing() || host.isTtsHostDestroyed()) {
-            return false;
+            return null;
         }
+        return host;
+    }
+
+    static boolean hasLiveHost() {
+        return liveHost() != null;
+    }
+
+    static boolean dispatch(String action) {
+        TtsHost host = liveHost();
+        if (host == null) return false;
         host.ttsHostActivity().runOnUiThread(() -> host.ttsHandlePlaybackCommand(action));
         return true;
     }

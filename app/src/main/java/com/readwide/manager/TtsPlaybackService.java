@@ -70,26 +70,30 @@ public class TtsPlaybackService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        String action = intent != null && intent.getAction() != null ? intent.getAction() : ACTION_START;
+        // The engine/queue belongs to the activity, not this notification service.
+        // A process restart cannot reconstruct playback from a sticky/null intent.
+        if (intent == null || !TtsPlaybackBridge.hasLiveHost()) {
+            stopOrphanedPlayback();
+            return START_NOT_STICKY;
+        }
+        String action = intent.getAction();
         if (ACTION_STOP.equals(action) || ACTION_PLAY_PAUSE.equals(action)
                 || ACTION_PLAY.equals(action) || ACTION_PAUSE.equals(action)
                 || ACTION_NEXT.equals(action) || ACTION_PREVIOUS.equals(action)) {
             boolean delivered = TtsPlaybackBridge.dispatch(action);
             if (!delivered) {
-                if (ACTION_STOP.equals(action)) {
-                    stopSelf();
-                } else {
-                    playing = false;
-                    subtitle = getString(R.string.tts_action_remote_unavailable);
-                    startForeground(NOTIFICATION_ID, buildNotification());
-                }
+                stopOrphanedPlayback();
             }
-            return START_STICKY;
+            return START_NOT_STICKY;
         }
 
+        if (!ACTION_START.equals(action) && !ACTION_REFRESH.equals(action)) {
+            stopOrphanedPlayback();
+            return START_NOT_STICKY;
+        }
         updateState(intent);
         startForeground(NOTIFICATION_ID, buildNotification());
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
     @Nullable
@@ -109,7 +113,14 @@ public class TtsPlaybackService extends Service {
     }
 
     private void dispatch(String action) {
-        TtsPlaybackBridge.dispatch(action);
+        if (!TtsPlaybackBridge.dispatch(action)) stopOrphanedPlayback();
+    }
+
+    private void stopOrphanedPlayback() {
+        playing = false;
+        if (mediaSession != null) mediaSession.setActive(false);
+        stopForeground(true);
+        stopSelf();
     }
 
     private void updateState(Intent intent) {

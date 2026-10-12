@@ -11,6 +11,7 @@ import androidx.core.content.ContextCompat;
 import androidx.core.graphics.drawable.DrawableCompat;
 
 import com.readwide.manager.adapter.FileAdapter;
+import com.readwide.manager.archive.ArchiveCancellation;
 import com.readwide.manager.util.FileClipboardController;
 import com.readwide.manager.util.FileOperationProgress;
 import com.readwide.manager.util.FileSystemOps;
@@ -174,7 +175,6 @@ final class MainSelectionModeController {
             exitFileSelectionMode(true);
             return;
         }
-        activity.archiveExtractInProgress = false;
         exitFileSelectionMode(true);
         activity.updateMainOverflowButtonVisibility();
         Toast.makeText(activity,
@@ -252,7 +252,7 @@ final class MainSelectionModeController {
     }
 
     private void deleteSelectedFiles(@NonNull ArrayList<File> selected) {
-        if (selected.isEmpty()) return;
+        if (activity.activityDestroyed || selected.isEmpty()) return;
         // The delete worker uses a snapshot of the selected files, so the UI no
         // longer needs to remain in multi-select mode after the user confirms.
         // Leaving selection mode active hides the background operation-progress
@@ -261,7 +261,6 @@ final class MainSelectionModeController {
         // navigation refreshes the toolbar. Exit selection mode up front so the
         // normal toolbar can expose the active progress button immediately.
         exitFileSelectionMode(true);
-        ArrayList<String> deletedPaths = new ArrayList<>();
         FileOperationProgress progress = activity.showFileOperationProgress(
                 activity.getString(R.string.file_deleting),
                 activity.getString(R.string.file_selection_count, selected.size()));
@@ -270,36 +269,44 @@ final class MainSelectionModeController {
                     ? activity.currentDirectory.getName()
                     : activity.currentDirectory.getAbsolutePath());
         }
-        activity.executeFolderBackgroundTask(() -> {
-            FileTreeProgressTracker treeProgress = FileTreeProgressTracker.create(progress, selected);
-            progress.setTotalBytes(treeProgress.totalBytes());
+        boolean accepted = activity.executeFolderBackgroundTask(() -> {
             int deletedCount = 0;
-            for (File file : selected) {
-                if (!treeProgress.isReady() || !progress.checkpoint()) break;
-                if (file == null || !file.exists()) continue;
-                String path = file.getAbsolutePath();
-                boolean wasDirectory = file.isDirectory();
-                if (FileSystemOps.delete(file, progress, false, treeProgress)) {
-                    deletedCount++;
-                    deletedPaths.add(path);
-                    if (activity.bookmarkManager != null) activity.bookmarkManager.deleteReadingState(path);
-                    activity.cleanupNavigationStateAfterDelete(path, wasDirectory);
+            try {
+                FileTreeProgressTracker treeProgress = FileTreeProgressTracker.create(progress, selected);
+                progress.setTotalBytes(treeProgress.totalBytes());
+                for (File file : selected) {
+                    if (!treeProgress.isReady() || !progress.checkpoint()) break;
+                    if (file == null || !file.exists()) continue;
+                    String path = file.getAbsolutePath();
+                    boolean wasDirectory = file.isDirectory();
+                    if (FileSystemOps.delete(file, progress, false, treeProgress)) {
+                        deletedCount++;
+                        // These are synchronized/persistent metadata updates, not
+                        // view operations. Keep bulk writes off the UI thread.
+                        if (activity.bookmarkManager != null) activity.bookmarkManager.deleteReadingState(path);
+                        activity.cleanupNavigationStateAfterDelete(path, wasDirectory);
+                    }
+                    if (progress.isCancelled()) break;
                 }
-                if (progress.isCancelled()) break;
+            } catch (RuntimeException failure) {
+                ArchiveCancellation.restoreIfCancelled(failure, progress);
+            } finally {
+                final int finalDeletedCount = deletedCount;
+                activity.runOnUiThread(() -> {
+                    activity.finishFileOperationProgress(progress);
+                    if (activity.activityDestroyed) return;
+                    if (progress.isCancelled()) {
+                        activity.refreshVisibleFileListAfterDelete();
+                        ShortToast.show(activity, R.string.file_operation_cancelled);
+                        return;
+                    }
+                    activity.refreshVisibleFileListAfterFileSystemChange();
+                    ShortToast.show(activity, finalDeletedCount > 0
+                                    ? activity.getString(R.string.selected_files_deleted, finalDeletedCount)
+                                    : activity.getString(R.string.selected_files_delete_failed));
+                });
             }
-            final int finalDeletedCount = deletedCount;
-            activity.fileSearchHandler.post(() -> {
-                activity.finishFileOperationProgress(progress);
-                if (progress.isCancelled()) {
-                    activity.refreshVisibleFileListAfterDelete();
-                    ShortToast.show(activity, R.string.file_operation_cancelled);
-                    return;
-                }
-                activity.refreshVisibleFileListAfterFileSystemChange();
-                ShortToast.show(activity, finalDeletedCount > 0
-                                ? activity.getString(R.string.selected_files_deleted, finalDeletedCount)
-                                : activity.getString(R.string.selected_files_delete_failed));
-            });
         });
+        if (!accepted) activity.finishFileOperationProgress(progress);
     }
 }

@@ -1,7 +1,9 @@
 package com.readwide.manager.archive;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -24,6 +26,472 @@ import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
 
 public class AlzipArchiveReaderTest {
+    @Test public void compressedPasswordCollisionsResolveAcrossDeflateAndBzipFlavors() throws Exception {
+        byte[] plain = alzBzipSingleBlockPlain();
+        ByteArrayOutputStream bzip = new ByteArrayOutputStream();
+        try (java.io.OutputStream out = new org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream(bzip)) {
+            out.write(plain);
+        }
+        byte[][] packed = {rawDeflate(plain), bzip.toByteArray(),
+                java.util.Arrays.copyOfRange(bzip.toByteArray(), 2, bzip.size()),
+                java.util.Base64.getDecoder().decode(ALZ_BZ_SINGLE_BLOCK_B64)};
+        for (String encoding : new String[]{"UTF-8", "MS949"}) {
+            for (int flavor = 0; flavor < packed.length; flavor++) {
+                File archive = ambiguousEncodedAlz(plain, flavor == 0 ? 2 : 1, packed[flavor], encoding);
+                char[] password = "비밀번호".toCharArray();
+                File output = tempFolder.newFile();
+                assertTrue(ArchiveSupport.extractSingleEntry(archive, "data.bin", output, password));
+                assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+                File directory = tempFolder.newFolder();
+                assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, password));
+                assertArrayEquals(plain, Files.readAllBytes(new File(directory, "data.bin").toPath()));
+            }
+        }
+    }
+
+    @Test public void compressedPasswordProbeSupportsSplitHeaderAndPayload() throws Exception {
+        byte[] plain = new byte[70003];
+        new java.util.Random(206).nextBytes(plain);
+        byte[] packed = rawDeflate(plain);
+        File archive = ambiguousEncodedAlz(plain, 2, packed, "UTF-8");
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        int payloadOffset = bytes.length - packed.length - 4;
+        ByteArrayOutputStream framed = new ByteArrayOutputStream();
+        framed.write(bytes, 0, bytes.length - 4); writeSegmentTrailer(framed, 0x025a4c43);
+        for (int cut : new int[]{payloadOffset - 6, payloadOffset + packed.length / 2}) {
+            File selected = splitWithFinalTail(framed.toByteArray(), cut);
+            File output = tempFolder.newFile();
+            assertTrue(AlzipArchiveReader.extractSingleEntry(selected, "data.bin", output, "비밀번호".toCharArray()));
+            assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+        }
+    }
+
+    @Test public void rejectedCompressedPasswordCandidatesPreserveOutputs() throws Exception {
+        byte[] plain = "compressed candidate must match size and CRC".getBytes(StandardCharsets.UTF_8);
+        byte[] wrong = "different valid decoded content".getBytes(StandardCharsets.UTF_8);
+        File archive = ambiguousEncodedAlz(plain, 2, rawDeflate(wrong), "MS949");
+        char[] password = "비밀번호".toCharArray();
+        File output = tempFolder.newFile(); Files.write(output.toPath(), new byte[]{42});
+        assertThrows(IOException.class, () -> AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, password));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+        File directory = tempFolder.newFolder(), existing = new File(directory, "data.bin");
+        Files.write(existing.toPath(), new byte[]{43});
+        assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, password));
+        assertArrayEquals(new byte[]{43}, Files.readAllBytes(existing.toPath()));
+        assertEquals(1, directory.list().length);
+    }
+
+    @Test public void storedPasswordHeaderCollisionsResolveForSelectedAndBulkReads() throws Exception {
+        byte[] plain = new byte[150003];
+        new java.util.Random(203).nextBytes(plain);
+        for (String encoding : new String[]{"UTF-8", "MS949"}) {
+            File archive = ambiguousStoredAlz(plain, encoding);
+            char[] password = "비밀번호".toCharArray();
+            File output = tempFolder.newFile();
+            Files.write(output.toPath(), new byte[]{42});
+            assertTrue(ArchiveSupport.extractSingleEntry(archive, "data.bin", output, password));
+            assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+            File directory = tempFolder.newFolder();
+            com.readwide.manager.util.FileOperationProgress progress =
+                    new com.readwide.manager.util.FileOperationProgress("test", null);
+            long[] lastProgress = {0};
+            progress.setListener(snapshot -> lastProgress[0] = snapshot.doneBytes);
+            assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, password, progress));
+            assertArrayEquals(plain, Files.readAllBytes(new File(directory, "data.bin").toPath()));
+            assertEquals(plain.length, lastProgress[0]);
+        }
+    }
+
+    @Test public void storedPasswordProbeTraversesSplitHeadersAndPayloads() throws Exception {
+        byte[] plain = new byte[4097];
+        new java.util.Random(204).nextBytes(plain);
+        File archive = ambiguousStoredAlz(plain, "MS949");
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        int payloadOffset = bytes.length - plain.length - 4;
+        ByteArrayOutputStream framed = new ByteArrayOutputStream();
+        framed.write(bytes, 0, bytes.length - 4);
+        writeSegmentTrailer(framed, 0x025a4c43);
+        bytes = framed.toByteArray();
+        for (int cut : new int[]{payloadOffset - 6, payloadOffset + 2048}) {
+            File selected = splitWithFinalTail(bytes, cut);
+            File output = tempFolder.newFile();
+            assertTrue(AlzipArchiveReader.extractSingleEntry(selected, "data.bin", output, "비밀번호".toCharArray()));
+            assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+        }
+    }
+
+    @Test public void damagedAmbiguousStoredPasswordPreservesExistingOutputs() throws Exception {
+        byte[] plain = new byte[4097];
+        new java.util.Random(205).nextBytes(plain);
+        File archive = ambiguousStoredAlz(plain, "UTF-8");
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        bytes[bytes.length - 5] ^= 1;
+        Files.write(archive.toPath(), bytes);
+        char[] password = "비밀번호".toCharArray();
+        File output = tempFolder.newFile();
+        Files.write(output.toPath(), new byte[]{42});
+        assertThrows(IOException.class, () -> AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, password));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+        File directory = tempFolder.newFolder(), existing = new File(directory, "data.bin");
+        Files.write(existing.toPath(), new byte[]{43});
+        assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, password));
+        assertArrayEquals(new byte[]{43}, Files.readAllBytes(existing.toPath()));
+        assertEquals(1, directory.list().length);
+    }
+
+    private File ambiguousStoredAlz(byte[] plain, String encoding) throws Exception {
+        return ambiguousEncodedAlz(plain, 0, plain, encoding);
+    }
+
+    private File ambiguousEncodedAlz(byte[] plain, int method, byte[] packed, String encoding) throws Exception {
+        File archive = buildAlzArchiveWithStoredPayload("data.bin", plain, method, packed);
+        CRC32 crc = new CRC32(); crc.update(plain);
+        byte[][] encrypted = AlzipZipCryptoTest.collidingPasswordFixture(packed, encoding, (int)(crc.getValue() >>> 24));
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        int payloadOffset = bytes.length - packed.length - 4;
+        bytes[19] |= 1; // Encryption bit of the local descriptor.
+        ByteArrayOutputStream result = new ByteArrayOutputStream();
+        result.write(bytes, 0, payloadOffset);
+        result.write(encrypted[0]); result.write(encrypted[1]);
+        result.write(bytes, bytes.length - 4, 4);
+        Files.write(archive.toPath(), result.toByteArray());
+        return archive;
+    }
+
+    @Test public void alzTimestampPreservesLocalDosTime() throws Exception {
+        File archive = alzWithDosTime(2024, 2, 29, 14, 35, 58);
+        java.util.Calendar expected = new java.util.GregorianCalendar();
+        expected.clear(); expected.set(2024, 1, 29, 14, 35, 58);
+        assertEquals(expected.getTimeInMillis(), AlzipArchiveReader.listEntries(archive, null).get(0).timeMillis);
+    }
+
+    @Test public void alzInvalidDosDatesRemainUnknown() throws Exception {
+        for (int[] date : new int[][]{{2023, 2, 29, 0, 0, 0}, {2024, 0, 1, 0, 0, 0},
+                {2024, 1, 0, 0, 0, 0}, {2024, 1, 1, 24, 0, 0},
+                {2024, 1, 1, 0, 60, 0}, {2024, 1, 1, 0, 0, 62}}) {
+            File archive = alzWithDosTime(date[0], date[1], date[2], date[3], date[4], date[5]);
+            assertEquals(0L, AlzipArchiveReader.listEntries(archive, null).get(0).timeMillis);
+        }
+    }
+
+    @Test public void malformedAlzDoesNotInventPasswordRequirement() throws Exception {
+        File archive = tempFolder.newFile("malformed.alz");
+        Files.write(archive.toPath(), new byte[]{'A', 'L', 'Z', 1});
+        assertFalse(AlzipArchiveReader.requiresPasswordForExtraction(archive));
+        assertThrows(IOException.class, () -> AlzipArchiveReader.listEntries(archive, null));
+    }
+
+    private File alzWithDosTime(int year, int month, int day, int hour, int minute, int second) throws Exception {
+        File archive = buildAlzArchive("data.bin", new byte[]{1}, 0, false, null);
+        long packed = ((long) (year - 1980) << 25) | ((long) month << 21) | ((long) day << 16)
+                | (hour << 11) | (minute << 5) | (second / 2);
+        try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(archive, "rw")) {
+            file.seek(15);
+            for (int i = 0; i < 4; i++) file.write((int) (packed >>> (8 * i)) & 255);
+        }
+        return archive;
+    }
+
+    @Test public void canonicalEmptyAlzListsAndExtractsSuccessfully() throws Exception {
+        for (boolean fullTail : new boolean[]{false, true}) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            writeIntLE(bytes, 0x015a4c41); writeIntLE(bytes, 0);
+            if (fullTail) writeSegmentTrailer(bytes, 0x025a4c43);
+            else writeIntLE(bytes, 0x025a4c43);
+            File archive = tempFolder.newFile(); Files.write(archive.toPath(), bytes.toByteArray());
+            assertTrue(AlzipArchiveReader.listEntries(archive, null).isEmpty());
+            assertFalse(AlzipArchiveReader.requiresPasswordForExtraction(archive));
+            File directory = tempFolder.newFolder(), existing = new File(directory, "keep");
+            Files.write(existing.toPath(), new byte[]{42});
+            assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, null));
+            assertArrayEquals(new byte[]{42}, Files.readAllBytes(existing.toPath()));
+            assertFalse(AlzipArchiveReader.extractSingleEntry(archive, "missing", existing, null));
+            assertArrayEquals(new byte[]{42}, Files.readAllBytes(existing.toPath()));
+            if (fullTail) {
+                File selected = splitWithFinalTail(bytes.toByteArray(), 8);
+                assertTrue(AlzipArchiveReader.listEntries(selected, null).isEmpty());
+                assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(selected, tempFolder.newFolder(), null));
+            }
+        }
+    }
+
+    @Test public void bareAlzHeaderIsNotAnEmptyArchive() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        writeIntLE(bytes, 0x015a4c41); writeIntLE(bytes, 0);
+        File archive = tempFolder.newFile(); Files.write(archive.toPath(), bytes.toByteArray());
+        assertMalformedIndexPreservesOutputs(archive);
+    }
+
+    @Test public void emptyCommentArchiveWorksThroughPublicAlzRouting() throws Exception {
+        File archive = alzWithComments(null, commentRecords());
+        assertTrue(ArchiveSupport.listEntries(archive, null).isEmpty());
+        File destination = new File(tempFolder.newFolder(), "empty-output");
+        assertTrue(ArchiveSupport.extractArchive(archive, destination, true, null));
+        assertTrue(destination.isDirectory());
+        assertEquals(0, destination.list().length);
+    }
+
+    @Test public void alzCommentsPreserveEncryptedDeflateAndSelectedReads() throws Exception {
+        byte[] plain = "comment-bearing payload".getBytes(StandardCharsets.UTF_8);
+        for (boolean encrypted : new boolean[]{false, true}) {
+            char[] password = encrypted ? "pw".toCharArray() : null;
+            File archive = alzWithComments(buildAlzArchive("data.bin", plain, 2, encrypted, password), commentRecords());
+            assertEquals(1, AlzipArchiveReader.listEntries(archive, password).size());
+            File output = tempFolder.newFile();
+            assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, password));
+            assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+            File directory = tempFolder.newFolder();
+            assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, password));
+            assertArrayEquals(plain, Files.readAllBytes(new File(directory, "data.bin").toPath()));
+        }
+    }
+
+    @Test public void splitAlzCommentsAndEmptyArchiveRetainFinalTail() throws Exception {
+        byte[] plain = "payload across volumes".getBytes(StandardCharsets.UTF_8);
+        for (boolean empty : new boolean[]{false, true}) {
+            File archive = alzWithComments(empty ? null : buildAlzArchive("data.bin", plain, 2, true, "pw".toCharArray()), commentRecords());
+            byte[] bytes = Files.readAllBytes(archive.toPath());
+            for (int cut : new int[]{8, bytes.length - 21, bytes.length - 17}) {
+                File selected = splitWithFinalTail(bytes, cut);
+                assertEquals(empty ? 0 : 1, AlzipArchiveReader.listEntries(selected, null).size());
+                File directory = tempFolder.newFolder();
+                assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(selected, directory, "pw".toCharArray()));
+                if (empty) assertEquals(0, directory.list().length);
+                else {
+                    assertArrayEquals(plain, Files.readAllBytes(new File(directory, "data.bin").toPath()));
+                    File output = tempFolder.newFile();
+                    assertTrue(AlzipArchiveReader.extractSingleEntry(selected, "data.bin", output, "pw".toCharArray()));
+                    assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+                }
+            }
+        }
+    }
+
+    @Test public void alzUnknownRecordCannotPublishPartialIndexOrOutput() throws Exception {
+        File archive = buildAlzArchive("data.bin", new byte[]{1}, 0, false, null);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        bytes[bytes.length - 4] = 99;
+        Files.write(archive.toPath(), bytes);
+        assertMalformedIndexPreservesOutputs(archive);
+    }
+
+    @Test public void alzPartialSignaturesAfterPayloadFailBeforeOutput() throws Exception {
+        for (int remaining = 1; remaining <= 3; remaining++) {
+            File archive = buildAlzArchive("data.bin", new byte[]{1}, 0, false, null);
+            byte[] bytes = Files.readAllBytes(archive.toPath());
+            Files.write(archive.toPath(), java.util.Arrays.copyOf(bytes, bytes.length - 4 + remaining));
+            assertMalformedIndexPreservesOutputs(archive);
+        }
+    }
+
+    @Test public void alzTruncatedCentralRecordAndWrongEndMarkerFail() throws Exception {
+        File complete = buildAlzArchive("data.bin", new byte[]{1}, 0, false, null);
+        byte[] original = Files.readAllBytes(complete.toPath());
+        ByteArrayOutputStream central = new ByteArrayOutputStream();
+        central.write(original, 0, original.length - 4); writeSegmentTrailer(central, 0x025a4c43);
+        Files.write(complete.toPath(), central.toByteArray());
+        byte[] bytes = Files.readAllBytes(complete.toPath());
+        for (int retained = 4; retained < 16; retained++) {
+            File archive = tempFolder.newFile();
+            Files.write(archive.toPath(), java.util.Arrays.copyOf(bytes, bytes.length - 16 + retained));
+            assertMalformedIndexPreservesOutputs(archive);
+        }
+        bytes[bytes.length - 1] = 99;
+        Files.write(complete.toPath(), bytes);
+        assertMalformedIndexPreservesOutputs(complete);
+    }
+
+    @Test public void alzLegacyCentralSplitMarkerBeforeSeparateEndIsReadable() throws Exception {
+        File archive = buildAlzArchive("data.bin", new byte[]{1}, 0, false, null);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(bytes, 0, bytes.length - 4); writeSegmentTrailer(out, 0x035a4c43);
+        writeIntLE(out, 0x025a4c43);
+        Files.write(archive.toPath(), out.toByteArray());
+        File output = tempFolder.newFile();
+        assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, null));
+        assertArrayEquals(new byte[]{1}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test public void alzSplitPayloadCannotConsumeRetainedTrailer() throws Exception {
+        File archive = buildAlzArchive("data.bin", new byte[]{1}, 0, false, null);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(bytes, 0, bytes.length - 4); writeSegmentTrailer(out, 0x025a4c43);
+        bytes = out.toByteArray();
+        // A forged packed length would otherwise swallow the newly visible trailer.
+        bytes[27] = 17;
+        assertMalformedIndexPreservesOutputs(splitWithFinalTail(bytes, 36));
+    }
+
+    @Test public void alzCommentExtentCannotHideTruncationOrEntryData() throws Exception {
+        for (int declared : new int[]{0, 3, 4, 5, Integer.MAX_VALUE, -1}) {
+            File archive = alzWithComments(buildAlzArchive("data.bin", new byte[]{1}, 0, false, null), commentRecords());
+            byte[] bytes = Files.readAllBytes(archive.toPath());
+            for (int i = 0; i < 4; i++) bytes[bytes.length - 12 + i] = (byte)(declared >>> (i * 8));
+            Files.write(archive.toPath(), bytes);
+            assertMalformedIndexPreservesOutputs(archive);
+        }
+    }
+
+    @Test public void alzTruncatedCommentRecordFailsWithoutOutput() throws Exception {
+        for (byte[] malformed : new byte[][]{new byte[]{1}, new byte[]{0, 0, 0, 0, 2, 0, 1}}) {
+            File archive = alzWithComments(buildAlzArchive("data.bin", new byte[]{1}, 0, false, null), malformed);
+            assertMalformedIndexPreservesOutputs(archive);
+        }
+    }
+
+    @Test public void alzLegacyNonemptyExactEofStillWorks() throws Exception {
+        File archive = buildAlzArchive("data.bin", new byte[]{1, 2}, 0, false, null);
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        Files.write(archive.toPath(), java.util.Arrays.copyOf(bytes, bytes.length - 4));
+        File output = tempFolder.newFile();
+        assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, null));
+        assertArrayEquals(new byte[]{1, 2}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test public void malformedAlzIndexIsNotCachedAndEmptyReadsHonorCancellation() throws Exception {
+        File archive = alzWithComments(null, commentRecords());
+        byte[] valid = Files.readAllBytes(archive.toPath()), bad = valid.clone();
+        bad[8] = 99;
+        Files.write(archive.toPath(), bad);
+        assertThrows(IOException.class, () -> AlzipArchiveReader.indexFor(archive));
+        Files.write(archive.toPath(), valid);
+        assertTrue(AlzipArchiveReader.listEntries(archive, null).isEmpty());
+        File directory = tempFolder.newFolder();
+        try {
+            Thread.currentThread().interrupt();
+            assertThrows(IOException.class, () -> AlzipArchiveReader.listEntries(archive, null));
+            assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, null));
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally { Thread.interrupted(); }
+    }
+
+    private File alzWithComments(File source, byte[] records) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        if (source == null) { writeIntLE(out, 0x015a4c41); writeIntLE(out, 0); }
+        else {
+            byte[] bytes = Files.readAllBytes(source.toPath());
+            out.write(bytes, 0, bytes.length - 4);
+        }
+        writeIntLE(out, 0x015a4c45); out.write(records);
+        writeIntLE(out, 0x015a4c43); writeIntLE(out, records.length + 4);
+        writeIntLE(out, 0); writeIntLE(out, 0x025a4c43);
+        File archive = new File(tempFolder.newFolder(), "comments.alz");
+        Files.write(archive.toPath(), out.toByteArray());
+        return archive;
+    }
+
+    private byte[] commentRecords() throws Exception {
+        ByteArrayOutputStream records = new ByteArrayOutputStream();
+        writeIntLE(records, -1); writeShortLE(records, 8);
+        // Embedded record magics are comment bytes, never parser resync points.
+        writeIntLE(records, 0x015a4c42); writeIntLE(records, 0x025a4c43);
+        writeIntLE(records, 0); writeShortLE(records, 0);
+        return records.toByteArray();
+    }
+
+    private File splitWithFinalTail(byte[] bytes, int cut) throws Exception {
+        File directory = tempFolder.newFolder();
+        ByteArrayOutputStream first = new ByteArrayOutputStream();
+        first.write(bytes, 0, cut); writeSegmentTrailer(first, 0x035a4c43);
+        Files.write(new File(directory, "split.alz").toPath(), first.toByteArray());
+        ByteArrayOutputStream last = new ByteArrayOutputStream();
+        writeIntLE(last, 0x015a4c41); writeIntLE(last, 0x0001000a);
+        last.write(bytes, cut, bytes.length - cut);
+        File selected = new File(directory, "split.a00");
+        Files.write(selected.toPath(), last.toByteArray());
+        return selected;
+    }
+
+    private void assertMalformedIndexPreservesOutputs(File archive) throws Exception {
+        assertThrows(IOException.class, () -> AlzipArchiveReader.listEntries(archive, null));
+        File output = tempFolder.newFile(); Files.write(output.toPath(), new byte[]{42});
+        assertThrows(IOException.class, () -> AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, null));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+        File directory = tempFolder.newFolder(), existing = new File(directory, "data.bin");
+        Files.write(existing.toPath(), new byte[]{42});
+        assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, null));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(existing.toPath()));
+        assertEquals(1, directory.list().length);
+    }
+
+    @Test public void bulkRejectsLateTraversalBeforeReplacingEarlierOutput() throws Exception {
+        preflightProtectsEarlierOutput("../outside");
+    }
+
+    @Test public void bulkRejectsImplicitDirectoryCollisionBeforeReplacingEarlierOutput() throws Exception {
+        preflightProtectsEarlierOutput("first/child");
+    }
+
+    @Test public void unsafeEntryIsHiddenFromListingButStillRejectedForBulk() throws Exception {
+        File archive = buildAlzArchive("../outside", new byte[]{1}, 0, false, null);
+        assertTrue(AlzipArchiveReader.listEntries(archive, null).isEmpty());
+        File output = tempFolder.newFile(); Files.write(output.toPath(), new byte[]{42});
+        assertFalse(AlzipArchiveReader.extractSingleEntry(archive, "../outside", output, null));
+        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+        File directory = tempFolder.newFolder();
+        org.junit.Assert.assertThrows(IOException.class,
+                () -> AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, null));
+    }
+
+    @Test public void duplicateListingUsesFirstSelectedFileSize() throws Exception {
+        File archive = buildAlzArchive("same", new byte[]{1}, 0, false, null);
+        appendLocalEntries(archive, buildAlzArchive("same", new byte[]{2,3}, 0, false, null));
+        List<ArchiveSupport.EntryInfo> entries = AlzipArchiveReader.listEntries(archive, null);
+        assertEquals(1, entries.size()); assertEquals(1, entries.get(0).size);
+        File output = tempFolder.newFile();
+        assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "same", output, null));
+        org.junit.Assert.assertArrayEquals(new byte[]{1}, Files.readAllBytes(output.toPath()));
+    }
+
+    private void preflightProtectsEarlierOutput(String later) throws Exception {
+        File archive = buildAlzArchive("first", new byte[]{1}, 0, false, null);
+        appendLocalEntries(archive, buildAlzArchive(later, new byte[]{2}, 0, false, null));
+        File directory = tempFolder.newFolder(), existing = new File(directory, "first");
+        Files.write(existing.toPath(), new byte[]{42});
+        org.junit.Assert.assertThrows(IOException.class,
+                () -> AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, null));
+        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(existing.toPath()));
+        assertEquals(1, directory.list().length);
+    }
+
+    @Test public void malformedEggContentDoesNotInventPasswordRequirement() throws Exception {
+        File archive = writeStubArchive("malformed.alz", "EGGA");
+        assertFalse(AlzipArchiveReader.requiresPasswordForExtraction(archive));
+        IOException failure = org.junit.Assert.assertThrows(IOException.class,
+                () -> AlzipArchiveReader.listEntries(archive, null));
+        assertFalse(failure instanceof ArchiveSupport.PasswordRequiredException);
+    }
+
+    @Test public void otherFamilyExtensionPlainArchiveUsesActualDecoder() throws Exception { familyBridge(false); }
+    @Test public void otherFamilyExtensionEncryptedArchiveUsesActualDecoder() throws Exception { familyBridge(true); }
+    @Test public void otherFamilyExtensionWrongPasswordPreservesTarget() throws Exception {
+        byte[] payload = {1, 2, 3}; char[] password = "pw".toCharArray(); boolean encrypted = true;
+        File original = buildAlzArchive("data.bin", payload, 2, encrypted, password);
+        File archive = new File(tempFolder.newFolder(), "misnamed.egg");
+        Files.copy(original.toPath(), archive.toPath());
+        File output = tempFolder.newFile(); Files.write(output.toPath(), new byte[]{42});
+        org.junit.Assert.assertThrows(IOException.class,
+                () -> EggArchiveReader.extractSingleEntry(archive, "data.bin", output, "wrong".toCharArray()));
+        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+    }
+    private void familyBridge(boolean encrypted) throws Exception {
+        byte[] payload = {1, 2, 3}; char[] password = encrypted ? "pw".toCharArray() : null;
+        File original = buildAlzArchive("data.bin", payload, 2, encrypted, password);
+        File archive = new File(tempFolder.newFolder(), "misnamed.egg");
+        Files.copy(original.toPath(), archive.toPath());
+        assertEquals(encrypted, EggArchiveReader.requiresPasswordForExtraction(archive));
+        assertEquals("data.bin", EggArchiveReader.listEntries(archive, password).get(0).path);
+        File output = tempFolder.newFile();
+        assertTrue(EggArchiveReader.extractSingleEntry(archive, "data.bin", output, password));
+        org.junit.Assert.assertArrayEquals(payload, Files.readAllBytes(output.toPath()));
+        File directory = tempFolder.newFolder();
+        assertTrue(EggArchiveReader.extractArchiveIntoDirectory(archive, directory, password, null, null));
+        org.junit.Assert.assertArrayEquals(payload, Files.readAllBytes(new File(directory, "data.bin").toPath()));
+    }
+
+
     @Test public void decodedLengthMismatchIsRejectedEvenWithCorrectPayloadCrc() throws Exception {
         byte[] payload = new byte[]{1, 2, 3};
         for (int method : new int[]{0, 2}) {
@@ -285,7 +753,7 @@ public class AlzipArchiveReaderTest {
 
         assertEquals(ArchiveSupport.Type.EGG, ArchiveSupport.getSupportedArchiveType(eggPart2));
         assertEquals(ArchiveSupport.Type.ALZ, ArchiveSupport.getSupportedArchiveType(alzPart));
-        assertTrue(ArchiveSupport.requiresPasswordForExtraction(alzPart));
+        assertFalse(ArchiveSupport.requiresPasswordForExtraction(alzPart));
     }
 
     @Test

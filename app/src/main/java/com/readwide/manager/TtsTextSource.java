@@ -9,7 +9,8 @@ import androidx.annotation.Nullable;
  * of these methods) and the WebView document viewer
  * ({@code DocumentTtsTextSource} over {@code DocumentPageActivity} pages).
  *
- * <p>Character positions are absolute offsets into {@link #getTextContent()}.
+ * <p>Character positions are offsets into {@link #getTextContent()}, not necessarily
+ * the whole file. The host supplies the absolute origin of a partitioned window.
  * A "visible page" is the half-open range
  * {@code [getCurrentCharPosition(), getCharPositionAfterCurrentVisibleContent())};
  * the controller segments that range into utterances and, when the host says
@@ -21,10 +22,10 @@ public interface TtsTextSource {
     @Nullable
     String getTextContent();
 
-    /** Absolute char offset where the currently displayed content starts. */
+    /** Window-local char offset where the currently displayed content starts. */
     int getCurrentCharPosition();
 
-    /** Absolute char offset just past the currently displayed content. */
+    /** Window-local char offset just past the currently displayed content. */
     int getCharPositionAfterCurrentVisibleContent();
 
     /**

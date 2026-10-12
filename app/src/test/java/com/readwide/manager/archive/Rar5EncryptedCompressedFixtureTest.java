@@ -48,6 +48,18 @@ public class Rar5EncryptedCompressedFixtureTest {
     private static final char[] PASSWORD = "Readwide2026".toCharArray();
 
     @Test public void encryptedCompressedSplitChecksPackedHashBeforePublishing() throws Exception {
+        checkEncryptedCompressedSplit(false, false);
+    }
+
+    @Test public void unknownIntermediateEncryptedSizeKeepsPackedHashAndRollbackChecks() throws Exception {
+        checkEncryptedCompressedSplit(true, false);
+    }
+
+    @Test public void unknownFinalEncryptedSizeKeepsProducerPayloadHashChecksAndRollback() throws Exception {
+        checkEncryptedCompressedSplit(true, true);
+    }
+
+    private void checkEncryptedCompressedSplit(boolean unknownIntermediateSize, boolean unknownFinalSize) throws Exception {
         File archive = writeFixture();
         RarArchiveReader.RarEntry original = RarArchiveReader.readEntries(archive,PASSWORD).get(0);
         byte[] all = Files.readAllBytes(archive.toPath());
@@ -76,7 +88,8 @@ public class Rar5EncryptedCompressedFixtureTest {
                 }
                 File volume = tempFolder.newFile(); Files.write(volume.toPath(),bytes);
                 RarArchiveReader.RarEntry part = new RarArchiveReader.RarEntry(original.path,false,
-                        original.unpackedSize,bytes.length,0,5,original.method,original.solid,
+                        (i == 0 ? unknownIntermediateSize : unknownFinalSize) ? -1 : original.unpackedSize,
+                        bytes.length,0,5,original.method,original.solid,
                         i == 1,i == 0,original.encryption,crc,0,original.rar5CompressionInfo,hash);
                 part.sourceArchive = volume; chain.add(part);
             }

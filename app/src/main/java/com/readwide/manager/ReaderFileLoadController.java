@@ -25,6 +25,14 @@ final class ReaderFileLoadController {
     }
 
     void loadFileFromIntent(@NonNull Intent sourceIntent) {
+        activity.dismissPageMoveBubble();
+        activity.cancelPendingFileLayout();
+        activity.cancelPendingSnapshotRestore();
+        activity.resetTextContents();
+        activity.rememberReaderLoadTarget(sourceIntent);
+        activity.resetTtsForDocumentLoad();
+        // Decoded coordinates may change even when file bytes/mtime do not (encoding).
+        if (activity.largeTextSearchEngine != null) activity.largeTextSearchEngine.invalidateCache();
         activity.textContentReadyForPersistence = false;
         activity.clearPendingToolbarSeekJump();
         String path = sourceIntent.getStringExtra(ReaderActivity.EXTRA_FILE_PATH);
@@ -33,6 +41,7 @@ final class ReaderFileLoadController {
                 && new File(path).getAbsolutePath().equals(activity.filePath);
 
         final int generation = activity.loadGeneration.incrementAndGet();
+        final int partitionMode = activity.getLargeTextPartitionMode();
         activity.largeTextPartitionSwitchGeneration.incrementAndGet();
         // Fix the blank-line collapse policy for this load so the large-text partition
         // reader uses one consistent value (matching the small-text path and
@@ -71,21 +80,18 @@ final class ReaderFileLoadController {
                 final String finalFilePath = target.path;
                 final String finalFileName = target.name;
                 final boolean useLargeTextFastOpen = activity.shouldUseLargeTextFastOpen(fileToRead);
+                final LoadIdentity identity = new LoadIdentity(
+                        fileToRead, finalFilePath, useLargeTextFastOpen, partitionMode);
                 if (useLargeTextFastOpen) {
                     activity.recordLargeTextCacheAccess(fileToRead, finalFilePath);
-                    openLargeTextPreview(
-                            fileToRead,
-                            finalFilePath,
-                            finalFileName,
-                            generation,
-                            jumpPosition,
-                            jumpDisplayPage,
-                            jumpTotalPages,
-                            requestedPartitionStartByte,
-                            requestedPartitionStartLine,
-                            jumpAnchorBefore,
-                            jumpAnchorAfter,
-                            preferAnchorPartition);
+                    com.readwide.manager.util.LargeTextPartitionReader.readWhile(
+                            () -> !activity.activityDestroyed && generation == activity.loadGeneration.get(), () -> {
+                                openLargeTextPreview(fileToRead, finalFilePath, finalFileName, generation,
+                                        jumpPosition, jumpDisplayPage, jumpTotalPages,
+                                        requestedPartitionStartByte, requestedPartitionStartLine,
+                                        jumpAnchorBefore, jumpAnchorAfter, preferAnchorPartition, identity);
+                                return null;
+                    });
                     return;
                 }
 
@@ -97,8 +103,11 @@ final class ReaderFileLoadController {
                         generation,
                         jumpPosition,
                         jumpAnchorBefore,
-                        jumpAnchorAfter);
-            } catch (Exception e) {
+                        jumpAnchorAfter, identity);
+            } catch (Exception | OutOfMemoryError e) {
+                // Text decoding/transformation can exhaust memory before a view
+                // exists. Report this load's failure; do not leave an uncaught
+                // worker error or start another equally large allocation.
                 postLoadError(generation, e);
             }
         });
@@ -106,8 +115,9 @@ final class ReaderFileLoadController {
 
     private void clearViewerStateForLoad(String path, boolean samePathReload) {
         activity.fileContent = "";
-        String sigPath = path != null ? new File(path).getAbsolutePath() : activity.filePath;
-        activity.appliedTextDisplayRuleSignature = activity.textContentTransformSignatureForPath(sigPath);
+        activity.appliedTextDisplayRuleSignature = "";
+        activity.contentsSourceLength = -1L;
+        activity.contentsSourceModified = -1L;
         activity.activeSearchQuery = "";
         activity.activeSearchIndex = -1;
         activity.activeSearchOrdinal = 0;
@@ -134,9 +144,10 @@ final class ReaderFileLoadController {
         activity.largeTextPartitionStartLine = 1;
         activity.largeTextPartitionEndLine = 1;
         activity.largeTextTotalLogicalLines = 1;
-        if (!samePathReload) {
-            activity.resetLargeTextExactPageIndex();
-        }
+        // Reuse in-memory anchors for layout callbacks, not across fresh file reads:
+        // an external replacement can retain size/mtime. The disk cache validates
+        // full source bytes before reusing anchors for this new content load.
+        activity.resetLargeTextExactPageIndex();
         activity.applySearchHighlight();
         activity.updatePositionLabel();
     }
@@ -178,7 +189,7 @@ final class ReaderFileLoadController {
                                       int requestedPartitionStartLine,
                                       String jumpAnchorBefore,
                                       String jumpAnchorAfter,
-                                      boolean preferAnchorPartition) throws Exception {
+                                      boolean preferAnchorPartition, LoadIdentity identity) throws java.io.IOException {
         CachedRestoreTarget restoreTarget = resolveInitialRestoreTarget(
                 finalFilePath, jumpPosition, jumpDisplayPage, jumpTotalPages, fileToRead.length());
         int initialRestorePosition = restoreTarget.charPosition;
@@ -209,7 +220,7 @@ final class ReaderFileLoadController {
                         || (effectiveAnchorAfter != null && !effectiveAnchorAfter.isEmpty()))) {
                 try {
                     anchorCharPosition = activity.resolveLargeTextCharPositionForAnchor(
-                            fileToRead, effectiveAnchorBefore, effectiveAnchorAfter);
+                            fileToRead, initialRestorePosition, effectiveAnchorBefore, effectiveAnchorAfter);
                 } catch (Exception ignored) {
                     anchorCharPosition = -1;
                 }
@@ -239,7 +250,7 @@ final class ReaderFileLoadController {
         long partitionEndByte = fullByteLength;
 
         activity.handler.post(() -> {
-            if (!activity.activityDestroyed && generation == activity.loadGeneration.get()) {
+            if (acceptLoad(identity, generation)) {
                 activity.fileApplier().onLargeTextPreviewLoaded(previewContent, previewLineCount,
                         finalFilePath, finalFileName, restorePositionForApply,
                         fullByteLength,
@@ -260,7 +271,7 @@ final class ReaderFileLoadController {
                                     int generation,
                                     int jumpPosition,
                                     String jumpAnchorBefore,
-                                    String jumpAnchorAfter) throws Exception {
+                                    String jumpAnchorAfter, LoadIdentity identity) throws Exception {
         String rawContent;
         if (FileUtils.isTextFile(fileToRead.getName())) {
             rawContent = FileUtils.readTextFile(fileToRead, activity.resolveTextEncodingForFile(fileToRead));
@@ -271,21 +282,67 @@ final class ReaderFileLoadController {
         // '\n', readLine-equivalent trailing newline, selector enforcement.
         rawContent = FileUtils.normalizeTextForDisplay(rawContent);
         String processedContent = TextDisplayRuleManager.apply(appContext, rawContent, finalFilePath);
-        if (activity.largeTextActiveCollapseBlankLines) {
+        if (identity.collapseBlankLines) {
             processedContent = TxtBlankLineCollapser.collapse(processedContent);
         }
         final String content = processedContent;
         final int lineCount = activity.countLines(content);
 
         activity.handler.post(() -> {
-            if (!activity.activityDestroyed && generation == activity.loadGeneration.get()) {
+            if (acceptLoad(identity, generation)) {
                 activity.fileApplier().onFileLoaded(content, lineCount, finalFilePath, finalFileName, jumpPosition,
                         jumpAnchorBefore, jumpAnchorAfter);
             }
         });
     }
 
-    private void postLoadError(int generation, @NonNull Exception e) {
+    private final class LoadIdentity {
+        final File file;
+        final String transform;
+        final long length, modified;
+        final boolean collapseBlankLines;
+        final int rulesVersion;
+        final boolean partitioned;
+        final int partitionMode;
+
+        LoadIdentity(File file, String path, boolean partitioned, int partitionMode) {
+            this.file = file;
+            length = file.length();
+            modified = file.lastModified();
+            transform = activity.textContentTransformSignatureForPath(path);
+            rulesVersion = TextDisplayRuleManager.getRulesVersion();
+            collapseBlankLines = activity.largeTextActiveCollapseBlankLines;
+            this.partitioned = partitioned;
+            this.partitionMode = partitionMode;
+        }
+    }
+
+    /** Publish content and its provenance together, never re-label old bytes. */
+    private boolean acceptLoad(LoadIdentity identity, int generation) {
+        if (activity.activityDestroyed || generation != activity.loadGeneration.get()) return false;
+        if (!ReaderLoadedTextSnapshotController.sourceMatchesContent(
+                identity.file, identity.length, identity.modified)
+                || identity.collapseBlankLines != (activity.prefs != null && activity.prefs.isCollapseBlankLinesEnabled())
+                || !identity.transform.equals(activity.textContentTransformSignatureForPath(identity.file.getAbsolutePath()))) {
+            postLoadError(generation, new java.io.IOException("TXT source or display rules changed while loading; reopen the file"));
+            return false;
+        }
+        if (identity.rulesVersion != TextDisplayRuleManager.getRulesVersion()) {
+            postLoadError(generation, new java.io.IOException("TXT display rules changed while loading; reopen the file"));
+            return false;
+        }
+        if (identity.partitioned && identity.partitionMode != activity.getLargeTextPartitionMode()) {
+            postLoadError(generation, new java.io.IOException("TXT partition mode changed while loading; reopen the file"));
+            return false;
+        }
+        activity.contentsSourceLength = identity.length;
+        activity.contentsSourceModified = identity.modified;
+        activity.appliedTextDisplayRuleSignature = identity.transform;
+        if (identity.partitioned) activity.appliedLargeTextPartitionMode = identity.partitionMode;
+        return true;
+    }
+
+    private void postLoadError(int generation, @NonNull Throwable e) {
         activity.handler.post(() -> {
             if (activity.activityDestroyed || generation != activity.loadGeneration.get()) return;
             activity.progressText.setText(String.format(Locale.getDefault(), "%s%s",

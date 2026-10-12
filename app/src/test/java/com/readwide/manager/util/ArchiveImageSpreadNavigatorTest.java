@@ -5,6 +5,33 @@ import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 
 public class ArchiveImageSpreadNavigatorTest {
+    @Test public void historyDoesNotReadAnyPairMetadata() {
+        ArchiveImageSpreadNavigator navigator = new ArchiveImageSpreadNavigator();
+        navigator.forward(0, 10, true);
+        assertEquals(0, navigator.backwardWithPairLookup(2, 10, index -> {
+            throw new AssertionError("History should not inspect pairs");
+        }));
+    }
+
+    @Test public void localFallbackMatchesArrayMathWithAtMostOneLookup() {
+        for (int count = 0; count <= 8; count++) {
+            for (int mask = 0; mask < (1 << count); mask++) {
+                boolean[] pairs = new boolean[count];
+                for (int i = 0; i < count; i++) pairs[i] = (mask & (1 << i)) != 0;
+                for (int index = -2; index <= count + 2; index++) {
+                    java.util.concurrent.atomic.AtomicInteger lookups = new java.util.concurrent.atomic.AtomicInteger();
+                    int actual = new ArchiveImageSpreadNavigator().backwardWithPairLookup(index, count, start -> {
+                        org.junit.Assert.assertTrue(start >= 0 && start + 1 < pairs.length);
+                        lookups.incrementAndGet();
+                        return pairs[start];
+                    });
+                    assertEquals(ArchiveImageSpreadMath.previousTarget(index, count, pairs), actual);
+                    org.junit.Assert.assertTrue(lookups.get() <= 1);
+                }
+            }
+        }
+    }
+
     @Test public void backwardReversesActualMixedScreenPath() {
         ArchiveImageSpreadNavigator navigator = new ArchiveImageSpreadNavigator();
 

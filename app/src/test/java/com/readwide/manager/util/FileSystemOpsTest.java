@@ -269,6 +269,74 @@ public class FileSystemOpsTest {
         assertText(destination, "data");
     }
 
+    @Test public void destinationAppearingAfterCommitValidationIsNotBackedUpWithoutOverwrite() throws Exception {
+        File source = tempFolder.newFile("source.txt");
+        writeText(source, "new");
+        File actual = new File(tempFolder.getRoot(), "target.txt");
+        File destination = new File(actual.getPath()) {
+            private int canonicalReads;
+            @Override public File getCanonicalFile() throws java.io.IOException {
+                // canTransfer reads kind before canonicalizing the target. Inject
+                // after its final kind check, without adding production test hooks.
+                if (++canonicalReads == 2) {
+                    Files.write(actual.toPath(), "external".getBytes(StandardCharsets.UTF_8));
+                }
+                return super.getCanonicalFile();
+            }
+        };
+        assertFalse(FileSystemOps.copy(source, destination, false));
+        assertText(source, "new");
+        assertText(actual, "external");
+        assertNoTransactions();
+    }
+
+    @Test public void nonfatalReportingFailureDoesNotUndoCommittedRename() throws Exception {
+        File source = tempFolder.newFile("source.txt");
+        writeText(source, "data");
+        File destination = new File(tempFolder.getRoot(), "moved.txt");
+        FileOperationProgress progress = new FileOperationProgress("move", null);
+        progress.setListener(snapshot -> {
+            if (snapshot.doneBytes > 0) throw new IllegalStateException("reporting");
+        });
+        assertTrue(FileSystemOps.move(source, destination, false, progress));
+        assertFalse(source.exists());
+        assertText(destination, "data");
+    }
+
+    @Test public void interruptedReportingRetainsCommittedMoveAndCancellation() throws Exception {
+        File source = tempFolder.newFile("source.txt");
+        writeText(source, "data");
+        File destination = new File(tempFolder.getRoot(), "moved.txt");
+        FileOperationProgress progress = new FileOperationProgress("move", null);
+        progress.setListener(snapshot -> {
+            if (snapshot.doneBytes > 0) throw new java.io.UncheckedIOException(
+                    new java.io.InterruptedIOException("cancel reporting"));
+        });
+        try {
+            assertTrue(FileSystemOps.move(source, destination, false, progress));
+            assertTrue(Thread.currentThread().isInterrupted());
+            assertTrue(progress.isCancelled());
+            assertFalse(source.exists());
+            assertText(destination, "data");
+        } finally { Thread.interrupted(); }
+    }
+
+    @Test public void nonfatalFinalReportDoesNotUndoFallbackMove() throws Exception {
+        File actual = tempFolder.newFile("source.txt");
+        writeText(actual, "data");
+        File source = new File(actual.getPath()) {
+            @Override public boolean renameTo(File target) { return false; }
+        };
+        File destination = new File(tempFolder.getRoot(), "moved.txt");
+        FileOperationProgress progress = new FileOperationProgress("move", null);
+        progress.setListener(snapshot -> {
+            if (snapshot.complete) throw new IllegalStateException("reporting");
+        });
+        assertTrue(FileSystemOps.move(source, destination, false, progress));
+        assertFalse(source.exists());
+        assertText(destination, "data");
+    }
+
     @Test public void failedRenameFallsBackToStagedCopyWithOneInventory() throws Exception {
         File actual = tempFolder.newFolder("source");
         writeText(new File(actual, "file"), "data");

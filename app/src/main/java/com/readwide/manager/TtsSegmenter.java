@@ -6,6 +6,7 @@ import com.readwide.manager.util.FileUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 final class TtsSegmenter {
     private TtsSegmenter() {
@@ -34,7 +35,8 @@ final class TtsSegmenter {
             }
             if (cursor >= length) break;
 
-            int hardEnd = Math.min(length, cursor + maxChars);
+            int hardEnd = safeCodePointEnd(pageText, cursor,
+                    cursor + Math.min(length - cursor, maxChars));
             int end = findPreferredEnd(pageText, cursor, hardEnd);
             if (end <= cursor) end = hardEnd;
 
@@ -61,10 +63,11 @@ final class TtsSegmenter {
         int scanEnd = Math.min(hardEnd, text.length());
 
         int minUseful = start + Math.min(80, Math.max(8, (scanEnd - start) / 8));
-        for (int i = Math.max(start, minUseful); i < scanEnd; i++) {
-            if (isSentenceTerminator(text.charAt(i))) {
+        for (int i = start; i < scanEnd; i++) {
+            if (isSentenceEnd(text, i)) {
                 int sentence = i + 1;
-                while (sentence < text.length() && isClosingPunctuation(text.charAt(sentence))) {
+                while (sentence < scanEnd && (isClosingPunctuation(text.charAt(sentence))
+                        || isSentenceTerminator(text.charAt(sentence)))) {
                     sentence++;
                 }
                 return sentence;
@@ -74,13 +77,13 @@ final class TtsSegmenter {
         // No sentence terminator found in range.
         if (reachesEnd) return text.length();
 
-        int paragraph = text.lastIndexOf("\n\n", hardEnd);
+        int paragraph = text.lastIndexOf("\n\n", hardEnd - 1);
         if (paragraph >= minUseful) return paragraph + 1;
 
-        int line = text.lastIndexOf('\n', hardEnd);
+        int line = text.lastIndexOf('\n', hardEnd - 1);
         if (line >= minUseful) return line + 1;
 
-        int space = text.lastIndexOf(' ', hardEnd);
+        int space = text.lastIndexOf(' ', hardEnd - 1);
         if (space >= minUseful) return space + 1;
 
         return hardEnd;
@@ -90,6 +93,64 @@ final class TtsSegmenter {
         return c == '.' || c == '!' || c == '?' || c == ';'
                 || c == '\u3002' || c == '\uff01' || c == '\uff1f'
                 || c == '\u2026';
+    }
+
+    private static boolean isSentenceEnd(String text, int index) {
+        char c = text.charAt(index);
+        if (!isSentenceTerminator(c)) return false;
+        if (c != '.') return true;
+        // Decimal points, domain names and dotted abbreviations are not stops.
+        if (index + 1 < text.length() && Character.isLetterOrDigit(text.charAt(index + 1))) {
+            return false;
+        }
+        int wordStart = index;
+        // Abbreviation recognition is deliberately bounded and Latin-specific;
+        // do not scan/copy a huge unbroken token or treat a lone CJK word as an initial.
+        int minimum = Math.max(0, index - 6);
+        while (wordStart > minimum && (isLatinLetter(text.charAt(wordStart - 1))
+                || text.charAt(wordStart - 1) == '.')) wordStart--;
+        String token = text.substring(wordStart, index).toLowerCase(Locale.ROOT);
+        if (index + 1 < text.length()) {
+            if (token.length() == 1 && isLatinLetter(token.charAt(0))) return false;
+            switch (token) {
+                case "mr": case "mrs": case "ms": case "dr": case "prof":
+                case "sr": case "jr": case "vs": case "e.g": case "i.e":
+                    return false;
+                default: break;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isLatinLetter(char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    }
+
+    /** Bound a prefetch window without cutting a normal word or a surrogate pair. */
+    static int windowEnd(String text, int start, int limit, int budget) {
+        int end = safeCodePointEnd(text, start, start + Math.min(limit - start, budget));
+        if (end >= limit) return limit;
+        if (Character.isWhitespace(text.charAt(end))) return end;
+        for (int i = end - 1; i > start; i--) {
+            if (Character.isWhitespace(text.charAt(i))) return i + 1;
+            if (isSentenceEnd(text, i)) return i + 1;
+        }
+        // An overlong unbroken token still needs a bounded, code-point-safe split.
+        return end;
+    }
+
+    private static int safeCodePointEnd(String text, int start, int end) {
+        if (end > start && end < text.length() && Character.isHighSurrogate(text.charAt(end - 1))
+                && Character.isLowSurrogate(text.charAt(end))) return end - 1;
+        return end;
+    }
+
+    /** Called against the original buffer, not the normalized spoken text. */
+    static boolean endsSentence(String text, int end) {
+        int cursor = Math.min(end, text.length());
+        while (cursor > 0 && (Character.isWhitespace(text.charAt(cursor - 1))
+                || isClosingPunctuation(text.charAt(cursor - 1)))) cursor--;
+        return end >= text.length() || (cursor > 0 && isSentenceEnd(text, cursor - 1));
     }
 
     private static boolean isClosingPunctuation(char c) {

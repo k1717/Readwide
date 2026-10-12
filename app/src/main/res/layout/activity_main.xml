@@ -95,14 +95,14 @@
                 android:id="@+id/recent_header_row"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minHeight="42dp"
+                android:minHeight="38dp"
                 android:background="?attr/colorSurface"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
                 android:paddingStart="16dp"
-                android:paddingTop="4dp"
+                android:paddingTop="2dp"
                 android:paddingEnd="8dp"
-                android:paddingBottom="4dp">
+                android:paddingBottom="2dp">
 
                 <TextView
                     android:id="@+id/recent_section_title"
@@ -111,7 +111,7 @@
                     android:layout_weight="1"
                     android:text="@string/recently_read"
                     android:textColor="?attr/colorOnSurface"
-                    android:textSize="15sp"
+                    android:textSize="12sp"
                     android:textStyle="bold" />
 
                 <TextView

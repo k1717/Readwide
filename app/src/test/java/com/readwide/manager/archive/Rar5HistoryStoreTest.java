@@ -19,6 +19,149 @@ public class Rar5HistoryStoreTest {
         return new Rar5HistoryStore(capacity, 2, temp.getRoot(), ignored -> Long.MAX_VALUE);
     }
 
+    @Test public void growthRetainsSparseInitialHistoryWithoutDeclaredSizeAllocation() throws Exception {
+        try (Rar5HistoryStore history = store(100)) {
+            history.append((byte) 19);
+            history.ensureCapacity(1L << 40);
+            assertEquals(19, history.read(0));
+            assertEquals(1, history.residentPagesForTest());
+            assertNull(history.spoolForTest());
+            byte[] match = new byte[6];
+            history.copyMatch(3, match, 0, match.length);
+            assertArrayEquals(new byte[]{0, 0, 19, 0, 0, 19}, match);
+        }
+    }
+
+    @Test public void growthAtExactCapacityKeepsSpilledPagesAndNonAlignedRingSlots() throws Exception {
+        int oldCapacity = 3 * PAGE + 17, newCapacity = 5 * PAGE + 31;
+        byte[] reference = new byte[newCapacity];
+        try (Rar5HistoryStore history = store(oldCapacity)) {
+            for (int i = 0; i < oldCapacity; i++) history.append(reference[i] = (byte) (i * 31 + i / 97));
+            File spool = history.spoolForTest();
+            assertNotNull(spool);
+            history.ensureCapacity(newCapacity);
+            assertEquals(spool, history.spoolForTest());
+            for (int i = 0; i < oldCapacity; i += 8191) assertEquals(reference[i], history.read(i));
+            byte[] match = new byte[PAGE + 7];
+            history.copyMatch(oldCapacity, match, 0, match.length);
+            for (int i = 0; i < match.length; i++) {
+                assertEquals(reference[i], match[i]);
+                reference[oldCapacity + i] = match[i];
+            }
+            int produced = oldCapacity + match.length;
+            for (int i = produced; i < newCapacity + 97; i++) {
+                byte value = (byte) (i * 17);
+                history.append(value);
+                reference[i % newCapacity] = value;
+            }
+            for (int i = 97; i < newCapacity + 97; i += 8191) {
+                assertEquals(reference[i % newCapacity], history.read(i));
+            }
+            assertTrue(history.residentPagesForTest() <= 2);
+        }
+    }
+
+    @Test public void smallerMinimumDoesNotShrinkOrReinterpretWrappedHistory() throws Exception {
+        try (Rar5HistoryStore history = store(100)) {
+            for (int i = 0; i < 120; i++) history.append((byte) i);
+            history.ensureCapacity(3);
+            assertEquals(20, history.read(20));
+            byte[] match = new byte[7];
+            history.copyMatch(100, match, 0, match.length);
+            assertArrayEquals(new byte[]{20, 21, 22, 23, 24, 25, 26}, match);
+        }
+    }
+
+    @Test public void growthAfterOverwriteRejectsAndRetiresSpilledHistory() throws Exception {
+        int capacity = 3 * PAGE + 17;
+        try (Rar5HistoryStore history = store(capacity)) {
+            for (int i = 0; i <= capacity; i++) history.append((byte) i);
+            File spool = history.spoolForTest();
+            IOException failure = assertThrows(IOException.class, () -> history.ensureCapacity(capacity + 1));
+            assertTrue(failure.getMessage().contains("after history wrap"));
+            assertFalse(spool.exists());
+            assertThrows(IOException.class, () -> history.read(capacity));
+            assertThrows(IOException.class, () -> history.ensureCapacity(capacity));
+        }
+    }
+
+    @Test public void growthDoesNotBypassSpilledPageAuthenticationOrSpaceChecks() throws Exception {
+        try (Rar5HistoryStore history = store(4L * PAGE)) {
+            for (int i = 0; i < 3 * PAGE; i++) history.append((byte) 7);
+            File spool = history.spoolForTest();
+            try (RandomAccessFile file = new RandomAccessFile(spool, "rw")) {
+                file.seek(20); int value = file.read(); file.seek(20); file.write(value ^ 1);
+            }
+            history.ensureCapacity(8L * PAGE);
+            assertThrows(IOException.class, () -> history.read(0));
+            assertFalse(spool.exists());
+        }
+        try (Rar5HistoryStore history = new Rar5HistoryStore(2L * PAGE, 2, temp.getRoot(), ignored -> 0)) {
+            for (int i = 0; i < 2 * PAGE; i++) history.append((byte) 7);
+            history.ensureCapacity(4L * PAGE);
+            assertThrows(IOException.class, () -> history.append((byte) 8));
+            assertFalse(history.spoolForTest().exists());
+        }
+    }
+
+    @Test public void invalidOrCancelledCapacityChangesCannotResumeHistory() throws Exception {
+        for (long invalid : new long[]{0, -1, (1L << 40) + 1}) {
+            try (Rar5HistoryStore history = store(100)) {
+                assertThrows(IOException.class, () -> history.ensureCapacity(invalid));
+                assertThrows(IOException.class, () -> history.append((byte) 1));
+            }
+        }
+        try (Rar5HistoryStore history = store(4L * PAGE)) {
+            for (int i = 0; i < 3 * PAGE; i++) history.append((byte) 7);
+            File spool = history.spoolForTest();
+            Thread.currentThread().interrupt();
+            try { assertThrows(IOException.class, () -> history.ensureCapacity(8L * PAGE)); }
+            finally { Thread.interrupted(); }
+            assertFalse(spool.exists());
+            assertThrows(IOException.class, () -> history.ensureCapacity(4L * PAGE));
+        }
+    }
+
+    @Test public void blockMatchesPreserveOverlapWrapAndSpilledPages() throws Exception {
+        int capacity = 3 * PAGE + 17;
+        byte[] reference = new byte[capacity];
+        byte[] block = new byte[PAGE + 39];
+        long produced = 0;
+        try (Rar5HistoryStore history = store(capacity)) {
+            for (int i = 0; i < capacity + 97; i++) {
+                byte value = (byte) (i * 31 + i / 97);
+                reference[(int) (produced++ % capacity)] = value;
+                history.append(value);
+            }
+            for (int distance : new int[] {capacity, 1, 2, 37, PAGE + 5, capacity - 1}) {
+                int length = PAGE + 13;
+                history.copyMatch(distance, block, 11, length);
+                for (int i = 0; i < length; i++) {
+                    byte expected = reference[(int) ((produced - distance) % capacity)];
+                    assertEquals(expected, block[11 + i]);
+                    reference[(int) (produced++ % capacity)] = expected;
+                }
+                assertEquals(block[10 + length], history.read(produced - 1));
+            }
+            assertTrue(history.residentPagesForTest() <= 2);
+        }
+    }
+
+    @Test public void blockMatchKeepsInitialZeroHistoryAndCancellation() throws Exception {
+        try (Rar5HistoryStore history = store(100)) {
+            history.append((byte) 7);
+            byte[] block = new byte[27];
+            history.copyMatch(3, block, 0, block.length);
+            for (int i = 0; i < block.length; i++) assertEquals(i % 3 == 2 ? 7 : 0, block[i]);
+            Thread.currentThread().interrupt();
+            try { history.copyMatch(1, block, 0, 1); fail("Interrupted match was copied"); }
+            catch (IOException expected) { }
+            finally { Thread.interrupted(); }
+            try { history.read(0); fail("Cancelled history was reused"); }
+            catch (IOException expected) { }
+        }
+    }
+
     @Test public void hugeDeclarationDoesNotAllocateOrSpillBeforeHistoryExists() throws Exception {
         try (Rar5HistoryStore history = store(1L << 40)) {
             assertEquals(0, history.residentPagesForTest());

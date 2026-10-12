@@ -17,7 +17,7 @@ final class RarPackedInputStream extends InputStream {
     private long remaining;
     private int index;
     private boolean closed;
-    private IOException failure;
+    private Throwable failure;
     private RarStoredPayloadIO.DataCheck packedCheck;
     private final byte[] single = new byte[1];
 
@@ -39,17 +39,18 @@ final class RarPackedInputStream extends InputStream {
 
     @Override public int read(byte[] bytes, int offset, int length) throws IOException {
         if (closed) throw new IOException("RAR packed stream is closed");
-        if (failure != null) throw failure;
+        if (failure instanceof IOException) throw (IOException) failure;
+        if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+        if (failure instanceof Error) throw (Error) failure;
         if (bytes == null) throw new NullPointerException("bytes");
         if ((offset | length) < 0 || length > bytes.length - offset) {
             throw new IndexOutOfBoundsException();
         }
         if (length == 0) return 0;
-        if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
-        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
         try {
+            checkpoint();
             while (remaining == 0) {
-                if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+                checkpoint();
                 closeVolume();
                 if (index == segments.size()) return -1;
                 RarCryptoStreams.EncryptedSegment segment = segments.get(index++);
@@ -59,7 +60,6 @@ final class RarPackedInputStream extends InputStream {
                 file = new RandomAccessFile(segment.archive, "r");
                 long size = file.length();
                 if (segment.offset > size || segment.encryptedSize > size - segment.offset) {
-                    closeVolume();
                     throw new EOFException("RAR packed segment extends past its volume");
                 }
                 file.seek(segment.offset);
@@ -75,11 +75,20 @@ final class RarPackedInputStream extends InputStream {
             // Fail on the boundary read, not on a later read that the caller may never make.
             if (remaining == 0) verifyPackedCheck();
             return count;
-        } catch (IOException error) {
+        } catch (IOException | RuntimeException | Error error) {
             failure = error;
             packedCheck = null;
-            try { closeVolume(); } catch (IOException cleanup) { error.addSuppressed(cleanup); }
+            try { closeVolume(); }
+            catch (IOException | RuntimeException | Error cleanup) {
+                if (cleanup != error) error.addSuppressed(cleanup);
+            }
             throw error;
+        }
+    }
+
+    private void checkpoint() throws java.io.InterruptedIOException {
+        if (Thread.currentThread().isInterrupted() || (progress != null && !progress.checkpoint())) {
+            throw new java.io.InterruptedIOException("RAR extraction cancelled");
         }
     }
 
@@ -92,9 +101,8 @@ final class RarPackedInputStream extends InputStream {
 
     private void closeVolume() throws IOException {
         if (file != null) {
-            RandomAccessFile previous = file;
-            file = null;
-            previous.close();
+            file.close();
+            file = null; // Retain ownership on failure so close() can retry.
         }
     }
 

@@ -65,3 +65,18 @@ search_funcs.txt
 *.tmp
 *.swp
 *.orig
+
+# Local Python checks and editor state
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.venv/
+.vscode/
+desktop.ini
+
+# Internal working reports are kept outside release source
+docs/review-*/
+docs/archive-review-*
+scripts/review-*/

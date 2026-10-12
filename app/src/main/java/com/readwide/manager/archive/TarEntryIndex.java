@@ -71,9 +71,7 @@ final class TarEntryIndex {
              TarFile tar = new TarFile(raw.getChannel())) {
             for (TarArchiveEntry entry : tar.getEntries()) {
                 checkpoint();
-                if (!entry.isCheckSumOK()) throw new ArchiveSupport.TarIntegrityException();
-                if (entry.isSymbolicLink() || entry.isLink()) continue;
-                if (!entry.isDirectory() && !entry.isFile() && !entry.isSparse()) continue;
+                if (!ArchiveSupport.isReadableTarMember(entry)) continue;
                 String name = ArchiveSupport.sanitizeEntryPathForList(entry.getName());
                 if (name == null) continue;
                 long size = entry.getSize(), offset = entry.getDataOffset();
@@ -81,7 +79,8 @@ final class TarEntryIndex {
                     throw new EOFException("TAR member exceeds archive bounds");
                 }
                 if (!entry.isDirectory() && files.containsKey(name)) continue;
-                listing.add(new ArchiveSupport.EntryInfo(name, entry.isDirectory(), size, 0L));
+                // Physical bounds use stored bytes; browser metadata uses the expanded file size.
+                listing.add(new ArchiveSupport.EntryInfo(name, entry.isDirectory(), entry.getRealSize(), 0L));
                 nameChars += name.length();
                 if (!entry.isDirectory()) {
                     // Match streaming extraction: the first readable occurrence wins.
@@ -109,6 +108,7 @@ final class TarEntryIndex {
     }
 
     static Boolean extract(Index index, File archive, String name, File target) throws IOException {
+        checkpoint(); // Including missing/sparse members, before opening or preserving output.
         Slice slice = index.files.get(name);
         if (slice == null) return false;
         if (slice.sparse) return null;
@@ -148,6 +148,6 @@ final class TarEntryIndex {
     static void clear() { synchronized (INDEXES) { INDEXES.clear(); } }
 
     private static void checkpoint() throws IOException {
-        if (Thread.currentThread().isInterrupted()) throw new IOException("TAR extraction cancelled");
+        ArchiveCancellation.checkpoint(null);
     }
 }

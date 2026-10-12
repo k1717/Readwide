@@ -10,6 +10,87 @@ import static org.junit.Assert.*;
 
 /** Tests the symbol-record/output boundary, not a new compressed PPMd fixture. */
 public class Rar3PpmdFilterOutputTest {
+    @Test public void partialRgbBlocksUseTheSameStreamingQueueAsFullRows() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (Rar3PpmdFilterOutput out = output(bytes, 10)) {
+            out.queue(filter(Rar3VmFilter.StandardFilter.RGB, 1, 1, 12));
+            out.queue(filter(Rar3VmFilter.StandardFilter.RGB, 2, 2, 12));
+            out.queue(filter(Rar3VmFilter.StandardFilter.RGB, 4, 6, 12));
+            out.write(new byte[]{42,1,1});
+            out.write(new byte[]{2,1,2,3,4,5,6}); out.finish();
+        }
+        assertArrayEquals(new byte[]{42,-1,-1,-2,-4,-3,-8,-10,-7,-18}, bytes.toByteArray());
+    }
+
+    @Test public void bulkWritesCrossPlainChainedAndAdjacentFilterRegions() throws Exception {
+        byte[] raw = new byte[140000];
+        for (int i=0;i<raw.length;i++) raw[i]=(byte)(i*17);
+        ByteArrayOutputStream bytewise = new ByteArrayOutputStream(), bulk = new ByteArrayOutputStream();
+        try (Rar3PpmdFilterOutput a=output(bytewise,raw.length);
+             Rar3PpmdFilterOutput b=output(bulk,raw.length)) {
+            for (Rar3PpmdFilterOutput out : new Rar3PpmdFilterOutput[]{a,b}) {
+                out.queue(filter(Rar3VmFilter.StandardFilter.DELTA,3,65540,2));
+                out.queue(filter(Rar3VmFilter.StandardFilter.DELTA,3,65540,1));
+                out.queue(filter(Rar3VmFilter.StandardFilter.E8,65543,10,0));
+                out.queue(filter(Rar3VmFilter.StandardFilter.DELTA,80000,1000,3));
+            }
+            for (byte value:raw) a.write(value);
+            // Keep the first filter partially buffered across calls.
+            b.write(raw,0,17);b.write(raw,17,raw.length-17);
+            a.finish();b.finish();
+        }
+        assertArrayEquals(bytewise.toByteArray(),bulk.toByteArray());
+    }
+
+    @Test public void unfilteredBulkOutputUsesBoundedChunkCalls() throws Exception {
+        final int[] calls={0};
+        OutputStream destination=new OutputStream() {
+            @Override public void write(int value) { fail("Per-byte dispatch"); }
+            @Override public void write(byte[] bytes,int offset,int length) {
+                assertTrue(length>0 && length<=65536);calls[0]++;
+            }
+        };
+        try(Rar3PpmdFilterOutput out=output(destination,150000)) {
+            out.write(new byte[150000]);out.finish();
+        }
+        assertEquals(3,calls[0]);
+    }
+
+    @Test public void bulkOverrunRejectsBeforeWritingAndRemainsFailed() throws Exception {
+        ByteArrayOutputStream destination=new ByteArrayOutputStream();
+        try(Rar3PpmdFilterOutput out=output(destination,2)) {
+            IOException first=assertThrows(IOException.class,()->out.write(new byte[3]));
+            assertEquals(0,destination.size());
+            assertSame(first,assertThrows(IOException.class,()->out.write(1)));
+        }
+    }
+
+    @Test public void cancellationBetweenBulkChunksIsSticky() throws Exception {
+        final int[] calls={0};
+        OutputStream destination=new OutputStream() {
+            @Override public void write(int value) { fail("Per-byte dispatch"); }
+            @Override public void write(byte[] bytes,int offset,int length) {
+                calls[0]++;Thread.currentThread().interrupt();
+            }
+        };
+        try(Rar3PpmdFilterOutput out=output(destination,100000)) {
+            IOException first;
+            try { first=assertThrows(IOException.class,()->out.write(new byte[100000])); }
+            finally { Thread.interrupted(); }
+            assertEquals(1,calls[0]);
+            assertSame(first,assertThrows(IOException.class,out::finish));
+        }
+    }
+
+    @Test public void invalidBulkRangeDoesNotPoisonValidOutput() throws Exception {
+        ByteArrayOutputStream destination=new ByteArrayOutputStream();
+        try(Rar3PpmdFilterOutput out=output(destination,1)) {
+            assertThrows(IndexOutOfBoundsException.class,()->out.write(new byte[1],Integer.MAX_VALUE,1));
+            out.write(new byte[0]);out.write(new byte[]{42});out.finish();
+        }
+        assertArrayEquals(new byte[]{42},destination.toByteArray());
+    }
+
     @Test public void mixedSinkPreservesClassicRegionsLargerThanPpmdOnlyGuard() throws Exception {
         int length = Rar3PpmdFilterOutput.MAX_FILTER_BYTES + 1;
         byte[] raw = new byte[length]; Arrays.fill(raw,(byte)1);
@@ -20,6 +101,34 @@ public class Rar3PpmdFilterOutputTest {
             out.queue(descriptor); out.write(raw); out.finish();
         }
         assertArrayEquals(Rar3VmFilter.apply(descriptor.type,raw,length,descriptor.initR,0),bytes.toByteArray());
+    }
+
+    @Test public void uncheckedPlainFilteredAndFlushFailuresCannotResume() throws Exception {
+        for (boolean error : new boolean[]{false,true}) {
+            for (int mode=0;mode<3;mode++) {
+                final Throwable sentinel=error?new AssertionError("sink"):new IllegalStateException("sink");
+                final int selected=mode;
+                final int[] calls={0};
+                OutputStream target=new OutputStream() {
+                    private void reject() {
+                        calls[0]++;
+                        if(sentinel instanceof Error)throw (Error)sentinel;
+                        throw (RuntimeException)sentinel;
+                    }
+                    @Override public void write(int value) { if(selected!=2)reject(); }
+                    @Override public void write(byte[] bytes,int offset,int length) { if(selected!=2)reject(); }
+                    @Override public void flush() { if(selected==2)reject(); }
+                    @Override public void close() { fail("Caller owns destination"); }
+                };
+                try(Rar3PpmdFilterOutput out=output(target,6)) {
+                    if(mode==1)out.queue(filter(Rar3VmFilter.StandardFilter.E8,0,6,0));
+                    assertSame(sentinel,assertThrows(Throwable.class,()->{out.write(new byte[6]);out.finish();}));
+                    assertSame(sentinel,assertThrows(Throwable.class,()->out.write(1)));
+                    assertSame(sentinel,assertThrows(Throwable.class,out::finish));
+                    assertEquals(1,calls[0]);
+                }
+            }
+        }
     }
 
     private Rar3PpmdFilterOutput output(OutputStream out, long size) {
@@ -82,15 +191,17 @@ public class Rar3PpmdFilterOutputTest {
         }
     }
 
-    @Test public void partialOverlapCrossEntryAndExcessivePendingFiltersFail() throws Exception {
+    @Test public void partialOverlapIncompleteRangeAndExcessivePendingFiltersFail() throws Exception {
         try (Rar3PpmdFilterOutput out = output(new ByteArrayOutputStream(),10)) {
             out.queue(filter(Rar3VmFilter.StandardFilter.E8,1,6,0));
             try { out.queue(filter(Rar3VmFilter.StandardFilter.E8,2,6,0)); fail(); }
             catch (IOException expected) { assertTrue(expected.getMessage().contains("Overlapping")); }
         }
         try (Rar3PpmdFilterOutput out = output(new ByteArrayOutputStream(),10)) {
-            try { out.queue(filter(Rar3VmFilter.StandardFilter.E8,9,6,0)); fail(); }
-            catch (IOException expected) { assertTrue(expected.getMessage().contains("cross-entry")); }
+            out.queue(filter(Rar3VmFilter.StandardFilter.E8,9,6,0));
+            out.write(new byte[10]); // Final file size cannot predict a raw filter's endpoint.
+            try { out.finish(); fail(); }
+            catch (IOException expected) { assertTrue(expected.getMessage().contains("Incomplete")); }
         }
         try (Rar3PpmdFilterOutput out = output(new ByteArrayOutputStream(),6)) {
             for(int i=0;i<1024;i++) out.queue(filter(Rar3VmFilter.StandardFilter.E8,0,6,0));
@@ -115,7 +226,7 @@ public class Rar3PpmdFilterOutputTest {
         }
     }
 
-    @Test public void pendingResetFailsAndQueuedRegistersAreOwned() throws Exception {
+    @Test public void resetDoesNotBypassOverlapChecksAndQueuedRegistersAreOwned() throws Exception {
         ByteArrayOutputStream bytes=new ByteArrayOutputStream();
         try(Rar3PpmdFilterOutput out=output(bytes,3)) {
             Rar3VmFilter.PendingFilter pending=filter(Rar3VmFilter.StandardFilter.DELTA,0,3,1);
@@ -124,13 +235,25 @@ public class Rar3PpmdFilterOutputTest {
             assertArrayEquals(new byte[]{-1,-3,-6},bytes.toByteArray());
         }
         bytes.reset();
-        try(Rar3PpmdFilterOutput out=output(bytes,6)) {
+        try(Rar3PpmdFilterOutput out=output(bytes,8)) {
             out.queue(filter(Rar3VmFilter.StandardFilter.E8,0,6,0));
+            out.write(1); // The reset record now starts at one, genuinely overlapping 0..6.
             ByteArrayInputStream reset=new ByteArrayInputStream(record(true,0));
-            try {out.readRecord(reset::read);fail("A reset must not silently discard pending transformations");}
-            catch(IOException expected) {assertTrue(expected.getMessage().contains("reset with pending"));}
+            try {out.readRecord(reset::read);fail("A reset must not silently discard overlapping transformations");}
+            catch(IOException expected) {assertTrue(expected.getMessage().contains("Overlapping"));}
             assertEquals(0,bytes.size());
         }
+    }
+
+    @Test public void programResetKeepsAlreadyQueuedStandardFilters() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (Rar3PpmdFilterOutput out = output(bytes, 6)) {
+            out.queue(filter(Rar3VmFilter.StandardFilter.DELTA, 0, 6, 1));
+            ByteArrayInputStream reset = new ByteArrayInputStream(record(true, 0));
+            out.readRecord(reset::read); // Define E8 and chain it after the pending Delta.
+            out.write(new byte[]{24,(byte)132,100,0,0,0}); out.finish();
+        }
+        assertArrayEquals(new byte[]{(byte)0xe8,99,0,0,0,0}, bytes.toByteArray());
     }
 
     @Test public void outputFailureCannotResumeOrCloseTheCallerDestination() throws Exception {

@@ -24,6 +24,119 @@ public class LargeTextForwardCursorEquivalenceTest {
     @Rule
     public final TemporaryFolder temporaryFolder = new TemporaryFolder();
 
+    @Test public void sourceChangeDuringFreshOrResumedReadDropsCursorAndAllowsRecovery() throws Exception {
+        String original = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n";
+        byte[] appended = "eleven\n".getBytes(StandardCharsets.UTF_8);
+        for (boolean resume : new boolean[]{false, true}) {
+            File file = temporaryFolder.newFile("changed-" + resume + ".txt");
+            Files.write(file.toPath(), original.getBytes(StandardCharsets.UTF_8));
+            LargeTextPartitionReader.ForwardCursor cursor = new LargeTextPartitionReader.ForwardCursor();
+            try {
+                if (resume) {
+                    LargeTextPartitionReader.readPartitionAtStartLineTransformed(
+                            file, "UTF-8", false, 1, 10, original.length(),
+                            2, 1, 1, false, RULES_VERSION, line -> line, cursor);
+                    org.junit.Assert.assertNotNull(cursor.reader);
+                    org.junit.Assert.assertFalse(cursor.queue.isEmpty());
+                }
+                boolean[] changed = {false};
+                int startLine = resume ? 3 : 1;
+                java.io.IOException failure = org.junit.Assert.assertThrows(java.io.IOException.class, () ->
+                        LargeTextPartitionReader.readPartitionAtStartLineTransformed(
+                                file, "UTF-8", false, startLine, 10, original.length(),
+                                2, 1, 1, false, RULES_VERSION, line -> {
+                                    if (!changed[0]) {
+                                        changed[0] = true;
+                                        try {
+                                            Files.write(file.toPath(), appended,
+                                                    java.nio.file.StandardOpenOption.APPEND);
+                                        } catch (java.io.IOException e) {
+                                            throw new AssertionError("fixture mutation failed", e);
+                                        }
+                                    }
+                                    return line;
+                                }, cursor));
+                org.junit.Assert.assertTrue(changed[0]);
+                assertEquals("TXT changed while reading a partition", failure.getMessage());
+                org.junit.Assert.assertNull(cursor.reader);
+                org.junit.Assert.assertNull(cursor.filePath);
+                org.junit.Assert.assertTrue(cursor.queue.isEmpty());
+
+                int totalChars = original.length() + appended.length;
+                LargeTextLinePartitionResult expected = LargeTextPartitionReader.readPartitionAtStartLineTransformed(
+                        file, "UTF-8", false, startLine, 11, totalChars,
+                        2, 1, 1, false, RULES_VERSION, line -> line, null);
+                LargeTextLinePartitionResult recovered = LargeTextPartitionReader.readPartitionAtStartLineTransformed(
+                        file, "UTF-8", false, startLine, 11, totalChars,
+                        2, 1, 1, false, RULES_VERSION, line -> line, cursor);
+                assertEquivalent("source changed, resumed=" + resume, expected, recovered);
+                assertEquals(file.length(), cursor.fileLength);
+                assertEquals(file.lastModified(), cursor.fileModified);
+            } finally {
+                cursor.closeQuietly();
+            }
+        }
+    }
+
+    @Test public void sourceTimestampChangeWithoutCursorDoesNotReturnPartialPartition() throws Exception {
+        File file = temporaryFolder.newFile("timestamp-change.txt");
+        String original = "one\ntwo\nthree\nfour\n";
+        Files.write(file.toPath(), original.getBytes(StandardCharsets.UTF_8));
+        long modified = file.lastModified();
+        boolean[] changed = {false};
+        java.io.IOException failure = org.junit.Assert.assertThrows(java.io.IOException.class, () ->
+                LargeTextPartitionReader.readPartitionAtStartLineTransformed(
+                        file, "UTF-8", false, 1, 4, original.length(),
+                        2, 1, 1, false, RULES_VERSION, line -> {
+                            if (!changed[0]) {
+                                changed[0] = true;
+                                try {
+                                    Files.setLastModifiedTime(file.toPath(),
+                                            java.nio.file.attribute.FileTime.fromMillis(modified + 60_000L));
+                                } catch (java.io.IOException e) {
+                                    throw new AssertionError("fixture timestamp mutation failed", e);
+                                }
+                            }
+                            return line;
+                        }, null));
+        org.junit.Assert.assertTrue(changed[0]);
+        assertEquals(original.length(), file.length());
+        org.junit.Assert.assertNotEquals(modified, file.lastModified());
+        assertEquals("TXT changed while reading a partition", failure.getMessage());
+        LargeTextLinePartitionResult recovered = LargeTextPartitionReader.readPartitionAtStartLineTransformed(
+                file, "UTF-8", false, 1, 4, original.length(),
+                2, 1, 1, false, RULES_VERSION, line -> line, null);
+        assertEquals("one\ntwo\nthree", recovered.content);
+    }
+
+    @Test public void interruptedReadDropsCursorAndFreshReadRetainsExactFields() throws Exception {
+        File file = temporaryFolder.newFile("cancelled.txt");
+        Files.write(file.toPath(), "one\ntwo\nthree\nfour\n".getBytes(StandardCharsets.UTF_8));
+        LargeTextPartitionReader.ForwardCursor cursor = new LargeTextPartitionReader.ForwardCursor();
+        try {
+            org.junit.Assert.assertThrows(java.io.InterruptedIOException.class, () ->
+                    LargeTextPartitionReader.readPartitionAtStartLineTransformed(
+                            file, "UTF-8", false, 1, 4, 19, 2, 1, 1, false, 1,
+                            line -> { Thread.currentThread().interrupt(); return line; }, cursor));
+            org.junit.Assert.assertTrue(Thread.currentThread().isInterrupted());
+            org.junit.Assert.assertNull(cursor.reader);
+            org.junit.Assert.assertTrue(cursor.queue.isEmpty());
+        } finally { Thread.interrupted(); cursor.closeQuietly(); }
+        LargeTextLinePartitionResult full = LargeTextPartitionReader.readPartitionAtStartLineTransformed(
+                file, "UTF-8", false, 1, 4, 19, 2, 1, 1, false, 1, line -> line, null);
+        try {
+            LargeTextLinePartitionResult resumed = LargeTextPartitionReader.readPartitionAtStartLineTransformed(
+                    file, "UTF-8", false, 1, 4, 19, 2, 1, 1, false, 1, line -> line, cursor);
+            assertEquals(full.content, resumed.content);
+            assertEquals(full.baseCharOffset, resumed.baseCharOffset);
+            assertEquals(full.bodyStartCharCount, resumed.bodyStartCharCount);
+            assertEquals(full.bodyCharCount, resumed.bodyCharCount);
+            assertEquals(full.startLine, resumed.startLine);
+            assertEquals(full.endLine, resumed.endLine);
+            assertEquals(full.totalChars, resumed.totalChars);
+        } finally { cursor.closeQuietly(); }
+    }
+
     @Test
     public void adversarialRequestChain_isFieldEquivalent() throws Exception {
         ArrayList<String> lines = new ArrayList<>();

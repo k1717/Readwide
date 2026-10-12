@@ -2,11 +2,8 @@ package com.readwide.manager;
 
 import androidx.annotation.NonNull;
 
-import com.readwide.manager.util.LargeTextAnchorMath;
 import com.readwide.manager.util.LargeTextContinuityMath;
-import com.readwide.manager.view.CustomReaderView;
-
-import java.util.ArrayList;
+import com.readwide.manager.util.LargeTextExactPageIndexState;
 
 final class ReaderLargeTextPagingController {
     private final ReaderActivity activity;
@@ -21,6 +18,12 @@ final class ReaderLargeTextPagingController {
         }
         if (activity.readerView == null || direction == 0) return;
 
+        // A tap owns a destination; an automatic buffer replacement does not.
+        // Supersede it before normal tap handling instead of queueing taps that
+        // could be discarded if the automatic read loses to the next gesture.
+        if (activity.largeTextPartitionSwitchState.isViewportHandoff()) {
+            activity.cancelLargeTextPartitionSwitchForLocalJump();
+        }
         if (activity.largeTextEstimateActive && activity.largeTextPartitionSwitchState.isInProgress()) {
             queueLargeTextPageDeltaWhileSwitching(direction);
             activity.updatePositionLabel();
@@ -41,39 +44,35 @@ final class ReaderLargeTextPagingController {
             }
         }
 
-        if (activity.largeTextEstimateActive && tryLargeTextPartitionBoundaryFallback(direction)) {
-            return;
-        }
-
         pageCurrentReaderView(direction);
     }
 
     void processQueuedLargeTextPageDeltaAfterPartitionApply() {
         if (!activity.largeTextEstimateActive
-                || !activity.largeTextPartitionSwitchState.hasQueuedDelta()
+                || !activity.largeTextPartitionSwitchState.hasQueuedTarget()
                 || activity.largeTextPartitionSwitchState.isInProgress()) return;
-        if (!activity.isLargeTextExactPageIndexReady()) {
-            activity.clearLargeTextQueuedPageDelta();
-            return;
-        }
-        int delta = activity.largeTextPartitionSwitchState.consumeQueuedDelta();
-        if (!pageLargeTextByExactAnchorDelta(delta, false)) {
-            int total = Math.max(1, activity.getDisplayedTotalPageCount());
-            int current = Math.max(1, Math.min(total, activity.getDisplayedCurrentPageNumber()));
-            int target = Math.max(1, Math.min(total, current + delta));
-            if (target != current) {
-                activity.scrollToPageNumber(target, false, false);
-            }
-        }
+        int target = activity.largeTextPartitionSwitchState.consumeQueuedTarget();
+        int total = activity.getLargeTextExactPageCountIfReady();
+        int page = total > 0 ? activity.findExactLargeTextPageForChar(target) : 0;
+        // The queued tap already selected a character. Do not replay numeric
+        // deltas from a different landing (or a newly rebuilt page model).
+        activity.jumpToAbsoluteCharPosition(target, page, total, null, null, false);
     }
 
     private void queueLargeTextPageDeltaWhileSwitching(int direction) {
         if (!activity.largeTextEstimateActive
                 || !activity.isLargeTextExactPageIndexReady()
+                || activity.filePath == null
                 || direction == 0) return;
-        int total = Math.max(1, activity.getDisplayedTotalPageCount());
-        activity.largeTextPartitionSwitchState.queuePageDelta(
-                direction, total, activity.getDisplayedCurrentPageNumber());
+        int origin = activity.largeTextPartitionSwitchState.destinationChar();
+        if (origin < 0) return;
+        String signature = activity.buildCurrentLargeTextExactPageIndexSignature(activity.filePath);
+        LargeTextExactPageIndexState.TapTarget target = activity.largeTextExactPageIndexState
+                .tapTargetIfUsable(signature, origin, direction);
+        if (target != null && target.anchor != null) {
+            activity.largeTextPartitionSwitchState.queueTarget(
+                    target.anchor.charPosition, target.page, target.total);
+        }
     }
 
     private boolean pageLargeTextByExactAnchorDelta(int direction,
@@ -84,30 +83,21 @@ final class ReaderLargeTextPagingController {
                 || direction == 0) return false;
 
         String currentSignature = activity.buildCurrentLargeTextExactPageIndexSignature(activity.filePath);
-        ArrayList<CustomReaderView.PageTextAnchor> anchors =
-                activity.largeTextExactPageIndexState.copyAnchorsIfUsable(currentSignature);
-        if (anchors == null || anchors.isEmpty()) return false;
-
-        int total = Math.max(1, anchors.size());
         int currentAbs = Math.max(0, activity.getCurrentCharPosition());
-        int targetIndex = LargeTextAnchorMath.findTapTargetAnchorIndex(anchors, currentAbs, direction);
-        if (targetIndex < 0) {
+        LargeTextExactPageIndexState.TapTarget target = activity.largeTextExactPageIndexState
+                .tapTargetIfUsable(currentSignature, currentAbs, direction);
+        if (target == null) return false;
+        if (target.anchor == null) {
             activity.updatePositionLabel();
             return true;
         }
-        if (Math.abs(direction) > 1) {
-            int extraSteps = Math.abs(direction) - 1;
-            targetIndex += direction > 0 ? extraSteps : -extraSteps;
-            targetIndex = Math.max(0, Math.min(anchors.size() - 1, targetIndex));
-        }
-
-        int targetPage = Math.max(1, Math.min(total, targetIndex + 1));
+        int total = target.total;
+        int targetPage = target.page;
         if (direction > 0 && targetPage >= total && total > 1) {
             return activity.jumpToFinalLargeTextPage(total, showLoadingForAsyncPartitionJump);
         }
 
-        CustomReaderView.PageTextAnchor targetAnchor = anchors.get(targetPage - 1);
-        activity.jumpToAbsoluteCharPosition(targetAnchor.charPosition, targetPage, total,
+        activity.jumpToAbsoluteCharPosition(target.anchor.charPosition, targetPage, total,
                 null, null, showLoadingForAsyncPartitionJump);
         return true;
     }
@@ -120,11 +110,10 @@ final class ReaderLargeTextPagingController {
         int displayedTotal = Math.max(1, activity.getDisplayedTotalPageCount());
         int displayedCurrent = Math.max(1,
                 Math.min(displayedTotal, activity.getDisplayedCurrentPageNumber()));
-        int displayedTarget = Math.max(1, Math.min(displayedTotal, displayedCurrent + direction));
-        if (displayedTarget == displayedCurrent) {
-            activity.updatePositionLabel();
-            return true;
-        }
+        // Until exact anchors are ready these numbers are only display hints.
+        // A clamped estimate is not proof of a physical document boundary.
+        int displayedTarget = (int) Math.max(1L,
+                Math.min(displayedTotal, (long) displayedCurrent + direction));
 
         if (direction > 0) {
             return pageLargeTextForwardSequentially(displayedTarget, displayedTotal);
@@ -133,6 +122,12 @@ final class ReaderLargeTextPagingController {
     }
 
     private boolean pageLargeTextForwardSequentially(int displayedTarget, int displayedTotal) {
+        // EOF can already be visible in lookahead, before the final canonical
+        // body is loaded. Do not reload that tail or snap the viewport backward.
+        if (activity.readerView.isDocumentEndFullyVisible()) {
+            activity.updatePositionLabel();
+            return true;
+        }
         int contentLength = activity.fileContent != null ? activity.fileContent.length() : 0;
         int bodyEnd = activity.largeTextPartitionBodyCharCount > 0
                 ? Math.min(contentLength, activity.largeTextPartitionBodyCharCount)
@@ -141,10 +136,6 @@ final class ReaderLargeTextPagingController {
                 activity.readerView.getCharPositionForNextPageStartRespectingOverlap()));
         boolean finalPartition = !activity.hasNextLargeTextPartition()
                 && activity.largeTextPartitionEndLine >= activity.largeTextTotalLogicalLines;
-
-        if (finalPartition && displayedTarget >= displayedTotal) {
-            return activity.jumpToFinalLargeTextPage(displayedTotal, false);
-        }
 
         if (nextPageStartLocal < bodyEnd || finalPartition) {
             pageCurrentReaderView(+1);
@@ -181,45 +172,6 @@ final class ReaderLargeTextPagingController {
 
         pageCurrentReaderView(-1);
         return true;
-    }
-
-    private boolean tryLargeTextPartitionBoundaryFallback(int direction) {
-        int localPage = Math.max(1, activity.readerView.getCurrentPageNumber());
-        int displayedTotal = activity.getDisplayedTotalPageCount();
-        int displayedCurrent = activity.getDisplayedCurrentPageNumber();
-        if (direction > 0 && activity.hasNextLargeTextPartition()) {
-            int contentLength = activity.fileContent != null ? activity.fileContent.length() : 0;
-            int bodyEnd = activity.largeTextPartitionBodyCharCount > 0
-                    ? Math.min(contentLength, activity.largeTextPartitionBodyCharCount)
-                    : contentLength;
-            int nextPageStartLocal = Math.max(0, Math.min(contentLength,
-                    activity.readerView.getCharPositionForNextPageStartRespectingOverlap()));
-            if (nextPageStartLocal >= bodyEnd) {
-                int targetAbs = LargeTextContinuityMath.forwardHandoffTargetAbs(
-                        activity.largeTextPreviewBaseCharOffset,
-                        nextPageStartLocal,
-                        bodyEnd);
-                int displayedTarget = Math.max(1, Math.min(displayedTotal, displayedCurrent + 1));
-                activity.reloadLargeTextPreviewAround(
-                        targetAbs, displayedTarget, displayedTotal, null, null, -1, false);
-                return true;
-            }
-        }
-        if (direction < 0 && localPage <= 1 && activity.hasPreviousLargeTextPartition()) {
-            int previousStart = activity.getLargeTextPartitionStartLineForLine(
-                    activity.largeTextPartitionStartLine - activity.getLargeTextPartitionLines());
-            int displayedTarget = Math.max(1, Math.min(displayedTotal, displayedCurrent - 1));
-            activity.reloadLargeTextPartitionByStartLine(previousStart, displayedTarget, displayedTotal);
-            return true;
-        }
-
-        if (direction > 0
-                && !activity.hasNextLargeTextPartition()
-                && activity.largeTextPartitionEndLine >= activity.largeTextTotalLogicalLines
-                && displayedCurrent < displayedTotal) {
-            return activity.jumpToFinalLargeTextPage(displayedTotal, false);
-        }
-        return false;
     }
 
     private void pageCurrentReaderView(int direction) {

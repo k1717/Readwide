@@ -3,6 +3,9 @@ package com.readwide.manager.archive;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 import org.junit.Rule;
 import org.junit.Test;
@@ -83,6 +86,26 @@ public class Rar4HeaderEncryptedMultiVolumeTest {
     @Test
     public void corruptIntermediateCrcRemovesNewPartialOutput() throws Exception {
         verifyCorruptIntermediate(false);
+    }
+
+    @Test public void headerEncryptedSplitStoredForwardOwnsAllRewrittenVolumes() throws Exception {
+        char[] password = "chain-pass".toCharArray();
+        byte[] payload = "two header-encrypted volumes".getBytes(StandardCharsets.UTF_8);
+        File archive = buildSplitChain("forward", "stored.bin", payload, password);
+        File spool = tempFolder.newFolder("spool");
+        int originalCount = tempFolder.getRoot().list().length;
+        try (ArchiveSupport.ForwardArchiveReader reader = Rar3PpmdSolidArchiveExtractor.openForwardReader(
+                archive, password, spool, true)) {
+            assertNotNull(reader);
+            assertNotNull(reader.nextEntry());
+            byte[] bytes = new byte[payload.length + 1];
+            assertEquals(payload.length, reader.read(bytes));
+            assertArrayEquals(payload, Arrays.copyOf(bytes, payload.length));
+            assertNull(reader.nextEntry());
+        }
+        assertEquals(originalCount, tempFolder.getRoot().list().length);
+        assertEquals(0, spool.list().length);
+        assertTrue(archive.isFile());
     }
 
     private void verifyCorruptIntermediate(boolean existing) throws Exception {

@@ -50,6 +50,7 @@ final class ButtonOrderManager {
                 items.add(new Item("find", R.string.find, R.id.btn_find));
                 items.add(new Item("page", R.string.bottom_page, R.id.btn_page_move));
                 items.add(new Item("bookmark", R.string.bookmark, R.id.btn_bookmark));
+                items.add(new Item("contents", R.string.txt_contents, R.id.btn_txt_contents));
                 items.add(new Item("annotations", R.string.annotations_title, R.id.btn_annotations));
                 items.add(new Item("auto_page", R.string.auto_page_turn_toolbar, R.id.btn_auto_page));
                 items.add(new Item("settings", R.string.settings, R.id.btn_settings));

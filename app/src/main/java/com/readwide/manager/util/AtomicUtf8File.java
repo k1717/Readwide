@@ -12,6 +12,7 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 
 /** Crash-safe UTF-8 text persistence for small app-owned JSON files. */
@@ -34,7 +35,9 @@ final class AtomicUtf8File {
         AtomicFile atomicFile = new AtomicFile(file);
         try (FileInputStream input = atomicFile.openRead();
              BufferedReader reader = new BufferedReader(
-                     new InputStreamReader(input, StandardCharsets.UTF_8))) {
+                     new InputStreamReader(input, StandardCharsets.UTF_8.newDecoder()
+                             .onMalformedInput(CodingErrorAction.REPORT)
+                             .onUnmappableCharacter(CodingErrorAction.REPORT)))) {
             StringBuilder text = new StringBuilder();
             char[] buffer = new char[8192];
             int count;

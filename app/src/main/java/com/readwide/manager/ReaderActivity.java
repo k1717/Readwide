@@ -88,7 +88,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class ReaderActivity extends AppCompatActivity implements TtsHost, ReaderDialogStyleHost {
 
-    static final long LARGE_TEXT_FAST_OPEN_THRESHOLD_BYTES = 3L * 1024L * 1024L;
+    public static final long LARGE_TEXT_FAST_OPEN_THRESHOLD_BYTES = 3L * 1024L * 1024L;
     private static final long HUGE_TEXT_PREVIEW_ONLY_THRESHOLD_BYTES = 32L * 1024L * 1024L;
     private static final int LARGE_TEXT_EXACT_INDEX_CHUNK_CHARS = 256 * 1024;
     // Kept only for sampling/legacy estimate paths; active large-TXT windows are line-based.
@@ -141,6 +141,20 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     String filePath;
     String fileName;
     String fileContent = "";
+    // Original-load source stamp; partition switches must not silently renew it.
+    long contentsSourceLength = -1L, contentsSourceModified = -1L;
+    private ReaderContentsController contentsController;
+
+    void showTextContents() {
+        if (contentsController == null) contentsController = new ReaderContentsController(this);
+        contentsController.show();
+    }
+
+    void resetTextContents() {
+        if (contentsController != null) contentsController.close();
+        contentsController = null;
+        contentsSourceLength = contentsSourceModified = -1L;
+    }
     // Content and its restored position must belong to the completed current load.
     boolean textContentReadyForPersistence = false;
     int totalChars;
@@ -504,7 +518,8 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     Intent backgroundTextRestoreIntent = null;
     final Runnable backgroundMemoryTrimRunnable = () -> trimReaderMemoryForBackground(false);
     final ExecutorService executor = Executors.newSingleThreadExecutor();
-    final ExecutorService largeTextPartitionExecutor = Executors.newSingleThreadExecutor();
+    final com.readwide.manager.util.LargeTextWorkQueue largeTextPartitionExecutor =
+            new com.readwide.manager.util.LargeTextWorkQueue();
     final ExecutorService largeTextSearchExecutor = Executors.newSingleThreadExecutor();
     final ExecutorService largeTextSearchCountExecutor = Executors.newSingleThreadExecutor();
     volatile boolean activityDestroyed = false;
@@ -569,6 +584,19 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
         return readerReload().maybeReloadForPhysicallyEditedOriginalTxtFile();
     }
 
+    boolean ensureLoadedTextCurrent() { return readerReload().ensureLoadedTextCurrent(); }
+
+    boolean loadedTextMatchesCurrentSourceAndTransform() {
+        return readerReload().loadedTextMatchesCurrentSourceAndTransform();
+    }
+
+    void invalidateTxtTtsCheckpoint() {
+        stopTts(false);
+        if (prefs != null && java.util.Objects.equals(filePath, prefs.getTtsLastFilePath())) {
+            prefs.clearTtsLastPlaybackState();
+        }
+    }
+
     boolean maybeReloadForLargeTextPartitionModeChange() {
         return readerReload().maybeReloadForLargeTextPartitionModeChange();
     }
@@ -600,6 +628,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     @Override
     protected void onNewIntent(@NonNull Intent intent) {
         super.onNewIntent(intent);
+        autoStartTtsConsumed = false; // A new explicit launch may request read-aloud again.
         startup().onNewIntent(intent);
     }
 
@@ -613,6 +642,26 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
 
     boolean restoreLoadedTextSnapshotIfAvailable(@NonNull Intent intent, Bundle savedInstanceState) {
         return loadedTextSnapshots().restoreLoadedTextSnapshotIfAvailable(intent, savedInstanceState);
+    }
+
+    void cancelPendingSnapshotRestore() {
+        if (readerLoadedTextSnapshotController != null) readerLoadedTextSnapshotController.cancelPendingRestore();
+    }
+
+    void cancelPendingFileLayout() {
+        if (readerFileApplyController != null) readerFileApplyController.cancelPendingLayout();
+    }
+
+    private void prepareTextLayoutForNavigation() {
+        // Complete initial-load setup before a new gesture takes ownership. The
+        // completion removes itself before scrolling, so this is reentry-safe.
+        if (readerFileApplyController != null) readerFileApplyController.finishPendingLayoutIfReady();
+        if (readerView != null && readerView.hasCurrentTextLayout()
+                && readerLoadedTextSnapshotController != null
+                && readerLoadedTextSnapshotController.cancelPendingRestore()) {
+            // The user's new navigation owns this already loaded text now.
+            textContentReadyForPersistence = true;
+        }
     }
 
     void previewToolbarSeekPage(int page, int totalPages) {
@@ -638,6 +687,10 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
         // geometry; refresh the title strip even when the scroll position
         // (and thus onScrollChanged) doesn't move.
         updateReaderFileTitleVisibility();
+    }
+
+    boolean hasCurrentReaderLayoutPreferences() {
+        return preferencesController != null && preferencesController.hasCurrentLayoutPreferences();
     }
 
     void applyStatusBarVisibilityPreference() {
@@ -1172,7 +1225,26 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
 
     @Override
     public boolean isTtsTextTemporarilyUnavailable() {
-        return largeTextEstimateActive && largeTextPartitionSwitchState.isInProgress();
+        return !textContentReadyForPersistence || readerView == null || !readerView.hasCurrentTextLayout()
+                || (largeTextEstimateActive && largeTextPartitionSwitchState.isInProgress());
+    }
+
+    @Override public int ttsTextBaseCharPosition() {
+        return largeTextEstimateActive ? largeTextPreviewBaseCharOffset : 0;
+    }
+
+    @Override public boolean ttsUsesAbsoluteTextContinuation() { return true; }
+
+    @Override public boolean ttsHasTextAfter(int absolutePosition) {
+        return absolutePosition < (largeTextEstimateActive ? largeTextEstimatedTotalChars : totalChars);
+    }
+
+    @Override public String ttsCheckpointSignature() {
+        java.io.File source = filePath != null ? new java.io.File(filePath) : null;
+        String manual = source != null && prefs != null ? prefs.getManualTextEncodingForFile(source) : "";
+        String automatic = source != null && prefs != null ? prefs.getCachedAutoTextEncodingForFile(source) : "";
+        return "txt-absolute-v1|" + contentsSourceLength + ":" + contentsSourceModified
+                + "|" + appliedTextDisplayRuleSignature + "|" + manual + "|" + automatic;
     }
 
     @Override
@@ -1309,11 +1381,30 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
         readerActions().startAutoPageTurn();
     }
 
+    boolean isReadyForAutoPageTurn() {
+        return textContentReadyForPersistence && !backgroundTextMemoryReleased
+                && readerView != null && readerView.hasCurrentTextLayout()
+                && !readerView.isUserDraggingOrFlinging()
+                && !largeTextPartitionSwitchState.isInProgress();
+    }
+
+    boolean hasAutoPageTurnReachedEnd() {
+        if (!isReadyForAutoPageTurn()) return false;
+        if (!largeTextEstimateActive) {
+            return getDisplayedCurrentPageNumber() >= getDisplayedTotalPageCount();
+        }
+        // Estimated page labels may saturate before the remaining partitions.
+        // Physical EOF also covers a final row in lookahead, and tiny viewports.
+        return readerView.isDocumentEndFullyVisible()
+                || (loadedTextWindowReachesDocumentEnd() && readerView.isAtVisualEndOfText());
+    }
+
     void stopAutoPageTurn(boolean showToast) {
         readerActions().stopAutoPageTurn(showToast);
     }
 
     void stopAutoPageTurnForManualNavigation() {
+        prepareTextLayoutForNavigation();
         readerActions().stopAutoPageTurnForManualNavigation();
         // TTS intentionally keeps playing when the user scrolls or moves the view.
     }
@@ -1327,6 +1418,11 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
             readerTtsController.release();
             readerTtsController = null;
         }
+    }
+
+    void resetTtsForDocumentLoad() {
+        pendingAutoStartTts = false;
+        stopTts(false);
     }
 
     void loadFileFromIntent(@NonNull Intent sourceIntent) {
@@ -1344,12 +1440,13 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     // actually has text, then begin playback in the same continuous mode as the
     // saved state. Gives up quietly after a few seconds if no text appears.
     private void scheduleAutoStartTtsCheck() {
+        final int requestedLoad = loadGeneration.get();
         View anchor = readerView != null ? readerView : getWindow().getDecorView();
         anchor.postDelayed(() -> {
-            if (activityDestroyed || !pendingAutoStartTts) return;
-            if (readerView != null && !TextUtils.isEmpty(readerView.getTextContent())) {
+            if (activityDestroyed || requestedLoad != loadGeneration.get() || !pendingAutoStartTts) return;
+            if (textContentReadyForPersistence && readerView != null && !TextUtils.isEmpty(readerView.getTextContent())) {
                 pendingAutoStartTts = false;
-                readerTts().start(prefs != null && prefs.getTtsLastContinuous());
+                readerTts().autoStartOrResume(prefs != null && prefs.getTtsLastContinuous());
             } else if (++autoStartTtsAttempts <= 40) {
                 scheduleAutoStartTtsCheck();
             } else {
@@ -1368,6 +1465,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
 
     void resetLargeTextExactPageIndex() {
         exactPageIndex().reset();
+        if (readerPagePositionController != null) readerPagePositionController.clearPartitionRowOrigin();
     }
 
     void invalidateLargeTextExactPageIndexBuild() {
@@ -1395,22 +1493,6 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
 
     LargeTextLinePartitionResult getCachedLargeTextPartitionForChar(int absoluteCharPosition) {
         return largeTextCaches().getPartitionForChar(absoluteCharPosition);
-    }
-
-    boolean markLargeTextPartitionPrefetchPending(int startLine) {
-        return largeTextCaches().markPartitionPrefetchPending(startLine);
-    }
-
-    boolean markLargeTextManualHandoffPartitionPrefetchPending(int startLine) {
-        return largeTextCaches().markManualHandoffPartitionPrefetchPending(startLine);
-    }
-
-    void unmarkLargeTextPartitionPrefetchPending(int startLine) {
-        largeTextCaches().unmarkPartitionPrefetchPending(startLine);
-    }
-
-    void unmarkLargeTextManualHandoffPartitionPrefetchPending(int startLine) {
-        largeTextCaches().unmarkManualHandoffPartitionPrefetchPending(startLine);
     }
 
     boolean isLargeTextExactPageIndexReady() {
@@ -1500,9 +1582,15 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     }
 
     int resolveLargeTextCharPositionForAnchor(@NonNull File file,
+                                              int fallbackPosition,
                                               String anchorBefore,
                                               String anchorAfter) throws IOException {
-        return partitionReader().resolveCharPositionForAnchor(file, anchorBefore, anchorAfter);
+        return partitionReader().resolveCharPositionForAnchor(file, fallbackPosition, anchorBefore, anchorAfter);
+    }
+
+    int resolveLargeTextCharPositionForLine(File file, int line,
+                                            java.util.function.BooleanSupplier keepReading) throws IOException {
+        return partitionReader().findCharForDisplayLine(file, line, keepReading);
     }
 
     LargeTextLinePartitionResult readLargeTextLinePartitionAtStartLine(@NonNull File file,
@@ -1532,7 +1620,25 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
 
     // --- Scroll & position ---
 
+    void onReaderManualScroll() {
+        stopAutoPageTurnForManualNavigation();
+        clearPendingToolbarSeekJump();
+        boolean pendingPartition = largeTextPartitionSwitchState.isInProgress();
+        // Do not stop the new gesture. Only retire the old read/landing and its UI.
+        cancelLargeTextPartitionSwitchForLocalJump();
+        if (pendingPartition && readerView != null
+                && readerView.hasCurrentTextLayout()) {
+            textContentReadyForPersistence = true;
+        }
+        updatePositionLabel();
+        // Also retry a boundary handoff if this drag cannot move at a buffer edge.
+        scheduleLargeTextManualScrollBoundaryHandoff();
+    }
+
     void onScrollChanged() {
+        if (readerFileApplyController != null) readerFileApplyController.finishPendingLayoutIfReady();
+        if (readerLoadedTextSnapshotController != null) readerLoadedTextSnapshotController.finishPendingRestoreIfReady();
+        if (readerLargeTextPartitionApplier != null) readerLargeTextPartitionApplier.finishPendingLayoutIfReady();
         updateReaderFileTitleMaskBounds();
         schedulePositionUpdate();
         scheduleLargeTextManualScrollBoundaryHandoff();
@@ -1547,7 +1653,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
         }, 80);
     }
 
-    private void scheduleLargeTextManualScrollBoundaryHandoff() {
+    void scheduleLargeTextManualScrollBoundaryHandoff() {
         boundaryHandoff().scheduleManualScrollBoundaryHandoff();
     }
 
@@ -1576,6 +1682,13 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
         partitionPrefetch().reloadPartitionByStartLine(startLine, displayPage, totalPages);
     }
 
+    /** Window includes canonical body plus lookahead, not just the body end. */
+    boolean loadedTextWindowReachesDocumentEnd() {
+        return !largeTextEstimateActive
+                || (long) largeTextPartitionEndLine + getLargeTextPartitionLookaheadLines()
+                        >= largeTextTotalLogicalLines;
+    }
+
     void prefetchNeighborLargeTextPartitions() {
         partitionPrefetch().prefetchNeighborPartitions();
     }
@@ -1589,7 +1702,22 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     }
 
     void clearLargeTextPartitionSwitchPending() {
+        if (readerLargeTextPartitionApplier != null) readerLargeTextPartitionApplier.cancelPendingLayout();
         largeTextState().clearPartitionSwitchPending();
+    }
+
+    void cancelLargeTextPartitionSwitchForLocalJump() {
+        largeTextPartitionNavigator().cancelForLocalJump();
+    }
+
+    void cancelLargeTextBoundaryHandoffs() {
+        boundaryHandoff().cancelPendingHandoffs();
+    }
+
+    void handoffLargeTextViewport(int displayPage, int totalPages,
+                                  int partitionStartLine, boolean useLookbehind) {
+        largeTextPartitionNavigator().handoffViewport(
+                displayPage, totalPages, partitionStartLine, useLookbehind);
     }
 
     void switchLargeTextPartitionInPlace(int charPosition,
@@ -1644,6 +1772,15 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
                                                 String anchorAfter,
                                                 boolean hideLoadingAfterApply,
                                                 int switchGeneration) {
+        applyLargeTextPartitionInPlace(partition, targetCharPosition, displayPage, totalPages,
+                anchorBefore, anchorAfter, hideLoadingAfterApply, switchGeneration, null);
+    }
+
+    void applyLargeTextPartitionInPlace(@NonNull LargeTextLinePartitionResult partition,
+                                       int targetCharPosition, int displayPage, int totalPages,
+                                       String anchorBefore, String anchorAfter,
+                                       boolean hideLoadingAfterApply, int switchGeneration,
+                                       ReaderLargeTextPartitionNavigator.ViewportHandoff viewport) {
         largeTextPartitionApplier().apply(
                 partition,
                 targetCharPosition,
@@ -1652,7 +1789,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
                 anchorBefore,
                 anchorAfter,
                 hideLoadingAfterApply,
-                switchGeneration);
+                switchGeneration, viewport);
     }
 
     void recomputeLargeTextDisplayPageOffset(int displayPage, int totalPages) {
@@ -1671,20 +1808,16 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
         return pagePositions().getDisplayedCurrentPageNumber();
     }
 
+    int getStatusCurrentPageNumber() {
+        return pagePositions().getStatusCurrentPageNumber();
+    }
+
     int getLineOffsetWithinDisplayedPage(int page, int totalPages) {
-        if (readerView == null) return 1;
+        return pagePositions().getLineOffsetWithinDisplayedPage(page, totalPages);
+    }
 
-        int total = Math.max(1, totalPages);
-        int target = Math.max(1, Math.min(total, page));
-        int currentPage = Math.max(1, Math.min(total, getDisplayedCurrentPageNumber()));
-
-        // The parenthesized value in the TXT page label is an in-page row offset,
-        // not the document-wide logical line number.  Use the rendered page
-        // anchors from CustomReaderView so large-TXT partitions cannot leak
-        // absolute lines such as 1975/2000 into the UI.  Non-current target
-        // pages in the jump dialog are shown at their page start.
-        if (target != currentPage) return 1;
-        return Math.max(1, readerView.getCurrentLineOffsetWithinPage());
+    void prepareLargeTextPartitionRowOrigin(@NonNull LargeTextLinePartitionResult partition) {
+        pagePositions().preparePartitionRowOrigin(partition);
     }
 
     int getCurrentVisibleLineNumber() {
@@ -1705,6 +1838,11 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
 
     void updatePositionLabel() {
         pagePositions().updatePositionLabel();
+        if (readerBottomControlsController != null) readerBottomControlsController.refreshPageMoveBubble();
+    }
+
+    void dismissPageMoveBubble() {
+        if (readerBottomControlsController != null) readerBottomControlsController.dismissPageMoveBubble();
     }
 
     void setPageLabels(int currentPage, int totalPages) {
@@ -1714,10 +1852,12 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     void scrollToPercent(float percent) { pagePositions().scrollToPercent(percent); }
 
     void scrollToCharPosition(int charPosition) {
+        prepareTextLayoutForNavigation();
         pagePositions().scrollToCharPosition(charPosition);
     }
 
     void scrollToSearchResultPosition(int charPosition) {
+        prepareTextLayoutForNavigation();
         pagePositions().scrollToSearchResultPosition(charPosition);
     }
 
@@ -1853,7 +1993,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     }
 
     void clearLargeTextQueuedPageDelta() {
-        largeTextPartitionSwitchState.clearQueuedDelta();
+        largeTextPartitionSwitchState.clearQueuedTarget();
     }
 
     void processQueuedLargeTextPageDeltaAfterPartitionApply() {
@@ -1878,7 +2018,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
 
     /**
      * Compact deterministic snapshot of the layout-affecting reader preferences plus
-     * the file display-rule signature. Stored with each ReaderState. On restore, a
+     * paging overlap and file display-rule signature. Stored with each ReaderState. On restore, a
      * mismatch means the cached page and scroll figures were produced under a
      * different layout or display-rule set, so they are dropped and the position is
      * recomputed from the character offset instead. Viewport and markdown changes are
@@ -1886,6 +2026,15 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
      * laid out at restore time, and the exact-page index already rebuilds on them).
      */
     String readerPageLayoutSignatureForPath(String path) {
+        if (prefs == null) return "";
+        return readerLayoutPreferencesSignature()
+                + "|pm=" + prefs.getLargeTextPartitionMode()
+                + "|cb=" + prefs.isCollapseBlankLinesEnabled()
+                + "|dr=" + textContentTransformSignatureForPath(path);
+    }
+
+    /** Render-only settings, independent of which file is being loaded. */
+    String readerLayoutPreferencesSignature() {
         if (prefs == null) return "";
         StringBuilder sb = new StringBuilder(160);
         sb.append("ff=").append(prefs.getFontFamily());
@@ -1898,9 +2047,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
         sb.append("|li=").append(prefs.getReaderTextLeftInsetPx());
         sb.append("|ri=").append(prefs.getReaderTextRightInsetPx());
         sb.append("|al=").append(prefs.getTextAlignment());
-        sb.append("|pm=").append(prefs.getLargeTextPartitionMode());
-        sb.append("|cb=").append(prefs.isCollapseBlankLinesEnabled());
-        sb.append("|dr=").append(textContentTransformSignatureForPath(path));
+        sb.append("|ol=").append(prefs.getPagingOverlapLines());
         return sb.toString();
     }
 
@@ -2148,6 +2295,13 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
 
     void trimReaderMemoryForBackground(boolean force) { readerMemory().trimReaderMemoryForBackground(force); }
 
+    com.readwide.manager.model.ReaderState captureReaderViewport() {
+        return readerMemory().captureReadingStateForRecreation();
+    }
+
+    Intent readerIntentForRecreation(Bundle saved) { return readerLifecycle().intentForRecreation(saved); }
+    void rememberReaderLoadTarget(Intent target) { readerLifecycle().rememberLoadTarget(target); }
+
     // --- Lifecycle ---
 
     @Override
@@ -2175,6 +2329,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     }
 
     @Override protected void onDestroy() {
+        resetTextContents();
         if (largeTextSearchEngine != null) largeTextSearchEngine.close();
         finishTxtSelectionActionMode(false);
         readerLifecycle().onDestroy();

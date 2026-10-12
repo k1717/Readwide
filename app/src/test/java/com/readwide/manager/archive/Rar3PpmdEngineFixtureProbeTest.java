@@ -66,6 +66,115 @@ public class Rar3PpmdEngineFixtureProbeTest {
     private static final int PNG_SIZE = 87;
     private static final int JPG_SIZE = 220;
 
+    @Test public void forwardSessionOwnsListAndPasswordCopies() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new java.util.ArrayList<>(
+                RarArchiveReader.readEntries(writeEmbeddedFixture(), null));
+        char[] password = "caller-owned".toCharArray();
+        char[] expectedPassword = password.clone();
+        File spool = temp.newFolder("owned-session-spool");
+        Rar3PpmdForwardReader reader = new Rar3PpmdForwardReader(
+                entries, password, spool, RarVolumeChain.index(entries));
+        java.lang.reflect.Field passwordField = Rar3PpmdForwardReader.class.getDeclaredField("password");
+        passwordField.setAccessible(true);
+        char[] ownedPassword = (char[]) passwordField.get(reader);
+        try (Rar3PpmdForwardReader ignored = reader) {
+            org.junit.Assert.assertNotSame(password, ownedPassword);
+            entries.clear();
+            java.util.Arrays.fill(password, 'x');
+            assertArrayEquals(expectedPassword, ownedPassword);
+            assertEquals("testfile.png", reader.nextEntry().path);
+            assertForwardEntry(reader, PNG_SIZE, PNG_CRC);
+            assertEquals("testfile.jpg", reader.nextEntry().path);
+            assertForwardEntry(reader, JPG_SIZE, JPG_CRC);
+            assertNull(reader.nextEntry());
+        }
+        assertArrayEquals(new char[expectedPassword.length], ownedPassword);
+        for (char value : password) assertEquals('x', value);
+        assertEquals(0, spool.list().length);
+        reader.close(); // Repeated close must not revive or re-own the session.
+        org.junit.Assert.assertThrows(IOException.class, () -> reader.nextEntry());
+    }
+
+    @Test public void forwardSessionAdvancesAfterPartialReadWithoutResettingSolidHistory() throws Exception {
+        File spool = temp.newFolder("partial-advance-spool");
+        try (ArchiveSupport.ForwardArchiveReader reader =
+                     Rar3PpmdSolidArchiveExtractor.openForwardReader(writeEmbeddedFixture(), spool, false)) {
+            assertTrue(reader instanceof Rar3PpmdForwardReader);
+            assertEquals("testfile.png", reader.nextEntry().path);
+            assertEquals(0, reader.read(new byte[0]));
+            assertEquals(0, spool.list().length);
+            assertEquals(1, reader.read(new byte[1]));
+            assertEquals(1, spool.list().length);
+            assertEquals("testfile.jpg", reader.nextEntry().path);
+            assertEquals(0, spool.list().length);
+            assertForwardEntry(reader, JPG_SIZE, JPG_CRC);
+            assertNull(reader.nextEntry());
+            assertNull(reader.nextEntry());
+            assertEquals(-1, reader.read(new byte[1]));
+        }
+        assertEquals(0, spool.list().length);
+    }
+
+    @Test public void independentPpmdPrimerCanUseSharedAesSplitLzPpmdEntryPoint() throws Exception {
+        char[] password = "test-secret".toCharArray();
+        List<RarArchiveReader.RarEntry> entries = transformedEntries(true, true, password);
+        File out = temp.newFile();
+        assertTrue(Rar3IndependentPayloadExtractor.tryExtract(entries.get(0), entries, out, password, null));
+        CRC32 crc = new CRC32(); crc.update(Files.readAllBytes(out.toPath()));
+        assertEquals(PNG_CRC, crc.getValue());
+        assertEquals(PNG_SIZE, out.length());
+    }
+
+    @Test public void bulkCanMixPlainPpmdClassicLzStoredAndIndependentAesSplitEntries() throws Exception {
+        char[] password = "test-secret".toCharArray();
+        List<RarArchiveReader.RarEntry> entries = new java.util.ArrayList<>();
+        entries.add(transformedEntries(false, false, null).get(0)); // Independent real PPMd primer.
+        byte[] lz = Rar3FirstPartyArchiveExtractorTest.independentLzFixture();
+        File lzSource = temp.newFile(); Files.write(lzSource.toPath(), lz);
+        RarArchiveReader.RarEntry lzEntry = new RarArchiveReader.RarEntry("plain-lz.bin", false,
+                2, lz.length, 0, 4, 0x33, false, false, false, null,
+                packedPartCrc(new byte[]{'A','B'}, 0, 2), 0);
+        lzEntry.sourceArchive = lzSource; entries.add(lzEntry);
+        File storedSource = temp.newFile(); Files.write(storedSource.toPath(), new byte[]{42});
+        RarArchiveReader.RarEntry stored = new RarArchiveReader.RarEntry("note.bin", false,
+                1, 1, 0, 4, 0x30, false, false, false, null, packedPartCrc(new byte[]{42}, 0, 1), 0);
+        stored.sourceArchive = storedSource; entries.add(stored);
+        List<RarArchiveReader.RarEntry> encrypted = transformedEntries(true, true, password);
+        for (int i = 0; i < 2; i++) {
+            RarArchiveReader.RarEntry part = encrypted.get(i);
+            RarArchiveReader.RarEntry renamed = new RarArchiveReader.RarEntry("secret.png", false,
+                    part.unpackedSize, part.packedSize, part.dataOffset, 4, part.method, false,
+                    part.splitBefore, part.splitAfter, part.encryption, part.dataCrc, 0);
+            renamed.sourceArchive = part.sourceArchive; entries.add(renamed);
+        }
+        File directory = temp.newFolder();
+        assertTrue(Rar3Or4SpecialCaseExtractor.tryExtractArchiveWithSpecialCases(
+                entries, directory, password, null, null));
+        for (String name : new String[]{"testfile.png", "secret.png"}) {
+            byte[] bytes = Files.readAllBytes(new File(directory, name).toPath());
+            assertEquals(PNG_SIZE, bytes.length);
+            assertEquals(PNG_CRC, packedPartCrc(bytes, 0, bytes.length));
+        }
+        org.junit.Assert.assertArrayEquals(new byte[]{'A','B'}, Files.readAllBytes(new File(directory, "plain-lz.bin").toPath()));
+        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(new File(directory, "note.bin").toPath()));
+    }
+
+    @Test public void ppmdBulkDirectoryCollisionFailsBeforePublishingImages() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new java.util.ArrayList<>();
+        entries.add(new RarArchiveReader.RarEntry("occupied", true, 0, 0, 0,
+                4, 0x30, false, false, false, null, 0, 0));
+        entries.addAll(RarArchiveReader.readEntries(writeEmbeddedFixture(), null));
+        File target = temp.newFolder();
+        File occupied = new File(target, "occupied");
+        Files.write(occupied.toPath(), new byte[]{42});
+        IOException failure = org.junit.Assert.assertThrows(IOException.class,
+                () -> Rar3PpmdSolidArchiveExtractor.tryExtractArchivePpmdSolid(
+                        entries, target, null, null, null));
+        assertEquals("Cannot create output directory", failure.getMessage());
+        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(occupied.toPath()));
+        assertTrue(!new File(target, "testfile.png").exists());
+    }
+
     @Test public void encryptedSplitPpmdKeepsCipherAndSolidModelAcrossVolumes() throws Exception {
         for (boolean encrypted : new boolean[]{false,true}) {
             char[] password = encrypted ? "test-secret".toCharArray() : null;
@@ -75,6 +184,7 @@ public class Rar3PpmdEngineFixtureProbeTest {
                     entries,password,spool,true)) {
                 assertTrue(reader != null);
                 if (password != null) java.util.Arrays.fill(password, 'x'); // Adapter owns a copy.
+                entries.clear(); // Reader retains entry order and split-chain membership.
                 assertEquals("testfile.png", reader.nextEntry().path);
                 assertTrue(reader.drainCurrentEntry(Long.MAX_VALUE)); // verified split primer, no spool
                 assertEquals(0,spool.list().length);
@@ -86,12 +196,36 @@ public class Rar3PpmdEngineFixtureProbeTest {
         }
     }
 
+    @Test public void ppmdBulkAndForwardRejectOrphanBeforePayloadWork() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = transformedEntries(false, true, null);
+        entries.add(new RarArchiveReader.RarEntry("orphan.bin", false, 1, 1, 0,
+                4, 0x30, false, true, false, null, 0, 0));
+        File target = new File(temp.getRoot(), "not-created");
+        IOException bulk = org.junit.Assert.assertThrows(IOException.class,
+                () -> Rar3PpmdSolidArchiveExtractor.tryExtractArchivePpmdSolid(
+                        entries, target, null, null, null));
+        assertTrue(bulk.getMessage().contains("split head"));
+        IOException forward = org.junit.Assert.assertThrows(IOException.class, () -> {
+            try (ArchiveSupport.ForwardArchiveReader ignored =
+                         Rar3PpmdSolidArchiveExtractor.openForwardReader(entries, null, target, false)) { }
+        });
+        assertTrue(forward.getMessage().contains("split head"));
+        assertTrue(!target.exists());
+    }
+
     @Test public void encryptedPpmdSingleTargetPrimesAndChecksEarlierSplitMember() throws Exception {
         char[] password = "test-secret".toCharArray();
         List<RarArchiveReader.RarEntry> entries = transformedEntries(true,true,password);
+        RarArchiveReader.RarEntry target = entries.get(2);
+        entries = new java.util.LinkedList<>(entries);
+        entries.add(0, new RarArchiveReader.RarEntry("unrelated-orphan", false, 1, 1, 0,
+                4, 0x30, false, true, false, null, 0, 0));
+        entries.add(1, null);
+        entries.add(new RarArchiveReader.RarEntry("later-missing", false, 1, 1, 0,
+                4, 0x33, false, false, true, null, 0, 0));
         File out = temp.newFile();
         assertTrue(Rar3PpmdSolidArchiveExtractor.tryExtractSolidPpmdEntry(
-                entries.get(2),entries,out,password,null));
+                target,entries,out,password,null));
         CRC32 crc = new CRC32(); crc.update(Files.readAllBytes(out.toPath()));
         assertEquals(JPG_CRC,crc.getValue());
         assertEquals(JPG_SIZE,out.length());
@@ -110,7 +244,7 @@ public class Rar3PpmdEngineFixtureProbeTest {
         } catch (IOException expected) { }
         assertEquals(0,spool.list().length);
         entries.remove(1);
-        try { Rar3PpmdPayload.open(entries.get(0),entries,"test-secret".toCharArray(),null); fail(); }
+        try { Rar3PackedPayload.open(entries.get(0),entries,"test-secret".toCharArray(),null); fail(); }
         catch (IOException expected) { }
     }
 
@@ -122,7 +256,7 @@ public class Rar3PpmdEngineFixtureProbeTest {
                 first.unpackedSize,first.packedSize,first.dataOffset,4,first.method,first.solid,
                 false,true,first.encryption,first.dataCrc ^ 1,first.timeMillis);
         bad.sourceArchive = first.sourceArchive; entries.set(0,bad);
-        try (Rar3PpmdPayload payload = Rar3PpmdPayload.open(bad,entries,password,null)) {
+        try (Rar3PackedPayload payload = Rar3PackedPayload.open(bad,entries,password,null)) {
             try {
                 while (payload.input.read(new byte[64]) != -1) { }
                 fail("Encrypted PPMd must not skip intermediate packed CRC");
@@ -351,6 +485,27 @@ public class Rar3PpmdEngineFixtureProbeTest {
     }
 
     @Test
+    public void uncheckedStreamingFailureInvalidatesContinuation() throws Exception {
+        byte[] cbr=hexToBytes(FIXTURE_CBR_HEX);
+        for(boolean error:new boolean[]{false,true}) {
+            Rar3PpmdSolidStreamDecoder decoder=new Rar3PpmdSolidStreamDecoder();
+            Throwable sentinel=error?new AssertionError("sink"):new IllegalStateException("sink");
+            org.junit.Assert.assertSame(sentinel,org.junit.Assert.assertThrows(Throwable.class,()->
+                    decoder.decodeEntry(new java.io.ByteArrayInputStream(cbr,0x40,0x54),PNG_SIZE,
+                            new java.io.OutputStream() {
+                                @Override public void write(int value) {
+                                    if(sentinel instanceof Error)throw (Error)sentinel;
+                                    throw (RuntimeException)sentinel;
+                                }
+                            })));
+            IOException next=org.junit.Assert.assertThrows(IOException.class,()->
+                    decoder.decodeEntry(new java.io.ByteArrayInputStream(cbr,0xc0,0xb6),JPG_SIZE,
+                            new java.io.ByteArrayOutputStream()));
+            assertTrue(next.getMessage().contains("continuation"));
+        }
+    }
+
+    @Test
     public void engineDecodesBothSolidPpmdEntriesWithCrcMatch() throws Exception {
         File fixture = writeEmbeddedFixture();
         List<Rar3PpmdEngineFixtureProbe.Row> rows = Rar3PpmdEngineFixtureProbe.probe(fixture);
@@ -500,7 +655,7 @@ public class Rar3PpmdEngineFixtureProbeTest {
     }
 
     private File writeEmbeddedFixture() throws IOException {
-        File fixture = temp.newFile("testfile_rar3_solid.cbr");
+        File fixture = new File(temp.newFolder(), "testfile_rar3_solid.cbr");
         try (FileOutputStream out = new FileOutputStream(fixture)) {
             out.write(hexToBytes(FIXTURE_CBR_HEX));
         }

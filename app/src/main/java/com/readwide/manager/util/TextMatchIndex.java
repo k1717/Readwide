@@ -56,13 +56,15 @@ public final class TextMatchIndex {
     public Hit nearest(int from, boolean forward, BooleanSupplier cancelled) {
         check(cancelled);
         if (count == 0) return new Hit(-1, 0);
-        if (overflowScan == null) {
-            int rank = offsets.rank(forward ? (long) from : from + 1L);
+        int rank = offsets.rankIfKnown(forward ? (long) from : from + 1L);
+        if (rank >= 0) {
             int ordinal = forward ? (rank == count ? 1 : rank + 1) : (rank == 0 ? count : rank);
-            return new Hit(offsets.occurrence(ordinal), ordinal);
+            int cached = offsets.occurrence(ordinal);
+            if (cached >= 0) return new Hit(cached, ordinal);
         }
         // If neither a complete sparse index nor the compact ranked bitmap fits,
-        // keep full result coverage through the prepared worker scan.
+        // reuse retained starts above; scan only when the answer is not cached.
+        // Keep whole-input regex context and exact ordinals in that fallback.
         int[] first = {-1}, last = {-1}, selected = {-1}, selectedOrdinal = {0}, ordinal = {0};
         scan(cancelled, (start, end) -> {
             ++ordinal[0];

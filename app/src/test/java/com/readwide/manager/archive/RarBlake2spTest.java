@@ -4,6 +4,23 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class RarBlake2spTest {
+    @Test public void snapshotsDoNotConsumeOrShareLeafState() {
+        byte[] data = sequence(1025);
+        RarBlake2sp streaming = new RarBlake2sp();
+        int previous = 0;
+        for (int length : new int[]{0,1,63,64,65,255,511,512,513,1024,1025}) {
+            streaming.update(data, previous, length - previous); previous = length;
+            RarBlake2sp oracle = new RarBlake2sp(); oracle.update(data, 0, length);
+            byte[] expected = oracle.digest();
+            assertArrayEquals(expected, streaming.snapshotDigest());
+            byte[] first = streaming.snapshotDigest(); first[0] ^= 1;
+            assertArrayEquals(expected, streaming.snapshotDigest());
+        }
+        RarBlake2sp complete = new RarBlake2sp(); complete.update(data, 0, data.length);
+        assertArrayEquals(complete.digest(), streaming.digest());
+        assertThrows(IllegalStateException.class, streaming::snapshotDigest);
+    }
+
     // Official unkeyed sequential-byte KATs (CC0 BLAKE2 reference package):
     // https://github.com/BLAKE2/BLAKE2/blob/master/testvectors/blake2-kat.json
     @Test public void officialKnownAnswersAtBlockBoundaries() {

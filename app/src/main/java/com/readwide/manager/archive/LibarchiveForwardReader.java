@@ -28,6 +28,7 @@ final class LibarchiveForwardReader implements ArchiveSupport.ForwardArchiveRead
     private final LibarchiveNativeBridge.ForwardStream stream;
     @Nullable
     private final Closeable owner;
+    private boolean streamClosed, ownerClosed;
 
     LibarchiveForwardReader(@NonNull LibarchiveNativeBridge.ForwardStream stream) {
         this(stream, null);
@@ -73,10 +74,20 @@ final class LibarchiveForwardReader implements ArchiveSupport.ForwardArchiveRead
 
     @Override
     public void close() throws IOException {
-        try {
-            stream.close();
-        } finally {
-            if (owner != null) owner.close();
+        Throwable failure = null;
+        if (!streamClosed) {
+            try { stream.close(); streamClosed = true; }
+            catch (IOException | RuntimeException | Error error) { failure = error; }
         }
+        if (!ownerClosed) {
+            try { if (owner != null) owner.close(); ownerClosed = true; }
+            catch (IOException | RuntimeException | Error error) {
+                if (failure == null) failure = error;
+                else if (failure != error) failure.addSuppressed(error);
+            }
+        }
+        if (failure instanceof IOException) throw (IOException) failure;
+        if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+        if (failure instanceof Error) throw (Error) failure;
     }
 }

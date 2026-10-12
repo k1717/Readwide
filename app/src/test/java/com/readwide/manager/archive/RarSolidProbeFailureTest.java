@@ -1,18 +1,46 @@
 package com.readwide.manager.archive;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
 public class RarSolidProbeFailureTest {
     @Test
+    public void currentPpmdDiagnosticDescribesTheHelperNotAMissingModel() {
+        String message = Rar3FirstPartyGap.ppmdBlock(false).getMessage();
+        assertTrue(message.contains("LZ table reader"));
+        assertTrue(message.contains("separate model reader"));
+        assertFalse(message.contains("not implemented"));
+        RarSolidProbeFailure failure = RarSolidProbeFailure.classifyMessage(message, true);
+        assertEquals(RarSolidProbeFailure.NextStep.CHECK_PPMD_ROUTE, failure.nextStep);
+    }
+
+    @Test
+    public void currentPpmdFilterDiagnosticNamesTheLiveArchiveFilterRoute() {
+        String message = Rar3FirstPartyGap.ppmdVmFilter(42).getMessage();
+        assertTrue(message.contains("Rar3PpmdFilterOutput"));
+        assertFalse(message.contains("not implemented"));
+        RarSolidProbeFailure failure = RarSolidProbeFailure.classifyMessage(message, true);
+        assertEquals(RarSolidProbeFailure.NextStep.CHECK_VM_FILTER_ROUTE, failure.nextStep);
+    }
+
+    @Test
+    public void missingVmStateDoesNotClaimAllFiltersAreAbsent() {
+        String message = Rar3FirstPartyGap.vmFilter(42).getMessage();
+        assertTrue(message.contains("execution state"));
+        RarSolidProbeFailure failure = RarSolidProbeFailure.classifyMessage(message, true);
+        assertEquals(RarSolidProbeFailure.NextStep.SUPPLY_VM_EXECUTION_STATE, failure.nextStep);
+    }
+
+    @Test
     public void classifiesPpmdModelGap() {
         RarSolidProbeFailure failure = RarSolidProbeFailure.classifyMessage(
                 "RAR3/RAR4 PPMd statistical model decoding is not implemented", true);
 
         assertEquals(RarSolidProbeFailure.Cause.PPMD_MODEL_GAP, failure.cause);
-        assertEquals(RarSolidProbeFailure.NextStep.IMPLEMENT_PPMD_MODEL, failure.nextStep);
+        assertEquals(RarSolidProbeFailure.NextStep.CHECK_PPMD_ROUTE, failure.nextStep);
     }
 
     @Test
@@ -21,7 +49,7 @@ public class RarSolidProbeFailureTest {
                 "RAR VM execution-state register state is missing", true);
 
         assertEquals(RarSolidProbeFailure.Cause.VM_EXECUTION_STATE_GAP, failure.cause);
-        assertEquals(RarSolidProbeFailure.NextStep.IMPLEMENT_VM_STATE_DECODING, failure.nextStep);
+        assertEquals(RarSolidProbeFailure.NextStep.SUPPLY_VM_EXECUTION_STATE, failure.nextStep);
     }
 
     @Test

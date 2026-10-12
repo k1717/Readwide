@@ -8,16 +8,17 @@ import com.readwide.manager.util.FileOperationProgress;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 
 /**
  * Routes the small first-party RAR3/RAR4 special cases that sit between the generic stored
  * reader and the libarchive primary backend.
  *
- * <p>The full RAR3/RAR4 compressed unpacker is intentionally not hidden here. This class only
- * owns the cases that can be safely rewritten into an ordinary temporary RAR4 and then handed
- * back to libarchive, plus the archive-wide loop that applies those cases without growing
- * {@link RarArchiveReader} again.</p>
+ * <p>This class owns scoped rewrites into a temporary RAR4 for libarchive and the archive-wide
+ * loop that falls back to independent first-party LZ/PPMd decoding when eligible. Compression
+ * and AES/split stream handling stay in their dedicated decoders and payload helpers.</p>
  */
 final class Rar3Or4SpecialCaseExtractor {
     private Rar3Or4SpecialCaseExtractor() {}
@@ -28,6 +29,7 @@ final class Rar3Or4SpecialCaseExtractor {
                                                       @Nullable char[] password,
                                                       @Nullable FileOperationProgress progress,
                                                       @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
+        checkpoint(progress);
         if (!RarLibarchiveFallback.isAvailable()) return false;
         if (password == null || password.length == 0) return false;
         if (!RarFeatureClassifier.hasRar3Or4EncryptedRewriteCandidate(entries)) return false;
@@ -36,11 +38,12 @@ final class Rar3Or4SpecialCaseExtractor {
             decrypted = Rar4EncryptedPayloadRewriter.buildDecryptedCopy(archive, password, progress);
             boolean extracted = RarLibarchiveFallback.extractArchiveIntoDirectory(
                     decrypted, targetDir, null, progress, entryProgress);
-            if (extracted) verifyExtractedArchiveCrc(entries, targetDir);
+            if (extracted) verifyExtractedArchiveCrc(entries, targetDir, progress);
             return extracted;
         } catch (ArchiveSupport.PasswordRequiredException e) {
             throw e;
         } catch (IOException | SecurityException e) {
+            rethrowCancellation(e, progress);
             return false;
         } finally {
             deleteQuietly(decrypted);
@@ -51,6 +54,7 @@ final class Rar3Or4SpecialCaseExtractor {
                                                     @NonNull File outFile,
                                                     @Nullable char[] password,
                                                     @Nullable FileOperationProgress progress) throws IOException {
+        checkpoint(progress);
         if (!RarLibarchiveFallback.isAvailable()) return false;
         if (password == null || password.length == 0) return false;
         if (!RarFeatureClassifier.isRar3Or4EncryptedRewriteCandidate(entry)) return false;
@@ -61,13 +65,14 @@ final class Rar3Or4SpecialCaseExtractor {
             boolean extracted = RarLibarchiveFallback.extractSingleEntry(
                     decrypted, entry.path, outFile, null, progress);
             if (extracted) {
-                RarStoredPayloadIO.verifyCrc(entry, outFile);
+                RarStoredPayloadIO.verifyCrc(entry, outFile, null, progress);
                 guard.commit();
             }
             return extracted;
         } catch (ArchiveSupport.PasswordRequiredException e) {
             throw e;
         } catch (IOException | SecurityException e) {
+            rethrowCancellation(e, progress);
             return false;
         } finally {
             deleteQuietly(decrypted);
@@ -79,46 +84,31 @@ final class Rar3Or4SpecialCaseExtractor {
                                                      @Nullable char[] password,
                                                      @Nullable FileOperationProgress progress,
                                                      @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
-        if (!isArchiveWideNonSolidSpecialCaseAllowed(entries, password)) return false;
+        checkpoint(progress);
+        ArchivePlan plan = prepareArchivePlan(entries, password, Rar3PpmdBlockProbe::probe);
+        if (plan == null) return false;
         List<OutputMark> writtenOutputs = new ArrayList<>();
         boolean success = false;
         try {
             boolean sawEntry = false;
-            for (RarArchiveReader.RarEntry entry : entries) {
-                if (entry == null || entry.splitBefore) continue;
-                if (progress != null && !progress.checkpoint()) return false;
+            for (PreparedEntry step : plan.steps) {
+                RarArchiveReader.RarEntry entry = step.entry;
+                checkpoint(progress);
                 if (entryProgress != null) {
-                    if (entry.directory || entry.path.endsWith("/")) entryProgress.onDirectory(entry.path);
+                    if (entry.directory) entryProgress.onDirectory(entry.path);
                     else entryProgress.onFile(entry.path);
                 } else if (progress != null) {
                     progress.setDetail(entry.path);
                 }
                 File out = RarArchiveReader.resolveOutput(targetDir, entry.path);
-                if (out == null) return false;
+                if (out == null) throw new IOException("Invalid RAR output path");
                 sawEntry = true;
-                if (entry.directory || entry.path.endsWith("/")) {
-                    if (!out.exists() && !out.mkdirs()) return false;
+                if (entry.directory) {
+                    RarOutputFileGuard.ensureDirectory(out);
                     continue;
                 }
                 boolean existedBefore = out.exists();
-                if (tryExtractEntryWithDecryptedCopy(entry, out, password, progress)) {
-                    writtenOutputs.add(new OutputMark(out, existedBefore));
-                    continue;
-                }
-                if (tryExtractSplitEntryWithDecryptedCopy(entry, entries, out, password, progress)) {
-                    writtenOutputs.add(new OutputMark(out, existedBefore));
-                    continue;
-                }
-                if (tryExtractSplitEntryWithRewrittenCopy(entry, entries, out, progress)) {
-                    writtenOutputs.add(new OutputMark(out, existedBefore));
-                    continue;
-                }
-                if (Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(entry, entries, out, progress)) {
-                    writtenOutputs.add(new OutputMark(out, existedBefore));
-                    continue;
-                }
-                if (RarFeatureClassifier.isUnsupportedRar3Or4Payload(entry)) return false;
-                RarArchiveReader.extractStoredEntry(entry, out, password, entries, progress);
+                if (!step.extract(out, password, progress)) return false;
                 writtenOutputs.add(new OutputMark(out, existedBefore));
             }
             success = sawEntry;
@@ -130,52 +120,118 @@ final class Rar3Or4SpecialCaseExtractor {
 
     static boolean isArchiveWideNonSolidSpecialCaseAllowed(@NonNull List<RarArchiveReader.RarEntry> entries,
                                                            @Nullable char[] password) throws IOException {
+        return prepareArchivePlan(entries, password, Rar3PpmdBlockProbe::probe) != null;
+    }
+
+    enum Route { DIRECTORY, STORED, PLAIN_COMPRESSED, AES, SPLIT, AES_SPLIT }
+
+    static final class ArchivePlan {
+        final List<PreparedEntry> steps;
+        ArchivePlan(List<PreparedEntry> steps) { this.steps = Collections.unmodifiableList(steps); }
+    }
+
+    static final class PreparedEntry {
+        final RarArchiveReader.RarEntry entry;
+        final Route route;
+        final List<RarArchiveReader.RarEntry> chain;
+        final Rar3DecodePlan plainPlan;
+
+        PreparedEntry(RarArchiveReader.RarEntry entry, Route route,
+                List<RarArchiveReader.RarEntry> chain, Rar3DecodePlan plainPlan) {
+            this.entry = entry; this.route = route;
+            this.chain = Collections.unmodifiableList(chain); this.plainPlan = plainPlan;
+        }
+
+        boolean extract(File out, char[] password, FileOperationProgress progress) throws IOException {
+            switch (route) {
+                case STORED:
+                    RarArchiveReader.extractStoredEntry(entry, out, password, chain, progress);
+                    return true;
+                case PLAIN_COMPRESSED:
+                    // Reuse the one-entry plan: no second probe or archive-wide target scan.
+                    new Rar3FirstPartyArchiveExtractor.PlannedDecoder(plainPlan).extractNext(out, progress);
+                    return true;
+                case AES:
+                    if (tryExtractEntryWithDecryptedCopy(entry, out, password, progress)) return true;
+                    break;
+                case SPLIT:
+                    if (tryExtractSplitEntryWithRewrittenCopy(entry, chain, out, progress)) return true;
+                    break;
+                case AES_SPLIT:
+                    if (tryExtractSplitEntryWithDecryptedCopy(entry, chain, out, password, progress)) return true;
+                    break;
+                default:
+                    throw new IOException("RAR directory step cannot be decoded as a file");
+            }
+            checkpoint(progress);
+            return Rar3IndependentPayloadExtractor.tryExtract(entry, chain, out, password, progress);
+        }
+    }
+
+    /** Preflight all routes before writing. Solid compressed history belongs to other planners. */
+    static ArchivePlan prepareArchivePlan(List<RarArchiveReader.RarEntry> source, char[] password,
+            Rar3DecodePlan.StartProbe probe) throws IOException {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        IdentityHashMap<RarArchiveReader.RarEntry, RarArchiveReader.RarEntry> snapshots = new IdentityHashMap<>();
+        for (RarArchiveReader.RarEntry entry : source) {
+            checkpoint(null);
+            // Keep identity through copying so the index can detect a reused part.
+            if (entry != null) entries.add(snapshots.computeIfAbsent(entry, Rar3DecodePlan::snapshot));
+        }
+        RarVolumeChain.Index chains = RarVolumeChain.index(entries);
+        List<PreparedEntry> steps = new ArrayList<>();
         boolean sawPayload = false;
         for (RarArchiveReader.RarEntry entry : entries) {
-            if (entry == null || entry.directory) continue;
-            if (entry.rarVersion >= 5) return false;
-            if (entry.splitBefore) continue;
-            if (entry.solid && !RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) return false;
-
-            if (RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) {
-                if (entry.encrypted()) {
-                    if (password == null || password.length == 0) return false;
-                    if (!RarFeatureClassifier.isFirstPartyRar3Or4EncryptedStoredEntry(entry)) return false;
-                }
-                sawPayload = true;
+            checkpoint(null);
+            if (entry.directory) {
+                steps.add(new PreparedEntry(entry, Route.DIRECTORY, Collections.singletonList(entry), null));
                 continue;
             }
-
-            if (entry.encrypted()) {
-                if (password == null || password.length == 0) return false;
-                if (entry.splitAfter) {
-                    List<RarArchiveReader.RarEntry> chain = RarVolumeChain.build(entry, entries);
-                    if (!RarFeatureClassifier.isRar3Or4EncryptedCompressedSplitRewriteCandidate(chain)) return false;
-                    sawPayload = true;
-                    continue;
-                }
-                if (RarFeatureClassifier.isRar3Or4EncryptedRewriteCandidate(entry)) {
-                    sawPayload = true;
-                    continue;
-                }
-                return false;
+            if (entry.rarVersion >= 5) return null;
+            if (entry.splitBefore) continue; // Membership was checked before preparing any route.
+            boolean stored = RarFeatureClassifier.isRar3Or4StoredMethod(entry.method);
+            if (entry.solid && !stored) return null;
+            if (entry.encrypted() && (password == null || password.length == 0)) return null;
+            List<RarArchiveReader.RarEntry> chain = chains.chain(entry);
+            Route route;
+            Rar3DecodePlan plainPlan = null;
+            if (stored) {
+                if (entry.encrypted() && !RarFeatureClassifier.isFirstPartyRar3Or4EncryptedStoredEntry(entry)) return null;
+                route = Route.STORED;
+            } else if (entry.encrypted() && entry.splitAfter) {
+                if (!RarFeatureClassifier.isRar3Or4EncryptedCompressedSplitRewriteCandidate(chain)) return null;
+                route = Route.AES_SPLIT;
+            } else if (entry.encrypted()) {
+                if (!RarFeatureClassifier.isRar3Or4EncryptedRewriteCandidate(entry)) return null;
+                route = Route.AES;
+            } else if (entry.splitAfter) {
+                if (!RarFeatureClassifier.isRar3Or4CompressedSplitRewriteCandidate(chain)) return null;
+                route = Route.SPLIT;
+            } else {
+                plainPlan = Rar3DecodePlan.compile(Collections.singletonList(entry), probe);
+                if (plainPlan == null) return null;
+                route = Route.PLAIN_COMPRESSED;
             }
-
-            if (entry.splitAfter) {
-                List<RarArchiveReader.RarEntry> chain = RarVolumeChain.build(entry, entries);
-                if (!RarFeatureClassifier.isRar3Or4CompressedSplitRewriteCandidate(chain)) return false;
-                sawPayload = true;
-                continue;
-            }
-
-            if (Rar3FirstPartyArchiveExtractor.isLimitedNonSolidClassicLzFallbackCandidate(entry)) {
-                sawPayload = true;
-                continue;
-            }
-
-            return false;
+            steps.add(new PreparedEntry(entry, route, chain, plainPlan));
+            sawPayload = true;
         }
-        return sawPayload;
+        return sawPayload ? new ArchivePlan(steps) : null;
+    }
+
+    private static void checkpoint(FileOperationProgress progress) throws IOException {
+        if (Thread.currentThread().isInterrupted() || (progress != null && !progress.checkpoint())) {
+            throw new java.io.InterruptedIOException("RAR extraction cancelled");
+        }
+    }
+
+    /** A cancelled rewrite is terminal, not an invitation to start another backend. */
+    private static void rethrowCancellation(Exception failure, FileOperationProgress progress) throws IOException {
+        if (failure instanceof java.io.InterruptedIOException) throw (IOException) failure;
+        if (Thread.currentThread().isInterrupted() || (progress != null && progress.isCancelled())) {
+            java.io.InterruptedIOException cancelled = new java.io.InterruptedIOException("RAR extraction cancelled");
+            cancelled.initCause(failure);
+            throw cancelled;
+        }
     }
 
     static boolean tryExtractSplitEntryWithDecryptedCopy(@NonNull RarArchiveReader.RarEntry entry,
@@ -183,6 +239,7 @@ final class Rar3Or4SpecialCaseExtractor {
                                                          @NonNull File outFile,
                                                          @Nullable char[] password,
                                                          @Nullable FileOperationProgress progress) throws IOException {
+        checkpoint(progress);
         if (!RarLibarchiveFallback.isAvailable()) return false;
         if (password == null || password.length == 0) return false;
         if (!RarFeatureClassifier.isRar3Or4EncryptedCompressedSplitRewriteCandidate(entry)) return false;
@@ -195,6 +252,7 @@ final class Rar3Or4SpecialCaseExtractor {
                     entry.sourceArchive,
                     entry.dataOffset,
                     RarVolumeChain.payloadSegments(chain),
+                    RarVolumeChain.last(chain).dataCrc,
                     password,
                     progress);
             boolean extracted = RarLibarchiveFallback.extractSingleEntry(
@@ -204,13 +262,14 @@ final class Rar3Or4SpecialCaseExtractor {
                     null,
                     progress);
             if (extracted) {
-                RarStoredPayloadIO.verifyCrc(RarVolumeChain.last(chain), outFile);
+                RarStoredPayloadIO.verifyCrc(RarVolumeChain.last(chain), outFile, null, progress);
                 guard.commit();
             }
             return extracted;
         } catch (ArchiveSupport.PasswordRequiredException e) {
             throw e;
         } catch (IOException | SecurityException e) {
+            rethrowCancellation(e, progress);
             return false;
         } finally {
             deleteQuietly(decrypted);
@@ -221,6 +280,7 @@ final class Rar3Or4SpecialCaseExtractor {
                                                          @NonNull List<RarArchiveReader.RarEntry> entries,
                                                          @NonNull File outFile,
                                                          @Nullable FileOperationProgress progress) throws IOException {
+        checkpoint(progress);
         if (!RarLibarchiveFallback.isAvailable()) return false;
         if (!RarFeatureClassifier.isRar3Or4CompressedSplitRewriteCandidate(entry)) return false;
         List<RarArchiveReader.RarEntry> chain = RarVolumeChain.build(entry, entries);
@@ -232,6 +292,7 @@ final class Rar3Or4SpecialCaseExtractor {
                     entry.sourceArchive,
                     entry.dataOffset,
                     RarVolumeChain.payloadSegments(chain),
+                    RarVolumeChain.last(chain).dataCrc,
                     progress);
             boolean extracted = RarLibarchiveFallback.extractSingleEntry(
                     rewritten,
@@ -240,13 +301,14 @@ final class Rar3Or4SpecialCaseExtractor {
                     null,
                     progress);
             if (extracted) {
-                RarStoredPayloadIO.verifyCrc(RarVolumeChain.last(chain), outFile);
+                RarStoredPayloadIO.verifyCrc(RarVolumeChain.last(chain), outFile, null, progress);
                 guard.commit();
             }
             return extracted;
         } catch (ArchiveSupport.PasswordRequiredException e) {
             throw e;
         } catch (IOException | SecurityException e) {
+            rethrowCancellation(e, progress);
             return false;
         } finally {
             deleteQuietly(rewritten);
@@ -276,12 +338,13 @@ final class Rar3Or4SpecialCaseExtractor {
     }
 
     private static void verifyExtractedArchiveCrc(@NonNull List<RarArchiveReader.RarEntry> entries,
-                                                  @NonNull File targetDir) throws IOException {
+                                                  @NonNull File targetDir,
+                                                  @Nullable FileOperationProgress progress) throws IOException {
         for (RarArchiveReader.RarEntry entry : entries) {
             if (entry == null || entry.directory || entry.splitBefore || entry.dataCrc < 0) continue;
             File out = RarArchiveReader.resolveOutput(targetDir, entry.path);
             if (out == null || !out.isFile()) continue;
-            RarStoredPayloadIO.verifyCrc(entry, out);
+            RarStoredPayloadIO.verifyCrc(entry, out, null, progress);
         }
     }
 

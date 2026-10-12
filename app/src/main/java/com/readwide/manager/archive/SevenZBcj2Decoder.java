@@ -85,6 +85,7 @@ final class SevenZBcj2Decoder {
         private int previous;
         private boolean initialized;
         private boolean closed;
+        private IOException failure;
 
         DecoderStream(InputStream main, InputStream call, InputStream jump, InputStream rc,
                       long size) throws IOException {
@@ -95,10 +96,25 @@ final class SevenZBcj2Decoder {
         }
 
         @Override public int read() throws IOException {
+            checkOpen();
+            try { return readByte(); }
+            catch (IOException error) { failure = error; throw error; }
+        }
+
+        private void checkOpen() throws IOException {
             if (closed) throw new IOException("BCJ2 stream closed");
+            if (failure != null) throw failure;
+            if (Thread.currentThread().isInterrupted()) {
+                failure = new java.io.InterruptedIOException("BCJ2 decoding cancelled");
+                throw failure;
+            }
+        }
+
+        private int readByte() throws IOException {
             if (!initialized) {
                 if (requiredByte(rc, "control") != 0) throw new IOException("Invalid BCJ2 range header");
                 for (int i = 0; i < 4; i++) code = ((code << 8) | requiredByte(rc, "control")) & 0xffffffffL;
+                if (code == 0xffffffffL) throw new IOException("Invalid BCJ2 initial range code");
                 initialized = true;
             }
             if (position == size) return -1;
@@ -143,7 +159,7 @@ final class SevenZBcj2Decoder {
         @Override public int read(byte[] data, int offset, int length) throws IOException {
             if (data == null) throw new NullPointerException("data");
             if ((offset | length) < 0 || length > data.length - offset) throw new IndexOutOfBoundsException();
-            if (closed) throw new IOException("BCJ2 stream closed");
+            checkOpen();
             if (length == 0) return 0;
             int count = 0;
             while (count < length) {
@@ -157,18 +173,24 @@ final class SevenZBcj2Decoder {
         @Override public void close() throws IOException {
             if (closed) return;
             closed = true;
-            IOException failure = null;
+            Throwable first = null;
             for (InputStream stream : new InputStream[] {main, call, jump, rc}) {
                 try { stream.close(); }
-                catch (IOException e) { if (failure == null) failure = e; else failure.addSuppressed(e); }
+                catch (IOException | RuntimeException | Error error) {
+                    if (first == null) first = error;
+                    else if (error != first) first.addSuppressed(error);
+                }
             }
-            if (failure != null) throw failure;
+            if (first instanceof IOException) throw (IOException) first;
+            if (first instanceof RuntimeException) throw (RuntimeException) first;
+            if (first instanceof Error) throw (Error) first;
         }
     }
 
     private static int requiredByte(InputStream input, String name) throws IOException {
         int value = input.read();
         if (value < 0) throw new EOFException("BCJ2 " + name + " stream exhausted");
+        if (value > 255) throw new IOException("Invalid BCJ2 " + name + " byte read");
         return value;
     }
 }

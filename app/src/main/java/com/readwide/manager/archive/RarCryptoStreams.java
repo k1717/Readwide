@@ -37,6 +37,8 @@ final class RarCryptoStreams {
                               @Nullable FileOperationProgress progress,
                               boolean reportWrittenBytes) throws IOException {
         if (plaintextLimit < 0L) throw new IOException("Invalid decrypted RAR stored size");
+        checkpoint(progress);
+        validateEncryptedRange(in, encryptedSize, plaintextLimit);
         try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             long remaining = decryptToStream(
                     in,
@@ -74,6 +76,8 @@ final class RarCryptoStreams {
                                       boolean reportWrittenBytes,
                                       @Nullable Rar5Crypto.Secrets checksumSecrets) throws IOException {
         if (plaintextLimit < 0L) throw new IOException("Invalid decrypted split RAR stored size");
+        checkpoint(progress);
+        validateSegments(segments, plaintextLimit, progress);
         try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
             long remaining = decryptSegmentsToStream(
                     segments,
@@ -107,22 +111,7 @@ final class RarCryptoStreams {
                                         @Nullable FileOperationProgress progress,
                                         boolean reportWrittenBytes,
                                         @Nullable Rar5Crypto.Secrets checksumSecrets) throws IOException {
-        long totalEncryptedSize = 0L;
-        for (EncryptedSegment segment : segments) {
-            if (segment.encryptedSize < 0L) {
-                throw new RarArchiveReader.UnsupportedRarFeatureException(
-                        "Encrypted RAR split data has invalid size");
-            }
-            if (Long.MAX_VALUE - totalEncryptedSize < segment.encryptedSize) {
-                throw new RarArchiveReader.UnsupportedRarFeatureException(
-                        "Encrypted RAR split data is too large");
-            }
-            totalEncryptedSize += segment.encryptedSize;
-        }
-        if ((totalEncryptedSize % 16L) != 0L) {
-            throw new RarArchiveReader.UnsupportedRarFeatureException(
-                    "Encrypted RAR split data is not AES block aligned");
-        }
+        validateSegments(segments, plaintextLimit, progress);
         long remaining = plaintextLimit;
         // One CBC state crosses volume boundaries, including boundaries within an AES block.
         // Verify ciphertext segments in the bounded raw reader, before decryption.
@@ -155,15 +144,13 @@ final class RarCryptoStreams {
                                 @NonNull String decryptError,
                                 @Nullable FileOperationProgress progress,
                                 boolean reportWrittenBytes) throws IOException {
-        if (encryptedSize < 0L || (encryptedSize % 16L) != 0L) {
-            throw new RarArchiveReader.UnsupportedRarFeatureException(
-                    "Encrypted RAR data is not AES block aligned");
-        }
+        checkpoint(progress);
+        validateEncryptedRange(in, encryptedSize, plaintextLimit);
         long encryptedRemaining = encryptedSize;
         long plaintextRemaining = plaintextLimit;
         byte[] input = new byte[BUFFER_SIZE];
         while (encryptedRemaining > 0L) {
-            if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+            checkpoint(progress);
             int request = (int) Math.min(input.length, encryptedRemaining);
             int read = in.read(input, 0, request);
             if (read < 0) throw new EOFException("Unexpected EOF in encrypted RAR entry");
@@ -177,12 +164,46 @@ final class RarCryptoStreams {
         return plaintextLimit < 0L ? 0L : plaintextRemaining;
     }
 
+    private static void validateSegments(java.util.List<EncryptedSegment> segments,
+            long plaintextLimit, FileOperationProgress progress) throws IOException {
+        checkpoint(progress);
+        long totalEncryptedSize = 0L;
+        for (EncryptedSegment segment : segments) {
+            checkpoint(progress);
+            if (segment.archive == null || segment.offset < 0L || segment.encryptedSize < 0L) {
+                throw new RarArchiveReader.UnsupportedRarFeatureException(
+                        "Encrypted RAR split data has invalid size");
+            }
+            if (Long.MAX_VALUE - totalEncryptedSize < segment.encryptedSize) {
+                throw new RarArchiveReader.UnsupportedRarFeatureException(
+                        "Encrypted RAR split data is too large");
+            }
+            totalEncryptedSize += segment.encryptedSize;
+        }
+        if ((totalEncryptedSize % 16L) != 0L) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException(
+                    "Encrypted RAR split data is not AES block aligned");
+        }
+        if (plaintextLimit > totalEncryptedSize) throw new IOException("Invalid decrypted split RAR stored size");
+    }
+
+    private static void validateEncryptedRange(RandomAccessFile input, long encryptedSize,
+            long plaintextLimit) throws IOException {
+        if (encryptedSize < 0L || (encryptedSize % 16L) != 0L) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException(
+                    "Encrypted RAR data is not AES block aligned");
+        }
+        if (plaintextLimit > encryptedSize) throw new IOException("Invalid decrypted RAR stored size");
+        RarStoredPayloadIO.validateSourceRange(input, encryptedSize);
+    }
+
     private static long finishCipher(@NonNull OutputStream out,
                                      @NonNull Cipher cipher,
                                      long plaintextRemaining,
                                      @NonNull String decryptError,
                                      @Nullable FileOperationProgress progress,
                                      boolean reportWrittenBytes) throws IOException {
+        checkpoint(progress);
         byte[] tail;
         try {
             tail = cipher.doFinal();
@@ -192,6 +213,7 @@ final class RarCryptoStreams {
         if (tail != null && tail.length > 0) {
             plaintextRemaining = writePlaintext(out, tail, plaintextRemaining, progress, reportWrittenBytes);
         }
+        checkpoint(progress);
         return plaintextRemaining;
     }
 
@@ -219,6 +241,7 @@ final class RarCryptoStreams {
                                        long remaining,
                                        @Nullable FileOperationProgress progress,
                                        boolean reportWrittenBytes) throws IOException {
+        checkpoint(progress);
         int write;
         if (remaining < 0L) {
             write = data.length;
@@ -230,5 +253,11 @@ final class RarCryptoStreams {
         out.write(data, 0, write);
         if (reportWrittenBytes && progress != null) progress.addDoneBytes(write);
         return remaining < 0L ? -1L : remaining - write;
+    }
+
+    private static void checkpoint(@Nullable FileOperationProgress progress) throws IOException {
+        if (Thread.currentThread().isInterrupted() || (progress != null && !progress.checkpoint())) {
+            throw new java.io.InterruptedIOException("RAR extraction cancelled");
+        }
     }
 }

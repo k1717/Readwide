@@ -23,6 +23,8 @@ final class Rar3SolidState {
     @NonNull private final Rar3PpmdState ppmdState = new Rar3PpmdState();
     @NonNull private final Rar3VmFilter.ProgramState vmFilterState =
             new Rar3VmFilter.ProgramState();
+    private final Rar3PpmdFilterOutput.DeferredFilters deferredFilters =
+            new Rar3PpmdFilterOutput.DeferredFilters();
     private int writePosition;
     private boolean initialized;
     private boolean reuseClassicTables;
@@ -39,6 +41,7 @@ final class Rar3SolidState {
     void invalidate() {
         reuseClassicTables = false;
         mixedPpmd.reset();
+        deferredFilters.reset();
         invalid = true;
     }
 
@@ -92,12 +95,15 @@ final class Rar3SolidState {
         return vmFilterState;
     }
 
+    Rar3PpmdFilterOutput.DeferredFilters deferredFilters() { return deferredFilters; }
+
     void reset() {
         Arrays.fill(window, (byte) 0);
         Arrays.fill(oldTableLengths, 0);
         unpackState.resetNonSolid();
         ppmdState.resetNonSolid();
         vmFilterState.reset();
+        deferredFilters.reset();
         mixedPpmd.reset();
         retained = 0;
         writePosition = 0;

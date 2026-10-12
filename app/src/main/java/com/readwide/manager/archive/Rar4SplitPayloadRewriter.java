@@ -5,7 +5,6 @@ import androidx.annotation.Nullable;
 
 import com.readwide.manager.util.FileOperationProgress;
 
-import java.io.EOFException;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -46,19 +45,27 @@ final class Rar4SplitPayloadRewriter {
     static File buildSingleEntryCopy(@NonNull File firstArchive,
                                      long firstDataOffset,
                                      @NonNull List<RarCryptoStreams.EncryptedSegment> segments,
+                                     long unpackedCrc,
                                      @Nullable FileOperationProgress progress) throws IOException {
+        Rar4EncryptedPayloadRewriter.checkpoint(progress);
+        if (unpackedCrc < 0 || unpackedCrc > 0xffff_ffffL) throw new IOException("Invalid RAR4 final payload checksum");
         if (segments.isEmpty()) throw new IOException("RAR split chain has no payload segments");
-        HeaderBlock sourceBlock = findFileHeaderForDataOffset(firstArchive, firstDataOffset);
+        HeaderBlock sourceBlock = findFileHeaderForDataOffset(firstArchive, firstDataOffset, progress);
         RewrittenFileBlock rewritten = prepareSplitFileBlock(sourceBlock.flags, sourceBlock.headerData, totalPayloadSize(segments));
+        // The first split header checks packed part bytes; the new file needs the final decoded CRC.
+        putUInt32(rewritten.headerData, 9, unpackedCrc);
 
         File temp = File.createTempFile("textview-rar4-split-plain-", ".rar");
         boolean success = false;
-        try (FileOutputStream out = new FileOutputStream(temp)) {
-            out.write(RAR4_SIGNATURE);
-            writeRar4Header(out, RAR4_HEADER_MAIN, 0, new byte[6]);
-            writeRar4Header(out, RAR4_HEADER_FILE, rewritten.flags, rewritten.headerData);
-            copySegmentsToStream(segments, out, progress);
-            writeRar4Header(out, RAR4_HEADER_END, 0, new byte[0]);
+        try {
+            try (FileOutputStream out = new FileOutputStream(temp)) {
+                out.write(RAR4_SIGNATURE);
+                writeRar4Header(out, RAR4_HEADER_MAIN, 0, new byte[6]);
+                writeRar4Header(out, RAR4_HEADER_FILE, rewritten.flags, rewritten.headerData);
+                copySegmentsToStream(segments, out, progress);
+                writeRar4Header(out, RAR4_HEADER_END, 0, new byte[0]);
+            }
+            Rar4EncryptedPayloadRewriter.checkpoint(progress);
             success = true;
             return temp;
         } finally {
@@ -67,13 +74,16 @@ final class Rar4SplitPayloadRewriter {
     }
 
     @NonNull
-    private static HeaderBlock findFileHeaderForDataOffset(@NonNull File archive, long dataOffset) throws IOException {
+    private static HeaderBlock findFileHeaderForDataOffset(@NonNull File archive, long dataOffset,
+            @Nullable FileOperationProgress progress) throws IOException {
+        Rar4EncryptedPayloadRewriter.checkpoint(progress);
         if (dataOffset < 0L) throw new IOException("Invalid RAR4 data offset");
         try (RandomAccessFile in = new RandomAccessFile(archive, "r")) {
             long signatureOffset = findRar4SignatureOffset(in);
             if (signatureOffset < 0) throw new IOException("RAR4 signature not found");
             in.seek(signatureOffset + RAR4_SIGNATURE.length);
             while (in.getFilePointer() < in.length()) {
+                Rar4EncryptedPayloadRewriter.checkpoint(progress);
                 long headerStart = in.getFilePointer();
                 if (in.length() - headerStart < 7) break;
                 readUInt16LE(in); // source CRC is advisory; rewritten header CRC is recalculated.
@@ -86,8 +96,11 @@ final class Rar4SplitPayloadRewriter {
                 byte[] headerData = new byte[headerSize - 7];
                 in.readFully(headerData);
                 long currentDataOffset = headerStart + headerSize;
-                long dataSize = type == RAR4_HEADER_FILE ? parseFileBlock(flags, headerData).packedSize : 0L;
+                long dataSize = type == RAR4_HEADER_FILE
+                        ? parseFileBlock(flags, headerData).packedSize
+                        : Rar4EncryptedPayloadRewriter.dataSizeForHeader(type, flags, headerData);
                 if (type == RAR4_HEADER_FILE && currentDataOffset == dataOffset) {
+                    Rar4EncryptedPayloadRewriter.checkpoint(progress);
                     return new HeaderBlock(flags, headerData);
                 }
                 long next = currentDataOffset + dataSize;
@@ -118,9 +131,25 @@ final class Rar4SplitPayloadRewriter {
         }
         if (totalPayloadSize < 0L) throw new IOException("Invalid RAR4 split payload size");
         byte[] rewrittenHeaderData = headerData.clone();
-        writePackedSize(rewrittenHeaderData, totalPayloadSize, (flags & RAR4_FILE_LARGE) != 0);
         int rewrittenFlags = flags & ~RAR4_FILE_SPLIT_BEFORE & ~RAR4_FILE_SPLIT_AFTER;
+        if (totalPayloadSize > 0xffff_ffffL && (rewrittenFlags & RAR4_FILE_LARGE) == 0) {
+            rewrittenHeaderData = addLargeSizeFields(rewrittenHeaderData);
+            rewrittenFlags |= RAR4_FILE_LARGE;
+        }
+        writePackedSize(rewrittenHeaderData, totalPayloadSize, (rewrittenFlags & RAR4_FILE_LARGE) != 0);
         return new RewrittenFileBlock(rewrittenFlags, rewrittenHeaderData);
+    }
+
+    /** Insert high packed/unpacked fields before the name, preserving all trailing records. */
+    static byte[] addLargeSizeFields(@NonNull byte[] headerData) throws IOException {
+        if (headerData.length < 25 || headerData.length > 0xffff - 7 - 8) {
+            throw new IOException("RAR4 file header cannot represent large packed size");
+        }
+        byte[] large = new byte[headerData.length + 8];
+        System.arraycopy(headerData, 0, large, 0, 25);
+        System.arraycopy(headerData, 25, large, 33, headerData.length - 25);
+        // The original short header's high unpacked size is zero; callers set high packed size.
+        return large;
     }
 
     private static long totalPayloadSize(@NonNull List<RarCryptoStreams.EncryptedSegment> segments) throws IOException {
@@ -137,20 +166,10 @@ final class Rar4SplitPayloadRewriter {
                                              @NonNull FileOutputStream out,
                                              @Nullable FileOperationProgress progress) throws IOException {
         byte[] buffer = new byte[COPY_BUFFER_SIZE];
-        for (RarCryptoStreams.EncryptedSegment segment : segments) {
-            if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
-            try (RandomAccessFile in = new RandomAccessFile(segment.archive, "r")) {
-                in.seek(segment.offset);
-                long remaining = segment.encryptedSize;
-                while (remaining > 0L) {
-                    if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
-                    int request = (int) Math.min(buffer.length, remaining);
-                    int read = in.read(buffer, 0, request);
-                    if (read < 0) throw new EOFException("Unexpected EOF in RAR split payload");
-                    out.write(buffer, 0, read);
-                    remaining -= read;
-                }
-            }
+        // Use the same bounded/checksummed packed reader as direct and AES split extraction.
+        try (RarPackedInputStream in = new RarPackedInputStream(segments, progress)) {
+            int read;
+            while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
         }
     }
 

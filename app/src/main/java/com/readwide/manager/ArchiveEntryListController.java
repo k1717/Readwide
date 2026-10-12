@@ -32,6 +32,31 @@ final class ArchiveEntryListController {
     private ArchiveEntryListController() {
     }
 
+    /** UI-thread cache for one folder of an immutable, replace-on-reload listing. */
+    static final class FolderView {
+        private List<ArchiveSupport.EntryInfo> source;
+        private String prefix;
+        private int sortMode;
+        private List<ArchiveSupport.EntryInfo> sortedChildren;
+
+        @NonNull
+        List<ArchiveSupport.EntryInfo> visibleChildren(@NonNull List<ArchiveSupport.EntryInfo> allEntries,
+                @NonNull String currentPrefix, @Nullable String query, int filter, int currentSortMode) {
+            if (source != allEntries || !currentPrefix.equals(prefix) || sortMode != currentSortMode) {
+                // Rebuild from source order on sort changes too: stable ties must
+                // not inherit the order produced by the previous sort mode.
+                List<ArchiveSupport.EntryInfo> children = collectDirectChildren(allEntries, currentPrefix);
+                sort(children, currentSortMode);
+                sortedChildren = children;
+                source = allEntries;
+                prefix = currentPrefix;
+                sortMode = currentSortMode;
+            }
+            // Return a new list; adapters/callers cannot mutate the cached order.
+            return filterPresorted(sortedChildren, query, filter);
+        }
+    }
+
     @NonNull
     static List<ArchiveSupport.EntryInfo> directChildren(@NonNull List<ArchiveSupport.EntryInfo> allEntries,
                                                          @NonNull String prefix,
@@ -59,12 +84,10 @@ final class ArchiveEntryListController {
             if (entry == null) continue;
             String path = entry.path;
             if (path == null || !path.startsWith(prefix)) continue;
-            String rest = path.substring(prefix.length());
-            if (rest.length() == 0) continue;
-            int slash = rest.indexOf('/');
+            if (path.length() == prefix.length()) continue;
+            int slash = path.indexOf('/', prefix.length());
             if (slash >= 0) {
-                String dirName = rest.substring(0, slash + 1);
-                String childPath = prefix + dirName;
+                String childPath = path.substring(0, slash + 1);
                 if (!children.containsKey(childPath)) {
                     children.put(childPath, new ArchiveSupport.EntryInfo(childPath, true, -1L, 0L));
                 }
@@ -80,11 +103,18 @@ final class ArchiveEntryListController {
                                                  @Nullable String queryText,
                                                  int activeFilter,
                                                  int sortMode) {
+        List<ArchiveSupport.EntryInfo> result = filterPresorted(source, queryText, activeFilter);
+        sort(result, sortMode);
+        return result;
+    }
+
+    /** Filtering preserves source order, so an already sorted view needs no re-sort. */
+    @NonNull
+    private static List<ArchiveSupport.EntryInfo> filterPresorted(
+            @NonNull List<ArchiveSupport.EntryInfo> source, @Nullable String queryText, int activeFilter) {
         String query = queryText == null ? "" : queryText.toLowerCase(Locale.ROOT);
         if (query.length() == 0 && activeFilter == FILTER_ALL) {
-            List<ArchiveSupport.EntryInfo> result = new ArrayList<>(source);
-            sort(result, sortMode);
-            return result;
+            return new ArrayList<>(source);
         }
         List<ArchiveSupport.EntryInfo> result = new ArrayList<>();
         for (ArchiveSupport.EntryInfo entry : source) {
@@ -97,7 +127,6 @@ final class ArchiveEntryListController {
                 result.add(entry);
             }
         }
-        sort(result, sortMode);
         return result;
     }
 
@@ -134,8 +163,11 @@ final class ArchiveEntryListController {
         }
         List<ArchiveSupport.EntryInfo> result = new ArrayList<>();
         for (ArchiveSupport.EntryInfo entry : allEntries) {
+            // Most entries can be outside a selected chapter. Check the cheap
+            // scope first, before classifying extensions and metadata components.
+            if (entry == null || !entry.path.startsWith(prefix)) continue;
             if (!isArchiveImageSequenceEntry(entry)) continue;
-            if (entry.path.startsWith(prefix)) result.add(entry);
+            result.add(entry);
         }
         if (result.isEmpty() && isArchiveImageSequenceEntry(selectedEntry)) result.add(selectedEntry);
         sortImageSequence(result);
@@ -164,18 +196,39 @@ final class ArchiveEntryListController {
         String path = entry.path == null ? "" : entry.path.replace('\\', '/');
         if (path.length() == 0) return false;
         String lower = path.toLowerCase(Locale.ROOT);
-        if (lower.startsWith("__macosx/") || lower.contains("/__macosx/")) return false;
-        String[] parts = path.split("/");
-        for (String part : parts) {
-            if (part == null || part.length() == 0) continue;
-            String lowerPart = part.toLowerCase(Locale.ROOT);
-            if (lowerPart.equals(".ds_store") || lowerPart.startsWith("._")) return false;
+        // Inspect components by offset: no split array, per-component substring
+        // or repeated lowercase copy while classifying large image lists.
+        for (int start = 0; start < lower.length();) {
+            int slash = lower.indexOf('/', start);
+            int end = slash < 0 ? lower.length() : slash;
+            int length = end - start;
+            if ((length == 8 && lower.startsWith("__macosx", start))
+                    || (length == 9 && lower.startsWith(".ds_store", start))
+                    || (length >= 2 && lower.startsWith("._", start))) return false;
+            if (slash < 0) break;
+            start = slash + 1;
         }
         return true;
     }
 
     static void sortImageSequence(@NonNull List<ArchiveSupport.EntryInfo> target) {
         FileSortUtils.sortArchiveImageSequence(target);
+    }
+
+    /** Small intent recipe restores browser scope/order without a large Binder list. */
+    static List<ArchiveSupport.EntryInfo> restoreImageSequence(
+            List<ArchiveSupport.EntryInfo> entries, String prefix, String query,
+            boolean previewOrder, int sortMode, String selectedPath) {
+        ArchiveSupport.EntryInfo selected = null;
+        for (ArchiveSupport.EntryInfo entry : entries) {
+            if (entry != null && entry.path.equals(selectedPath)) { selected = entry; break; }
+        }
+        String safePrefix = prefix != null ? prefix : "";
+        if (previewOrder) {
+            return collectPreviewOrderedImageSequence(visibleChildren(entries, safePrefix,
+                    query, FILTER_ALL, sortMode), selected);
+        }
+        return collectImageSequence(entries, safePrefix, selected, sortMode);
     }
 
     @NonNull

@@ -3,6 +3,8 @@ package com.readwide.manager.util;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.readwide.manager.archive.ArchiveCancellation;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -41,63 +43,64 @@ public final class FileSystemOps {
      * @return true if the entry now has the requested name
      */
     public static boolean renameInPlace(@NonNull File source, @NonNull String newName) {
-        if (!source.exists() || newName.isEmpty() || newName.equals(".") || newName.equals("..")
-                || newName.indexOf('/') >= 0 || newName.indexOf('\\') >= 0
-                || newName.indexOf('\0') >= 0) return false;
-        File parent = source.getParentFile();
-        if (parent == null) return false;
-        File target = new File(parent, newName);
-
-        if (source.getName().equals(newName)) {
-            // Already the exact name (including case); nothing to do.
-            return true;
-        }
-
-        boolean caseOnlyChange = source.getName().equalsIgnoreCase(newName);
-        if (target.exists()) {
-            // Canonical paths alone need not preserve case on every Android
-            // mount. A separately listed target is a collision, even when its
-            // name differs only by case (or it is a hard link to the source).
-            String[] entries = parent.list();
-            if (entries == null) return false;
-            boolean sourceListed = false;
-            for (String entry : entries) {
-                if (entry.equals(newName)) return false;
-                if (entry.equals(source.getName())) sourceListed = true;
-            }
-            if (!caseOnlyChange || !sourceListed) return false;
-        }
-        if (!caseOnlyChange) {
-            // Different name (not just case): a plain rename is correct. Refuse to
-            // clobber an unrelated existing entry.
-            if (target.exists() && !sameCanonicalFile(source, target)) return false;
-            return source.renameTo(target);
-        }
-
-        // Case-only change: hop through a unique temporary name so the file
-        // system actually rewrites the entry instead of collapsing source and
-        // destination to the same inode.
-        File temp = null;
-        for (int i = 0; i < 10000; i++) {
-            File candidate = new File(parent, ".rwrename_" + System.nanoTime() + "_" + i);
-            if (!candidate.exists()) {
-                temp = candidate;
-                break;
-            }
-        }
-        if (temp == null) return false;
-
-        if (!source.renameTo(temp)) {
+        if (!isSingleEntryName(newName)) return false;
+        try {
+            if (!FileTreeWalk.existsNoFollow(source)) return false;
+            File parent = source.getParentFile();
+            if (parent == null) return false;
+            if (source.getName().equals(newName)) return true;
+            File target = new File(parent, newName);
+            boolean caseOnly = source.getName().equalsIgnoreCase(newName);
+            if (FileTreeWalk.existsNoFollow(target)
+                    && (!caseOnly || !isCaseAlias(parent, source.getName(), newName))) return false;
+            if (caseOnly) return renameThroughTemporary(source, target, parent);
+            // Inspect without following links: a dangling target still occupies a name.
+            return !FileTreeWalk.existsNoFollow(target) && source.renameTo(target);
+        } catch (IOException | SecurityException unavailable) {
+            ArchiveCancellation.restoreIfCancelled(unavailable, null);
             return false;
         }
-        if (!target.exists() && temp.renameTo(target)) {
-            return true;
+    }
+
+    private static boolean isSingleEntryName(String name) {
+        return !name.isEmpty() && !name.equals(".") && !name.equals("..")
+                && name.indexOf('/') < 0 && name.indexOf('\\') < 0 && name.indexOf('\0') < 0;
+    }
+
+    private static boolean isCaseAlias(File parent, String sourceName, String targetName) {
+        // Case-insensitive lookup may find the source. A separately listed target
+        // is instead a collision, including a hard link or dangling symbolic link.
+        String[] names = parent.list();
+        if (names == null) return false;
+        boolean sourceListed = false;
+        for (String name : names) {
+            if (name.equals(targetName)) return false;
+            if (name.equals(sourceName)) sourceListed = true;
         }
-        // Second hop failed: restore the original name so we don't leave the
-        // entry stranded under the temporary name.
-        //noinspection ResultOfMethodCallIgnored
-        if (!source.exists()) temp.renameTo(source);
-        return false;
+        return sourceListed;
+    }
+
+    private static boolean renameThroughTemporary(File source, File target, File parent) throws IOException {
+        File temporary = new File(parent, ".rwrename_" + UUID.randomUUID());
+        // No retries are needed for a UUID collision; fail without taking ownership.
+        if (FileTreeWalk.existsNoFollow(temporary) || !source.renameTo(temporary)) return false;
+        boolean committed = false;
+        try {
+            committed = !FileTreeWalk.existsNoFollow(target) && temporary.renameTo(target);
+            return committed;
+        } finally {
+            if (!committed) restoreRenameSource(temporary, source);
+        }
+    }
+
+    private static void restoreRenameSource(File temporary, File source) {
+        try {
+            // Never replace a source name claimed meanwhile, including a dangling
+            // link. If rollback is denied, leave the temporary entry for recovery.
+            if (!FileTreeWalk.existsNoFollow(source)) temporary.renameTo(source);
+        } catch (IOException | SecurityException unavailable) {
+            ArchiveCancellation.restoreIfCancelled(unavailable, null);
+        }
     }
 
     public static boolean move(@NonNull File source,
@@ -141,9 +144,7 @@ public final class FileSystemOps {
             if (!FileTreeWalk.existsNoFollow(destination) && source.renameTo(destination)) {
                 // The rename is the commit point. Late cancellation must not turn
                 // a successful move into failure and lose its metadata updates.
-                if (tracker != null) tracker.onMoved(source);
-                if (progress != null && assignTotalBytes) progress.markComplete();
-                return true;
+                return finishCommittedMove(source, tracker, progress, assignTotalBytes);
             }
         } catch (IOException | SecurityException ignored) {
         }
@@ -156,8 +157,20 @@ public final class FileSystemOps {
         if (progress != null && !progress.checkpoint()) return false;
 
         boolean deleted = delete(source);
-        if (deleted && progress != null && assignTotalBytes) progress.markComplete();
-        return deleted;
+        return deleted && finishCommittedMove(source, null, progress, assignTotalBytes);
+    }
+
+    private static boolean finishCommittedMove(File source, FileTreeProgressTracker tracker,
+                                                FileOperationProgress progress, boolean assignTotalBytes) {
+        try {
+            if (tracker != null) tracker.onMoved(source);
+            if (progress != null && assignTotalBytes) progress.markComplete();
+        } catch (RuntimeException reportingFailure) {
+            // The filesystem change is already committed. A nonfatal UI/progress
+            // failure must not strand its queue item or lose saved-path updates.
+            ArchiveCancellation.restoreIfCancelled(reportingFailure, progress);
+        }
+        return true;
     }
 
     public static boolean copy(@NonNull File source,
@@ -237,7 +250,7 @@ public final class FileSystemOps {
             // Cancellation is intentionally not observed between these renames:
             // complete the short commit/rollback sequence first.
             if (FileTreeWalk.existsNoFollow(destination)) {
-                if (!destination.renameTo(previous)) return false;
+                if (!overwrite || !destination.renameTo(previous)) return false;
                 backedUp = true;
             }
             if (FileTreeWalk.existsNoFollow(destination) || !staged.renameTo(destination)) return false;

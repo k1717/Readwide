@@ -17,6 +17,10 @@ import com.readwide.manager.util.PrefsManager;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 
 final class MainRecentFilesController {
     // The recent list shows up to DISPLAY_LIMIT rows. The full read-history is
@@ -40,6 +44,10 @@ final class MainRecentFilesController {
     private static final float SWIPE_HORIZONTAL_DOMINANCE = 2f;
 
     private final MainActivity activity;
+    // Read-only queries must not wait behind a paused copy/extraction.
+    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private Future<?> pendingLoad;
+    private boolean closed;
 
     // Cumulative finger travel of the current touch gesture on the recent
     // list, recorded by an observing OnItemTouchListener registered before the
@@ -72,6 +80,8 @@ final class MainRecentFilesController {
     }
 
     void loadRecentFiles(boolean preserveScroll) {
+        if (closed || activity.activityDestroyed) return;
+        invalidateLoad();
         preserveScrollOnApply = preserveScroll;
         if (preserveScroll) {
             captureRecentScrollPosition();
@@ -83,41 +93,57 @@ final class MainRecentFilesController {
             applyRecentFiles(new ArrayList<>(), new ArrayList<>());
             return;
         }
-        final long token = ++recentLoadToken;
-        activity.executeFolderBackgroundTask(() -> {
-            // Load the whole read-history (no scan cap). visibleRecentFileFor
-            // still drops missing/image/preview-cache entries, so this is a
-            // single existence pass over the store; the result is cached in
-            // fullRecentItems for search until the next reload.
-            List<ReaderState> recent = activity.bookmarkManager.getRecentFiles(Integer.MAX_VALUE);
-            List<File> visibleFiles = new ArrayList<>();
-            for (ReaderState state : recent) {
-                File file = visibleRecentFileFor(state);
-                if (file != null) visibleFiles.add(file);
+        final long token = recentLoadToken;
+        final int filter = activity.activeFileFilter;
+        final boolean showHidden = activity.prefs != null && activity.prefs.getShowHiddenFiles();
+        try {
+            pendingLoad = worker.submit(() -> loadSnapshot(token, filter, showHidden));
+        } catch (RejectedExecutionException stopped) {
+            // Lifecycle teardown owns cancellation; keep the last visible list.
+        }
+    }
+
+    private void loadSnapshot(long token, int filter, boolean showHidden) {
+        // Keep metadata construction in the cancellable pass too, rather than
+        // starting an uninterruptible second pass over a large history snapshot.
+        if (Thread.currentThread().isInterrupted() || token != recentLoadToken) return;
+        List<ReaderState> recent = activity.bookmarkManager.getRecentFiles(Integer.MAX_VALUE);
+        List<FileListItem> allItems = new ArrayList<>();
+        for (ReaderState state : recent) {
+            if (Thread.currentThread().isInterrupted() || token != recentLoadToken) return;
+            File file = visibleRecentFileFor(state, filter, showHidden);
+            if (file != null) allItems.add(FileListItem.from(file));
+        }
+        activity.runOnUiThread(() -> {
+            if (closed || activity.activityDestroyed || activity.isFinishing() || activity.isDestroyed()) return;
+            if (token != recentLoadToken) return;
+            pendingLoad = null;
+            fullRecentStates = recent;
+            fullRecentItems = allItems;
+            // The live search box, not a captured query, owns the display.
+            String liveQuery = activity.homeMode ? currentSearchBoxQuery() : "";
+            if (!liveQuery.isEmpty()) {
+                applyRecentSearchInternal(liveQuery);
+            } else {
+                hideRecentSearchBanner();
+                applyRecentFiles(recent, displayItems(allItems));
             }
-            final java.util.List<FileListItem> allItems = FileListItem.fromList(visibleFiles);
-            activity.runOnUiThread(() -> {
-                // Drop stale results if another reload started or the activity is gone.
-                if (activity.isFinishing() || activity.isDestroyed()) return;
-                if (token != recentLoadToken) return;
-                fullRecentStates = recent;
-                fullRecentItems = allItems;
-                // The live search box is authoritative: a reload while the home
-                // search has text (e.g. file-type filter change) re-applies the
-                // filter; otherwise show the capped display. Reading the box here
-                // avoids any stale search-state after navigation.
-                String liveQuery = activity.homeMode ? currentSearchBoxQuery() : "";
-                if (!liveQuery.isEmpty()) {
-                    applyRecentSearchInternal(liveQuery);
-                } else {
-                    hideRecentSearchBanner();
-                    applyRecentFiles(recent, displayItems(allItems));
-                }
-            });
         });
     }
 
     private volatile long recentLoadToken = 0;
+
+    private void invalidateLoad() {
+        ++recentLoadToken;
+        if (pendingLoad != null) pendingLoad.cancel(true);
+        pendingLoad = null;
+    }
+
+    void close() {
+        closed = true;
+        invalidateLoad();
+        worker.shutdownNow();
+    }
 
     private int savedFirstVisiblePosition = RecyclerView.NO_POSITION;
     private int savedFirstVisibleOffset = 0;
@@ -134,7 +160,8 @@ final class MainRecentFilesController {
             if (pos != RecyclerView.NO_POSITION) {
                 savedFirstVisiblePosition = pos;
                 View first = llm.findViewByPosition(pos);
-                savedFirstVisibleOffset = first != null ? first.getTop() : 0;
+                savedFirstVisibleOffset = first != null
+                        ? first.getTop() - activity.recentRecyclerView.getPaddingTop() : 0;
             }
         }
     }
@@ -148,13 +175,11 @@ final class MainRecentFilesController {
         savedFirstVisiblePosition = RecyclerView.NO_POSITION;
         if (activity.recentRecyclerView == null || pos < 0 || itemCount <= 0) return;
         final RecyclerView rv = activity.recentRecyclerView;
-        rv.post(() -> {
-            RecyclerView.LayoutManager lm = rv.getLayoutManager();
-            if (lm instanceof LinearLayoutManager) {
-                int clamped = Math.min(pos, itemCount - 1);
-                ((LinearLayoutManager) lm).scrollToPositionWithOffset(clamped, offset);
-            }
-        });
+        if (closed || activity.activityDestroyed) return;
+        RecyclerView.LayoutManager lm = rv.getLayoutManager();
+        if (lm instanceof LinearLayoutManager) {
+            ((LinearLayoutManager) lm).scrollToPositionWithOffset(Math.min(pos, itemCount - 1), offset);
+        }
     }
 
     private void applyRecentFiles(@NonNull List<ReaderState> recent,
@@ -165,17 +190,19 @@ final class MainRecentFilesController {
                     ? activity.prefs.getRecentSortMode()
                     : PrefsManager.SORT_RECENT_READ;
             if (recentSort == PrefsManager.SORT_RECENT_READ) {
-                // BookmarkManager already returns newest first. Avoid DiffUtil
-                // holder reuse here because recent rows carry progress badges.
+                // Preserve unchanged holders and cover requests. Progress badges
+                // are refreshed separately even when file metadata did not change.
                 activity.recentAdapter.setSortEnabled(false);
-                activity.recentAdapter.setItemsFastPresorted(recentItems);
+                activity.recentAdapter.setItems(recentItems);
             } else {
                 activity.recentAdapter.setSortEnabled(true);
                 activity.recentAdapter.setSortMode(recentSort);
                 activity.recentAdapter.setItems(recentItems);
             }
             activity.recentAdapter.refreshReadingProgress();
-            if (preserveScrollOnApply && savedFirstVisiblePosition != RecyclerView.NO_POSITION) {
+            if (activity.navigationState.restoreScroll(true)) {
+                savedFirstVisiblePosition = RecyclerView.NO_POSITION;
+            } else if (preserveScrollOnApply && savedFirstVisiblePosition != RecyclerView.NO_POSITION) {
                 restoreRecentScrollPosition(recentItems.size());
             } else {
                 activity.scrollListToTop(activity.recentRecyclerView);
@@ -336,6 +363,9 @@ final class MainRecentFilesController {
         FileListItem item = activity.recentAdapter.getItemAt(position);
         if (item == null) return;
         String path = item.getFile().getAbsolutePath();
+        // A snapshot captured before this deletion must never restore the row.
+        boolean reload = pendingLoad != null;
+        invalidateLoad();
         if (activity.bookmarkManager != null) {
             activity.bookmarkManager.deleteReadingState(path);
         }
@@ -344,9 +374,11 @@ final class MainRecentFilesController {
         // search or a search-preserving reload.
         removeFromFullRecent(path);
         refreshRecentChromeAfterRemoval();
+        if (reload) loadRecentFiles(true);
     }
 
     private void removeFromFullRecent(@NonNull String path) {
+        fullRecentStates.removeIf(state -> path.equals(state.getFilePath()));
         for (int i = 0; i < fullRecentItems.size(); i++) {
             if (fullRecentItems.get(i).getFile().getAbsolutePath().equals(path)) {
                 fullRecentItems.remove(i);
@@ -377,7 +409,7 @@ final class MainRecentFilesController {
     }
 
     @Nullable
-    private File visibleRecentFileFor(@Nullable ReaderState state) {
+    private File visibleRecentFileFor(@Nullable ReaderState state, int filter, boolean showHidden) {
         String statePath = state == null ? null : state.getFilePath();
         if (statePath == null || statePath.trim().isEmpty()) return null;
 
@@ -390,8 +422,7 @@ final class MainRecentFilesController {
 
         File file = new File(statePath);
         if (!file.exists()) return null;
-        if ((activity.prefs == null || !activity.prefs.getShowHiddenFiles())
-                && file.getName().startsWith(".")) {
+        if (!showHidden && file.getName().startsWith(".")) {
             return null;
         }
         if (FileUtils.isImageFile(file.getName())) {
@@ -399,8 +430,8 @@ final class MainRecentFilesController {
             activity.bookmarkManager.deleteReadingState(file.getAbsolutePath());
             return null;
         }
-        if (activity.activeFileFilter != MainActivity.FILTER_ALL
-                && !activity.matchesActiveFileFilter(file.getName(), activity.activeFileFilter)) {
+        if (filter != MainActivity.FILTER_ALL
+                && !activity.matchesActiveFileFilter(file.getName(), filter)) {
             return null;
         }
         return file;

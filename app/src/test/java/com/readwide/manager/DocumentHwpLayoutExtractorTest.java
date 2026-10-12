@@ -19,6 +19,129 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 public class DocumentHwpLayoutExtractorTest {
+    @Test public void hwpxScriptElementsSurviveInlineColorOverrides() throws Exception {
+        RenderedDocument doc = scriptFixture("textColor=\"0000cc\"");
+        java.util.List<com.readwide.manager.document.render.RenderedRun> runs = doc.pages.get(0).blocks.get(0).paragraph.runs;
+        assertEquals(com.readwide.manager.document.render.TextStyle.VerticalAlign.SUPERSCRIPT, runs.get(0).style.verticalAlign);
+        assertEquals(com.readwide.manager.document.render.TextStyle.VerticalAlign.SUBSCRIPT, runs.get(1).style.verticalAlign);
+        assertEquals(14f, runs.get(0).style.fontSizePt, 0f);
+        assertEquals(Boolean.TRUE, runs.get(0).style.bold);
+        assertEquals("#0000cc", runs.get(0).style.color);
+        assertTrue(FixedHtmlRenderer.render(doc).contains("vertical-align:sub;"));
+    }
+
+    @Test public void hwpxExplicitBaselineCanClearInheritedScripts() throws Exception {
+        RenderedDocument doc = scriptFixture("supscript=\"false\"");
+        java.util.List<com.readwide.manager.document.render.RenderedRun> runs = doc.pages.get(0).blocks.get(0).paragraph.runs;
+        assertEquals(com.readwide.manager.document.render.TextStyle.VerticalAlign.BASELINE, runs.get(0).style.verticalAlign);
+        assertEquals(com.readwide.manager.document.render.TextStyle.VerticalAlign.SUBSCRIPT, runs.get(1).style.verticalAlign);
+        assertEquals(Boolean.TRUE, runs.get(0).style.bold);
+    }
+
+    private static RenderedDocument scriptFixture(String inlineAttributes) throws Exception {
+        File file = File.createTempFile("readwide-hwpx-scripts", ".hwpx");
+        try {
+            try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(file))) {
+                put(out, "Contents/header.xml", "<root xmlns:hh=\"http://www.hancom.co.kr/hwpml/2011/head\">"
+                        + "<hh:charPr id=\"1\" height=\"1400\"><hh:bold/><hh:supscript/></hh:charPr>"
+                        + "<hh:charPr id=\"2\" height=\"1400\"><hh:subscript/></hh:charPr></root>");
+                put(out, "Contents/section0.xml", "<root xmlns:hp=\"http://www.hancom.co.kr/hwpml/2011/paragraph\">"
+                        + "<hp:p><hp:run charPrIDRef=\"1\" " + inlineAttributes + "><hp:t>2</hp:t></hp:run>"
+                        + "<hp:run charPrIDRef=\"2\"><hp:t>i</hp:t></hp:run></hp:p></root>");
+            }
+            return DocumentHwpLayoutExtractor.extract(file, "scripts.hwpx", 30, 4800);
+        } finally { file.delete(); }
+    }
+
+    @Test public void binaryPaperDefinitionPreservesLandscapeAndMargins() throws Exception {
+        kr.dogfoot.hwplib.object.bodytext.control.sectiondefine.PageDef definition =
+                new kr.dogfoot.hwplib.object.bodytext.control.sectiondefine.PageDef();
+        definition.setPaperWidth(59500); definition.setPaperHeight(84200);
+        definition.setLeftMargin(5000); definition.setRightMargin(3000);
+        definition.setTopMargin(2000); definition.setBottomMargin(4000);
+        definition.getProperty().setPaperDirection(kr.dogfoot.hwplib.object.bodytext.control.sectiondefine.PaperDirection.Landscape);
+        java.lang.reflect.Method read = DocumentHwpLayoutExtractor.class.getDeclaredMethod("readBinaryPageMetrics", definition.getClass());
+        read.setAccessible(true);
+        java.lang.reflect.Method build = DocumentHwpLayoutExtractor.class.getDeclaredMethod("newPageBuilder", int.class, read.getReturnType());
+        build.setAccessible(true);
+        RenderedPage page = ((RenderedPage.Builder) build.invoke(null, 0, read.invoke(null, definition))).build();
+        assertEquals(842f, page.widthPt, 0f);
+        assertEquals(595f, page.heightPt, 0f);
+        assertEquals(20f, page.marginTopPt, 0f);
+        assertEquals(50f, page.marginLeftPt, 0f);
+        RenderedPage fallback = ((RenderedPage.Builder) build.invoke(null, 0, read.invoke(null, new Object[]{null}))).build();
+        assertEquals(595f, fallback.widthPt, 0f);
+    }
+
+    @Test public void binaryTableKeepsWidthVerticalAlignmentAndExplicitInsets() throws Exception {
+        kr.dogfoot.hwplib.object.bodytext.control.ControlTable table = new kr.dogfoot.hwplib.object.bodytext.control.ControlTable();
+        kr.dogfoot.hwplib.object.bodytext.control.table.Row row = table.addNewRow();
+        addCell(row, "Cell", 0, 0, 1, 24000, 0);
+        kr.dogfoot.hwplib.object.bodytext.control.table.ListHeaderForCell header = row.getCellList().get(0).getListHeader();
+        header.getProperty().setTextVerticalAlignment(kr.dogfoot.hwplib.object.bodytext.control.gso.textbox.TextVerticalAlignment.Bottom);
+        header.getProperty().setApplyInnerMagin(true);
+        header.setTopMargin(200); header.setLeftMargin(400);
+        RenderedTable rendered = DocumentHwpLayoutExtractor.renderedTableFromControl(table, null);
+        assertEquals(240f, rendered.widthPt, 0f);
+        assertEquals(RenderedTableCell.VerticalAlignment.BOTTOM, rendered.rows.get(0).get(0).verticalAlignment);
+        assertEquals(2f, rendered.rows.get(0).get(0).paddingTopPt, 0f);
+        assertEquals(4f, rendered.rows.get(0).get(0).paddingLeftPt, 0f);
+    }
+
+    @Test public void hwpxCellAlignmentDoesNotLeakFromNestedParagraphs() throws Exception {
+        String xml = "<hp:tc xmlns:hp=\"urn:hp\"><hp:subList vertAlign=\"CENTER\">"
+                + "<hp:p><hp:run><hp:t>Cell</hp:t></hp:run></hp:p></hp:subList></hp:tc>";
+        org.w3c.dom.Document doc = DocumentArchiveUtils.secureDocumentBuilder().parse(
+                new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+        Class<?> context = Class.forName("com.readwide.manager.DocumentHwpLayoutExtractor$HwpxDocumentContext");
+        java.lang.reflect.Method read = DocumentHwpLayoutExtractor.class.getDeclaredMethod("readHwpxTableCell", org.w3c.dom.Node.class, context);
+        read.setAccessible(true);
+        RenderedTableCell cell = (RenderedTableCell) read.invoke(null, doc.getDocumentElement(), null);
+        assertEquals(RenderedTableCell.VerticalAlignment.MIDDLE, cell.verticalAlignment);
+        doc = DocumentArchiveUtils.secureDocumentBuilder().parse(new java.io.ByteArrayInputStream(
+                "<tc><p vertAlign=\"BOTTOM\"><t>Text</t></p></tc>".getBytes(StandardCharsets.UTF_8)));
+        cell = (RenderedTableCell) read.invoke(null, doc.getDocumentElement(), null);
+        assertTrue(cell.verticalAlignment == null);
+    }
+
+    @Test public void binaryStructuralBlocksUsePageBudgetsAndKeepSourceText() throws Exception {
+        java.util.List<RenderedBlock> blocks = new java.util.ArrayList<>();
+        for (int i = 0; i < 9; i++) blocks.add(RenderedBlock.paragraph(
+                com.readwide.manager.document.render.RenderedParagraph.of(
+                        com.readwide.manager.document.render.RenderedRun.text("Paragraph " + i))));
+        blocks.add(2, RenderedBlock.table(RenderedTable.ofRows(java.util.Collections.singletonList(
+                java.util.Collections.singletonList(RenderedTableCell.text("Cell"))))));
+        RenderedDocument doc = paginateStructuralBlocks(blocks, "Full extracted source text", 4, 4800);
+        assertTrue(doc.pageCount() >= 3);
+        assertEquals("Full extracted source text", doc.plainText);
+        java.util.List<RenderedBlock> flattened = new java.util.ArrayList<>();
+        for (int i = 0; i < doc.pages.size(); i++) {
+            assertEquals(i, doc.pages.get(i).pageIndex);
+            flattened.addAll(doc.pages.get(i).blocks);
+        }
+        assertEquals(blocks, flattened);
+    }
+
+    @Test public void structuralCharacterBudgetAlsoStartsANewPage() throws Exception {
+        char[] text = new char[600];
+        java.util.Arrays.fill(text, 'a');
+        RenderedBlock block = RenderedBlock.paragraph(com.readwide.manager.document.render.RenderedParagraph.of(
+                com.readwide.manager.document.render.RenderedRun.text(new String(text))));
+        RenderedDocument doc = paginateStructuralBlocks(java.util.Arrays.asList(block, block), null, 30, 900);
+        assertEquals(2, doc.pageCount());
+        assertEquals(1, doc.pages.get(0).blocks.size());
+        assertEquals(1, doc.pages.get(1).blocks.size());
+    }
+
+    private static RenderedDocument paginateStructuralBlocks(java.util.List<RenderedBlock> blocks,
+                                                               String plainText, int paragraphs, int chars) throws Exception {
+        Class<?> metrics = Class.forName("com.readwide.manager.DocumentHwpLayoutExtractor$PageMetrics");
+        java.lang.reflect.Method build = DocumentHwpLayoutExtractor.class.getDeclaredMethod("buildDocument",
+                String.class, String.class, java.util.List.class, int.class, int.class, metrics, String.class);
+        build.setAccessible(true);
+        return (RenderedDocument) build.invoke(null, "HWP fixture", "hwp", blocks, paragraphs, chars, null, plainText);
+    }
+
     @Test
     public void extractsHwpxHeaderStylesRunStylesPageMetricsAndTableColor() throws Exception {
         File hwpx = File.createTempFile("readwide-hwpx-style", ".hwpx");
@@ -58,11 +181,8 @@ public class DocumentHwpLayoutExtractorTest {
         assertTrue(html.contains("padding-right:20pt"));
         assertTrue(html.contains("padding-bottom:25pt"));
         assertTrue(html.contains("padding-left:15pt"));
-        // The page side margin (marginLeft 5000 / paper width 59500) is a
-        // responsive viewport clamp, not a fixed 50pt; cell padding above stays
-        // in fixed points.
-        assertTrue("page side margin should be a responsive clamp, html=" + html,
-                html.contains("padding-left:clamp("));
+        assertTrue("page side margin should share the cell/text scale, html=" + html,
+                html.contains("padding-left:calc(var(--rw-point,1pt) * 50);"));
     }
 
     @Test

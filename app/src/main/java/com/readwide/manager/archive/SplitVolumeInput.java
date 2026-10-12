@@ -3,6 +3,7 @@ package com.readwide.manager.archive;
 import androidx.annotation.NonNull;
 
 import java.io.Closeable;
+import java.io.EOFException;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -60,7 +61,7 @@ final class SplitVolumeInput implements Closeable {
     private long position;
     private boolean closed;
     private IOException failure;
-    private final byte[] singleByte = new byte[1]; // Access only while holding this reader's lock.
+    private final byte[] scalarBytes = new byte[8]; // Access only while holding this reader's lock.
 
     SplitVolumeInput(@NonNull List<Segment> segments) throws IOException {
         if (segments.isEmpty()) throw new IOException("split volume set is empty");
@@ -120,8 +121,8 @@ final class SplitVolumeInput implements Closeable {
     }
 
     private synchronized int readByteAt(long pos) throws IOException {
-        int count = readAt(pos, singleByte, 0, 1);
-        return count < 0 ? -1 : (singleByte[0] & 0xff);
+        int count = readAt(pos, scalarBytes, 0, 1);
+        return count < 0 ? -1 : (scalarBytes[0] & 0xff);
     }
 
     synchronized int read(@NonNull byte[] buffer, int offset, int length) throws IOException {
@@ -144,6 +145,21 @@ final class SplitVolumeInput implements Closeable {
         int v = read();
         if (v < 0) throw new IOException("Unexpected EOF in split volume set");
         return v;
+    }
+
+    /** Reads exactly 1..8 bytes; eight-byte values retain their raw signed-long bits. */
+    synchronized long readLittleEndian(int byteCount) throws IOException {
+        if (byteCount < 1 || byteCount > scalarBytes.length) throw new IllegalArgumentException("Invalid scalar width");
+        checkReadable();
+        int done = 0;
+        while (done < byteCount) {
+            int count = read(scalarBytes, done, byteCount - done);
+            if (count < 0) throw new EOFException("Truncated split-volume header scalar");
+            done += count;
+        }
+        long value = 0L;
+        for (int i = 0; i < byteCount; i++) value |= (scalarBytes[i] & 0xffL) << (8 * i);
+        return value;
     }
 
     /**
@@ -186,6 +202,10 @@ final class SplitVolumeInput implements Closeable {
     }
 
     private int segmentFor(long pos) {
+        // Most parser/decoder reads remain in the open volume. Reuse its range
+        // before searching the chain; this adds no cache or new handle lifetime.
+        if (activeSegment >= 0 && pos >= segStart[activeSegment]
+                && pos - segStart[activeSegment] < segmentLength(activeSegment)) return activeSegment;
         // Upper bound selects the last equal start, skipping zero-length segments correctly.
         int low = 0, high = segStart.length;
         while (low < high) {

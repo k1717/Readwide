@@ -15,6 +15,14 @@ import com.readwide.manager.widget.SelectionContrastWebView;
 
 final class DocumentWebViewController {
     private final DocumentPageActivity activity;
+    private final ScaleObservation primaryScale = new ScaleObservation();
+    private final ScaleObservation rightScale = new ScaleObservation();
+
+    private static final class ScaleObservation {
+        WebView view;
+        int loadGeneration;
+        float scale = Float.NaN;
+    }
 
     DocumentWebViewController(@NonNull DocumentPageActivity activity) {
         this.activity = activity;
@@ -23,6 +31,47 @@ final class DocumentWebViewController {
     void setupWebView() {
         setupOneWebView(activity.webView, true);
         setupOneWebView(activity.rightWebView, false);
+    }
+
+    /** Callback values belong to one live WebView and one document load. */
+    boolean recordScaleChange(@NonNull WebView view, float scale) {
+        if (activity.activityDestroyed || !validScale(scale)
+                || (view != activity.webView && view != activity.rightWebView)
+                || !activity.isCurrentDocumentPageLoad(view, view.getUrl())) return false;
+        boolean right = view == activity.rightWebView;
+        ScaleObservation observation = right ? rightScale : primaryScale;
+        observation.view = view;
+        observation.loadGeneration = right ? activity.rightDocumentPageLoadGeneration
+                : activity.primaryDocumentPageLoadGeneration;
+        observation.scale = scale;
+        return true;
+    }
+
+    float scaleFor(@NonNull WebView view) {
+        boolean right = view == activity.rightWebView;
+        ScaleObservation observation = right ? rightScale : primaryScale;
+        int generation = right ? activity.rightDocumentPageLoadGeneration
+                : activity.primaryDocumentPageLoadGeneration;
+        if ((view == activity.webView || view == activity.rightWebView)
+                && observation.view == view && observation.loadGeneration == generation
+                && activity.isCurrentDocumentPageLoad(view, view.getUrl())
+                && validScale(observation.scale)) {
+            return observation.scale;
+        }
+        return initialScale(view);
+    }
+
+    @SuppressWarnings("deprecation")
+    private static float initialScale(@NonNull WebView view) {
+        // WebView need not send onScaleChanged when its initial scale is unchanged.
+        // Retain the existing bootstrap query, but never cache it as a callback
+        // observation or assume that fit-to-page always means a scale of 1.
+        float scale = view.getScale();
+        return validScale(scale) ? scale : 1f;
+    }
+
+    private static boolean validScale(float scale) {
+        return scale > 0f && !Float.isNaN(scale) && !Float.isInfinite(scale);
     }
 
     private void setupOneWebView(WebView view, boolean primary) {
@@ -110,7 +159,16 @@ final class DocumentWebViewController {
             @Override
             public void onScaleChanged(@NonNull WebView view, float oldScale, float newScale) {
                 super.onScaleChanged(view, oldScale, newScale);
-                if (primary) activity.scheduleDocumentFastScrollUpdate();
+                if (!recordScaleChange(view, newScale)) return;
+                if (primary) {
+                    activity.scheduleDocumentFastScrollUpdate();
+                    // Do not enqueue the page-load retry sequence on every pinch
+                    // frame, or persist progress before this load is ready.
+                    if (activity.primaryDocumentPageReadyGeneration
+                            == activity.primaryDocumentPageLoadGeneration) {
+                        activity.updateMarkdownVisualPageModel(false);
+                    }
+                }
             }
 
             @Override
@@ -145,7 +203,7 @@ final class DocumentWebViewController {
                 activity.documentTtsHighlight().installScript();
                 activity.applyPendingEpubAnchorAfterPageLoad(view);
                 activity.onEpubPrimaryPageLoaded(view);
-                if (activity.isRenderedContentAnchorDocument()) {
+                if (!activity.isMarkdownDocument()) {
                     activity.webView.postDelayed(activity::saveReadingState, 180);
                 }
             }
@@ -163,6 +221,10 @@ final class DocumentWebViewController {
         int pageIndex = view == activity.rightWebView
                 ? activity.documentRightSpreadPageIndex() : activity.currentPage;
         boolean fixedLayout = activity.epubPageKeepsOriginalLayout(pageIndex);
+        boolean renderedPaper = ("Word".equals(activity.docType) || "HWP".equals(activity.docType))
+                && pageIndex >= 0 && pageIndex < activity.pages.size()
+                && activity.pages.get(pageIndex).html != null
+                && activity.pages.get(pageIndex).html.contains("class=\"rw-rendered-doc\"");
         if (fixedLayout) {
             settings.setUseWideViewPort(false);
             settings.setLoadWithOverviewMode(false);
@@ -172,8 +234,8 @@ final class DocumentWebViewController {
         } else {
             settings.setLoadWithOverviewMode(false);
             settings.setUseWideViewPort(false);
-            settings.setLayoutAlgorithm("EPUB".equals(activity.docType)
-                    && activity.epubVerticalWritingLike
+            settings.setLayoutAlgorithm(renderedPaper || ("EPUB".equals(activity.docType)
+                    && activity.epubPageUsesVerticalWriting(pageIndex))
                     ? WebSettings.LayoutAlgorithm.NORMAL
                     : WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING);
             settings.setTextZoom(activity.documentTextZoomPercent());

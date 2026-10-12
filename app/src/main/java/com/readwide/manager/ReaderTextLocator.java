@@ -22,13 +22,14 @@ final class ReaderTextLocator {
     int getBookmarkSaveCharPosition() {
         if (activity.readerView == null) return 0;
 
-        int localPosition = activity.readerView.getCharPositionAtTitleCoveredRow();
+        int localPosition = activity.readerView.getDisplayTopCharPosition();
         if (activity.fileContent != null && !activity.fileContent.isEmpty()) {
             localPosition = FileUtils.clampToSurrogateSafeStart(activity.fileContent, localPosition);
         }
 
         return activity.largeTextEstimateActive
-                ? Math.max(0, activity.largeTextPreviewBaseCharOffset + localPosition)
+                ? (int) Math.min(Integer.MAX_VALUE, Math.max(0L,
+                        (long) activity.largeTextPreviewBaseCharOffset + localPosition))
                 : localPosition;
     }
 

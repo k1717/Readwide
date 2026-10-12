@@ -164,17 +164,21 @@ final class ArchiveImageSequenceLoader {
                            @NonNull List<ArchiveSupport.EntryInfo> sequence,
                            int targetIndex,
                            @Nullable char[] password) {
+        if (Thread.currentThread().isInterrupted()) return interruptedResult(null);
         String archivePathSnapshot = archiveFile.getAbsolutePath();
         long archiveLengthSnapshot = archiveFile.length();
         long archiveLastModifiedSnapshot = archiveFile.lastModified();
         ArchiveSourceSnapshot sourceSnapshot = ArchiveSourceSnapshot.capture(archiveFile);
+        if (Thread.currentThread().isInterrupted()) return interruptedResult(null);
         boolean sensitiveCache = PasswordChars.hasPassword(password);
+        ArchivePreviewCache.EntryFiles cacheFiles = ArchivePreviewCache.prepareEntries(context, sourceSnapshot, sensitiveCache);
         Set<String> verifiedSensitivePaths = new HashSet<>();
         ArrayList<String> imagePaths = new ArrayList<>();
         ArrayList<String> displayNames = new ArrayList<>();
         ArrayList<String> entryPaths = new ArrayList<>();
         for (ArchiveSupport.EntryInfo imageEntry : sequence) {
-            File outFile = ArchivePreviewCache.outputFileForEntry(context, sourceSnapshot, imageEntry.path, sensitiveCache);
+            if (Thread.currentThread().isInterrupted()) return interruptedResult(null);
+            File outFile = cacheFiles.file(imageEntry.path);
             imagePaths.add(outFile.getAbsolutePath());
             displayNames.add(imageEntry.name());
             entryPaths.add(imageEntry.path);
@@ -185,7 +189,7 @@ final class ArchiveImageSequenceLoader {
         SequentialArchiveImageReader preparedReader = null;
         if (targetIndex >= 0 && targetIndex < sequence.size()) {
             ArchiveSupport.EntryInfo targetEntry = sequence.get(targetIndex);
-            File targetFile = ArchivePreviewCache.outputFileForEntry(context, sourceSnapshot, targetEntry.path, sensitiveCache);
+            File targetFile = cacheFiles.file(targetEntry.path);
             if (ArchiveSupport.isForwardImageReadableType(archiveFile)) {
                 // Sequential archives: extract only up to the target via a forward reader,
                 // avoiding whole-archive decompression for the first page. Falls back to
@@ -237,6 +241,7 @@ final class ArchiveImageSequenceLoader {
             selectedReady = selectedResult.success;
         }
 
+        if (Thread.currentThread().isInterrupted()) return interruptedResult(preparedReader);
         int openIndex = targetIndex;
         if (!selectedReady && ArchiveSupport.getSupportedArchiveType(archiveFile) != ArchiveSupport.Type.RAR
                 && shouldTryAlternateImageEntry(selectedResult, PasswordChars.hasPassword(password))) {
@@ -245,9 +250,10 @@ final class ArchiveImageSequenceLoader {
                 preparedReader = null;
             }
             for (int i = 0; i < sequence.size(); i++) {
+                if (Thread.currentThread().isInterrupted()) return interruptedResult(null);
                 if (i == targetIndex) continue;
                 ArchiveSupport.EntryInfo imageEntry = sequence.get(i);
-                File outFile = ArchivePreviewCache.outputFileForEntry(context, sourceSnapshot, imageEntry.path, sensitiveCache);
+                File outFile = cacheFiles.file(imageEntry.path);
                 ArchiveSupport.ExtractionResult fallbackResult = ensureEntryReady(
                         archiveFile,
                         imageEntry.path,
@@ -263,12 +269,14 @@ final class ArchiveImageSequenceLoader {
             }
         }
 
+        if (Thread.currentThread().isInterrupted()) return interruptedResult(preparedReader);
         if (!SequentialArchiveImageReader.matchesArchiveSnapshot(
                 archiveFile,
                 archivePathSnapshot,
                 archiveLengthSnapshot,
                 archiveLastModifiedSnapshot)
                 || (sourceSnapshot != null && !sourceSnapshot.matches(archiveFile))) {
+            if (Thread.currentThread().isInterrupted()) return interruptedResult(preparedReader);
             if (preparedReader != null) preparedReader.close();
             return new Result(
                     imagePaths,
@@ -282,6 +290,7 @@ final class ArchiveImageSequenceLoader {
                     null,
                     null);
         }
+        if (Thread.currentThread().isInterrupted()) return interruptedResult(preparedReader);
         return new Result(imagePaths, displayNames, entryPaths, openIndex, selectedReady,
                 selectedResult, preparedReader, verifiedSensitivePaths,
                 archivePathSnapshot, archiveLengthSnapshot, archiveLastModifiedSnapshot, sourceSnapshot);
@@ -309,6 +318,7 @@ final class ArchiveImageSequenceLoader {
 
     static boolean shouldTryAlternateImageEntry(@Nullable ArchiveSupport.ExtractionResult result,
                                                 boolean passwordProvided) {
+        if (Thread.currentThread().isInterrupted()) return false;
         if (result == null || result.success) return false;
         if (result.failure == ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED) return false;
         if (result.failure == ArchiveSupport.ExtractionFailure.BAD_PASSWORD) return false;
@@ -322,11 +332,14 @@ final class ArchiveImageSequenceLoader {
                             @NonNull List<ArchiveSupport.EntryInfo> sequence,
                             int targetIndex,
                             @Nullable char[] password) {
+        if (Thread.currentThread().isInterrupted()) return interruptedResult(null);
         String archivePathSnapshot = archiveFile.getAbsolutePath();
         long archiveLengthSnapshot = archiveFile.length();
         long archiveLastModifiedSnapshot = archiveFile.lastModified();
         ArchiveSourceSnapshot sourceSnapshot = ArchiveSourceSnapshot.capture(archiveFile);
+        if (Thread.currentThread().isInterrupted()) return interruptedResult(null);
         boolean sensitiveCache = PasswordChars.hasPassword(password);
+        ArchivePreviewCache.EntryFiles cacheFiles = ArchivePreviewCache.prepareEntries(context, sourceSnapshot, sensitiveCache);
         Set<String> verifiedSensitivePaths = new HashSet<>();
         ArrayList<String> imagePaths = new ArrayList<>();
         ArrayList<String> displayNames = new ArrayList<>();
@@ -335,8 +348,9 @@ final class ArchiveImageSequenceLoader {
         boolean selectedExtracted = false;
         ArchiveSupport.ExtractionResult selectedResult = null;
         for (int i = 0; i < sequence.size(); i++) {
+            if (Thread.currentThread().isInterrupted()) return interruptedResult(null);
             ArchiveSupport.EntryInfo imageEntry = sequence.get(i);
-            File outFile = ArchivePreviewCache.outputFileForEntry(context, sourceSnapshot, imageEntry.path, sensitiveCache);
+            File outFile = cacheFiles.file(imageEntry.path);
             ArchiveSupport.ExtractionResult result = ensureEntryReady(
                     archiveFile,
                     imageEntry.path,
@@ -344,6 +358,7 @@ final class ArchiveImageSequenceLoader {
                     password,
                     sensitiveCache,
                     verifiedSensitivePaths);
+            if (Thread.currentThread().isInterrupted()) return interruptedResult(null);
             boolean ok = result.success;
             if (ok && outFile.exists()) {
                 if (i == targetIndex) {
@@ -357,6 +372,7 @@ final class ArchiveImageSequenceLoader {
                 selectedResult = result;
             }
         }
+        if (Thread.currentThread().isInterrupted()) return interruptedResult(null);
         if (ArchiveSupport.getSupportedArchiveType(archiveFile) != ArchiveSupport.Type.RAR
                 && !selectedExtracted && !imagePaths.isEmpty() && selectedResult != null
                 && selectedResult.failure == ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE) {
@@ -369,6 +385,7 @@ final class ArchiveImageSequenceLoader {
                 archiveLengthSnapshot,
                 archiveLastModifiedSnapshot)
                 || (sourceSnapshot != null && !sourceSnapshot.matches(archiveFile))) {
+            if (Thread.currentThread().isInterrupted()) return interruptedResult(null);
             return new Result(
                     imagePaths,
                     displayNames,
@@ -381,9 +398,16 @@ final class ArchiveImageSequenceLoader {
                     null,
                     null);
         }
+        if (Thread.currentThread().isInterrupted()) return interruptedResult(null);
         return new Result(imagePaths, displayNames, entryPaths,
                 extractedSelectedIndex, selectedExtracted, selectedResult,
                 null, verifiedSensitivePaths,
                 archivePathSnapshot, archiveLengthSnapshot, archiveLastModifiedSnapshot, sourceSnapshot);
+    }
+
+    private static Result interruptedResult(@Nullable SequentialArchiveImageReader reader) {
+        if (reader != null) reader.close();
+        return new Result(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(),
+                0, false, ArchiveImageEntryCache.interruptedResult());
     }
 }

@@ -59,7 +59,8 @@ final class MainActivityStartupController {
         activity.applyMainReadableTheme(toolbar);
 
         Intent intent = activity.getIntent();
-        Uri viewUri = (intent != null && Intent.ACTION_VIEW.equals(intent.getAction()))
+        Uri viewUri = (!activity.navigationState.hasPendingRestore()
+                && intent != null && Intent.ACTION_VIEW.equals(intent.getAction()))
                 ? intent.getData() : null;
 
         if (activity.prefs.isLockEnabled() && !activity.lockChecked) {
@@ -69,6 +70,7 @@ final class MainActivityStartupController {
             // lock screen. The unlock callback opens the pending file or initialises the
             // main UI.
             activity.pendingExternalUri = viewUri;
+            activity.awaitingUnlock = true;
             Intent lockIntent = new Intent(activity, LockActivity.class);
             lockIntent.putExtra(LockActivity.EXTRA_MODE, LockActivity.MODE_UNLOCK);
             activity.lockLauncher.launch(lockIntent);
@@ -147,6 +149,9 @@ final class MainActivityStartupController {
         activity.recentSection = activity.findViewById(R.id.recent_section);
         activity.browserSection = activity.findViewById(R.id.main_content_container);
         activity.recentRecyclerView = activity.findViewById(R.id.recent_list);
+        // The compact navigation snapshot restores the correct list after loading.
+        activity.fileRecyclerView.setSaveEnabled(false);
+        activity.recentRecyclerView.setSaveEnabled(false);
         activity.recentEmptyText = activity.findViewById(R.id.recent_empty_text);
         activity.recentClearAllButton = activity.findViewById(R.id.recent_clear_all);
     }

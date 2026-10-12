@@ -9,6 +9,24 @@ import java.nio.charset.StandardCharsets;
 import org.junit.Test;
 
 public class DocumentTextDecoderTest {
+    @Test public void cssCharsetPreservesNonAsciiResourceNames() {
+        String css = "@charset \"windows-1252\"; @import \"caf\u00e9.css\";";
+        assertEquals(css, DocumentTextDecoder.decode(css.getBytes(Charset.forName("windows-1252"))));
+    }
+
+    @Test public void utf8BomTakesPrecedenceOverCssCharset() {
+        String css = "@charset \"windows-1252\"; .note{content:'한글';}";
+        byte[] body = css.getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = new byte[body.length + 3];
+        bytes[0] = (byte) 0xef; bytes[1] = (byte) 0xbb; bytes[2] = (byte) 0xbf;
+        System.arraycopy(body, 0, bytes, 3, body.length);
+        assertEquals(css, DocumentTextDecoder.decode(bytes));
+    }
+
+    @Test public void asciiCssHeaderCannotForceUtf16Decoding() {
+        String css = "@charset \"UTF-16\"; .note{content:'한글';}";
+        assertEquals(css, DocumentTextDecoder.decode(css.getBytes(StandardCharsets.UTF_8)));
+    }
     @Test
     public void utf16LeBomIsDecoded() {
         byte[] body = "<html><body>한글</body></html>".getBytes(StandardCharsets.UTF_16LE);

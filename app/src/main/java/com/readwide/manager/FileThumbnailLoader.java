@@ -12,6 +12,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.readwide.manager.archive.ArchiveSupport;
+import com.readwide.manager.archive.ArchiveSourceSnapshot;
 import com.readwide.manager.util.FileThumbnailMath;
 import com.readwide.manager.util.NaturalSort;
 
@@ -21,7 +22,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
@@ -39,25 +40,33 @@ import java.util.zip.ZipFile;
  * {@code null}, leaving the normal type icon in the row.</p>
  */
 public final class FileThumbnailLoader {
-    private static final long MAX_ARCHIVE_COVER_ENTRY_BYTES = 128L * 1024L * 1024L;
     private static final long MAX_DISK_CACHE_BYTES = 64L * 1024L * 1024L;
     private static final int MAX_DISK_CACHE_FILES = 1600;
     private static final int DISK_CACHE_TRIM_INTERVAL = 32;
     private static final int MAX_COVER_CANDIDATES = 8;
     private static final String DISK_CACHE_DIRECTORY = "file_thumbnails_v1";
-    private static final String DISK_CACHE_FORMAT = "readwide-thumbnail-v2";
+    private static final String DISK_CACHE_FORMAT = "readwide-thumbnail-v3";
     private static final Semaphore GLOBAL_DECODE_SLOTS = new Semaphore(2, true);
     private static final Object DISK_CACHE_TRIM_LOCK = new Object();
     private static final ConcurrentHashMap<String, KeyLock> KEY_LOCKS =
             new ConcurrentHashMap<>();
     private static final AtomicBoolean INITIAL_CACHE_TRIM_DONE = new AtomicBoolean();
     private static final AtomicInteger CACHE_WRITES = new AtomicInteger();
+    private static final Comparator<File> FOLDER_COVER_ORDER = (left, right) -> {
+        boolean leftImage = FileThumbnailMath.isThumbnailImageName(left.getName());
+        boolean rightImage = FileThumbnailMath.isThumbnailImageName(right.getName());
+        if (leftImage != rightImage) return leftImage ? -1 : 1;
+        return NaturalSort.compare(left.getName(), right.getName());
+    };
+    private static final Comparator<ArchiveSupport.EntryInfo> ARCHIVE_COVER_ORDER =
+            (left, right) -> NaturalSort.compare(left.path, right.path);
 
     private FileThumbnailLoader() {}
 
     /**
-     * Read only an already-published cover PNG. No archive/PDF decoding, folder
-     * scan, decode-slot wait, key-lock wait, directory creation or cache trim.
+     * Read only an already-published cover PNG. No archive extraction/PDF decoding,
+     * decode-slot wait, key-lock wait, directory creation or cache trim. Archive
+     * source validation may resolve sibling volumes and read format headers.
      * Atomic publication makes lock-free cache reads safe; a racing eviction is
      * simply a miss. Never delete a miss here: a writer may have just replaced it.
      */
@@ -99,8 +108,10 @@ public final class FileThumbnailLoader {
         try {
             GLOBAL_DECODE_SLOTS.acquire();
             acquired = true;
+            if (Thread.currentThread().isInterrupted()) return null;
             if (directory) {
                 for (File source : directThumbnailSources(file, showHiddenFiles)) {
+                    if (Thread.currentThread().isInterrupted()) return null;
                     Bitmap decoded = decodeCachedSource(context, source, maxSidePx);
                     if (decoded != null && !decoded.isRecycled()) return decoded;
                 }
@@ -123,14 +134,14 @@ public final class FileThumbnailLoader {
     /**
      * Reuses an app-private PNG cache across adapter instances and process
      * restarts. The key includes source identity, size, modification time,
-     * requested decode size, and cache format version, so replacing a source
+     * resolved archive-volume metadata, requested decode size, and cache format version, so replacing a source
      * naturally creates a new entry without relying on UI-side invalidation.
      */
     @Nullable
     private static Bitmap decodeCachedSource(@NonNull Context context,
                                              @NonNull File source,
                                              int maxSidePx) {
-        if (!source.isFile()) return null;
+        if (Thread.currentThread().isInterrupted() || !source.isFile()) return null;
         SourceStamp sourceStamp = SourceStamp.capture(source);
         if (!sourceStamp.regularFile) return null;
         String key = diskCacheKey(sourceStamp, maxSidePx);
@@ -141,13 +152,14 @@ public final class FileThumbnailLoader {
         });
         try {
             synchronized (keyLock.monitor) {
+                if (Thread.currentThread().isInterrupted()) return null;
                 File cacheDirectory = diskCacheDirectory(context);
                 File cachedFile = cacheDirectory != null
                         ? new File(cacheDirectory, key + ".png")
                         : null;
                 Bitmap cached = readDiskBitmap(cachedFile);
                 if (cached != null) {
-                    if (sourceStamp.matches(source)) return cached;
+                    if (!Thread.currentThread().isInterrupted() && sourceStamp.matches(source)) return cached;
                     cached.recycle();
                     return null;
                 }
@@ -157,7 +169,7 @@ public final class FileThumbnailLoader {
                 // still being copied/replaced. Its cache key describes the old
                 // file state and a partial decode can otherwise look like a
                 // persistent, randomly changing cover.
-                if (decoded != null && !sourceStamp.matches(source)) {
+                if (decoded != null && (Thread.currentThread().isInterrupted() || !sourceStamp.matches(source))) {
                     if (!decoded.isRecycled()) decoded.recycle();
                     return null;
                 }
@@ -180,20 +192,27 @@ public final class FileThumbnailLoader {
         int users;
     }
 
-    private static final class SourceStamp {
+    /** Worker-only identity for validating an adapter's archive cover memory hit. */
+    public static String sourceIdentity(@NonNull File source) {
+        return diskCacheKey(SourceStamp.capture(source), 0);
+    }
+
+    static final class SourceStamp {
         @NonNull final String path;
         final long length;
         final long lastModified;
         final boolean regularFile;
+        @Nullable final ArchiveSourceSnapshot archiveSnapshot;
 
         private SourceStamp(@NonNull String path,
                             long length,
                             long lastModified,
-                            boolean regularFile) {
+                            boolean regularFile, @Nullable ArchiveSourceSnapshot archiveSnapshot) {
             this.path = path;
             this.length = length;
             this.lastModified = lastModified;
             this.regularFile = regularFile;
+            this.archiveSnapshot = archiveSnapshot;
         }
 
         @NonNull
@@ -208,13 +227,15 @@ public final class FileThumbnailLoader {
                     path,
                     source.length(),
                     source.lastModified(),
-                    source.isFile());
+                    source.isFile(), FileThumbnailMath.isThumbnailArchiveName(source.getName())
+                            ? ArchiveSourceSnapshot.capture(source) : null);
         }
 
         boolean matches(@NonNull File source) {
             return source.isFile()
                     && source.length() == length
-                    && source.lastModified() == lastModified;
+                    && source.lastModified() == lastModified
+                    && (archiveSnapshot == null || archiveSnapshot.matches(source));
         }
     }
 
@@ -224,6 +245,7 @@ public final class FileThumbnailLoader {
                 + '\n' + source.path
                 + '\n' + source.length
                 + '\n' + source.lastModified
+                + '\n' + (source.archiveSnapshot == null ? "" : source.archiveSnapshot.cacheFingerprint())
                 + '\n' + maxSidePx;
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -308,8 +330,7 @@ public final class FileThumbnailLoader {
         synchronized (DISK_CACHE_TRIM_LOCK) {
             File[] files = cacheDirectory.listFiles(file -> file != null && file.isFile());
             if (files == null || files.length == 0) return;
-            Arrays.sort(files, (left, right) ->
-                    Long.compare(left.lastModified(), right.lastModified()));
+            ArrayList<CacheFileStamp> candidates = new ArrayList<>(files.length);
             long totalBytes = 0L;
             int validFiles = 0;
             for (File file : files) {
@@ -318,14 +339,20 @@ public final class FileThumbnailLoader {
                     file.delete();
                     continue;
                 }
-                totalBytes += Math.max(0L, file.length());
+                CacheFileStamp stamp = new CacheFileStamp(file);
+                candidates.add(stamp);
+                totalBytes += stamp.length;
                 validFiles++;
             }
+            if (totalBytes <= MAX_DISK_CACHE_BYTES && validFiles <= MAX_DISK_CACHE_FILES) return;
+            // Sorting is pure memory work; never stat files from the comparator.
+            candidates.sort((left, right) -> Long.compare(left.modified, right.modified));
             int removeIndex = 0;
             while ((totalBytes > MAX_DISK_CACHE_BYTES || validFiles > MAX_DISK_CACHE_FILES)
-                    && removeIndex < files.length) {
-                File file = files[removeIndex++];
-                if (!file.isFile() || file.getName().endsWith(".tmp")) continue;
+                    && removeIndex < candidates.size()) {
+                CacheFileStamp stamp = candidates.get(removeIndex++);
+                File file = stamp.file;
+                if (!file.isFile()) continue;
                 String name = file.getName();
                 String activeKey = name.endsWith(".png")
                         ? name.substring(0, name.length() - 4)
@@ -333,13 +360,39 @@ public final class FileThumbnailLoader {
                 // Per-source decoding owns this key. Let a later trim remove it
                 // rather than racing BitmapFactory or an atomic cache commit.
                 if (!activeKey.isEmpty() && KEY_LOCKS.containsKey(activeKey)) continue;
-                long length = Math.max(0L, file.length());
                 if (file.delete()) {
-                    totalBytes = Math.max(0L, totalBytes - length);
+                    totalBytes = Math.max(0L, totalBytes - stamp.length);
                     validFiles--;
                 }
             }
         }
+    }
+
+    private static final class CacheFileStamp {
+        final File file;
+        final long length;
+        final long modified;
+
+        CacheFileStamp(File file) {
+            this.file = file;
+            length = Math.max(0L, file.length());
+            modified = file.lastModified();
+        }
+    }
+
+    /** Stable sorted prefix, bounded to eight entries rather than sorting all candidates. */
+    static <T> void offerCoverCandidate(List<T> selected, T candidate, Comparator<? super T> order) {
+        if (selected.size() == MAX_COVER_CANDIDATES
+                && order.compare(candidate, selected.get(MAX_COVER_CANDIDATES - 1)) >= 0) return;
+        int low = 0;
+        int high = selected.size();
+        while (low < high) {
+            int mid = (low + high) >>> 1;
+            if (order.compare(candidate, selected.get(mid)) < 0) high = mid;
+            else low = mid + 1; // Equal keys keep their original enumeration order.
+        }
+        if (selected.size() == MAX_COVER_CANDIDATES) selected.remove(MAX_COVER_CANDIDATES - 1);
+        selected.add(low, candidate);
     }
 
     @Nullable
@@ -378,29 +431,9 @@ public final class FileThumbnailLoader {
         if (children == null || children.length == 0) {
             return java.util.Collections.emptyList();
         }
-        ArrayList<File> preferredImages = new ArrayList<>();
-        ArrayList<File> bookCandidates = new ArrayList<>();
+        ArrayList<File> ordered = new ArrayList<>(MAX_COVER_CANDIDATES);
         for (File child : children) {
-            if (FileThumbnailMath.isThumbnailImageName(child.getName())) {
-                preferredImages.add(child);
-            } else {
-                bookCandidates.add(child);
-            }
-        }
-        preferredImages.sort((left, right) ->
-                NaturalSort.compare(left.getName(), right.getName()));
-        bookCandidates.sort((left, right) ->
-                NaturalSort.compare(left.getName(), right.getName()));
-        ArrayList<File> ordered = new ArrayList<>(
-                Math.min(MAX_COVER_CANDIDATES,
-                        preferredImages.size() + bookCandidates.size()));
-        for (File source : preferredImages) {
-            if (ordered.size() >= MAX_COVER_CANDIDATES) break;
-            ordered.add(source);
-        }
-        for (File source : bookCandidates) {
-            if (ordered.size() >= MAX_COVER_CANDIDATES) break;
-            ordered.add(source);
+            offerCoverCandidate(ordered, child, FOLDER_COVER_ORDER);
         }
         return ordered;
     }
@@ -423,7 +456,7 @@ public final class FileThumbnailLoader {
             ZipEntry entry = zip.getEntry(coverPath);
             if (entry == null || entry.isDirectory()) return null;
             long declaredSize = entry.getSize();
-            if (declaredSize <= 0L || declaredSize > MAX_ARCHIVE_COVER_ENTRY_BYTES) {
+            if (!FileThumbnailMath.hasPossibleImageData(declaredSize)) {
                 return null;
             }
             return decodeZipBitmap(zip, entry, maxSidePx);
@@ -491,9 +524,12 @@ public final class FileThumbnailLoader {
                                              int maxSidePx) {
         File temp = null;
         try {
+            if (Thread.currentThread().isInterrupted()) return null;
             List<ArchiveSupport.EntryInfo> entries = ArchiveSupport.listEntries(archive, null);
-            ArrayList<ArchiveSupport.EntryInfo> images = new ArrayList<>();
+            if (Thread.currentThread().isInterrupted()) return null;
+            ArrayList<ArchiveSupport.EntryInfo> images = new ArrayList<>(MAX_COVER_CANDIDATES);
             for (ArchiveSupport.EntryInfo entry : entries) {
+                if (Thread.currentThread().isInterrupted()) return null;
                 if (entry == null || entry.directory || entry.path == null) continue;
                 String normalized = entry.path.replace('\\', '/');
                 String lower = normalized.toLowerCase(Locale.ROOT);
@@ -501,28 +537,27 @@ public final class FileThumbnailLoader {
                         || lower.contains("/__macosx/")
                         || FileThumbnailMath.fileName(lower).startsWith("._")
                         || !FileThumbnailMath.isThumbnailImageName(lower)
-                        || entry.size <= 0L
-                        || entry.size > MAX_ARCHIVE_COVER_ENTRY_BYTES) {
+                        || !FileThumbnailMath.hasPossibleImageData(entry.size)) {
                     continue;
                 }
-                images.add(entry);
+                offerCoverCandidate(images, entry, ARCHIVE_COVER_ORDER);
             }
             if (images.isEmpty()) return null;
-            images.sort((left, right) -> NaturalSort.compare(left.path, right.path));
 
             File cacheDir = new File(context.getCacheDir(), "file_thumbnail_entries");
             if (!cacheDir.exists() && !cacheDir.mkdirs()) return null;
             temp = File.createTempFile("cover-", ".image", cacheDir);
             int attempts = Math.min(MAX_COVER_CANDIDATES, images.size());
             for (int i = 0; i < attempts; i++) {
+                if (Thread.currentThread().isInterrupted()) return null;
                 ArchiveSupport.EntryInfo candidate = images.get(i);
                 ArchiveSupport.ExtractionResult result =
                         ArchiveSupport.extractSingleEntryDetailed(
                                 archive, candidate.path, temp, null);
+                if (Thread.currentThread().isInterrupted()) return null;
                 if (!result.success
                         || !temp.isFile()
-                        || temp.length() <= 0L
-                        || temp.length() > MAX_ARCHIVE_COVER_ENTRY_BYTES) {
+                        || temp.length() <= 0L) {
                     continue;
                 }
                 Bitmap decoded = decodeBitmapFile(temp, maxSidePx);

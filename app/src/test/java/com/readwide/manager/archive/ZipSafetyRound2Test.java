@@ -21,15 +21,15 @@ public class ZipSafetyRound2Test {
     @Test public void dotPrefixRawLookupExtractsExpectedPayload()throws Exception {
         File archive=zip("./chapter.txt"),out=new File(temp.getRoot(),"out.txt");
         assertTrue(LightweightZipArchiveReader.extractSingleEntry(archive,"chapter.txt",out));
-        assertEquals("payload:./chapter.txt",Files.readString(out.toPath()));
+        assertEquals("payload:./chapter.txt",ArchiveTestTextFiles.readString(out.toPath()));
     }
     @Test public void slashNormalizedRawLookupExtractsExpectedPayload()throws Exception {
         File archive=zip("a//b.txt"),out=new File(temp.getRoot(),"out.txt");assertTrue(LightweightZipArchiveReader.extractSingleEntry(archive,"a/b.txt",out));
-        assertEquals("payload:a//b.txt",Files.readString(out.toPath()));
+        assertEquals("payload:a//b.txt",ArchiveTestTextFiles.readString(out.toPath()));
     }
     @Test public void crcMismatchRestoresExistingOutput()throws Exception {
-        File archive=zip("page.txt");corrupt(archive);File out=temp.newFile("out.txt");Files.writeString(out.toPath(),"KEEP");
-        io(()->LightweightZipArchiveReader.extractSingleEntry(archive,"page.txt",out));assertEquals("KEEP",Files.readString(out.toPath()));
+        File archive=zip("page.txt");corrupt(archive);File out=temp.newFile("out.txt");ArchiveTestTextFiles.writeString(out.toPath(),"KEEP");
+        io(()->LightweightZipArchiveReader.extractSingleEntry(archive,"page.txt",out));assertEquals("KEEP",ArchiveTestTextFiles.readString(out.toPath()));
     }
     @Test public void crcMismatchDeletesNewPartialOutput()throws Exception {
         File archive=zip("page.txt");corrupt(archive);File out=new File(temp.getRoot(),"out.txt");io(()->LightweightZipArchiveReader.extractSingleEntry(archive,"page.txt",out));assertFalse(out.exists());
@@ -47,25 +47,25 @@ public class ZipSafetyRound2Test {
         File archive=zip("../escape.txt","safe.txt");File target=temp.newFolder("out");io(()->LightweightZipArchiveReader.extractArchiveIntoDirectory(archive,target));assertEquals(0,target.list().length);
     }
     @Test public void preInterruptedExtractionDoesNotTouchExistingTarget()throws Exception {
-        File archive=zip("page.txt");File out=temp.newFile("out.txt");Files.writeString(out.toPath(),"KEEP");Thread.currentThread().interrupt();
-        try{io(()->LightweightZipArchiveReader.extractSingleEntry(archive,"page.txt",out));assertTrue(Thread.currentThread().isInterrupted());}finally{Thread.interrupted();}assertEquals("KEEP",Files.readString(out.toPath()));
+        File archive=zip("page.txt");File out=temp.newFile("out.txt");ArchiveTestTextFiles.writeString(out.toPath(),"KEEP");Thread.currentThread().interrupt();
+        try{io(()->LightweightZipArchiveReader.extractSingleEntry(archive,"page.txt",out));assertTrue(Thread.currentThread().isInterrupted());}finally{Thread.interrupted();}assertEquals("KEEP",ArchiveTestTextFiles.readString(out.toPath()));
     }
     @Test public void boundedWorkersExtractManyMembersWithExactBytes()throws Exception {
         String[] names=new String[120];for(int i=0;i<names.length;i++)names[i]="images/p"+i+".txt";
         File archive=zip(names),target=temp.newFolder("out");assertTrue(LightweightZipArchiveReader.extractArchiveIntoDirectory(archive,target));
-        for(String name:names)assertEquals("payload:"+name,Files.readString(new File(target,name).toPath()));
+        for(String name:names)assertEquals("payload:"+name,ArchiveTestTextFiles.readString(new File(target,name).toPath()));
     }
     @Test public void parallelFailureLeavesNoActiveWritersOrBackupFiles()throws Exception {
-        File archive=zip("bad.txt","b.txt","c.txt","d.txt","e.txt");corrupt(archive);File target=temp.newFolder("out");File old=new File(target,"bad.txt");Files.writeString(old.toPath(),"KEEP");
-        io(()->LightweightZipArchiveReader.extractArchiveIntoDirectory(archive,target));assertEquals("KEEP",Files.readString(old.toPath()));
+        File archive=zip("bad.txt","b.txt","c.txt","d.txt","e.txt");corrupt(archive);File target=temp.newFolder("out");File old=new File(target,"bad.txt");ArchiveTestTextFiles.writeString(old.toPath(),"KEEP");
+        io(()->LightweightZipArchiveReader.extractArchiveIntoDirectory(archive,target));assertEquals("KEEP",ArchiveTestTextFiles.readString(old.toPath()));
         Map<String,Long> snapshot=new TreeMap<>();for(File f:target.listFiles()){assertFalse(f.getName().contains("rar-extract-backup"));snapshot.put(f.getName(),f.length());}
         Thread.sleep(25);Map<String,Long> after=new TreeMap<>();for(File f:target.listFiles())after.put(f.getName(),f.length());assertEquals(snapshot,after);
     }
     @Test public void repeatedRollbackCloseDoesNotDeleteRestoredOriginal()throws Exception {
-        File out=temp.newFile("old.txt");Files.writeString(out.toPath(),"ORIGINAL");RarOutputFileGuard guard=RarOutputFileGuard.forTarget(out);Files.writeString(out.toPath(),"PARTIAL");guard.close();guard.close();assertEquals("ORIGINAL",Files.readString(out.toPath()));
+        File out=temp.newFile("old.txt");ArchiveTestTextFiles.writeString(out.toPath(),"ORIGINAL");RarOutputFileGuard guard=RarOutputFileGuard.forTarget(out);ArchiveTestTextFiles.writeString(out.toPath(),"PARTIAL");guard.close();guard.close();assertEquals("ORIGINAL",ArchiveTestTextFiles.readString(out.toPath()));
     }
     @Test public void repeatedCommittedClosePreservesNewFile()throws Exception {
-        File out=temp.newFile("old.txt");Files.writeString(out.toPath(),"ORIGINAL");RarOutputFileGuard guard=RarOutputFileGuard.forTarget(out);Files.writeString(out.toPath(),"NEW");guard.commit();guard.close();guard.close();assertEquals("NEW",Files.readString(out.toPath()));
+        File out=temp.newFile("old.txt");ArchiveTestTextFiles.writeString(out.toPath(),"ORIGINAL");RarOutputFileGuard guard=RarOutputFileGuard.forTarget(out);ArchiveTestTextFiles.writeString(out.toPath(),"NEW");guard.commit();guard.close();guard.close();assertEquals("NEW",ArchiveTestTextFiles.readString(out.toPath()));
     }
     @Test public void lateCommitCannotResurrectClosedGuard()throws Exception {
         File out=temp.newFile("old.txt");RarOutputFileGuard guard=RarOutputFileGuard.forTarget(out);guard.close();try{guard.commit();fail();}catch(IllegalStateException expected){}

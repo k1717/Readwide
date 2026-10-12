@@ -1,21 +1,16 @@
 package com.readwide.manager;
 
-import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
-import android.graphics.drawable.GradientDrawable;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
-import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Spinner;
@@ -24,7 +19,6 @@ import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 
-import com.google.android.material.button.MaterialButton;
 import com.readwide.manager.util.EpubFontPreferenceMath;
 import com.readwide.manager.util.ArchiveViewerTimeoutPolicy;
 import com.readwide.manager.util.FontManager;
@@ -41,6 +35,10 @@ final class SettingsReaderControlsController {
 
     private final SettingsActivity activity;
     private final PrefsManager prefs;
+    private java.util.concurrent.ExecutorService fontWorker;
+    private java.util.concurrent.Future<?> fontLoad;
+    private android.app.Dialog fontDialog;
+    private boolean closed;
 
     SettingsReaderControlsController(@NonNull SettingsActivity activity) {
         this.activity = activity;
@@ -296,65 +294,99 @@ final class SettingsReaderControlsController {
     }
 
     private void showEpubDefaultFontDialog(@NonNull TextView valueView) {
+        if (closed || activity.isFinishing() || activity.isDestroyed()) return;
+        if (fontLoad != null) { fontLoad.cancel(true); fontLoad = null; }
+        if (fontDialog != null) fontDialog.dismiss();
         List<EpubFontOption> options = epubFontOptions();
         String current = EpubFontPreferenceMath.normalize(prefs.getEpubFontFamily());
         android.app.Dialog dialog = activity.createRoundedSettingsDialog();
+        fontDialog = dialog;
+        dialog.setOnDismissListener(ignored -> {
+            if (fontDialog != dialog) return;
+            fontDialog = null;
+            if (fontLoad != null) fontLoad.cancel(true);
+            fontLoad = null;
+        });
+        dialog.setCanceledOnTouchOutside(true);
         LinearLayout panel = activity.createRoundedSettingsDialogPanel();
         int text = activity.dialogTextColor();
         int sub = activity.dialogSubTextColor();
         int outline = activity.dialogOutlineColor();
         panel.addView(activity.makeSettingsDialogTitle(activity.getString(R.string.select_font), text));
 
-        RadioGroup list = new RadioGroup(activity);
+        LinearLayout list = new LinearLayout(activity);
         list.setOrientation(LinearLayout.VERTICAL);
+        TextView selectedRow = null;
         for (EpubFontOption option : options) {
             boolean selected = option.value.equals(current);
-            RadioButton row = new RadioButton(activity);
-            row.setId(View.generateViewId());
-            row.setText(option.label);
-            row.setTextColor(text);
-            row.setTextSize(14.5f);
-            row.setSingleLine(false);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setMinHeight(activity.dpToPx(48));
-            row.setPaddingRelative(activity.dpToPx(12), activity.dpToPx(8),
-                    activity.dpToPx(12), activity.dpToPx(8));
-            row.setButtonTintList(new ColorStateList(
-                    new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
-                    new int[]{text, sub}));
-            GradientDrawable background = new GradientDrawable();
-            background.setColor(selected ? prefs.getMainSelectedColor(activity) : activity.dialogRowBackgroundColor());
-            background.setCornerRadius(activity.dpToPx(13));
-            background.setStroke(activity.dpToPx(1), selected ? prefs.getMainFileLongHoldColor(activity) : outline);
-            row.setBackground(background);
-            row.setChecked(selected);
+            TextView row = activity.makeSettingsSelectionRow(option.label, selected, text, sub, outline);
+            if (selected) selectedRow = row;
             row.setOnClickListener(v -> {
                 prefs.setEpubFontFamily(option.value);
                 updateEpubDefaultFontValue(valueView);
                 dialog.dismiss();
             });
-            RadioGroup.LayoutParams rowParams = new RadioGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            rowParams.setMargins(0, 0, 0, activity.dpToPx(6));
-            list.addView(row, rowParams);
+            list.addView(row);
         }
 
         ScrollView scroll = new ScrollView(activity);
         scroll.setFillViewport(false);
+        scroll.setClipChildren(true);
+        scroll.setClipToPadding(true);
         scroll.setVerticalScrollBarEnabled(false);
         scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         scroll.addView(list, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        int listHeight = Math.max(activity.dpToPx(160),
-                Math.min(activity.dpToPx(360), activity.currentVisibleWindowHeightPx() - activity.dpToPx(220)));
-        panel.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, listHeight));
+        panel.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, activity.settingsSelectionListHeightPx()));
 
-        MaterialButton cancel = activity.makeTextRuleDialogButton(activity.getString(R.string.cancel), text);
-        cancel.setOnClickListener(v -> dialog.dismiss());
-        panel.addView(cancel);
-        activity.showRoundedSettingsDialog(dialog, panel);
-        View selectedRow = list.findViewById(list.getCheckedRadioButtonId());
-        if (selectedRow != null) scroll.post(() -> scroll.scrollTo(0, selectedRow.getTop()));
+        activity.showRoundedSettingsDialog(dialog, panel, true, 0.76f, 280);
+        final TextView selectedFontRow = selectedRow;
+        if (selectedFontRow != null) scroll.post(() -> {
+            if (dialog.isShowing()) scroll.scrollTo(0, selectedFontRow.getTop());
+        });
+        TextView loading = new TextView(activity);
+        loading.setText(R.string.loading);
+        loading.setTextColor(sub);
+        list.addView(loading);
+        if (fontWorker == null) fontWorker = java.util.concurrent.Executors.newSingleThreadExecutor();
+        // Even isScanned()/getUserAddedFontNames() take the font manager's scan
+        // lock. Keep every font-manager call off the UI thread, including warm opens.
+        fontLoad = fontWorker.submit(() -> {
+            List<String> names;
+            try {
+                names = FontManager.getInstance().getUserAddedFontNames(activity.getApplicationContext());
+            } catch (RuntimeException unavailable) {
+                names = java.util.Collections.emptyList();
+            }
+            if (Thread.currentThread().isInterrupted()) return;
+            final List<String> loaded = names;
+            activity.runOnUiThread(() -> {
+                if (closed || activity.isFinishing() || activity.isDestroyed()
+                        || fontDialog != dialog || !dialog.isShowing()) return;
+                fontLoad = null;
+                list.removeView(loading);
+                for (String name : loaded) {
+                    int before = options.size();
+                    addEpubFontOptionIfMissing(options, name, name);
+                    if (before == options.size()) continue;
+                    TextView row = activity.makeSettingsSelectionRow(name, name.equals(current), text, sub, outline);
+                    row.setOnClickListener(v -> {
+                        prefs.setEpubFontFamily(name);
+                        updateEpubDefaultFontValue(valueView);
+                        dialog.dismiss();
+                    });
+                    list.addView(row);
+                }
+            });
+        });
+    }
+
+    void close() {
+        closed = true;
+        if (fontDialog != null) fontDialog.dismiss();
+        if (fontLoad != null) fontLoad.cancel(true);
+        if (fontWorker != null) fontWorker.shutdownNow();
     }
 
     private List<EpubFontOption> epubFontOptions() {
@@ -380,16 +412,8 @@ final class SettingsReaderControlsController {
         options.add(new EpubFontOption("sans_light",
                 activity.getString(R.string.epub_font_sans_light)));
 
-        try {
-            FontManager fontManager = FontManager.getInstance();
-            if (!fontManager.isScanned()) fontManager.scanFontsSync(activity);
-            for (String fontName : fontManager.getUserAddedFontNames(activity)) {
-                addEpubFontOptionIfMissing(options, fontName, fontName);
-            }
-        } catch (Throwable ignored) {
-            // Curated choices remain usable when Android blocks a font folder.
-        }
-
+        // A stored custom name is already its display label. No filesystem work
+        // is necessary just to render the Settings screen or built-in choices.
         String current = EpubFontPreferenceMath.normalize(prefs.getEpubFontFamily());
         addEpubFontOptionIfMissing(options, current, current);
         return options;

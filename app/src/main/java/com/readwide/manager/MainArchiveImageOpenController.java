@@ -208,6 +208,7 @@ final class MainArchiveImageOpenController {
         Intent intent = new Intent(activity, ImageReaderActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra(ImageReaderActivity.EXTRA_FILE_PATH, result.imagePaths.get(safeIndex));
+        intent.putExtra(ImageReaderActivity.EXTRA_SOURCE_ENTRY_PATH, result.entryPaths.get(safeIndex));
         intent.putExtra(ImageReaderActivity.EXTRA_SEQUENCE_HANDOFF_TOKEN, token);
         intent.putExtra(ImageReaderActivity.EXTRA_SOURCE_ARCHIVE_PATH, archiveFile.getAbsolutePath());
         intent.putExtra(ImageReaderActivity.EXTRA_ALLOW_FILE_OPS, false);

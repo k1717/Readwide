@@ -34,7 +34,7 @@ public final class ZipxNativeCodecs {
         return nativeDecode(method, input, output, maxOutputBytes);
     }
 
-    private static synchronized void ensureLoaded() {
+    static synchronized void ensureLoaded() {
         if (!loaded) {
             System.loadLibrary("readwide-zipx-codecs");
             loaded = true;

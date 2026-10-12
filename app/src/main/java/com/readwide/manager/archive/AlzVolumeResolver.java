@@ -14,7 +14,11 @@ import java.util.regex.Pattern;
 
 /** One catalogue for ALZ routing, payload windows and preview source identity. */
 final class AlzVolumeResolver {
-    static final Pattern CONTINUATION = Pattern.compile("^(.+)\\.a([0-9]{2,})$", Pattern.CASE_INSENSITIVE);
+    // Legacy ALZ producers roll .a99 -> .b00 through .j99. Keep the existing
+    // unbounded-width .a100 decimal spelling as an alias, not a second chain.
+    // Do not absorb .r00/.s00 etc., which belong to the old RAR naming family.
+    static final Pattern CONTINUATION = Pattern.compile(
+            "^(.+)\\.(a[0-9]{2,}|[b-j][0-9]{2})$", Pattern.CASE_INSENSITIVE);
     private static final int HEADER = 0x015a4c41;
     private static final int CENTRAL = 0x015a4c43;
     private static final int LAST = 0x025a4c43;
@@ -24,9 +28,11 @@ final class AlzVolumeResolver {
     static final class VolumeSet {
         final List<File> files;
         final List<SplitVolumeInput.Segment> segments;
-        VolumeSet(List<File> files, List<SplitVolumeInput.Segment> segments) {
+        final boolean retainedFinalTrailer;
+        VolumeSet(List<File> files, List<SplitVolumeInput.Segment> segments, boolean retainedFinalTrailer) {
             this.files = Collections.unmodifiableList(new ArrayList<>(files));
             this.segments = Collections.unmodifiableList(new ArrayList<>(segments));
+            this.retainedFinalTrailer = retainedFinalTrailer;
         }
     }
 
@@ -43,7 +49,7 @@ final class AlzVolumeResolver {
         boolean continuation = selectedPart.matches();
         String base;
         if (continuation) {
-            ordinal(selectedPart.group(2));
+            partOrdinal(selectedPart.group(2));
             base = selectedPart.group(1);
         } else if (name.length() > 4 && name.regionMatches(true, name.length() - 4, ".alz", 0, 4)) {
             base = name.substring(0, name.length() - 4);
@@ -67,20 +73,23 @@ final class AlzVolumeResolver {
             Matcher part = CONTINUATION.matcher(sibling.getName());
             if (!part.matches() || !part.group(1).equalsIgnoreCase(base)) continue;
             requireFile(sibling);
-            long number = ordinal(part.group(2));
+            long number = partOrdinal(part.group(2));
             if (parts.put(number, sibling) != null) throw new IOException("Ambiguous ALZ volume number: " + number);
         }
         if (first == null) throw new IOException("Missing ALZ first volume: " + base + ".alz");
         ArrayList<File> result = new ArrayList<>();
         result.add(first);
         long expected = 0;
-        boolean selectedFound = first.getCanonicalPath().equals(selected.getCanonicalPath());
+        String selectedPath = selected.getCanonicalPath();
+        boolean selectedFound = first.getCanonicalPath().equals(selectedPath);
         for (Map.Entry<Long, File> part : parts.entrySet()) {
+            checkpoint();
             if (part.getKey() != expected) throw new IOException("Missing ALZ split volume number: " + expected);
             result.add(part.getValue());
-            selectedFound |= part.getValue().getCanonicalPath().equals(selected.getCanonicalPath());
+            selectedFound |= part.getValue().getCanonicalPath().equals(selectedPath);
             expected++;
         }
+        checkpoint();
         if (!selectedFound) throw new IOException("Selected file is not in the ALZ volume set");
         return result;
     }
@@ -88,6 +97,7 @@ final class AlzVolumeResolver {
     static VolumeSet resolve(File selected) throws IOException {
         List<File> files = catalogue(selected);
         ArrayList<SplitVolumeInput.Segment> segments = new ArrayList<>();
+        boolean retainedFinalTrailer = false;
         for (int i = 0; i < files.size(); i++) {
             checkpoint();
             File file = files.get(i);
@@ -113,25 +123,31 @@ final class AlzVolumeResolver {
                     boolean last = i == files.size() - 1;
                     if (tail != (last ? LAST : MORE)) throw new IOException("ALZ split end marker disagrees with volume set");
                     long start = i == 0 ? 0 : 8;
-                    segments.add(new SplitVolumeInput.Segment(file, start, size - start - 16));
+                    // Retain the final trailer, including its comment size.
+                    // Removing only intermediate framing leaves payload offsets
+                    // unchanged and lets the parser validate container completion.
+                    segments.add(new SplitVolumeInput.Segment(file, start, size - start - (last ? 0 : 16)));
+                    retainedFinalTrailer = last;
                 } else {
                     // Retain the existing unframed continuation compatibility path.
                     segments.add(new SplitVolumeInput.Segment(file, 0, size));
                 }
             }
         }
-        return new VolumeSet(files, segments);
+        return new VolumeSet(files, segments, retainedFinalTrailer);
     }
 
     private static int readInt(RandomAccessFile input) throws IOException { return Integer.reverseBytes(input.readInt()); }
-    private static long ordinal(String digits) throws IOException {
+    private static long partOrdinal(String suffix) throws IOException {
         long value = 0;
-        for (int i = 0; i < digits.length(); i++) {
-            int digit = digits.charAt(i) - '0';
+        for (int i = 1; i < suffix.length(); i++) {
+            int digit = suffix.charAt(i) - '0';
             if (digit < 0 || digit > 9 || value > (Long.MAX_VALUE - digit) / 10) throw new IOException("Invalid ALZ volume number");
             value = value * 10 + digit;
         }
-        return value;
+        long offset = (Character.toLowerCase(suffix.charAt(0)) - 'a') * 100L;
+        if (value > Long.MAX_VALUE - offset) throw new IOException("Invalid ALZ volume number");
+        return offset + value;
     }
     private static void requireFile(File file) throws IOException {
         if (!file.isFile() || !file.canRead()) throw new IOException("ALZ volume unavailable: " + file.getName());

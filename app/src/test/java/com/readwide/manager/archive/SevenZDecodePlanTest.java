@@ -7,6 +7,19 @@ import java.util.Arrays;
 import org.junit.Test;
 
 public class SevenZDecodePlanTest {
+    @Test public void aesZstdDeltaChainIsPlannedWithoutNativeCodeOrPassword() throws Exception {
+        SevenZDecodePlan.Coder[] coders = {
+                coder("03", new byte[]{0}, 1, 1),
+                coder("04F71101", new byte[]{0}, 1, 1),
+                coder("06F10701", new byte[]{0x3f,0}, 1, 1)};
+        SevenZDecodePlan plan = SevenZDecodePlan.compile(coders, new long[]{8192,8192,128},
+                new int[]{0,1}, new int[]{1,2}, new int[]{2});
+        assertEquals("AES", plan.step(0).decoder.entry.name);
+        assertEquals("Zstandard", plan.step(1).decoder.entry.name);
+        assertEquals("Delta", plan.step(2).decoder.entry.name);
+        assertEquals(0, plan.finalCoder);
+    }
+
     @Test public void shuffledCodersAreScheduledByDependencies() throws Exception {
         SevenZDecodePlan plan = SevenZDecodePlan.compile(copies(3), new long[]{10,10,10},
                 new int[]{0,2}, new int[]{2,1}, new int[]{1});

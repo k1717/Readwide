@@ -93,4 +93,18 @@ public class ReaderRestoreTargetMathTest {
                 "", null,
                 null));
     }
+
+    @Test public void resolvedLocalCopyStillBelongsToItsUriLaunch() {
+        assertTrue(ReaderRestoreTargetMath.matchesRestoreTarget(
+                "/cache/a.txt", "content://provider/a", null, "content://provider/a", "/cache/a.txt"));
+        assertFalse(ReaderRestoreTargetMath.matchesRestoreTarget(
+                "/cache/a.txt", "content://provider/a", null, "content://provider/b", "/cache/a.txt"));
+    }
+
+    @Test public void explicitPathWinsOverRetainedUriLikeTheFileLoader() {
+        assertFalse(ReaderRestoreTargetMath.matchesRestoreTarget(
+                "/cache/a.txt", "content://provider/a", "/books/b.txt", "content://provider/a", "/cache/a.txt"));
+        assertTrue(ReaderRestoreTargetMath.matchesRestoreTarget(
+                "/cache/a.txt", "content://provider/a", "/cache/a.txt", "content://provider/a", "/cache/a.txt"));
+    }
 }

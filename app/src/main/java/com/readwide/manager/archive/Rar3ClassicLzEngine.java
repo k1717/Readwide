@@ -16,8 +16,9 @@ import java.util.List;
  * byte-aligned block tables, canonical Huffman main/distance/low-distance/repeat tables,
  * old-distance and short-distance caches, multi-block continuation, and the six standard VM
  * filters (E8/E8E9/Itanium/Delta/RGB/Audio). The streaming mixed entry point also dispatches
- * PPMd tables; legacy classic-only entry points reject them. Custom VM and unsupported
- * filter scheduling still fail explicitly. Native libarchive remains primary.</p>
+ * PPMd tables; legacy classic-only entry points reject them. The shared streaming
+ * output also executes within-entry custom VM chains with separate raw/final byte counts;
+ * unsupported filter scheduling still fails explicitly. Native libarchive remains primary.</p>
  *
  * <p>Output and dictionary state are driven through {@link RarLzWindow}, so solid dictionary
  * carryover is handled by the shared-window infrastructure. The owning solid context also
@@ -63,6 +64,8 @@ final class Rar3ClassicLzEngine {
     private boolean reuseTablesForNextEntry;
     private int endCode;
     private int endCodeLength;
+    private int vmCode;
+    private int vmCodeLength;
     interface PpmdSource {
         void readTable(java.io.InputStream input) throws IOException;
         int symbol() throws IOException;
@@ -75,6 +78,7 @@ final class Rar3ClassicLzEngine {
 
     // Pending VM filters, applied after decoding the full output region.
     private final List<Rar3VmFilter.PendingFilter> filters = new ArrayList<>();
+    private final Rar3VmFilter.ProgramRetention retainedPrograms = new Rar3VmFilter.ProgramRetention();
 
     private Rar3ClassicLzEngine(@NonNull RarBitInput in, @NonNull RarLzWindow window, long limit,
                                 @Nullable int[] seedOldTable,
@@ -161,16 +165,15 @@ final class Rar3ClassicLzEngine {
         window.retainUpTo(32 * 1024 * 1024);
         if (reuseTables) engine.buildTables(engine.unpOldTable);
         engine.run();
-        if (engine.ppmdMode) engine.finishPpmdEntry();
-        else if (captureBoundary) engine.captureFileBoundary();
+        engine.finishStreamingEntry(captureBoundary);
         return engine;
     }
 
     int[] tableState() { return unpOldTable; }
 
     private void run() throws IOException {
-        if (ldTable == null && !readTables()) throw new IOException("RAR3 initial table read failed");
-        while (window.written() < limit) {
+        if (ldTable == null && !ppmdMode && !readTables()) throw new IOException("RAR3 initial table read failed");
+        while (!fileEndSeen && (streamingFilters == null ? window.written() < limit : streamingFilters.needsInput())) {
             if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
             if (ppmdMode) {
                 if (!readPpmdSymbol(false)) break;
@@ -326,19 +329,24 @@ final class Rar3ClassicLzEngine {
         lddTable = RarCanonicalHuffman.fromCodeLengths(Arrays.copyOfRange(table, NC30 + DC30, NC30 + DC30 + LDC30));
         rdTable = RarCanonicalHuffman.fromCodeLengths(Arrays.copyOfRange(table, NC30 + DC30 + LDC30, HUFF_TABLE_SIZE30));
         endCodeLength = table[256];
-        endCode = 0;
-        if (endCodeLength != 0) {
-            int[] counts = new int[16];
-            for (int symbol = 0; symbol < NC30; symbol++) {
-                if (table[symbol] != 0) counts[table[symbol]]++;
-            }
-            for (int length = 1; length <= endCodeLength; length++) {
-                endCode = (endCode + counts[length - 1]) << 1;
-            }
-            for (int symbol = 0; symbol < 256; symbol++) {
-                if (table[symbol] == endCodeLength) endCode++;
-            }
+        vmCodeLength = table[257];
+        int[] counts = new int[16];
+        for (int symbol = 0; symbol < NC30; symbol++) {
+            if (table[symbol] != 0) counts[table[symbol]]++;
         }
+        endCode = canonicalCode(table, counts, 256);
+        vmCode = canonicalCode(table, counts, 257);
+    }
+
+    private static int canonicalCode(int[] table, int[] counts, int symbol) {
+        int length = table[symbol];
+        if (length == 0) return 0;
+        int code = 0;
+        for (int bits = 1; bits <= length; bits++) code = (code + counts[bits - 1]) << 1;
+        for (int before = 0; before < symbol; before++) {
+            if (table[before] == length) code++;
+        }
+        return code;
     }
 
     private boolean readEndOfBlock() throws IOException {
@@ -350,7 +358,11 @@ final class Rar3ClassicLzEngine {
     }
 
     private void captureFileBoundary() throws IOException {
-        if (fileEndSeen || window.written() != limit || endCodeLength == 0) return;
+        if (fileEndSeen || endCodeLength == 0) return;
+        if (streamingFilters == null) {
+            if (window.written() != limit) return;
+        } else if (streamingFilters.needsInput()
+                || (!streamingFilters.changedLength() && window.written() != streamingFilters.rawBytes())) return;
         // Legacy size-limited fixtures need not contain an EOF marker. Do not infer a
         // continuation from padding, a partial marker, another table or match overshoot.
         // No extra output/filter/table is executed beyond the declared output boundary.
@@ -388,7 +400,11 @@ final class Rar3ClassicLzEngine {
             streamingFilters.acceptParsed(parsed);
             return;
         }
-        if (parsed.resetPendingFilters) filters.clear();
+        // Resetting slots must not discard already queued transformations.
+        if (filters.size() >= Rar3VmFilter.ProgramRetention.MAX_PENDING_FILTERS) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3 pending VM filter memory limit");
+        }
+        retainedPrograms.retain(parsed.filter.customProgram);
         filters.add(parsed.filter);
     }
 
@@ -407,8 +423,8 @@ final class Rar3ClassicLzEngine {
             reuseTablesForNextEntry = false;
             return false;
         }
-        if (atLimit) throw new IOException("RAR3 PPMd missing file marker");
         if (code == 3) { streamingFilters.readRecord(mixedPpmd::symbol); return true; }
+        if (atLimit) throw new IOException("RAR3 PPMd data follows declared size");
         if (code == 4 || code == 5) {
             int distance = 1;
             if (code == 4) {
@@ -417,24 +433,69 @@ final class Rar3ClassicLzEngine {
                 distance += 2;
             }
             int length = mixedPpmd.symbol() + (code == 4 ? 32 : 4);
-            if (length > limit - window.written() || distance > window.retained()) {
+            if ((!streamingFilters.hasPendingFilters() && length > streamingFilters.rawBytesUntilBoundary())
+                    || distance > window.retained()) {
                 throw new IOException("RAR3 PPMd match exceeds entry or available history");
             }
             // PPMd match commands must not alter classic-LZ repeated-distance caches.
             window.copyMatch(distance, length);
+            if (window.written() != streamingFilters.rawBytes()) {
+                throw new IOException("RAR3 PPMd match exceeds final filtered entry size");
+            }
         } else window.writeLiteral(mixedPpmd.escape());
         return true;
     }
 
-    private void finishPpmdEntry() throws IOException {
-        while (!fileEndSeen && ppmdMode) {
+    /**
+     * Final file length is not a raw-data terminator: a following VM record may
+     * consume more history and produce zero bytes. Only recognize control codes
+     * at that boundary; never decode/drop a new literal or match as padding.
+     */
+    private void finishStreamingEntry(boolean captureBoundary) throws IOException {
+        boolean requireMarker = ppmdMode || streamingFilters.changedLength();
+        while (!fileEndSeen) {
             if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
-            readPpmdSymbol(true);
+            if (streamingFilters.needsInput()) {
+                run();
+                requireMarker |= ppmdMode || streamingFilters.changedLength();
+                continue;
+            }
+            // Preserve legacy final-match clipping, but never resume control
+            // processing with raw/filter positions that no longer agree.
+            if (window.written() != streamingFilters.rawBytes()) break;
+            if (ppmdMode) {
+                requireMarker = true;
+                readPpmdSymbol(true);
+                continue;
+            }
+            if (captureBoundary || requireMarker) {
+                captureFileBoundary();
+                if (fileEndSeen) break;
+            }
+            if (matchesCode(vmCode, vmCodeLength)) {
+                requireMarker = true;
+                in.skipBits(vmCodeLength);
+                readVMCode();
+                continue;
+            }
+            // Same-file tables can switch LZ/PPMd even after final output size
+            // has been reached. A complete control stream must then end the file.
+            if (matchesCode(endCode, endCodeLength)
+                    && in.remainingBits() >= endCodeLength + 1
+                    && (in.peekBits(endCodeLength + 1) & 1) != 0) {
+                requireMarker = true;
+                in.skipBits(endCodeLength);
+                readEndOfBlock();
+                continue;
+            }
+            break;
         }
-        // A final PPMd table transition may select LZ; only its explicit EOF is accepted.
-        if (!fileEndSeen) {
-            captureFileBoundary();
-            if (!fileEndSeen) throw new IOException("RAR3 mixed entry lacks file boundary");
+        if (requireMarker && !fileEndSeen) {
+            throw new IOException("RAR3 filtered/control stream requires an explicit file boundary");
         }
+    }
+
+    private boolean matchesCode(int code, int length) throws IOException {
+        return length != 0 && in.remainingBits() >= length && in.peekBits(length) == code;
     }
 }

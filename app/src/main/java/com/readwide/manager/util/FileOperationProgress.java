@@ -175,6 +175,7 @@ public final class FileOperationProgress {
             if (totalBytes > 0L) doneBytes = totalBytes;
             paused = false;
             complete = true;
+            lock.notifyAll();
         }
         notifyListener();
     }
@@ -195,6 +196,7 @@ public final class FileOperationProgress {
                     cancelled = true;
                     paused = false;
                     complete = true;
+                    lock.notifyAll();
                     break;
                 }
             }
@@ -204,7 +206,7 @@ public final class FileOperationProgress {
 
     public void setPaused(boolean paused) {
         synchronized (lock) {
-            if (cancelled) return;
+            if (cancelled || complete) return;
             this.paused = paused;
             if (!paused) lock.notifyAll();
         }

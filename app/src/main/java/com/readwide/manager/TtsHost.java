@@ -82,6 +82,19 @@ interface TtsHost {
     /** Version of saved text offsets, scoped to this host's extraction format. */
     default int ttsTextFormatVersion() { return 0; }
 
+    /** Absolute origin of the current immutable text window; full buffers use zero. */
+    default int ttsTextBaseCharPosition() { return 0; }
+
+    /** TXT can continue by a consumed character, independently of visual page overlap. */
+    default boolean ttsUsesAbsoluteTextContinuation() { return false; }
+
+    default boolean ttsHasTextAfter(int absolutePosition) {
+        return ttsDisplayedCurrentPageNumber() < ttsDisplayedTotalPageCount();
+    }
+
+    /** Empty keeps legacy document/PDF checkpoint migration in the host. */
+    default String ttsCheckpointSignature() { return ""; }
+
     /** Turn the page by the given signed direction, as read-aloud navigation. */
     void ttsHostPageBy(int direction);
 

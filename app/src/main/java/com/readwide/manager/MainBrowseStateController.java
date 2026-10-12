@@ -88,7 +88,7 @@ final class MainBrowseStateController {
                 && !new File(preserveOpenedFilePath).exists()) {
             return false;
         }
-        if (preserveFolderSignature == null) return false;
+        if (preserveFolderSignature == null || !currentDisplayPreferencesMatch()) return false;
         // Keep the preserved folder view immediately and verify its signature in the
         // background, rather than running a synchronous per-file folder stat on the
         // main thread during the viewer-return resume. Deletion of the file that was
@@ -97,6 +97,12 @@ final class MainBrowseStateController {
         // which refreshes the folder in place (keeping scroll).
         validateOptimistic(activity.currentDirectory, preserveFolderSignature);
         return true;
+    }
+
+    private boolean currentDisplayPreferencesMatch() {
+        int sort = activity.prefs != null ? activity.prefs.getSortMode() : PrefsManager.SORT_NAME_ASC;
+        boolean hidden = activity.prefs != null && activity.prefs.getShowHiddenFiles();
+        return currentLoadedSortMode == sort && currentLoadedShowHidden == hidden;
     }
 
     boolean shouldKeepCurrentStateOnResume() {
@@ -108,10 +114,7 @@ final class MainBrowseStateController {
             return false;
         }
         int sortMode = activity.prefs != null ? activity.prefs.getSortMode() : PrefsManager.SORT_NAME_ASC;
-        boolean showHidden = activity.prefs != null && activity.prefs.getShowHiddenFiles();
-        if (currentLoadedSortMode != sortMode || currentLoadedShowHidden != showHidden) {
-            return false;
-        }
+        if (!currentDisplayPreferencesMatch()) return false;
         // Without a known baseline signature there is nothing to validate against,
         // so fall back to a reload.
         if (currentLoadedSignature == null) return false;
@@ -454,11 +457,11 @@ final class MainBrowseStateController {
 
     private void restoreRecyclerViewState(@Nullable Parcelable state) {
         if (state == null || activity.fileRecyclerView == null) return;
-        activity.fileRecyclerView.post(() -> {
-            if (activity.activityDestroyed || activity.fileRecyclerView == null) return;
-            RecyclerView.LayoutManager manager = activity.fileRecyclerView.getLayoutManager();
-            if (manager != null) manager.onRestoreInstanceState(state);
-        });
+        if (activity.activityDestroyed) return;
+        // Store the pending layout state immediately, before another navigation
+        // can replace this list. RecyclerView applies it during its next layout.
+        RecyclerView.LayoutManager manager = activity.fileRecyclerView.getLayoutManager();
+        if (manager != null) manager.onRestoreInstanceState(state);
     }
 
     private static final class BrowseFolderSnapshot {

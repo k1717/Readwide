@@ -94,9 +94,10 @@ public class EggIntegrityRound5Test {
         assertThrows(IOException.class,()->EggArchiveReader.extractArchiveIntoDirectory(file,dir,null));
         assertArrayEquals(OLD,Files.readAllBytes(new File(dir,"blocked").toPath()));
     }
-    @Test public void unsafeSolidPathDoesNotShiftFollowingEntry() throws Exception {
+    @Test public void unsafeSolidPathRejectsBulkButDoesNotShiftSelectedEntry() throws Exception {
         File file=Round5Fixtures.egg(temp.newFolder(),new String[]{"../outside","ok"},new byte[][]{{1,2},{3,4}},true,new int[]{4},-1,0);
-        File dir=temp.newFolder();assertTrue(EggArchiveReader.extractArchiveIntoDirectory(file,dir,null));assertArrayEquals(new byte[]{3,4},Files.readAllBytes(new File(dir,"ok").toPath()));assertEquals(1,dir.list().length);
+        File dir=temp.newFolder();assertThrows(IOException.class,()->EggArchiveReader.extractArchiveIntoDirectory(file,dir,null));assertEquals(0,dir.list().length);
+        File selected=temp.newFile();assertTrue(EggArchiveReader.extractSingleEntry(file,"ok",selected,null));assertArrayEquals(new byte[]{3,4},Files.readAllBytes(selected.toPath()));
     }
     @Test public void manyFilesInOneFailedBlockAreAllRolledBack() throws Exception {
         int count=129;String[] names=new String[count];byte[][] bytes=new byte[count][];

@@ -103,6 +103,7 @@ final class PreferenceBackupSchema {
             case "recent_folders":
             case "tts_language_tag":
             case "tts_last_file_path":
+            case "tts_last_content_signature":
             case "tts_voice_name":
             case "txt_display_replacement_rules_json":
                 return String.class;

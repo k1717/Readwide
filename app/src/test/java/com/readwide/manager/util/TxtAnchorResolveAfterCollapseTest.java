@@ -70,4 +70,56 @@ public class TxtAnchorResolveAfterCollapseTest {
 
         assertEquals(baseCharOffset + localIndex, resolved);
     }
+
+    @Test
+    public void overlappingAfterAnchorRetainsExactSavedPosition() {
+        assertEquals(3, TextSearchMath.findBestAnchorPosition(
+                "aaaaaaaaaaaa", 3, "", "aaaaaaaa"));
+        assertEquals(1003, TextSearchMath.resolveAnchoredAbsolutePosition(
+                "aaaaaaaaaaaa", 1000, 1003, "", "aaaaaaaa"));
+    }
+
+    @Test
+    public void overlappingAfterAnchorStillUsesCompleteBeforeContext() {
+        assertEquals(3, TextSearchMath.findBestAnchorPosition(
+                "Xaaaaaaaaaaaa", 0, "Xaa", "aaaaaaaa"));
+        // An exact after match at the fallback must not bypass a better before match.
+        assertEquals(1, TextSearchMath.findBestAnchorPosition(
+                "Xaaaaaaaaaaaa", 2, "X", "aaaaaaaa"));
+        assertEquals(3, TextSearchMath.findBestAnchorPosition(
+                "Xaaaaaaaaaaaa", 3, "Xaa", "aaaaaaaa"));
+    }
+
+    @Test
+    public void overlappingBeforeAnchorReturnsNearestEnd() {
+        assertEquals(11, TextSearchMath.findBestAnchorPosition(
+                "aaaaaaaaaaaa", 11, "aaaaaaaa", "missing after"));
+    }
+
+    @Test
+    public void equidistantOverlappingMatchesKeepTheEarlierMatch() {
+        assertEquals(0, TextSearchMath.findBestAnchorPosition(
+                "abababababab", 1, "", "abababab"));
+    }
+
+    @Test
+    public void collapseTolerantAfterAnchorChecksOverlappingMatches() {
+        String content = "abcd\n\nabcd\n\nabcd\n\nabcd";
+        assertEquals(6, TextSearchMath.findBestAnchorPosition(
+                content, 6, "", "abcd\n\n\nabcd"));
+    }
+
+    @Test
+    public void collapseTolerantBeforeAnchorChecksOverlappingEndsInSourceCoordinates() {
+        String content = "abcd\n\nabcd\n\nabcd\n\nabcd";
+        // A normalized blank-line boundary maps to the retained source blank line.
+        assertEquals(17, TextSearchMath.findBestAnchorPosition(
+                content, 17, "abcd\n\n\nabcd", ""));
+    }
+
+    @Test
+    public void contextPenaltyCannotOverflowAndBeatAnExactBeforeMatch() {
+        assertEquals(12, TextSearchMath.findBestAnchorPosition(
+                "12345678badX12345678", Integer.MAX_VALUE, "X", "12345678"));
+    }
 }

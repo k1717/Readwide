@@ -235,6 +235,23 @@ public class ZoomImageView extends AppCompatImageView {
         invalidate();
     }
 
+    /** Reattach a retained image after a stopped window returns, without resetting pan/zoom. */
+    public void restoreImageReady() {
+        Drawable retained = getDrawable();
+        if (retained == null) return;
+        stopImageFling();
+        // A same-object setImageDrawable is a no-op. Detach first so visibility,
+        // callbacks and drawable bounds are refreshed on the resumed surface.
+        setImageDrawable(null);
+        setImageDrawable(retained);
+        setImageMatrix(matrix);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && retained instanceof AnimatedImageDrawable) {
+            ((AnimatedImageDrawable) retained).start();
+        }
+        invalidate();
+    }
+
     private void configureBaseMatrixWhenReady() {
         if (getWidth() > 0 && getHeight() > 0 && getContentWidth() > 0 && getContentHeight() > 0) {
             configureBaseMatrix();

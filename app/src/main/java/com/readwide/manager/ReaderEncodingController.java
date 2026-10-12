@@ -62,6 +62,7 @@ final class ReaderEncodingController {
         }
 
         activity.currentTextEncodingLabel = "";
+        activity.invalidateTxtTtsCheckpoint();
         activity.currentTextEncodingManual = normalized != null;
 
         // Encoding changes alter decoded text. Therefore every page/partition
@@ -77,14 +78,25 @@ final class ReaderEncodingController {
         activity.pendingLargeTextCachedDisplayPage = 0;
         activity.pendingLargeTextCachedTotalPages = 0;
 
-        Intent reloadIntent = new Intent(activity.getIntent());
-        reloadIntent.putExtra(ReaderActivity.EXTRA_FILE_PATH, file.getAbsolutePath());
-        reloadIntent.removeExtra(ReaderActivity.EXTRA_FILE_URI);
-        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_TO_POSITION, 0);
-        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_DISPLAY_PAGE, 0);
-        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_TOTAL_PAGES, 0);
+        Intent reloadIntent = encodingReloadIntent(activity.getIntent(), file);
 
         ShortToast.show(activity, normalized == null ? R.string.text_encoding_auto_restored : R.string.text_encoding_manual_applied);
         activity.loadFileFromIntent(reloadIntent);
+    }
+
+    static Intent encodingReloadIntent(Intent original, File file) {
+        Intent reload = new Intent(original);
+        reload.putExtra(ReaderActivity.EXTRA_FILE_PATH, file.getAbsolutePath());
+        reload.removeExtra(ReaderActivity.EXTRA_FILE_URI);
+        reload.putExtra(ReaderActivity.EXTRA_JUMP_TO_POSITION, 0);
+        reload.putExtra(ReaderActivity.EXTRA_JUMP_DISPLAY_PAGE, 0);
+        reload.putExtra(ReaderActivity.EXTRA_JUMP_TOTAL_PAGES, 0);
+        // These belong to the previous decoded coordinate space and can override zero.
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE);
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER);
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE);
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_BYTE);
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION);
+        return reload;
     }
 }

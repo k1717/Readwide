@@ -16,6 +16,52 @@ import java.util.HashSet;
 import java.util.Set;
 
 public class ArchiveImageSequenceLoaderTest {
+    @Test
+    public void interruptedLoadDoesNotAccessContextOrArchiveOrTryAlternates() {
+        ArchiveSupport.ExtractionResult failed = ArchiveSupport.ExtractionResult.failed(
+                ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, "unsupported member");
+        Thread.currentThread().interrupt();
+        try {
+            assertFalse(ArchiveImageSequenceLoader.shouldTryAlternateImageEntry(failed));
+            ArchiveImageSequenceLoader.Result lazy = ArchiveImageSequenceLoader.loadLazy(
+                    null, new File("missing.zip"), new ArrayList<>(), 0, null);
+            ArchiveImageSequenceLoader.Result full = ArchiveImageSequenceLoader.loadFully(
+                    null, new File("missing.rar"), new ArrayList<>(), 0, null);
+            assertFalse(lazy.selectedReady);
+            assertFalse(full.selectedReady);
+            assertTrue(lazy.imagePaths.isEmpty() && full.imagePaths.isEmpty());
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+        assertTrue(ArchiveImageSequenceLoader.shouldTryAlternateImageEntry(failed));
+    }
+
+    @Test
+    public void interruptedCacheRequestLeavesExistingCacheUntouched() throws Exception {
+        File archive = volumeFolder.newFile("cancelled.rar");
+        File output = volumeFolder.newFile("page.jpg");
+        byte[] original = {1, 2, 3};
+        java.nio.file.Files.write(output.toPath(), original);
+        Thread.currentThread().interrupt();
+        try {
+            ArchiveSupport.ExtractionResult result = ArchiveImageEntryCache.ensureReady(
+                    archive, "page.jpg", output, null, true, new HashSet<>());
+            assertFalse(result.success);
+            assertTrue(Thread.currentThread().isInterrupted());
+            try {
+                ArchiveImageEntryCache.checkInterrupted();
+                org.junit.Assert.fail("Cancellation checkpoint must reject interrupted work");
+            } catch (java.io.InterruptedIOException expected) {
+                assertTrue(Thread.currentThread().isInterrupted());
+            }
+        } finally {
+            Thread.interrupted();
+        }
+        ArchiveImageEntryCache.checkInterrupted();
+        org.junit.Assert.assertArrayEquals(original, java.nio.file.Files.readAllBytes(output.toPath()));
+    }
+
     @org.junit.Rule public org.junit.rules.TemporaryFolder volumeFolder =
             new org.junit.rules.TemporaryFolder();
 
@@ -237,6 +283,118 @@ public class ArchiveImageSequenceLoaderTest {
         };
         SequentialArchiveImageReader.drainSkippedEntry(reader, new byte[64 * 1024], Long.MAX_VALUE);
         assertTrue(remaining[0] == 0);
+    }
+
+    @Test public void forwardChunkCancellationBeforeReadDoesNotTouchDecoder() throws Exception {
+        RecordingForwardReader reader = new RecordingForwardReader(false, false);
+        Thread.currentThread().interrupt();
+        try {
+            org.junit.Assert.assertThrows(java.io.InterruptedIOException.class,
+                    () -> SequentialArchiveImageReader.readEntryChunk(reader, new byte[8]));
+            org.junit.Assert.assertEquals(0, reader.readCalls);
+        } finally { Thread.interrupted(); }
+    }
+
+    @Test public void viewerFallbackRetainsWrappedAndSuppressedCancellation() {
+        IOException primary = new IOException("decode");
+        RuntimeException wrapper = new RuntimeException("callback", new java.io.InterruptedIOException("cancelled"));
+        primary.addSuppressed(wrapper);
+        wrapper.addSuppressed(primary); // Identity-based traversal must tolerate cycles.
+        try {
+            assertFalse(Thread.currentThread().isInterrupted());
+            ArchiveImageEntryCache.preserveCancellation(primary);
+            assertTrue(Thread.currentThread().isInterrupted());
+            assertFalse(ArchiveImageSequenceLoader.shouldTryAlternateImageEntry(
+                    ArchiveSupport.ExtractionResult.failed(ArchiveSupport.ExtractionFailure.FAILED, "decode")));
+        } finally { Thread.interrupted(); }
+        ArchiveImageEntryCache.preserveCancellation(new IOException("ordinary failure"));
+        assertFalse(Thread.currentThread().isInterrupted());
+    }
+
+    @Test public void forwardChunkCancellationAfterDataOrEofIsTerminal() throws Exception {
+        for (int count : new int[]{1, -1}) {
+            try {
+                org.junit.Assert.assertThrows(java.io.InterruptedIOException.class,
+                        () -> SequentialArchiveImageReader.readEntryChunk(chunkReader(count, true), new byte[8]));
+                assertTrue(Thread.currentThread().isInterrupted());
+            } finally { Thread.interrupted(); }
+        }
+    }
+
+    @Test public void forwardChunkRejectsInvalidProgressButKeepsValidEof() throws Exception {
+        for (int count : new int[]{-2, 0, 9}) {
+            org.junit.Assert.assertThrows(IOException.class,
+                    () -> SequentialArchiveImageReader.readEntryChunk(chunkReader(count, false), new byte[8]));
+        }
+        org.junit.Assert.assertEquals(-1,
+                SequentialArchiveImageReader.readEntryChunk(chunkReader(-1, false), new byte[8]));
+        org.junit.Assert.assertEquals(8,
+                SequentialArchiveImageReader.readEntryChunk(chunkReader(8, false), new byte[8]));
+    }
+
+    @Test public void forwardDrainChecksCancellationBeforeSkipOrDecode() throws Exception {
+        RecordingForwardReader reader = new RecordingForwardReader(true, true);
+        Thread.currentThread().interrupt();
+        try {
+            org.junit.Assert.assertThrows(java.io.InterruptedIOException.class,
+                    () -> SequentialArchiveImageReader.drainSkippedEntry(reader, new byte[8], Long.MAX_VALUE));
+            org.junit.Assert.assertEquals(0, reader.drainCalls);
+            org.junit.Assert.assertEquals(0, reader.readCalls);
+        } finally { Thread.interrupted(); }
+    }
+
+    @Test public void backendDrainCancellationCannotBecomeSuccessOrBufferedRetry() throws Exception {
+        for (boolean drained : new boolean[]{false, true}) {
+            ArchiveSupport.ForwardArchiveReader reader = new ArchiveSupport.ForwardArchiveReader() {
+                @Override public ArchiveSupport.ForwardEntry nextEntry() { return null; }
+                @Override public int read(byte[] buffer) { throw new AssertionError("No read after cancellation"); }
+                @Override public boolean drainCurrentEntry(long maximum) {
+                    Thread.currentThread().interrupt(); return drained;
+                }
+                @Override public void close() { }
+            };
+            try {
+                org.junit.Assert.assertThrows(java.io.InterruptedIOException.class,
+                        () -> SequentialArchiveImageReader.drainSkippedEntry(reader, new byte[8], Long.MAX_VALUE));
+            } finally { Thread.interrupted(); }
+        }
+    }
+
+    @Test public void cancelledCachePublicationPreservesExistingImageAndVerification() throws Exception {
+        for (boolean duringValidation : new boolean[]{false, true}) {
+            File root = volumeFolder.newFolder();
+            File output = new File(root, "page.avif");
+            File marker = new File(output.getPath() + ".ready");
+            java.nio.file.Files.write(output.toPath(), new byte[]{9});
+            java.nio.file.Files.write(marker.toPath(), new byte[]{7});
+            File temporary = new File(root, "candidate");
+            java.nio.file.Files.write(temporary.toPath(), new byte[]{0, 0, 0, 12, 'f', 't', 'y', 'p', 'a', 'v', 'i', 'f'});
+            File checked = duringValidation ? new File(temporary.getPath()) {
+                @Override public long length() { Thread.currentThread().interrupt(); return super.length(); }
+            } : temporary;
+            Set<String> verified = new HashSet<>();
+            try {
+                if (!duringValidation) Thread.currentThread().interrupt();
+                assertFalse(ArchiveImageEntryCache.commitReadyImageFile(
+                        "page.avif", checked, output, true, verified));
+                assertTrue(Thread.currentThread().isInterrupted());
+            } finally { Thread.interrupted(); }
+            org.junit.Assert.assertArrayEquals(new byte[]{9}, java.nio.file.Files.readAllBytes(output.toPath()));
+            org.junit.Assert.assertArrayEquals(new byte[]{7}, java.nio.file.Files.readAllBytes(marker.toPath()));
+            assertFalse(temporary.exists());
+            assertTrue(verified.isEmpty());
+        }
+    }
+
+    private static ArchiveSupport.ForwardArchiveReader chunkReader(int count, boolean interrupt) {
+        return new ArchiveSupport.ForwardArchiveReader() {
+            @Override public ArchiveSupport.ForwardEntry nextEntry() { return null; }
+            @Override public int read(byte[] buffer) {
+                if (interrupt) Thread.currentThread().interrupt();
+                return count;
+            }
+            @Override public void close() { }
+        };
     }
 
     private static final class RecordingCloseable implements Closeable {

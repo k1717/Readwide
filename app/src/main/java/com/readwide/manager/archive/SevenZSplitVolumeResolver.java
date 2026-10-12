@@ -93,6 +93,11 @@ final class SevenZSplitVolumeResolver {
                         + " / " + child.getName());
             }
         }
+        File cataloguedSelection = found.get(selected.number);
+        if (cataloguedSelection == null
+                || !selectedPart.getCanonicalPath().equals(cataloguedSelection.getCanonicalPath())) {
+            throw new IOException("Selected numeric split volume is outside the discovered set");
+        }
         List<File> parts = new ArrayList<>(found.size());
         long expected = 1;
         for (Map.Entry<Integer, File> entry : found.entrySet()) {

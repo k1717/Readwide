@@ -35,7 +35,6 @@ final class Rar4HeaderEncryptedArchiveRewriter {
 
     private static final int AES_BLOCK_SIZE = 16;
     private static final int COPY_BUFFER_SIZE = 64 * 1024;
-    private static final int MAX_HEADER_SIZE = 2 * 1024 * 1024;
 
     private static final int RAR4_HEADER_MAIN = 0x73;
     private static final int RAR4_HEADER_FILE = 0x74;
@@ -57,6 +56,7 @@ final class Rar4HeaderEncryptedArchiveRewriter {
     static File buildDecryptedHeaderCopy(@NonNull File archive,
                                          @NonNull char[] password,
                                          @Nullable FileOperationProgress progress) throws IOException {
+        checkpoint(progress);
         File temp = File.createTempFile("textview-rar4-hp-headers-", ".rar");
         boolean success = false;
         try {
@@ -72,6 +72,7 @@ final class Rar4HeaderEncryptedArchiveRewriter {
                                          @NonNull File output,
                                          @NonNull char[] password,
                                          @Nullable FileOperationProgress progress) throws IOException {
+        checkpoint(progress);
         if (password.length == 0) throw new ArchiveSupport.PasswordRequiredException();
         try (RandomAccessFile in = new RandomAccessFile(archive, "r");
              FileOutputStream out = new FileOutputStream(output)) {
@@ -83,7 +84,7 @@ final class Rar4HeaderEncryptedArchiveRewriter {
             byte[] salt = new byte[8];
             in.seek(main.saltOffset);
             in.readFully(salt);
-            Rar3Crypto.Parameters parameters = Rar3Crypto.deriveParameters(password, salt);
+            Rar3Crypto.Parameters parameters = Rar3Crypto.deriveParameters(password, salt, progress);
 
             out.write(RAR4_SIGNATURE);
             writeRar4Header(out, RAR4_HEADER_MAIN, main.flags & ~RAR4_MAIN_PASSWORD, main.body);
@@ -91,9 +92,7 @@ final class Rar4HeaderEncryptedArchiveRewriter {
             long position = main.saltOffset + salt.length;
             boolean sawEnd = false;
             while (position < in.length()) {
-                if (progress != null && !progress.checkpoint()) {
-                    throw new IOException("RAR extraction cancelled");
-                }
+                checkpoint(progress);
                 DecryptedHeader header = readEncryptedHeader(in, position, parameters);
                 out.write(header.plainHeader);
                 position += header.encryptedHeaderSize;
@@ -111,6 +110,7 @@ final class Rar4HeaderEncryptedArchiveRewriter {
             if (!sawEnd && out.getChannel().position() <= RAR4_SIGNATURE.length) {
                 throw new BadRarPasswordException();
             }
+            checkpoint(progress);
         } catch (BadRarPasswordException e) {
             safeDelete(output);
             throw new ArchiveSupport.PasswordRequiredException();
@@ -131,7 +131,8 @@ final class Rar4HeaderEncryptedArchiveRewriter {
         int type = in.readUnsignedByte();
         int flags = readUInt16LE(in);
         int headerSize = readUInt16LE(in);
-        if (type != RAR4_HEADER_MAIN || headerSize < 7 || headerSize > MAX_HEADER_SIZE) return null;
+        // RAR4 stores headerSize in an unsigned 16-bit field.
+        if (type != RAR4_HEADER_MAIN || headerSize < 7) return null;
         long bodyStart = in.getFilePointer();
         long bodyEnd = headerStart + headerSize;
         if (bodyEnd < bodyStart || bodyEnd + 8 > in.length()) return null;
@@ -154,7 +155,7 @@ final class Rar4HeaderEncryptedArchiveRewriter {
         int type = firstPlain[2] & 0xff;
         int flags = uint16(firstPlain, 3);
         int headerSize = uint16(firstPlain, 5);
-        if (!isPlausibleHeaderType(type) || headerSize < 7 || headerSize > MAX_HEADER_SIZE) {
+        if (!isPlausibleHeaderType(type) || headerSize < 7) {
             throw new BadRarPasswordException();
         }
         long encryptedHeaderSize = align16(headerSize);
@@ -232,16 +233,24 @@ final class Rar4HeaderEncryptedArchiveRewriter {
                                   @NonNull FileOutputStream out,
                                   @Nullable FileOperationProgress progress) throws IOException {
         if (size < 0L) throw new IOException("Invalid RAR payload size");
+        checkpoint(progress);
         byte[] buffer = new byte[COPY_BUFFER_SIZE];
         in.seek(offset);
         long remaining = size;
         while (remaining > 0L) {
-            if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+            checkpoint(progress);
             int request = (int) Math.min(buffer.length, remaining);
             int read = in.read(buffer, 0, request);
             if (read < 0) throw new EOFException("Unexpected EOF in RAR payload");
             out.write(buffer, 0, read);
             remaining -= read;
+        }
+        checkpoint(progress);
+    }
+
+    private static void checkpoint(@Nullable FileOperationProgress progress) throws IOException {
+        if (Thread.currentThread().isInterrupted() || (progress != null && !progress.checkpoint())) {
+            throw new java.io.InterruptedIOException("RAR extraction cancelled");
         }
     }
 

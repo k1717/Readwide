@@ -6,7 +6,7 @@ import java.io.InterruptedIOException;
 import java.io.RandomAccessFile;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -61,13 +61,17 @@ final class EggVolumeResolver {
         }
         String selectedPath = selected.getCanonicalPath();
         boolean included = false;
-        for (File file : files) included |= file.getCanonicalPath().equals(selectedPath);
+        for (File file : files) {
+            checkpoint();
+            included |= file.getCanonicalPath().equals(selectedPath);
+        }
+        checkpoint();
         if (!included) throw new IOException("Selected EGG volume is outside the declared chain");
         return new VolumeSet(files, segments);
     }
 
     private static final class Catalogue {
-        final Map<Long, File> files = new LinkedHashMap<>();
+        final Map<Long, File> files = new HashMap<>();
         final Set<Long> aliases = new HashSet<>();
         Catalogue(File selected, String stem) throws IOException {
             File parent = selected.getAbsoluteFile().getParentFile();

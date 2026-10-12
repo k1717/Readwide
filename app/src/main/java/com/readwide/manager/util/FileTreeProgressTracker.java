@@ -5,7 +5,6 @@ import androidx.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -98,13 +97,9 @@ public final class FileTreeProgressTracker {
         String key = folderKey(directory);
         FolderInfo info = folderOrder.get(key);
         if (info == null) return;
-        if (seenFolders.add(key)) {
-            progress.setFolder(info.displayName);
-            progress.setFolderProgress(Math.min(seenFolders.size(), totalFolders), totalFolders);
-        } else {
-            progress.setFolder(info.displayName);
-            progress.setFolderProgress(Math.min(seenFolders.size(), totalFolders), totalFolders);
-        }
+        seenFolders.add(key);
+        progress.setFolder(info.displayName);
+        progress.setFolderProgress(Math.min(seenFolders.size(), totalFolders), totalFolders);
     }
 
     public void onFile(@Nullable File file) {
@@ -150,8 +145,10 @@ public final class FileTreeProgressTracker {
         String key = folderKey(folder);
         if (!folderOrder.containsKey(key)) {
             folderOrder.put(key, new FolderInfo(displayFolder(folder)));
-            totals.folders.add(key);
         }
+        // Each root owns its complete folder set, even when another selected
+        // root shares a parent. Completion order need not match inventory order.
+        totals.folders.add(key);
     }
 
     private static long addBytes(long first, long next) {
@@ -161,7 +158,7 @@ public final class FileTreeProgressTracker {
     private static final class Totals {
         long bytes;
         int files;
-        final List<String> folders = new ArrayList<>();
+        final Set<String> folders = new LinkedHashSet<>();
     }
 
     private void noteParentFolder(@NonNull File file) {

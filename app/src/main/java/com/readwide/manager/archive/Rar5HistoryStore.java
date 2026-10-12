@@ -22,7 +22,7 @@ final class Rar5HistoryStore implements Closeable {
 
     interface SpaceAvailable { long bytes(File directory); }
 
-    private final long capacity;
+    private long capacity;
     private final int residentLimit;
     private final File directory;
     private final SpaceAvailable space;
@@ -53,6 +53,30 @@ final class Rar5HistoryStore implements Closeable {
         this.space = space;
     }
 
+    /**
+     * Retains a larger existing dictionary, or grows it while all produced history
+     * still has its original absolute-position slot. This changes no page addresses,
+     * allocates no declared-size buffer and preserves authenticated spilled records.
+     * Once the ring has overwritten history, growth requires a separate remapping path.
+     */
+    void ensureCapacity(long minimum) throws IOException {
+        try {
+            requireOpen();
+            checkpoint();
+            if (minimum <= 0 || minimum > (1L << 40)) {
+                throw new IOException("Invalid RAR history capacity");
+            }
+            if (minimum <= capacity) return;
+            if (produced > capacity) {
+                throw new IOException("RAR solid dictionary growth after history wrap is not supported");
+            }
+            capacity = minimum;
+        } catch (IOException | RuntimeException failure) {
+            retire(failure);
+            throw failure;
+        }
+    }
+
     void append(byte value) throws IOException {
         try {
             requireOpen();
@@ -81,6 +105,64 @@ final class Rar5HistoryStore implements Closeable {
             long index = slot / PAGE_SIZE;
             if (readPage == null || readPage.index != index) readPage = page(index);
             return readPage.data[(int) (slot % PAGE_SIZE)];
+        } catch (IOException | RuntimeException failure) {
+            retire(failure);
+            throw failure;
+        }
+    }
+
+    /** Copy an LZ period into caller-owned scratch/output space, then append it.
+     * Reading the seed BEFORE changing the ring preserves distance==capacity.
+     * Doubling the seed preserves overlapping matches without per-byte lookups.
+     */
+    void copyMatch(long distance, byte[] target, int offset, int length) throws IOException {
+        java.util.Objects.requireNonNull(target);
+        if (offset < 0 || length < 0 || offset > target.length - length) throw new IndexOutOfBoundsException();
+        try {
+            requireOpen();
+            checkpoint();
+            if (distance <= 0 || distance > capacity || length > Long.MAX_VALUE - produced) {
+                throw new IOException("Invalid RAR history match");
+            }
+            int seed = (int) Math.min(distance, length);
+            long source = produced - distance;
+            int copied = 0;
+            if (source < 0) {
+                int zeroes = (int) Math.min(-source, seed);
+                Arrays.fill(target, offset, offset + zeroes, (byte) 0);
+                copied = zeroes;
+                source += zeroes;
+            }
+            while (copied < seed) {
+                checkpoint();
+                long slot = source % capacity;
+                long index = slot / PAGE_SIZE;
+                if (readPage == null || readPage.index != index) readPage = page(index);
+                int inPage = (int) (slot % PAGE_SIZE);
+                int count = (int) Math.min(seed - copied, Math.min(PAGE_SIZE - inPage, capacity - slot));
+                System.arraycopy(readPage.data, inPage, target, offset + copied, count);
+                copied += count;
+                source += count;
+            }
+            while (copied < length) {
+                checkpoint();
+                int count = Math.min(copied, length - copied);
+                System.arraycopy(target, offset, target, offset + copied, count);
+                copied += count;
+            }
+            int appended = 0;
+            while (appended < length) {
+                checkpoint();
+                long slot = produced % capacity;
+                long index = slot / PAGE_SIZE;
+                if (writePage == null || writePage.index != index) writePage = page(index);
+                int inPage = (int) (slot % PAGE_SIZE);
+                int count = (int) Math.min(length - appended, Math.min(PAGE_SIZE - inPage, capacity - slot));
+                System.arraycopy(target, offset + appended, writePage.data, inPage, count);
+                writePage.dirty = true;
+                appended += count;
+                produced += count;
+            }
         } catch (IOException | RuntimeException failure) {
             retire(failure);
             throw failure;

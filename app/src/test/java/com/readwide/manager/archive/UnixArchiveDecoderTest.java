@@ -104,10 +104,10 @@ public class UnixArchiveDecoderTest {
 
     private void assertGuardedFailure(File archive) throws Exception {
         File output = tempFolder.newFile();
-        Files.writeString(output.toPath(), "existing");
+        ArchiveTestTextFiles.writeString(output.toPath(), "existing");
         try { extractGuarded(archive, output); fail("Expected failure for " + archive.getName()); }
         catch (IOException expected) { }
-        assertEquals("existing", Files.readString(output.toPath()));
+        assertEquals("existing", ArchiveTestTextFiles.readString(output.toPath()));
     }
 
     // The public preview wrapper intentionally deletes disposable targets after failure.

@@ -215,22 +215,6 @@ final class ReaderFontDialogController {
         return drawable;
     }
 
-    private View fontDialogHeaderSeparator(int bgColor) {
-        View separator = new View(activity);
-        separator.setBackgroundColor(activity.dialogStyler().dialogActionPanelLineColor(bgColor));
-        separator.setClickable(false);
-        separator.setFocusable(false);
-        return separator;
-    }
-
-    private View fontDialogBottomSeparator(int bgColor) {
-        View separator = new View(activity);
-        separator.setBackgroundColor(activity.dialogStyler().dialogActionPanelLineColor(bgColor));
-        separator.setClickable(false);
-        separator.setFocusable(false);
-        return separator;
-    }
-
     private FrameLayout makeClippedDialogScrollFrame(@NonNull ScrollView scroll,
                                                      @NonNull ViewGroup contentList,
                                                      int bgColor) {
@@ -398,9 +382,6 @@ final class ReaderFontDialogController {
         panel.addView(header, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
-        panel.addView(fontDialogHeaderSeparator(bg), new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                Math.max(1, activity.dpToPx(1))));
 
         LinearLayout list = new LinearLayout(activity);
         list.setOrientation(LinearLayout.VERTICAL);
@@ -435,9 +416,6 @@ final class ReaderFontDialogController {
                 0,
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 1f));
-        panel.addView(fontDialogBottomSeparator(bg), new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                Math.max(1, activity.dpToPx(1))));
         panel.addView(actionRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 activity.dpToPx(54)));
@@ -527,9 +505,6 @@ final class ReaderFontDialogController {
         panel.addView(header, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
-        panel.addView(fontDialogHeaderSeparator(bg), new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                Math.max(1, activity.dpToPx(1))));
 
         LinearLayout list = new LinearLayout(activity);
         list.setOrientation(LinearLayout.VERTICAL);
@@ -555,9 +530,6 @@ final class ReaderFontDialogController {
                 0,
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 1f));
-        panel.addView(fontDialogBottomSeparator(bg), new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                Math.max(1, activity.dpToPx(1))));
         panel.addView(actionRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 activity.dpToPx(54)));

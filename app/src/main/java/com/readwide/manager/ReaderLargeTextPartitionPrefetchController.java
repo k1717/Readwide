@@ -3,6 +3,7 @@ package com.readwide.manager;
 import androidx.annotation.NonNull;
 
 import com.readwide.manager.model.LargeTextLinePartitionResult;
+import com.readwide.manager.util.LargeTextPartitionCache;
 
 import java.io.File;
 
@@ -25,10 +26,8 @@ final class ReaderLargeTextPartitionPrefetchController {
                     : activity.largeTextPreviewBaseCharOffset
                             + Math.max(0, activity.largeTextPartitionBodyCharCount) + 1;
         } else if (partitionStartLine < activity.largeTextPartitionStartLine) {
-            targetChar = cached != null
-                    ? cached.baseCharOffset + Math.max(0, cached.bodyCharCount - 1)
-                    : Math.max(0, activity.largeTextPreviewBaseCharOffset
-                            + Math.max(0, activity.largeTextPartitionBodyStartCharCount) - 1);
+            targetChar = com.readwide.manager.util.LargeTextContinuityMath.backwardHandoffTargetAbs(
+                    activity.largeTextPreviewBaseCharOffset);
         }
 
         int preservedDisplayPage = displayPage;
@@ -109,39 +108,54 @@ final class ReaderLargeTextPartitionPrefetchController {
     private void prefetchPartitionByStartLine(int requestedStartLine, boolean manualHandoff) {
         if (activity.filePath == null || !activity.largeTextEstimateActive) return;
         final int startLine = activity.getLargeTextPartitionStartLineForLine(requestedStartLine);
-        boolean marked = manualHandoff
-                ? activity.markLargeTextManualHandoffPartitionPrefetchPending(startLine)
-                : activity.markLargeTextPartitionPrefetchPending(startLine);
-        if (!marked) return;
-
         final int generation = activity.loadGeneration.get();
+        final int switchGeneration = activity.largeTextPartitionSwitchGeneration.get();
+        final LargeTextPartitionCache cache = activity.largeTextPartitionCache;
+        final LargeTextPartitionCache.PrefetchTicket ticket = cache.acquirePrefetch(
+                startLine, activity.getLargeTextPartitionLines(), manualHandoff, switchGeneration);
+        if (ticket == null) return;
+        if (!activity.ensureLoadedTextCurrent()) { cache.releasePrefetch(ticket); return; }
         final String expectedPath = activity.filePath;
         final int knownTotalLines = Math.max(1, activity.largeTextTotalLogicalLines);
         final int knownTotalChars = Math.max(0, activity.largeTextEstimatedTotalChars);
 
-        activity.largeTextPartitionExecutor.execute(() -> {
-            try {
-                File source = new File(expectedPath);
-                LargeTextLinePartitionResult partition = activity.readLargeTextLinePartitionAtStartLine(
-                        source, startLine, knownTotalLines, knownTotalChars, manualHandoff);
-                if (!activity.activityDestroyed
-                        && generation == activity.loadGeneration.get()
-                        && expectedPath.equals(activity.filePath)) {
-                    activity.cacheLargeTextPartition(partition);
-                } else {
-                    unmarkPrefetchPending(startLine, manualHandoff);
+        try {
+            activity.largeTextPartitionExecutor.execute(() -> {
+                boolean handedOff = false;
+                try {
+                    File source = new File(expectedPath);
+                    LargeTextLinePartitionResult partition =
+                            com.readwide.manager.util.LargeTextPartitionReader.readWhile(() ->
+                                    !activity.activityDestroyed
+                                            && generation == activity.loadGeneration.get()
+                                            && switchGeneration == activity.largeTextPartitionSwitchGeneration.get()
+                                            && cache.ownsPrefetch(ticket)
+                                            && !activity.largeTextPartitionExecutor.hasForegroundWork(),
+                                    () -> activity.readLargeTextLinePartitionAtStartLine(
+                                            source, startLine, knownTotalLines, knownTotalChars, manualHandoff));
+                    handedOff = activity.handler.post(() -> {
+                        try {
+                            if (!activity.activityDestroyed
+                                    && generation == activity.loadGeneration.get()
+                                    && expectedPath.equals(activity.filePath)
+                                    && switchGeneration == activity.largeTextPartitionSwitchGeneration.get()) {
+                                if (!activity.ensureLoadedTextCurrent()) return;
+                                if (cache.completePrefetch(ticket, partition) && manualHandoff) {
+                                    // The reader may have stopped at the seam while this was
+                                    // loading. Recheck when idle, never move directly here.
+                                    activity.scheduleLargeTextManualScrollBoundaryHandoff();
+                                }
+                            }
+                        } finally { cache.releasePrefetch(ticket); }
+                    });
+                } catch (Throwable ignored) {
+                    // Speculative failure/cancellation must not block a later visible read.
+                } finally {
+                    if (!handedOff) cache.releasePrefetch(ticket);
                 }
-            } catch (Throwable ignored) {
-                unmarkPrefetchPending(startLine, manualHandoff);
-            }
-        });
-    }
-
-    private void unmarkPrefetchPending(int startLine, boolean manualHandoff) {
-        if (manualHandoff) {
-            activity.unmarkLargeTextManualHandoffPartitionPrefetchPending(startLine);
-        } else {
-            activity.unmarkLargeTextPartitionPrefetchPending(startLine);
+            });
+        } catch (java.util.concurrent.RejectedExecutionException stopped) {
+            cache.releasePrefetch(ticket);
         }
     }
 }

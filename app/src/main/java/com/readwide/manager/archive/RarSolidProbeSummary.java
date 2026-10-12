@@ -102,7 +102,9 @@ final class RarSolidProbeSummary {
         StringBuilder sb = new StringBuilder();
         sb.append("## Solid probe summary\n\n");
         sb.append("This summary is diagnostic only. It does not enable first-party compressed-solid extraction; ")
-                .append("libarchive remains the primary backend for normal compressed and solid RAR.\n\n");
+                .append("libarchive remains the primary backend for normal compressed and solid RAR. ")
+                .append("Legacy *_GAP cause codes identify a failed helper/probe path, not an app-wide missing decoder. ")
+                .append("Current PPMd and standard-filter archive routes must be checked separately.\n\n");
         sb.append("- probe rows: ").append(total).append('\n');
         sb.append("- first-party successes: ").append(firstPartySuccess).append('\n');
         sb.append("- first-party failures/skips/gaps: ").append(firstPartyFailure).append('\n');

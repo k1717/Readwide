@@ -33,10 +33,11 @@ final class Rar3PpmdSolidStreamDecoder {
     // esc,4 carries a 24-bit distance plus two. 32 MiB retains every such match,
     // independently of the total number of bytes decoded in a solid set.
     private static final int HISTORY_BYTES = 32 * 1024 * 1024;
-    private static final int MAX_MODEL_BYTES = 256 * 1024 * 1024;
     private final RarPpmdVarHDecoder model = new RarPpmdVarHDecoder();
     private final HistoryWindow window = new HistoryWindow(HISTORY_BYTES);
     private final Rar3VmFilter.ProgramState vmPrograms = new Rar3VmFilter.ProgramState();
+    private final Rar3PpmdFilterOutput.DeferredFilters deferredFilters =
+            new Rar3PpmdFilterOutput.DeferredFilters();
     private int escapeChar = 2;
     private boolean modelReady;
 
@@ -83,24 +84,31 @@ final class Rar3PpmdSolidStreamDecoder {
             }
         };
         java.io.BufferedOutputStream buffered = new java.io.BufferedOutputStream(checked, 64 * 1024);
-        try (Rar3PpmdFilterOutput out = new Rar3PpmdFilterOutput(buffered, unpackedSize, vmPrograms)) {
+        try (Rar3PpmdFilterOutput out = new Rar3PpmdFilterOutput(buffered, unpackedSize, vmPrograms,
+                Rar3PpmdFilterOutput.MAX_FILTER_BYTES, deferredFilters)) {
             readPpmdTable(packed);
 
-            long produced = 0;
             int untilCheckpoint = 0;
-            while (produced < unpackedSize) {
+            // Consume through the marker, not just final byte count: a trailing
+            // VM record may legitimately consume raw bytes and emit no output.
+            while (true) {
                 if (--untilCheckpoint <= 0) {
                     if (Thread.currentThread().isInterrupted()) throw new java.io.IOException("RAR extraction cancelled");
                     untilCheckpoint = 1024;
                 }
                 int sym = nextSymbol("entry data");
                 if (sym != escapeChar) {
-                    window.literal(sym, out); produced++; continue;
+                    if (!out.needsInput()) throw unsupported("RAR3 PPMd data follows declared entry size");
+                    window.literal(sym, out); continue;
                 }
                 int code = nextSymbol("escape code");
                 if (code == 0) { readPpmdTable(packed); continue; }
-                if (code == 2) throw unsupported("RAR3 PPMd end-of-data arrived before the entry was complete");
+                if (code == 2) {
+                    if (!out.canFinishEntry()) throw unsupported("RAR3 PPMd end-of-data arrived before the entry was complete");
+                    break;
+                }
                 if (code == 3) { out.readRecord(() -> nextSymbol("VM record")); continue; }
+                if (!out.needsInput()) throw unsupported("RAR3 PPMd data follows declared entry size");
                 if (code == 4 || code == 5) {
                     int distance = 1;
                     if (code == 4) {
@@ -110,36 +118,29 @@ final class Rar3PpmdSolidStreamDecoder {
                     }
                     int length = nextSymbol("match length") + (code == 4 ? 32 : 4);
                     // Check before emitting any part of an overlong match.
-                    if (length > unpackedSize - produced) throw unsupported("RAR3 PPMd match exceeds entry size");
+                    if (!out.hasPendingFilters() && length > out.rawBytesUntilBoundary()) {
+                        throw unsupported("RAR3 PPMd match exceeds entry size");
+                    }
                     window.match(distance, length, out);
-                    produced += length;
                 } else {
-                    window.literal(escapeChar, out); produced++;
+                    window.literal(escapeChar, out);
                 }
             }
-            // Both marker symbols mutate the model used by the next solid entry.
-            while (true) {
-                if (Thread.currentThread().isInterrupted()) throw new java.io.IOException("RAR extraction cancelled");
-                if (nextSymbol("end-of-data marker") != escapeChar) {
-                    throw unsupported("RAR3 PPMd stream desynchronised: missing end-of-data marker");
-                }
-                int code = nextSymbol("end-of-data code");
-                if (code == 2) break;
-                if (code != 0) throw unsupported("RAR3 PPMd data follows declared entry size");
-                readPpmdTable(packed);
-            }
-            out.finish();
+            // Marker symbols above also advance the model for the next solid entry.
+            out.finish(true);
             return crc.getValue();
         } catch (RarPpmdVarHDecoder.PpmdDataException failure) {
             modelReady = false;
             vmPrograms.reset();
+            deferredFilters.reset();
             if (failure.getCause() instanceof java.io.IOException) {
                 throw (java.io.IOException) failure.getCause();
             }
             throw unsupported("RAR3 PPMd decode failed: " + failure.getMessage());
-        } catch (java.io.IOException failure) {
+        } catch (java.io.IOException | RuntimeException | Error failure) {
             modelReady = false;
             vmPrograms.reset();
+            deferredFilters.reset();
             throw failure;
         }
     }
@@ -159,8 +160,9 @@ final class Rar3PpmdSolidStreamDecoder {
             int maxOrder = (flags & 0x1f) + 1;
             if (maxOrder == 1) throw unsupported("Invalid RAR3 PPMd model order");
             if (maxOrder > 16) maxOrder = 16 + (maxOrder - 16) * 3;
-            long heapBytes = (long) memMb << 20;
-            if (heapBytes > MAX_MODEL_BYTES || !model.alloc((int) heapBytes)) {
+            // The format's unsigned byte plus one encodes 1..256 MiB, not an app quota.
+            int heapBytes = memMb << 20;
+            if (!model.alloc(heapBytes)) {
                 throw unsupported("RAR3 PPMd model allocation failed: " + memMb + " MB");
             }
             model.rangeInit(packed);

@@ -58,7 +58,8 @@ final class Rar3DecodePlan {
             checkCancelled();
             RarArchiveReader.RarEntry entry = snapshot.get(start);
             if (entry == null || entry.directory) continue;
-            // Stored/unknown/encrypted/split entries cannot supply this decoder's history.
+            // Stored bytes are outside the compressed dictionary, but do not erase it.
+            if (isStored(entry)) continue;
             if (!isCompressedCandidate(entry)) return null;
             if (!entry.solid) break;
         }
@@ -82,9 +83,8 @@ final class Rar3DecodePlan {
             checkCancelled();
             RarArchiveReader.RarEntry entry = entries.get(i);
             if (entry.directory) { actions[i] = Action.DIRECTORY; continue; }
-            if (isIndependentStored(entry)) {
+            if (isStored(entry)) {
                 actions[i] = Action.STORED;
-                runStart = -1;
             } else {
                 if (!isCompressedCandidate(entry)) return null;
                 sawCompressed = true;
@@ -121,8 +121,8 @@ final class Rar3DecodePlan {
                 && RarCompressedPayloadDecoder.isRar3Or4CompressionMethod(entry.method);
     }
 
-    private static boolean isIndependentStored(RarArchiveReader.RarEntry entry) {
-        return hasPlainData(entry) && !entry.solid && entry.packedSize == entry.unpackedSize
+    private static boolean isStored(RarArchiveReader.RarEntry entry) {
+        return hasPlainData(entry) && entry.packedSize == entry.unpackedSize
                 && RarFeatureClassifier.isRar3Or4StoredMethod(entry.method);
     }
 
@@ -135,10 +135,18 @@ final class Rar3DecodePlan {
     }
 
     /** RarEntry's source field is mutable; do not retain a caller-owned routing decision. */
-    private static RarArchiveReader.RarEntry snapshot(RarArchiveReader.RarEntry entry) {
+    static RarArchiveReader.RarEntry snapshot(RarArchiveReader.RarEntry entry) {
+        RarArchiveReader.EncryptionInfo encryption = entry.encryption;
+        if (encryption != null) {
+            encryption = encryption.rar4Unsupported
+                    ? RarArchiveReader.EncryptionInfo.rar4Unsupported(encryption.salt.clone())
+                    : new RarArchiveReader.EncryptionInfo(encryption.version, encryption.flags,
+                            encryption.kdfCount, encryption.salt.clone(), encryption.iv.clone(),
+                            encryption.check.clone());
+        }
         RarArchiveReader.RarEntry copy = new RarArchiveReader.RarEntry(entry.path, entry.directory,
                 entry.unpackedSize, entry.packedSize, entry.dataOffset, entry.rarVersion, entry.method,
-                entry.solid, entry.splitBefore, entry.splitAfter, entry.encryption, entry.dataCrc,
+                entry.solid, entry.splitBefore, entry.splitAfter, encryption, entry.dataCrc,
                 entry.timeMillis, entry.rar5CompressionInfo, entry.blake2sp);
         copy.sourceArchive = entry.sourceArchive;
         return copy;

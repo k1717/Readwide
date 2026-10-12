@@ -9,6 +9,28 @@ import static org.junit.Assert.*;
 
 public class NumericSupportRound3Test {
  @Rule public TemporaryFolder temp=new TemporaryFolder();
+
+ @Test public void mergeRejectsRedistributedLengthsEvenWhenTheTotalIsUnchanged()throws Exception {
+  File first=temp.newFile("length-a"),second=temp.newFile("length-b");
+  Files.write(first.toPath(),new byte[]{1,2});Files.write(second.toPath(),new byte[]{3,4});
+  int before=temp.getRoot().list().length;
+  IOException failure=assertThrows(IOException.class,()->NumericSplitArchiveMerger.merge(
+    Arrays.asList(first,second),temp.getRoot(),directory->{
+     try {Files.write(first.toPath(),new byte[]{1});Files.write(second.toPath(),new byte[]{2,3,4});}
+     catch(IOException error){throw new AssertionError(error);}
+     return Long.MAX_VALUE;
+    }));
+  assertTrue(failure.getMessage().contains("volume lengths changed before open"));
+  assertEquals(before,temp.getRoot().list().length);
+ }
+
+ @Test public void lengthPreflightStillAllowsAnAllEmptyVolumeSet()throws Exception {
+  File first=temp.newFile("empty-a"),second=temp.newFile("empty-b");
+  File joined=merge(Arrays.asList(first,second));
+  try{assertEquals(0,joined.length());assertArrayEquals(new byte[0],Files.readAllBytes(joined.toPath()));}
+  finally{joined.delete();}
+ }
+
  private List<File> split(String name,byte[] bytes,int step)throws Exception {
   List<File> files=new ArrayList<>();int n=1;
   for(int p=0;p<bytes.length;p+=step){File f=temp.newFile(String.format(Locale.ROOT,"%s.%03d",name,n++));Files.write(f.toPath(),Arrays.copyOfRange(bytes,p,Math.min(bytes.length,p+step)));files.add(f);}

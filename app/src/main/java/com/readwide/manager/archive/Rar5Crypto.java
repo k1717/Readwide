@@ -2,6 +2,7 @@ package com.readwide.manager.archive;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -23,10 +24,23 @@ final class Rar5Crypto {
 
     private Rar5Crypto() {}
 
+    private static void checkpoint(FileOperationProgress progress) throws java.io.InterruptedIOException {
+        if (Thread.currentThread().isInterrupted() || (progress != null && !progress.checkpoint())) {
+            throw new java.io.InterruptedIOException("RAR password derivation cancelled");
+        }
+    }
+
     @NonNull
     static Secrets deriveSecrets(@NonNull char[] password,
                                  int kdfCount,
                                  @NonNull byte[] salt) throws IOException {
+        return deriveSecrets(password, kdfCount, salt, null);
+    }
+
+    @NonNull
+    static Secrets deriveSecrets(@NonNull char[] password, int kdfCount, @NonNull byte[] salt,
+                                  @Nullable FileOperationProgress progress) throws IOException {
+        checkpoint(progress);
         if (kdfCount < 0 || kdfCount > MAX_KDF_COUNT) {
             throw new RarArchiveReader.UnsupportedRarFeatureException("RAR KDF count is too high");
         }
@@ -52,9 +66,7 @@ final class Rar5Crypto {
             long pswAt = iterations + 32;
 
             for (long i = 1; i <= pswAt; i++) {
-                if ((i == 1 || (i & 1023) == 0) && Thread.currentThread().isInterrupted()) {
-                    throw new IOException("RAR password derivation cancelled");
-                }
+                if (i == 1 || (i & 1023) == 0) checkpoint(progress);
                 if (i != 1) {
                     u = mac.doFinal(u);
                     xorInto(accumulator, u);
@@ -66,6 +78,7 @@ final class Rar5Crypto {
             if (key == null || pswCheck == null) {
                 throw new IOException("RAR key derivation produced no key");
             }
+            checkpoint(progress);
             return new Secrets(key, hashKey, foldPswCheck(pswCheck));
         } catch (GeneralSecurityException e) {
             throw new IOException("RAR key derivation failed", e);

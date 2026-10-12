@@ -34,6 +34,10 @@ public final class LargeTextLinePartitionResult {
         this.bodyCharCount = Math.max(this.bodyStartCharCount, Math.min(this.content.length(), bodyCharCount));
         this.windowStartLine = Math.max(1, windowStartLine);
         this.includesLookbehind = includesLookbehind;
-        this.totalChars = Math.max(this.baseCharOffset + this.content.length(), totalChars);
+        long windowEnd = (long) this.baseCharOffset + this.content.length();
+        if (windowEnd > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("TXT partition exceeds the supported coordinate range");
+        }
+        this.totalChars = Math.max((int) windowEnd, totalChars);
     }
 }

@@ -15,14 +15,16 @@ import java.util.Set;
 import java.util.function.BooleanSupplier;
 
 /** Iterative, no-follow tree walk shared by inventory, copy and deletion. */
-final class FileTreeWalk {
-    enum Kind { FILE, DIRECTORY, LINK, OTHER, MISSING }
+public final class FileTreeWalk {
+    private FileTreeWalk() { }
 
-    static final class Entry {
-        final File file;
-        final String relative;
-        final Kind kind;
-        final long bytes;
+    public enum Kind { FILE, DIRECTORY, LINK, OTHER, MISSING }
+
+    public static final class Entry {
+        public final File file;
+        public final String relative;
+        public final Kind kind;
+        public final long bytes;
         final Object identity;
         final File expectedParent;
 
@@ -35,7 +37,7 @@ final class FileTreeWalk {
             this.expectedParent = expectedParent;
         }
 
-        void recheck() throws IOException {
+        public void recheck() throws IOException {
             checkParent(file, expectedParent);
             Info now = inspect(file);
             if (now.kind != kind || (identity != null && !identity.equals(now.identity))) {
@@ -44,7 +46,7 @@ final class FileTreeWalk {
         }
     }
 
-    interface Visitor {
+    public interface Visitor {
         boolean enter(Entry entry) throws IOException;
         default boolean leave(Entry directory) throws IOException { return true; }
     }
@@ -62,7 +64,7 @@ final class FileTreeWalk {
         }
     }
 
-    static boolean walk(File root, BooleanSupplier checkpoint, Visitor visitor) throws IOException {
+    public static boolean walk(File root, BooleanSupplier checkpoint, Visitor visitor) throws IOException {
         if (!checkpoint.getAsBoolean()) return false;
         File parent = root.getAbsoluteFile().getParentFile();
         File expectedParent = parent == null ? null : parent.getCanonicalFile();
@@ -115,7 +117,7 @@ final class FileTreeWalk {
         if (!Objects.equals(expected, actual)) throw new IOException("Parent changed: " + file);
     }
 
-    static Kind kind(File file) throws IOException { return inspect(file).kind; }
+    public static Kind kind(File file) throws IOException { return inspect(file).kind; }
 
     static boolean existsNoFollow(File file) throws IOException { return kind(file) != Kind.MISSING; }
 

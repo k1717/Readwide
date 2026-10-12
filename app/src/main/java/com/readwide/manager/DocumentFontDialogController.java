@@ -75,9 +75,6 @@ final class DocumentFontDialogController {
         panel.addView(header, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
-        panel.addView(fontDialogHeaderSeparator(bg), new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                Math.max(1, dpToPx(1))));
 
         LinearLayout list = new LinearLayout(activity);
         list.setOrientation(LinearLayout.VERTICAL);
@@ -114,9 +111,6 @@ final class DocumentFontDialogController {
                 0,
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 1f));
-        panel.addView(fontDialogBottomSeparator(bg), new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                Math.max(1, dpToPx(1))));
         panel.addView(actionRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dpToPx(54)));
@@ -204,9 +198,6 @@ final class DocumentFontDialogController {
         panel.addView(header, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
-        panel.addView(fontDialogHeaderSeparator(bg), new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                Math.max(1, dpToPx(1))));
 
         LinearLayout list = new LinearLayout(activity);
         list.setOrientation(LinearLayout.VERTICAL);
@@ -234,9 +225,6 @@ final class DocumentFontDialogController {
                 0,
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 1f));
-        panel.addView(fontDialogBottomSeparator(bg), new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                Math.max(1, dpToPx(1))));
         panel.addView(actionRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dpToPx(54)));
@@ -452,14 +440,6 @@ final class DocumentFontDialogController {
         return drawable;
     }
 
-    private View fontDialogHeaderSeparator(int bgColor) {
-        View separator = new View(activity);
-        separator.setBackgroundColor(dialogActionPanelLineColor(bgColor));
-        separator.setClickable(false);
-        separator.setFocusable(false);
-        return separator;
-    }
-
     private FrameLayout makeClippedDialogScrollFrame(@NonNull ScrollView scroll,
                                                      @NonNull ViewGroup contentList,
                                                      int bgColor) {
@@ -549,7 +529,9 @@ final class DocumentFontDialogController {
         row.setGravity(Gravity.CENTER_VERTICAL);
         // Keep the rounded row background but remove the radio/circle icon.
         // This matches the intended TXT/EPUB/Word font picker style.
-        row.setPadding(dpToPx(18), 0, dpToPx(18), 0);
+        row.setPadding(dpToPx(18), dpToPx(4), dpToPx(18), dpToPx(4));
+        row.setMinHeight(dpToPx(40));
+        row.setSingleLine(false);
         row.setCompoundDrawables(null, null, null, null);
         row.setCompoundDrawablePadding(0);
         GradientDrawable bg = new GradientDrawable();
@@ -568,7 +550,7 @@ final class DocumentFontDialogController {
         row.setBackground(bg);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dpToPx(48));
+                LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.setMargins(0, 0, 0, dpToPx(8));
         row.setLayoutParams(lp);
         return row;
@@ -581,14 +563,6 @@ final class DocumentFontDialogController {
         // extra color-blend strip between the border and the bottom action row.
         drawable.setCornerRadius(0f);
         return drawable;
-    }
-
-    private View fontDialogBottomSeparator(int bgColor) {
-        View separator = new View(activity);
-        separator.setBackgroundColor(dialogActionPanelLineColor(bgColor));
-        separator.setClickable(false);
-        separator.setFocusable(false);
-        return separator;
     }
 
     private int dialogActionPanelFillColor(int bgColor) {

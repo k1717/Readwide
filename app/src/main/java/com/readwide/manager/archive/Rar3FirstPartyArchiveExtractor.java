@@ -29,16 +29,16 @@ final class Rar3FirstPartyArchiveExtractor {
                                                     @Nullable char[] password,
                                                     @Nullable FileOperationProgress progress,
                                                     @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
-        if (password != null && password.length > 0) return false;
+        // The plan admits plain payloads only; a supplied password must not block them.
         Rar3DecodePlan plan = Rar3DecodePlan.forArchive(entries);
         if (plan == null) return false;
+        java.util.Map<RarArchiveReader.RarEntry, File> destinations = ArchiveOutputPreflight.rar(targetDir, plan.entries());
         if (progress != null) progress.setTotalBytes(plan.totalUnpackedBytes);
         PlannedDecoder decoder = new PlannedDecoder(plan);
         for (int i = 0; i < plan.size(); i++) {
             RarArchiveReader.RarEntry entry = plan.step(i).entry;
             if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
-            File out = RarArchiveReader.resolveOutput(targetDir, entry.path);
-            if (out == null) throw new IOException("Invalid RAR output path");
+            File out = destinations.get(entry);
             if (entry.directory) {
                 if (entryProgress != null) entryProgress.onDirectory(entry.path);
             } else {
@@ -61,6 +61,13 @@ final class Rar3FirstPartyArchiveExtractor {
             decoder.extractNext(i == plan.size() - 1 ? outFile : null, progress);
         }
         return true;
+    }
+
+    static boolean tryExtractSingleEntryLimitedFallback(@NonNull RarArchiveReader.RarEntry target,
+            @NonNull List<RarArchiveReader.RarEntry> entries, @NonNull File outFile,
+            @Nullable char[] password, @Nullable FileOperationProgress progress) throws IOException {
+        if (Rar3IndependentPayloadExtractor.tryExtract(target, entries, outFile, password, progress)) return true;
+        return tryExtractSingleEntryLimitedFallback(target, entries, outFile, progress);
     }
 
     /** Shared ordered executor for bulk, target-only and forward-reading plans. */
@@ -86,9 +93,9 @@ final class Rar3FirstPartyArchiveExtractor {
                         position++;
                         return;
                     case STORED:
-                        state = null;
-                        if (out == null) throw new IOException("Stored RAR verification requires a destination");
-                        RarArchiveReader.extractStoredEntry(entry, out, null, plan.entries(), progress);
+                        // Keep compressed history across stored members. Selected reads skip
+                        // unrelated stored bytes; bulk/forward reads still verify their CRC.
+                        if (out != null) RarArchiveReader.extractStoredEntry(entry, out, null, plan.entries(), progress);
                         position++;
                         return;
                     case INDEPENDENT_LZ:

@@ -25,6 +25,13 @@ public final class TextDisplayRuleManager {
     private static List<TextDisplayRule> cachedRules;
     private static String cachedRaw;
     private static int rulesVersion;
+    // Bounded by recently queried paths, not by document/rule text length.
+    private static final java.util.LinkedHashMap<String, String> exactSignatures =
+            new java.util.LinkedHashMap<String, String>(16, 0.75f, true) {
+                @Override protected boolean removeEldestEntry(java.util.Map.Entry<String, String> entry) {
+                    return size() > 16;
+                }
+            };
 
     public static int getRulesVersion() {
         synchronized (RULE_LOCK) { return rulesVersion; }
@@ -70,7 +77,9 @@ public final class TextDisplayRuleManager {
 
     /** Called after preference imports; raw-value matching also covers external edits. */
     public static void invalidateCache() {
-        synchronized (RULE_LOCK) { cachedRules = null; cachedRaw = null; rulesVersion++; }
+        synchronized (RULE_LOCK) {
+            cachedRules = null; cachedRaw = null; rulesVersion++; exactSignatures.clear();
+        }
     }
 
     private static List<TextDisplayRule> copyRules(List<TextDisplayRule> rules) {
@@ -82,6 +91,7 @@ public final class TextDisplayRuleManager {
     private static void refreshLocked(String raw) {
         if (raw == null) raw = "[]";
         if (cachedRules != null && raw.equals(cachedRaw)) return;
+        exactSignatures.clear();
         ArrayList<TextDisplayRule> rules = new ArrayList<>();
         try {
             JSONArray arr = new JSONArray(raw);
@@ -123,7 +133,7 @@ public final class TextDisplayRuleManager {
         SharedPreferences preferences = prefs(context);
         synchronized (RULE_LOCK) {
             preferences.edit().putString(PREF_KEY, arr.toString()).apply();
-            cachedRules = null; cachedRaw = null; rulesVersion++;
+            cachedRules = null; cachedRaw = null; rulesVersion++; exactSignatures.clear();
         }
     }
 
@@ -138,6 +148,57 @@ public final class TextDisplayRuleManager {
             }
         }
         return Integer.toHexString(arr.toString().hashCode()) + ":" + arr.length();
+    }
+
+    /** Recheck raw preferences (including imports), but hash/copy rules only on a miss. */
+    public static String getExactSignature(Context context, String filePath) {
+        if (context == null) return getExactSignature(java.util.Collections.emptyList());
+        return getExactSignature(prefs(context), filePath);
+    }
+
+    static String getExactSignature(SharedPreferences preferences, String filePath) {
+        synchronized (RULE_LOCK) {
+            refreshLocked(preferences.getString(PREF_KEY, "[]"));
+            String signature = exactSignatures.get(filePath);
+            if (signature != null) return signature;
+            List<TextDisplayRule> active = new ArrayList<>();
+            for (TextDisplayRule rule : cachedRules) if (rule.appliesTo(filePath)) active.add(rule);
+            signature = getExactSignature(active);
+            exactSignatures.put(filePath, signature);
+            return signature;
+        }
+    }
+
+    /** Collision-resistant identity of the actual ordered transforms used for page caching. */
+    public static String getExactSignature(List<TextDisplayRule> rules) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            for (TextDisplayRule rule : rules) {
+                updateExactSignature(digest, rule.findText);
+                updateExactSignature(digest, rule.replacementText);
+                digest.update((byte) (rule.caseSensitive ? 1 : 0));
+                digest.update((byte) (rule.useRegex ? 1 : 0));
+            }
+            StringBuilder result = new StringBuilder(64);
+            for (byte value : digest.digest()) {
+                result.append(Character.forDigit((value >>> 4) & 15, 16));
+                result.append(Character.forDigit(value & 15, 16));
+            }
+            return result.toString();
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+
+    private static void updateExactSignature(java.security.MessageDigest digest, String value) {
+        String text = value != null ? value : "";
+        for (int shift = 24; shift >= 0; shift -= 8) digest.update((byte) (text.length() >>> shift));
+        // Preserve UTF-16 code units, including an unpaired surrogate in a user rule.
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            digest.update((byte) (c >>> 8));
+            digest.update((byte) c);
+        }
     }
 
     public static String apply(Context context, String text, String filePath) {

@@ -17,6 +17,7 @@ import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
 import java.io.InputStream;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -26,9 +27,9 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * DOCX -> RenderedDocument bridge for the 1.0.3 L3 fidelity cycle.
+ * DOCX -> RenderedDocument bridge for read-only, reading-order previews.
  *
- * This is intentionally conservative: it converts the already-verified subset
+ * This is intentionally conservative: it converts the supported preview subset
  * (paragraphs, run styling, page margins, basic tables, inline images) into the
  * shared RenderedDocument model, and DocumentPageActivity still falls back to
  * the legacy semantic HTML converter if this bridge fails.
@@ -53,6 +54,7 @@ final class DocumentDocxLayoutExtractor {
         try (InputStream is = zip.getInputStream(documentXml)) {
             doc = DocumentArchiveUtils.secureDocumentBuilder().parse(is);
         }
+        DocumentWordUtils.selectMarkupAlternatives(doc);
 
         Node body = DocumentArchiveUtils.firstNodeByLocalName(doc, "body");
         if (body == null) body = doc.getDocumentElement();
@@ -86,9 +88,7 @@ final class DocumentDocxLayoutExtractor {
         int blockBudget = Math.max(4, blocksPerPage > 0 ? blocksPerPage : DEFAULT_BLOCKS_PER_PAGE);
         PageAccumulator accumulator = new PageAccumulator(pages, metrics, blockBudget, headerFooters);
 
-        NodeList children = body.getChildNodes();
-        for (int i = 0; i < children.getLength(); i++) {
-            Node child = children.item(i);
+        for (Node child : visibleChildren(body)) {
             String local = child.getLocalName();
             String name = child.getNodeName();
             boolean paragraph = "p".equals(local) || "w:p".equals(name);
@@ -170,22 +170,33 @@ final class DocumentDocxLayoutExtractor {
         ArrayList<RenderedBlock> blocks = new ArrayList<>();
         ArrayList<RenderedRun> runs = new ArrayList<>();
         TextStyle paragraphRunStyle = paragraphRunStyle(paragraph, styles);
-        collectParagraphRuns(paragraph, paragraph, relationships, localHost, runs, blocks, styles, paragraphRunStyle, notes);
+        collectParagraphRuns(paragraph, paragraph, relationships, localHost, runs, blocks, styles, paragraphRunStyle, notes, numbering);
         runs = coalesceAdjacentTextRuns(runs);
         ListMarker marker = listCounters != null ? listCounters.next(paragraph, numbering) : null;
-        if (!runs.isEmpty()) {
+        if (!runs.isEmpty() || (blocks.isEmpty() && !DocumentWordUtils.containsPageBreak(paragraph))) {
             RenderedParagraph rendered = new RenderedParagraph(readParagraphStyle(paragraph, marker, styles), runs);
-            if (!rendered.plainText().trim().isEmpty()) blocks.add(0, RenderedBlock.paragraph(rendered));
+            blocks.add(0, RenderedBlock.paragraph(rendered));
         }
         return blocks;
     }
 
     private static void collectParagraphRuns(Node rootParagraph, Node node, Map<String, String> relationships,
                                              String localHost, List<RenderedRun> runs, List<RenderedBlock> sideBlocks,
-                                             DocxStyles styles, TextStyle paragraphRunStyle, NoteDefinitions notes) {
+                                             DocxStyles styles, TextStyle paragraphRunStyle, NoteDefinitions notes,
+                                             NumberingDefinitions numbering) {
         if (node == null) return;
         String local = node.getLocalName();
         String name = node.getNodeName();
+
+        // Display the current reading view, never content-control metadata or removed text.
+        if ("del".equals(local) || "moveFrom".equals(local)
+                || "sdtPr".equals(local) || "sdtEndPr".equals(local)
+                || "customXmlPr".equals(local) || "pPr".equals(local) || "rPr".equals(local)) return;
+        if ("sdt".equals(local)) {
+            collectParagraphRuns(rootParagraph, directChildByLocalName(node, "sdtContent"),
+                    relationships, localHost, runs, sideBlocks, styles, paragraphRunStyle, notes, numbering);
+            return;
+        }
 
         if (node != rootParagraph && ("p".equals(local) || "w:p".equals(name)
                 || "tbl".equals(local) || "w:tbl".equals(name))) {
@@ -199,6 +210,11 @@ final class DocumentDocxLayoutExtractor {
         }
         if ("tab".equals(local) || "w:tab".equals(name)) {
             runs.add(RenderedRun.text("\t", currentRunStyle(node, styles, paragraphRunStyle)));
+            return;
+        }
+        if ("noBreakHyphen".equals(local) || "softHyphen".equals(local)) {
+            runs.add(RenderedRun.text("noBreakHyphen".equals(local) ? "\u2011" : "\u00ad",
+                    currentRunStyle(node, styles, paragraphRunStyle)));
             return;
         }
         if ("br".equals(local) || "w:br".equals(name) || "cr".equals(local) || "w:cr".equals(name)) {
@@ -224,15 +240,18 @@ final class DocumentDocxLayoutExtractor {
             }
             return;
         }
-        if (isDrawingInline(node)) {
-            RenderedImage image = imageForDrawingContainer(node, relationships, localHost, false);
-            if (image != null) sideBlocks.add(RenderedBlock.image(image));
-            return;
-        }
-        if (isDrawingAnchor(node)) {
-            RenderedImage image = imageForDrawingContainer(node, relationships, localHost, true);
-            if (image != null) sideBlocks.add(RenderedBlock.image(image));
-            else sideBlocks.add(RenderedBlock.unsupported("Floating drawing is shown in reading order when supported."));
+        if (isDrawingInline(node) || isDrawingAnchor(node)) {
+            int before = sideBlocks.size();
+            // Descend once so text boxes and grouped pictures are not reduced to
+            // the first blip (which may itself be inside a text box).
+            NodeList children = node.getChildNodes();
+            for (int i = 0; i < children.getLength(); i++) {
+                collectParagraphRuns(rootParagraph, children.item(i), relationships, localHost,
+                        runs, sideBlocks, styles, paragraphRunStyle, notes, numbering);
+            }
+            if (sideBlocks.size() == before && isDrawingAnchor(node)) {
+                sideBlocks.add(RenderedBlock.unsupported("Floating drawing is shown in reading order when supported."));
+            }
             return;
         }
         if ("blip".equals(local) || "a:blip".equals(name)) {
@@ -241,30 +260,83 @@ final class DocumentDocxLayoutExtractor {
             return;
         }
         if ("txbxContent".equals(local) || "w:txbxContent".equals(name)) {
-            sideBlocks.add(RenderedBlock.unsupported("Text box content is shown in reading order when supported."));
+            // A text box is a separate text flow. Reuse paragraph/table/style parsing,
+            // keeping its numbering state separate from the surrounding body.
+            ListCounterState boxCounters = new ListCounterState();
+            for (Node child : visibleChildren(node)) {
+                if ("p".equals(child.getLocalName())) {
+                    sideBlocks.addAll(readParagraphBlocks(child, relationships, localHost,
+                            numbering, boxCounters, styles, notes));
+                } else if ("tbl".equals(child.getLocalName())) {
+                    RenderedTable table = readTable(child, relationships, localHost,
+                            numbering, boxCounters, styles, notes);
+                    if (table != null && !table.rows.isEmpty()) sideBlocks.add(RenderedBlock.table(table));
+                }
+            }
+            return;
+        }
+        if ("imagedata".equals(local) && "urn:schemas-microsoft-com:vml".equals(node.getNamespaceURI())) {
+            String rid = DocumentArchiveUtils.attr(node, "r:id", "id");
+            String target = rid != null ? relationships.get(rid) : null;
+            if (target != null) sideBlocks.add(RenderedBlock.image(new RenderedImage(
+                    "https://" + localHost + "/" + target, DocumentArchiveUtils.fileNameFromPath(target), -1f, -1f, true)));
             return;
         }
 
         NodeList children = node.getChildNodes();
         for (int i = 0; i < children.getLength(); i++) {
-            collectParagraphRuns(rootParagraph, children.item(i), relationships, localHost, runs, sideBlocks, styles, paragraphRunStyle, notes);
+            collectParagraphRuns(rootParagraph, children.item(i), relationships, localHost, runs, sideBlocks, styles, paragraphRunStyle, notes, numbering);
         }
     }
 
     private static ArrayList<RenderedRun> coalesceAdjacentTextRuns(List<RenderedRun> source) {
         ArrayList<RenderedRun> out = new ArrayList<>();
         if (source == null || source.isEmpty()) return out;
+        RenderedRun first = null;
+        StringBuilder text = null;
         for (RenderedRun run : source) {
             if (run == null) continue;
-            int lastIndex = out.size() - 1;
-            if (lastIndex >= 0 && canCoalesceRuns(out.get(lastIndex), run)) {
-                RenderedRun previous = out.remove(lastIndex);
-                out.add(RenderedRun.text(previous.text + run.text, previous.style));
+            if (first != null && canCoalesceRuns(first, run)) {
+                if (text == null) text = new StringBuilder(first.text);
+                text.append(run.text);
             } else {
-                out.add(run);
+                if (first != null) out.add(text != null ? RenderedRun.text(text.toString(), first.style) : first);
+                first = run;
+                text = null;
+            }
+        }
+        if (first != null) out.add(text != null ? RenderedRun.text(text.toString(), first.style) : first);
+        return out;
+    }
+
+    /** Unwrap content containers without descending into paragraphs/tables or their properties. */
+    private static List<Node> visibleChildren(Node parent) {
+        ArrayList<Node> out = new ArrayList<>();
+        ArrayDeque<Node> pending = new ArrayDeque<>();
+        pushChildren(parent, pending);
+        while (!pending.isEmpty()) {
+            Node node = pending.pop();
+            String local = node.getLocalName();
+            if ("del".equals(local) || "moveFrom".equals(local)) continue;
+            if ("sdt".equals(local)) {
+                pushChildren(directChildByLocalName(node, "sdtContent"), pending);
+            } else if ("sdtContent".equals(local) || "customXml".equals(local)
+                    || "ins".equals(local) || "moveTo".equals(local)
+                    || ("http://schemas.openxmlformats.org/markup-compatibility/2006".equals(node.getNamespaceURI())
+                    && ("AlternateContent".equals(local) || "Choice".equals(local) || "Fallback".equals(local)))) {
+                pushChildren(node, pending);
+            } else if (node.getNodeType() == Node.ELEMENT_NODE) {
+                out.add(node);
             }
         }
         return out;
+    }
+
+    private static void pushChildren(Node parent, ArrayDeque<Node> pending) {
+        if (parent == null) return;
+        for (Node child = parent.getLastChild(); child != null; child = child.getPreviousSibling()) {
+            pending.push(child);
+        }
     }
 
     private static boolean canCoalesceRuns(RenderedRun a, RenderedRun b) {
@@ -285,7 +357,9 @@ final class DocumentDocxLayoutExtractor {
                 && same(a.strike, b.strike)
                 && same(a.color, b.color)
                 && same(a.backgroundColor, b.backgroundColor)
-                && a.verticalAlign == b.verticalAlign;
+                && same(a.highlightColor, b.highlightColor)
+                && a.verticalAlign == b.verticalAlign
+                && a.verticalAlignSpecified == b.verticalAlignSpecified;
     }
 
     private static boolean same(Object a, Object b) {
@@ -300,19 +374,22 @@ final class DocumentDocxLayoutExtractor {
         List<Float> columnWidths = readGridWidthPercents(table);
         float totalGridPt = readGridTotalPt(table);
         Float tableWidthPercent = readTableWidthPercent(table);
+        Node tblPr = directChildByLocalName(table, "tblPr");
+        Float tableWidthPt = readDxaWidthPt(directChildByLocalName(tblPr, "tblW"));
+        Float tableIndentPt = readDxaWidthPt(directChildByLocalName(tblPr, "tblInd"));
+        String tableAlign = DocumentArchiveUtils.attr(directChildByLocalName(tblPr, "jc"), "w:val", "val");
+        ParagraphStyle.Alignment alignment = "center".equals(tableAlign) ? ParagraphStyle.Alignment.CENTER
+                : "right".equals(tableAlign) || "end".equals(tableAlign) ? ParagraphStyle.Alignment.RIGHT : ParagraphStyle.Alignment.LEFT;
+        PaddingSpec tablePadding = readMarginPadding(directChildByLocalName(tblPr, "tblCellMar"));
         BorderSpec tableBorder = readTableBorders(table);
 
-        NodeList rows = table.getChildNodes();
-        for (int i = 0; i < rows.getLength(); i++) {
-            Node row = rows.item(i);
+        for (Node row : visibleChildren(table)) {
             String local = row.getLocalName();
             String name = row.getNodeName();
             if (!"tr".equals(local) && !"w:tr".equals(name)) continue;
             ArrayList<MutableTableCell> rowOut = new ArrayList<>();
             int gridColumn = 0;
-            NodeList cells = row.getChildNodes();
-            for (int j = 0; j < cells.getLength(); j++) {
-                Node cell = cells.item(j);
+            for (Node cell : visibleChildren(row)) {
                 String cl = cell.getLocalName();
                 String cn = cell.getNodeName();
                 if (!"tc".equals(cl) && !"w:tc".equals(cn)) continue;
@@ -334,6 +411,14 @@ final class DocumentDocxLayoutExtractor {
 
                 MutableTableCell renderedCell = readTableCell(cell, relationships, localHost, numbering, listCounters, styles,
                         colSpan, gridColumn, columnWidths, totalGridPt, tableBorder, notes);
+                if (tablePadding != null) {
+                    if (renderedCell.paddingTopPt == null) renderedCell.paddingTopPt = tablePadding.topPt;
+                    if (renderedCell.paddingRightPt == null) renderedCell.paddingRightPt = tablePadding.rightPt;
+                    if (renderedCell.paddingBottomPt == null) renderedCell.paddingBottomPt = tablePadding.bottomPt;
+                    if (renderedCell.paddingLeftPt == null) renderedCell.paddingLeftPt = tablePadding.leftPt;
+                }
+                Node rowHeight = directChildByLocalName(directChildByLocalName(row, "trPr"), "trHeight");
+                renderedCell.minHeightPt = twipsToPt(DocumentArchiveUtils.attr(rowHeight, "w:val", "val"));
                 rowOut.add(renderedCell);
                 if (vMerge == VerticalMerge.RESTART) {
                     for (int c = 0; c < renderedCell.colSpan; c++) activeVerticalMerges.put(gridColumn + c, renderedCell);
@@ -349,7 +434,8 @@ final class DocumentDocxLayoutExtractor {
             for (MutableTableCell cell : row) converted.add(cell.toRendered());
             rowsOut.add(converted);
         }
-        return new RenderedTable(rowsOut, tableWidthPercent != null ? tableWidthPercent : 100f, columnWidths);
+        return new RenderedTable(rowsOut, tableWidthPercent != null ? tableWidthPercent : 100f, columnWidths,
+                tableWidthPt, alignment, tableIndentPt);
     }
 
     private static MutableTableCell readTableCell(Node cell, Map<String, String> relationships, String localHost,
@@ -358,8 +444,14 @@ final class DocumentDocxLayoutExtractor {
                                                    float totalGridPt, BorderSpec tableBorder, NoteDefinitions notes) {
         MutableTableCell out = new MutableTableCell();
         out.colSpan = Math.max(1, colSpan);
+        out.borderVisible = tableBorder != null ? tableBorder.visible : Boolean.FALSE;
+        out.borderColor = tableBorder != null ? tableBorder.color : null;
         Node tcPr = directChildByLocalName(cell, "tcPr");
         if (tcPr != null) {
+            String vertical = DocumentArchiveUtils.attr(directChildByLocalName(tcPr, "vAlign"), "w:val", "val");
+            if ("center".equals(vertical)) out.verticalAlignment = RenderedTableCell.VerticalAlignment.MIDDLE;
+            else if ("bottom".equals(vertical)) out.verticalAlignment = RenderedTableCell.VerticalAlignment.BOTTOM;
+            else if ("top".equals(vertical)) out.verticalAlignment = RenderedTableCell.VerticalAlignment.TOP;
             Node shd = directChildByLocalName(tcPr, "shd");
             String fill = DocumentArchiveUtils.attr(shd, "w:fill", "fill");
             if (isHexColor(fill)) out.backgroundColor = "#" + fill;
@@ -386,10 +478,8 @@ final class DocumentDocxLayoutExtractor {
             }
         }
 
-        NodeList children = cell.getChildNodes();
         boolean hasBlock = false;
-        for (int i = 0; i < children.getLength(); i++) {
-            Node child = children.item(i);
+        for (Node child : visibleChildren(cell)) {
             String local = child.getLocalName();
             String name = child.getNodeName();
             if ("p".equals(local) || "w:p".equals(name)) {
@@ -436,6 +526,12 @@ final class DocumentDocxLayoutExtractor {
         return readWidthPercent(tblW, -1f);
     }
 
+    private static Float readDxaWidthPt(Node widthNode) {
+        String type = DocumentArchiveUtils.attr(widthNode, "w:type", "type");
+        return type == null || "dxa".equalsIgnoreCase(type)
+                ? twipsToPt(DocumentArchiveUtils.attr(widthNode, "w:w", "w")) : null;
+    }
+
     private static Float readCellWidthPercent(Node tcPr, int gridColumn, int colSpan, List<Float> columnWidths, float totalGridPt) {
         Node tcW = directChildByLocalName(tcPr, "tcW");
         Float explicit = readWidthPercent(tcW, totalGridPt);
@@ -450,7 +546,10 @@ final class DocumentDocxLayoutExtractor {
     }
 
     private static PaddingSpec readTableCellPadding(Node tcPr) {
-        Node tcMar = directChildByLocalName(tcPr, "tcMar");
+        return readMarginPadding(directChildByLocalName(tcPr, "tcMar"));
+    }
+
+    private static PaddingSpec readMarginPadding(Node tcMar) {
         if (tcMar == null) return null;
         Float top = tableMarginSidePt(tcMar, "top");
         Float right = tableMarginSidePt(tcMar, "right");
@@ -575,7 +674,8 @@ final class DocumentDocxLayoutExtractor {
         Node jc = directChildByLocalName(pPr, "jc");
         String align = DocumentArchiveUtils.attr(jc, "w:val", "val");
         if (align != null) {
-            if ("center".equalsIgnoreCase(align)) style.alignment(ParagraphStyle.Alignment.CENTER);
+            if ("left".equalsIgnoreCase(align) || "start".equalsIgnoreCase(align)) style.alignment(ParagraphStyle.Alignment.LEFT);
+            else if ("center".equalsIgnoreCase(align)) style.alignment(ParagraphStyle.Alignment.CENTER);
             else if ("right".equalsIgnoreCase(align) || "end".equalsIgnoreCase(align)) style.alignment(ParagraphStyle.Alignment.RIGHT);
             else if ("both".equalsIgnoreCase(align) || "distribute".equalsIgnoreCase(align)) style.alignment(ParagraphStyle.Alignment.JUSTIFY);
         }
@@ -627,7 +727,31 @@ final class DocumentDocxLayoutExtractor {
 
     private static TextStyle currentRunStyle(Node node, DocxStyles styles, TextStyle paragraphRunStyle) {
         Node run = nearestAncestor(node, "r");
-        return readRunStyle(run, styles, paragraphRunStyle);
+        TextStyle style = readRunStyle(run, styles, paragraphRunStyle);
+        // OMML scripts are structural (m:sSub/m:sSup/m:sSubSup), not w:vertAlign.
+        // Preserve their reading-order positioning without claiming a full equation layout.
+        for (Node part = node; part != null; part = part.getParentNode()) {
+            if ("p".equals(part.getLocalName())) break;
+            if (!isOfficeMathNode(part)) continue;
+            String local = part.getLocalName();
+            Node parent = part.getParentNode();
+            if (!("sub".equals(local) || "sup".equals(local)) || !isOfficeMathNode(parent)) continue;
+            String owner = parent.getLocalName();
+            boolean script = "sSubSup".equals(owner)
+                    || ("sub".equals(local) && "sSub".equals(owner))
+                    || ("sup".equals(local) && "sSup".equals(owner));
+            if (!script) continue;
+            MutableTextStyle out = new MutableTextStyle();
+            out.apply(style);
+            out.verticalAlign = "sub".equals(local) ? TextStyle.VerticalAlign.SUBSCRIPT : TextStyle.VerticalAlign.SUPERSCRIPT;
+            return out.toTextStyle();
+        }
+        return style;
+    }
+
+    private static boolean isOfficeMathNode(Node node) {
+        return node != null && ("http://schemas.openxmlformats.org/officeDocument/2006/math".equals(node.getNamespaceURI())
+                || "http://purl.oclc.org/ooxml/officeDocument/math".equals(node.getNamespaceURI()));
     }
 
     private static TextStyle readRunStyle(Node run, DocxStyles styles, TextStyle paragraphRunStyle) {
@@ -635,6 +759,18 @@ final class DocumentDocxLayoutExtractor {
         if (styles != null) out.apply(readRunProperties(styles.defaultRunPr));
         out.apply(paragraphRunStyle);
         Node props = directChildByLocalName(run, "rPr");
+        if (isOfficeMathNode(run)) {
+            // m:rPr controls math appearance; w:rPr holds normal font/color styling.
+            props = null;
+            if (run != null) for (Node child = run.getFirstChild(); child != null; child = child.getNextSibling()) {
+                if ("rPr".equals(child.getLocalName())
+                        && ("http://schemas.openxmlformats.org/wordprocessingml/2006/main".equals(child.getNamespaceURI())
+                        || "http://purl.oclc.org/ooxml/wordprocessingml/main".equals(child.getNamespaceURI()))) {
+                    props = child;
+                    break;
+                }
+            }
+        }
         String characterStyleId = runStyleId(props);
         if (styles != null) {
             StyleDefinition charStyle = styles.characterStyle(characterStyleId);
@@ -665,7 +801,13 @@ final class DocumentDocxLayoutExtractor {
         Node highlight = directChildByLocalName(props, "highlight");
         String highlightVal = DocumentArchiveUtils.attr(highlight, "w:val", "val");
         String highlightCss = highlightColor(highlightVal);
-        if (highlightCss != null) style.backgroundColor(highlightCss);
+        if ("none".equalsIgnoreCase(highlightVal)) style.highlightColor("none");
+        else if (highlightCss != null) style.highlightColor(highlightCss);
+        Node shading = directChildByLocalName(props, "shd");
+        String shadingValue = DocumentArchiveUtils.attr(shading, "w:val", "val");
+        String shadingFill = DocumentArchiveUtils.attr(shading, "w:fill", "fill");
+        if ("nil".equalsIgnoreCase(shadingValue)) style.backgroundColor("transparent");
+        else if (isHexColor(shadingFill)) style.backgroundColor("#" + shadingFill);
 
         Node sz = directChildByLocalName(props, "sz");
         Float size = halfPointsToPt(DocumentArchiveUtils.attr(sz, "w:val", "val"));
@@ -675,6 +817,7 @@ final class DocumentDocxLayoutExtractor {
         String valign = DocumentArchiveUtils.attr(vertAlign, "w:val", "val");
         if ("superscript".equalsIgnoreCase(valign)) style.verticalAlign(TextStyle.VerticalAlign.SUPERSCRIPT);
         else if ("subscript".equalsIgnoreCase(valign)) style.verticalAlign(TextStyle.VerticalAlign.SUBSCRIPT);
+        else if ("baseline".equalsIgnoreCase(valign)) style.verticalAlign(TextStyle.VerticalAlign.BASELINE);
 
         Node rFonts = directChildByLocalName(props, "rFonts");
         String font = sanitizeFont(DocumentArchiveUtils.attr(rFonts, "w:ascii", "ascii"));
@@ -682,12 +825,6 @@ final class DocumentDocxLayoutExtractor {
         if (font == null) font = sanitizeFont(DocumentArchiveUtils.attr(rFonts, "w:eastAsia", "eastAsia"));
         if (font != null) style.fontFamily(font);
         return style.build();
-    }
-
-    private static RenderedImage imageForDrawingContainer(Node container, Map<String, String> relationships,
-                                                          String localHost, boolean floating) {
-        Node blip = firstDescendantByLocalName(container, "blip");
-        return imageForBlip(blip, relationships, localHost, floating);
     }
 
     private static RenderedImage imageForBlip(Node blip, Map<String, String> relationships, String localHost, boolean floating) {
@@ -1001,12 +1138,11 @@ final class DocumentDocxLayoutExtractor {
         relationships.putAll(loadRelationshipsForPart(zip, path));
         try (InputStream is = zip.getInputStream(entry)) {
             Document doc = DocumentArchiveUtils.secureDocumentBuilder().parse(is);
+            DocumentWordUtils.selectMarkupAlternatives(doc);
             Node root = doc.getDocumentElement();
             if (root == null) return blocks;
             ListCounterState counters = new ListCounterState();
-            NodeList children = root.getChildNodes();
-            for (int i = 0; i < children.getLength(); i++) {
-                Node child = children.item(i);
+            for (Node child : visibleChildren(root)) {
                 String local = child.getLocalName();
                 String name = child.getNodeName();
                 if ("p".equals(local) || "w:p".equals(name)) {
@@ -1090,16 +1226,15 @@ final class DocumentDocxLayoutExtractor {
         if (entry == null || defs == null) return;
         try (InputStream is = zip.getInputStream(entry)) {
             Document doc = DocumentArchiveUtils.secureDocumentBuilder().parse(is);
+            DocumentWordUtils.selectMarkupAlternatives(doc);
             Node root = doc.getDocumentElement();
             if (root == null) return;
             for (Node noteNode : directChildrenByLocalName(root, elementName)) {
                 String id = DocumentArchiveUtils.attr(noteNode, "w:id", "id");
                 if (!isVisibleNoteId(id)) continue;
                 ArrayList<RenderedBlock> blocks = new ArrayList<>();
-                NodeList children = noteNode.getChildNodes();
                 ListCounterState noteCounters = new ListCounterState();
-                for (int i = 0; i < children.getLength(); i++) {
-                    Node child = children.item(i);
+                for (Node child : visibleChildren(noteNode)) {
                     String local = child.getLocalName();
                     String name = child.getNodeName();
                     if ("p".equals(local) || "w:p".equals(name)) {
@@ -1360,6 +1495,8 @@ final class DocumentDocxLayoutExtractor {
         Boolean borderVisible;
         String backgroundColor;
         Float widthPercent;
+        Float minHeightPt;
+        RenderedTableCell.VerticalAlignment verticalAlignment;
         Float paddingTopPt;
         Float paddingRightPt;
         Float paddingBottomPt;
@@ -1373,6 +1510,8 @@ final class DocumentDocxLayoutExtractor {
             if (borderVisible != null) builder.borderVisible(borderVisible);
             if (backgroundColor != null) builder.backgroundColor(backgroundColor);
             if (widthPercent != null) builder.widthPercent(widthPercent);
+            if (minHeightPt != null && rowSpan == 1) builder.minHeightPt(minHeightPt);
+            if (verticalAlignment != null) builder.verticalAlignment(verticalAlignment);
             builder.paddingPt(paddingTopPt, paddingRightPt, paddingBottomPt, paddingLeftPt);
             for (RenderedBlock block : blocks) builder.addBlock(block);
             return builder.build();
@@ -1395,14 +1534,14 @@ final class DocumentDocxLayoutExtractor {
 
         void apply(ParagraphStyle s) {
             if (s == null || s.isDefault()) return;
-            if (s.alignment != null && s.alignment != ParagraphStyle.Alignment.LEFT) alignment = s.alignment;
+            if (s.alignmentSpecified) alignment = s.alignment;
             if (s.marginTopPt != null) marginTopPt = s.marginTopPt;
             if (s.marginBottomPt != null) marginBottomPt = s.marginBottomPt;
             if (s.marginLeftPt != null) marginLeftPt = s.marginLeftPt;
             if (s.marginRightPt != null) marginRightPt = s.marginRightPt;
             if (s.textIndentPt != null) textIndentPt = s.textIndentPt;
-            if (s.lineHeightMultiplier != null) lineHeightMultiplier = s.lineHeightMultiplier;
-            if (s.lineHeightPt != null) lineHeightPt = s.lineHeightPt;
+            if (s.lineHeightMultiplier != null) { lineHeightMultiplier = s.lineHeightMultiplier; lineHeightPt = null; }
+            if (s.lineHeightPt != null) { lineHeightPt = s.lineHeightPt; lineHeightMultiplier = null; }
             if (s.backgroundColor != null) backgroundColor = s.backgroundColor;
             if (s.listType != null && s.listType != ParagraphStyle.ListType.NONE) {
                 listType = s.listType;
@@ -1438,6 +1577,7 @@ final class DocumentDocxLayoutExtractor {
         Boolean strike;
         String color;
         String backgroundColor;
+        String highlightColor;
         TextStyle.VerticalAlign verticalAlign;
 
         void apply(TextStyle s) {
@@ -1450,7 +1590,8 @@ final class DocumentDocxLayoutExtractor {
             if (s.strike != null) strike = s.strike;
             if (s.color != null) color = s.color;
             if (s.backgroundColor != null) backgroundColor = s.backgroundColor;
-            if (s.verticalAlign != null && s.verticalAlign != TextStyle.VerticalAlign.BASELINE) verticalAlign = s.verticalAlign;
+            if (s.highlightColor != null) highlightColor = s.highlightColor;
+            if (s.verticalAlignSpecified) verticalAlign = s.verticalAlign;
         }
 
         TextStyle toTextStyle() {
@@ -1463,6 +1604,7 @@ final class DocumentDocxLayoutExtractor {
             if (strike != null) b.strike(strike);
             if (color != null) b.color(color);
             if (backgroundColor != null) b.backgroundColor(backgroundColor);
+            if (highlightColor != null) b.highlightColor(highlightColor);
             if (verticalAlign != null) b.verticalAlign(verticalAlign);
             return b.build();
         }

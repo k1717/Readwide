@@ -11,6 +11,22 @@ zlib license and is credited in THIRD_PARTY_NOTICES.md and in the source file
 that contains the modified port.
 
 Third-party dependency notices are maintained in THIRD_PARTY_NOTICES.md.
+The separate libreadwide-lzham.so target uses the pinned MIT LZHAM decoder/common
+subset with marked local safety changes and a Readwide Apache-2.0 Java/JNI adapter.
+Its private NDK C++ runtime retains LLVM/legacy MIT notices. Keep the APK assets
+open_source_licenses/lzham_mit.txt and open_source_licenses/llvm_cxx_runtime.txt.
+Source provenance and original/local hashes are in third_party/lzham.
+The independent libreadwide-ppmd.so target uses eight unchanged public-domain
+7-Zip Ppmd8 decoder/platform files with a Readwide Apache-2.0 Java/JNI adapter.
+Source declarations and hashes are retained in third_party/ppmd8; the APK includes
+assets/open_source_licenses/ppmd8_public_domain.txt. No encoder or UnRAR code is
+included. Its libarchive ZIP regression resources and BSD notices are test-only.
+The source build includes a separate LGPL-2.1-only libreadwide-cab.so target using
+libmspack's CAB decoder and a Readwide JNI adapter, with a marked strict-continuation
+change in cabd.c. License/provenance are retained in third_party/libmspack; the APK
+includes assets/open_source_licenses/libmspack_cab_lgpl_2_1.txt with the full license
+and relinking notice. App routes are connected in source; native execution remains pending. See
+THIRD_PARTY_NOTICES.md. Attributed regression resources are test-only.
 The APK also packages the exact libarchive-android/native-codec terms at
 assets/open_source_licenses/libarchive_android_and_codecs.txt, the full
 XADMaster WinZip JPEG LGPL-2.1 text at

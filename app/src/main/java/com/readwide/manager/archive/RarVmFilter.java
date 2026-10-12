@@ -7,10 +7,10 @@ import java.util.Arrays;
 /**
  * Metadata parsed from a RAR3/RAR4 VM-filter marker in the first-party unpacker path.
  *
- * <p>This class deliberately stores the raw VM bytecode only for diagnostics and future
- * interpreter/filter work. The current source keeps only standalone E8/E8E9 byte-range primitives
- * plus a delayed-output queue scaffold for future pipeline work. This still must not be
- * advertised as first-party VM-filtered extraction support.</p>
+ * <p>This helper stores bytecode and standard-filter identity for explicit execution plans.
+ * It is not a general VM interpreter. Live archive decoding separately uses
+ * {@link Rar3VmFilter} and {@link Rar3PpmdFilterOutput} for recognized standard filters;
+ * the presence or absence of a plan here does not describe all archive decoder paths.</p>
  */
 final class RarVmFilter {
     enum LengthEncoding {

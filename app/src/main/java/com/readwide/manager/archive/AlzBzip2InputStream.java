@@ -35,6 +35,7 @@
  *    container stores a per-entry CRC32 that the caller verifies instead),
  *  - the 32-bit combined CRC after the end-of-stream magic is absent, and
  *  - buffered checked input, cancellation and sticky I/O failures (Readwide review),
+ *  - checked table/run integers, active-block bounds and bulk RLE output,
  *  - concatenated-stream support and the commons-compress base classes are
  *    dropped; this is a plain read-only java.io.InputStream.
  */
@@ -59,6 +60,7 @@ final class AlzBzip2InputStream extends InputStream {
     private static final int BLOCK_SIZE_100K = 9; // fixed 900k in the ALZ variant
     private static final int MAX_ALPHA_SIZE = 258;
     private static final int MAX_CODE_LEN = 23;
+    private static final int MAX_HUFFMAN_LENGTH = 20;
     private static final int N_GROUPS = 6;
     private static final int G_SIZE = 50;
     private static final int MAX_SELECTORS = 2 + 900000 / G_SIZE;
@@ -134,6 +136,8 @@ final class AlzBzip2InputStream extends InputStream {
     private int last;
     private int origPtr;
     private int nInUse;
+    private int selectorCount;
+    private int groupCount;
     private BitReader bin;
     private InputStream source;
     private int currentState = START_BLOCK_STATE;
@@ -286,7 +290,7 @@ final class AlzBzip2InputStream extends InputStream {
         int nextSym = getAndMoveToFrontDecode0();
         int lastShadow = -1;
         int zt = selector[groupNo] & 0xff;
-        checkBounds(zt, N_GROUPS, "zt");
+        checkBounds(zt, groupCount, "zt");
         int[] base_zt = base[zt];
         int[] limit_zt = limit[zt];
         int[] perm_zt = perm[zt];
@@ -296,20 +300,20 @@ final class AlzBzip2InputStream extends InputStream {
             if (nextSym == RUNA || nextSym == RUNB) {
                 int s = -1;
 
-                for (int n = 1; true; n <<= 1) {
-                    if (nextSym == RUNA) {
-                        s += n;
-                    } else if (nextSym == RUNB) {
-                        s += n << 1;
-                    } else {
-                        break;
+                for (int n = 1; nextSym == RUNA || nextSym == RUNB; n <<= 1) {
+                    // Bound the integer before doubling/adding; otherwise long
+                    // RUNA/RUNB sequences can wrap back to a small accepted run.
+                    if (n > limitLast) throw new IOException("Corrupt ALZ bzip2 RLE run length");
+                    s += nextSym == RUNA ? n : n << 1;
+                    if (s >= limitLast - lastShadow - 1) {
+                        throw new IOException("Corrupt ALZ bzip2 RLE exceeds remaining block size");
                     }
 
                     if (groupPos == 0) {
                         groupPos = G_SIZE - 1;
-                        checkBounds(++groupNo, MAX_SELECTORS, "groupNo");
+                        checkBounds(++groupNo, selectorCount, "selector count exhausted");
                         zt = selector[groupNo] & 0xff;
-                        checkBounds(zt, N_GROUPS, "zt");
+                        checkBounds(zt, groupCount, "zt");
                         base_zt = base[zt];
                         limit_zt = limit[zt];
                         perm_zt = perm[zt];
@@ -319,14 +323,14 @@ final class AlzBzip2InputStream extends InputStream {
                     }
 
                     int zn = minLens_zt;
-                    checkBounds(zn, MAX_ALPHA_SIZE, "zn");
+                    checkBounds(zn - 1, MAX_HUFFMAN_LENGTH, "Huffman code length");
                     int zvec = bin.readBits(zn);
                     while (zvec > limit_zt[zn]) {
-                        checkBounds(++zn, MAX_ALPHA_SIZE, "zn");
+                        checkBounds(++zn - 1, MAX_HUFFMAN_LENGTH, "Huffman code length");
                         zvec = zvec << 1 | bin.readBits(1);
                     }
                     final int tmp = zvec - base_zt[zn];
-                    checkBounds(tmp, MAX_ALPHA_SIZE, "zvec");
+                    checkBounds(tmp, this.nInUse + 2, "zvec");
                     nextSym = perm_zt[tmp];
                 }
                 checkBounds(s, this.data.ll8.length, "s");
@@ -348,7 +352,7 @@ final class AlzBzip2InputStream extends InputStream {
                 if (++lastShadow >= limitLast) {
                     throw new IOException("Block overrun in MTF, " + lastShadow + " exceeds " + limitLast);
                 }
-                checkBounds(nextSym, 256 + 1, "nextSym");
+                checkBounds(nextSym, this.nInUse + 1, "nextSym");
 
                 final char tmp = yy[nextSym - 1];
                 checkBounds(tmp, 256, "yy");
@@ -367,9 +371,9 @@ final class AlzBzip2InputStream extends InputStream {
 
                 if (groupPos == 0) {
                     groupPos = G_SIZE - 1;
-                    checkBounds(++groupNo, MAX_SELECTORS, "groupNo");
+                    checkBounds(++groupNo, selectorCount, "selector count exhausted");
                     zt = selector[groupNo] & 0xff;
-                    checkBounds(zt, N_GROUPS, "zt");
+                    checkBounds(zt, groupCount, "zt");
                     base_zt = base[zt];
                     limit_zt = limit[zt];
                     perm_zt = perm[zt];
@@ -379,14 +383,14 @@ final class AlzBzip2InputStream extends InputStream {
                 }
 
                 int zn = minLens_zt;
-                checkBounds(zn, MAX_ALPHA_SIZE, "zn");
+                checkBounds(zn - 1, MAX_HUFFMAN_LENGTH, "Huffman code length");
                 int zvec = bin.readBits(zn);
                 while (zvec > limit_zt[zn]) {
-                    checkBounds(++zn, MAX_ALPHA_SIZE, "zn");
+                    checkBounds(++zn - 1, MAX_HUFFMAN_LENGTH, "Huffman code length");
                     zvec = zvec << 1 | bin.readBits(1);
                 }
                 final int idx = zvec - base_zt[zn];
-                checkBounds(idx, MAX_ALPHA_SIZE, "zvec");
+                checkBounds(idx, this.nInUse + 2, "zvec");
                 nextSym = perm_zt[idx];
             }
         }
@@ -397,17 +401,17 @@ final class AlzBzip2InputStream extends InputStream {
     private int getAndMoveToFrontDecode0() throws IOException {
         final Data dataShadow = this.data;
         final int zt = dataShadow.selector[0] & 0xff;
-        checkBounds(zt, N_GROUPS, "zt");
+        checkBounds(zt, groupCount, "zt");
         final int[] limit_zt = dataShadow.limit[zt];
         int zn = dataShadow.minLens[zt];
-        checkBounds(zn, MAX_ALPHA_SIZE, "zn");
+        checkBounds(zn - 1, MAX_HUFFMAN_LENGTH, "Huffman code length");
         int zvec = bin.readBits(zn);
         while (zvec > limit_zt[zn]) {
-            checkBounds(++zn, MAX_ALPHA_SIZE, "zn");
+            checkBounds(++zn - 1, MAX_HUFFMAN_LENGTH, "Huffman code length");
             zvec = zvec << 1 | bin.readBits(1);
         }
         final int tmp = zvec - dataShadow.base[zt][zn];
-        checkBounds(tmp, MAX_ALPHA_SIZE, "zvec");
+        checkBounds(tmp, this.nInUse + 2, "zvec");
 
         return dataShadow.perm[zt][tmp];
     }
@@ -425,7 +429,7 @@ final class AlzBzip2InputStream extends InputStream {
 
         if (magic0 != 'D' || magic1 != 'L' || magic2 != 'Z') {
             this.currentState = EOF;
-            throw new IOException("Bad ALZ bzip2 block header");
+            throw new IOException("Corrupt ALZ bzip2 block header");
         }
         if (magic3 == 0x02) {
             // End of stream. The ALZ variant stores no combined CRC.
@@ -435,7 +439,7 @@ final class AlzBzip2InputStream extends InputStream {
         }
         if (magic3 != 0x01) {
             this.currentState = EOF;
-            throw new IOException("Bad ALZ bzip2 block header");
+            throw new IOException("Corrupt ALZ bzip2 block header");
         }
 
         // The ALZ variant carries no stored block CRC and no randomised bit.
@@ -483,11 +487,23 @@ final class AlzBzip2InputStream extends InputStream {
             if (len == 0) return 0;
             final int hi = offs + len;
             int destOffs = offs;
+            int untilCheckpoint = 0;
             while (destOffs < hi) {
-                if (((destOffs - offs) & 4095) == 0) checkpoint();
-                int value = read0();
-                if (value < 0) break;
-                dest[destOffs++] = (byte) value;
+                if (untilCheckpoint <= 0) { checkpoint(); untilCheckpoint = 4096; }
+                // RLE output is already decoded. Copy its remaining identical
+                // bytes in bulk while retaining the scalar state machine.
+                if (currentState == NO_RAND_PART_C_STATE && su_j2 < su_z) {
+                    int count = Math.min(hi - destOffs, su_z - su_j2);
+                    Arrays.fill(dest, destOffs, destOffs + count, (byte) su_ch2);
+                    su_j2 += count;
+                    destOffs += count;
+                    untilCheckpoint -= count;
+                } else {
+                    int value = read0();
+                    if (value < 0) break;
+                    dest[destOffs++] = (byte) value;
+                    untilCheckpoint--;
+                }
             }
             return destOffs == offs ? -1 : destOffs - offs;
         } catch (IOException error) {
@@ -548,15 +564,18 @@ final class AlzBzip2InputStream extends InputStream {
         }
 
         makeMaps();
+        if (nInUse == 0) throw new IOException("Corrupt ALZ bzip2 empty symbol map");
         final int alphaSize = this.nInUse + 2;
         /* Now the selectors */
         final int nGroups = bin.readBits(3);
+        if (nGroups < 2 || nGroups > N_GROUPS) {
+            throw new IOException("Corrupted ALZ bzip2 group count");
+        }
         final int selectors = bin.readBits(15);
-        if (selectors < 0) {
-            throw new IOException("Corrupted input, nSelectors value negative");
+        if (selectors <= 0) {
+            throw new IOException("Corrupted ALZ bzip2 selector count");
         }
         checkBounds(alphaSize, MAX_ALPHA_SIZE + 1, "alphaSize");
-        checkBounds(nGroups, N_GROUPS + 1, "nGroups");
 
         // Don't fail on nSelectors overflowing boundaries but discard the values in overflow
         // See https://gnu.wildebeest.org/blog/mjw/2019/08/02/bzip2-and-the-cve-that-wasnt/
@@ -564,13 +583,19 @@ final class AlzBzip2InputStream extends InputStream {
         for (int i = 0; i < selectors; i++) {
             int j = 0;
             while (bsGetBit(bin)) {
-                j++;
+                // Validate the integer while counting, including discarded selectors.
+                // The bound is the active group count, not the six-slot capacity;
+                // otherwise a value such as 256 could narrow to selector 0.
+                checkBounds(++j, nGroups, "selectorMtf");
             }
+            checkBounds(j, nGroups, "selectorMtf");
             if (i < MAX_SELECTORS) {
                 selectorMtf[i] = (byte) j;
             }
         }
         final int nSelectors = Math.min(selectors, MAX_SELECTORS);
+        this.selectorCount = nSelectors;
+        this.groupCount = nGroups;
 
         /* Undo the MTF values for the selectors. */
         for (int v = nGroups; --v >= 0;) {
@@ -579,7 +604,7 @@ final class AlzBzip2InputStream extends InputStream {
 
         for (int i = 0; i < nSelectors; i++) {
             int v = selectorMtf[i] & 0xff;
-            checkBounds(v, N_GROUPS, "selectorMtf");
+            checkBounds(v, nGroups, "selectorMtf");
             final byte tmp = pos[v];
             while (v > 0) {
                 pos[v] = pos[v - 1];
@@ -596,7 +621,11 @@ final class AlzBzip2InputStream extends InputStream {
             int curr = bin.readBits(5);
             final char[] len_t = len[t];
             for (int i = 0; i < alphaSize; i++) {
-                while (bsGetBit(bin)) {
+                while (true) {
+                    // Check before narrowing and on every delta, including an
+                    // unused table. char wrapping must not hide corrupt lengths.
+                    checkBounds(curr - 1, MAX_HUFFMAN_LENGTH, "Huffman code length");
+                    if (!bsGetBit(bin)) break;
                     curr += bsGetBit(bin) ? -1 : 1;
                 }
                 len_t[i] = (char) curr;
@@ -630,9 +659,9 @@ final class AlzBzip2InputStream extends InputStream {
             tt[tmp] = i;
         }
 
-        if (this.origPtr < 0 || this.origPtr >= tt.length) {
-            throw new IOException("Stream corrupted");
-        }
+        // tt is reused and can be larger than this block after a long block.
+        // Capacity is not the number of currently initialized BWT positions.
+        checkBounds(this.origPtr, ttLen, "origPtr");
 
         this.su_tPos = tt[this.origPtr];
         this.su_count = 0;
@@ -645,9 +674,9 @@ final class AlzBzip2InputStream extends InputStream {
     private int setupNoRandPartA() throws IOException {
         if (this.su_i2 <= this.last) {
             this.su_chPrev = this.su_ch2;
+            checkBounds(this.su_tPos, this.last + 1, "su_tPos");
             final int su_ch2Shadow = this.data.ll8[this.su_tPos] & 0xff;
             this.su_ch2 = su_ch2Shadow;
-            checkBounds(this.su_tPos, this.data.tt.length, "su_tPos");
             this.su_tPos = this.data.tt[this.su_tPos];
             this.su_i2++;
             this.currentState = NO_RAND_PART_B_STATE;
@@ -664,7 +693,8 @@ final class AlzBzip2InputStream extends InputStream {
             return setupNoRandPartA();
         }
         if (++this.su_count >= 4) {
-            checkBounds(this.su_tPos, this.data.ll8.length, "su_tPos");
+            checkBounds(this.su_i2, this.last + 1, "missing RLE count");
+            checkBounds(this.su_tPos, this.last + 1, "su_tPos");
             this.su_z = (char) (this.data.ll8[this.su_tPos] & 0xff);
             this.su_tPos = this.data.tt[this.su_tPos];
             this.su_j2 = 0;

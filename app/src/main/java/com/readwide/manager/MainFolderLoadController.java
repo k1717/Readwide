@@ -405,6 +405,7 @@ final class MainFolderLoadController {
         }
         updateEmptyState(items.isEmpty());
         activity.markCurrentBrowseFolderLoadComplete(targetDir, items, sortMode, precomputedSignature);
+        activity.navigationState.restoreScroll(false);
         activity.syncVisibleFolderChangeObserver();
         if (activity.fileSearchProgress != null) activity.fileSearchProgress.setVisibility(View.GONE);
         activity.rebuildDrawerStorageEntries();
@@ -442,6 +443,7 @@ final class MainFolderLoadController {
         }
         updateEmptyState(items.isEmpty());
         activity.markCurrentBrowseFolderLoadComplete(targetDir, items, sortMode, precomputedSignature);
+        activity.navigationState.restoreScroll(false);
         activity.syncVisibleFolderChangeObserver();
         if (activity.fileSearchProgress != null) activity.fileSearchProgress.setVisibility(View.GONE);
     }

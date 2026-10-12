@@ -69,11 +69,11 @@ public final class LargeTextContinuityMath {
         int stableTotalLines = Math.max(1, totalLines);
         int stablePartitionLines = Math.max(1, partitionLines);
         int startLine = partitionStartLineForLine(requestedStartLine, stablePartitionLines);
-        int bodyEndLine = Math.min(stableTotalLines, startLine + stablePartitionLines - 1);
+        int bodyEndLine = (int) Math.min(stableTotalLines, (long) startLine + stablePartitionLines - 1L);
         int windowStartLine = includeLookbehind
                 ? Math.max(1, startLine - Math.max(0, lookbehindLines))
                 : startLine;
-        int captureEndLine = Math.min(stableTotalLines, bodyEndLine + Math.max(0, lookaheadLines));
+        int captureEndLine = (int) Math.min(stableTotalLines, (long) bodyEndLine + Math.max(0, lookaheadLines));
         return new PartitionWindow(startLine, bodyEndLine, windowStartLine, captureEndLine);
     }
 
@@ -109,25 +109,52 @@ public final class LargeTextContinuityMath {
                                                           int contentLength,
                                                           int bodyStartCharCount,
                                                           int bodyCharCount) {
-        int localPosition = absolutePosition - Math.max(0, previewBaseCharOffset);
-        return localBodyRange(contentLength, bodyStartCharCount, bodyCharCount).contains(localPosition);
+        long localPosition = (long) absolutePosition - Math.max(0, previewBaseCharOffset);
+        return localPosition >= 0 && localPosition <= Integer.MAX_VALUE
+                && localBodyRange(contentLength, bodyStartCharCount, bodyCharCount).contains((int) localPosition);
     }
 
     public static int forwardHandoffTargetAbs(int previewBaseCharOffset,
                                               int nextPageStartLocal,
                                               int bodyEndExclusive) {
         int localTarget = Math.max(0, nextPageStartLocal);
-        int targetAbs = Math.max(0, previewBaseCharOffset) + localTarget;
+        long targetAbs = (long) Math.max(0, previewBaseCharOffset) + localTarget;
         if (localTarget == Math.max(0, bodyEndExclusive)) {
             targetAbs += 1;
         }
-        return Math.max(0, targetAbs);
+        return (int) Math.min(Integer.MAX_VALUE, targetAbs);
     }
 
     public static int clampAbsolutePositionToKnownText(int absolutePosition,
                                                        int estimatedTotalChars) {
-        int max = Math.max(0, estimatedTotalChars - 1);
+        int max = Math.max(1, estimatedTotalChars) - 1;
         return Math.max(0, Math.min(max, absolutePosition));
+    }
+
+    /** Move before the loaded window, not to the end of its overlapping body. */
+    public static int backwardHandoffTargetAbs(int previewBaseCharOffset) {
+        return previewBaseCharOffset > 0 ? previewBaseCharOffset - 1 : 0;
+    }
+
+    /** Exact logical-line lookup within already transformed text; -1 means unknown. */
+    public static int partitionStartLineForLoadedChar(String content, int baseCharOffset,
+                                                       int windowStartLine, int absolutePosition,
+                                                       int partitionLines, int expectedWindowLines) {
+        long local = (long) absolutePosition - baseCharOffset;
+        if (content == null || local < 0 || local >= content.length()) return -1;
+        long lines = 1, linesBeforeTarget = 0;
+        for (int i = 0; i < content.length(); i++) {
+            if (content.charAt(i) == '\n') {
+                lines++;
+                if (i < (int) local) linesBeforeTarget++;
+            }
+        }
+        // Display rules can insert newlines within one emitted logical line.
+        // Such a window cannot be mapped by counting rendered separators.
+        if (lines != expectedWindowLines) return -1;
+        long absoluteLine = Math.max(1, windowStartLine) + linesBeforeTarget;
+        if (absoluteLine > Integer.MAX_VALUE) return -1;
+        return partitionStartLineForLine((int) absoluteLine, partitionLines);
     }
 
     public static int estimateCharPositionForLine(int targetLine,
@@ -148,8 +175,8 @@ public final class LargeTextContinuityMath {
         int totalLinesForEstimate = Math.max(1, totalLogicalLines);
         int line = Math.max(1, Math.min(totalLinesForEstimate, lineNumber));
         float ratio = (line - 1f) / (float) Math.max(1, totalLinesForEstimate - 1);
-        return Math.max(1, Math.min(stableTotal,
-                1 + Math.round(ratio * Math.max(0, stableTotal - 1))));
+        return (int) Math.max(1L, Math.min(stableTotal,
+                1L + Math.round(ratio * Math.max(0, stableTotal - 1))));
     }
 
     public static int targetLineForEstimatedPage(int page,
@@ -159,7 +186,7 @@ public final class LargeTextContinuityMath {
         int targetPage = Math.max(1, Math.min(stableTotalPages, page));
         int totalLinesForEstimate = Math.max(1, totalLogicalLines);
         float pageRatio = (targetPage - 1f) / (float) Math.max(1, stableTotalPages - 1);
-        int targetLine = 1 + Math.round(pageRatio * Math.max(0, totalLinesForEstimate - 1));
-        return Math.max(1, Math.min(totalLinesForEstimate, targetLine));
+        long targetLine = 1L + Math.round(pageRatio * Math.max(0, totalLinesForEstimate - 1));
+        return (int) Math.max(1L, Math.min(totalLinesForEstimate, targetLine));
     }
 }

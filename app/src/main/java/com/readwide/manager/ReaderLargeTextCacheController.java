@@ -5,7 +5,6 @@ import androidx.annotation.NonNull;
 import com.readwide.manager.model.LargeTextLinePartitionResult;
 import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.PageIndexCacheManager;
-import com.readwide.manager.util.TextDisplayRuleManager;
 
 import java.io.File;
 
@@ -19,7 +18,7 @@ final class ReaderLargeTextCacheController {
     void recordFileAccess(@NonNull File file, @NonNull String loadedFilePath) {
         try {
             PageIndexCacheManager.getInstance(activity)
-                    .recordFileAccess(file, buildTextPageCacheLayoutSignature(loadedFilePath));
+                    .recordFileAccess(file, PageIndexCacheManager.EXACT_PAGE_CACHE_LAYOUT);
         } catch (RuntimeException ignored) {
             // Cache bookkeeping is best-effort and must never break file opening.
         }
@@ -53,55 +52,4 @@ final class ReaderLargeTextCacheController {
         return activity.largeTextPartitionCache.getNormalOwnerForChar(absoluteCharPosition);
     }
 
-    boolean markPartitionPrefetchPending(int startLine) {
-        return activity.largeTextPartitionCache.markNormalPrefetchPending(
-                startLine, activity.getLargeTextPartitionLines());
-    }
-
-    boolean markManualHandoffPartitionPrefetchPending(int startLine) {
-        return activity.largeTextPartitionCache.markManualHandoffPrefetchPending(
-                startLine, activity.getLargeTextPartitionLines());
-    }
-
-    void unmarkPartitionPrefetchPending(int startLine) {
-        activity.largeTextPartitionCache.unmarkNormalPrefetchPending(
-                startLine, activity.getLargeTextPartitionLines());
-    }
-
-    void unmarkManualHandoffPartitionPrefetchPending(int startLine) {
-        activity.largeTextPartitionCache.unmarkManualHandoffPrefetchPending(
-                startLine, activity.getLargeTextPartitionLines());
-    }
-
-    private String buildTextPageCacheLayoutSignature(@NonNull String loadedFilePath) {
-        if (activity.prefs == null) return "unknown";
-
-        android.util.DisplayMetrics dm = activity.getResources().getDisplayMetrics();
-        String fontName = activity.prefs.getFontFamily();
-        if (fontName == null) fontName = "default";
-
-        int effectiveWidth = activity.readerView != null
-                ? activity.readerView.getTextLayoutWidthForIndex()
-                : -1;
-
-        return "txt-v5-px-boundary"
-                + "|fontSize=" + activity.prefs.getFontSize()
-                + "|lineSpacing=" + activity.prefs.getLineSpacing()
-                + "|marginH=" + activity.prefs.getMarginHorizontal()
-                + "|marginV=" + activity.prefs.getMarginVertical()
-                + "|layoutW=" + effectiveWidth
-                + "|top=" + activity.prefs.getReaderTextTopOffsetPx()
-                + "|bottom=" + activity.prefs.getReaderTextBottomOffsetPx()
-                + "|left=" + activity.prefs.getReaderTextLeftInsetPx()
-                + "|right=" + activity.prefs.getReaderTextRightInsetPx()
-                + "|overlap=" + activity.prefs.getPagingOverlapLines()
-                + "|partitionMode=" + activity.getLargeTextPartitionMode()
-                + "|partitionLines=" + activity.getLargeTextPartitionLines()
-                + "|partitionBuffer=" + activity.getLargeTextPartitionBufferLines()
-                + "|collapseBlank=" + activity.prefs.isCollapseBlankLinesEnabled()
-                + "|font=" + fontName
-                + "|displayRules=" + TextDisplayRuleManager.getSignature(
-                        activity.getApplicationContext(), loadedFilePath)
-                + "|screen=" + dm.widthPixels + "x" + dm.heightPixels;
-    }
 }

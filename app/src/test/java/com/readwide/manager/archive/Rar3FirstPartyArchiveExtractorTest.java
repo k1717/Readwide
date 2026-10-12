@@ -17,6 +17,20 @@ import java.util.List;
 import java.util.zip.CRC32;
 
 public class Rar3FirstPartyArchiveExtractorTest {
+    static byte[] independentLzFixture() {
+        return syntheticPayload(block(new int[]{'A','B',256}, "00011000"));
+    }
+
+    @Test public void suppliedPasswordDoesNotDisableAnOtherwisePlainArchivePlan() throws Exception {
+        byte[] packed = independentLzFixture();
+        RarArchiveReader.RarEntry entry = entry("plain.txt", writeArchive("plain-with-password", packed),
+                packed, 2, crc("AB"), false);
+        File out = tempFolder.newFolder();
+        assertTrue(Rar3FirstPartyArchiveExtractor.tryExtractArchiveLimitedFallback(
+                java.util.Collections.singletonList(entry), out, new char[]{'p'}, null, null));
+        assertArrayEquals(new byte[]{'A','B'}, Files.readAllBytes(new File(out,"plain.txt").toPath()));
+    }
+
     @Test public void classicFallbackDirectoryCollisionPreservesExistingFile() throws Exception {
         assertClassicDirectoryHandling(true);
     }

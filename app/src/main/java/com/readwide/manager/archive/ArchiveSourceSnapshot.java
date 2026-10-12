@@ -15,7 +15,7 @@ import java.util.UUID;
 
 /**
  * Immutable metadata snapshot and preview namespace for an archive source.
- * RAR, ALZ, EGG, PKZIP and generic numeric splits include their declared validated volume set.
+ * RAR, ALZ, EGG, Amiga LHA, linked CAB, PKZIP and generic numeric splits include their resolved volume set.
  * Other families currently retain a single-file stamp; this is NOT a content hash or an integrity/authentication check.
  * Capture once per loading/session boundary; reuse cacheFingerprint() per page.
  */
@@ -43,12 +43,19 @@ public final class ArchiveSourceSnapshot {
             Stamp selectedStamp = new Stamp(selected);
             String numericStem = ArchiveTypeDetector.numericSplitStem(selected.getName());
             boolean rar = numericStem == null
-                    && ArchiveTypeDetector.fromFileName(selected.getName()) == ArchiveSupport.Type.RAR;
+                    && ArchiveTypeDetector.fromFile(selected) == ArchiveSupport.Type.RAR;
             List<File> files;
             String family;
-            if (numericStem != null) {
+            if (ArchiveTypeDetector.fromFileName(selected.getName()) == ArchiveSupport.Type.LIBARCHIVE
+                    && CabVolumeResolver.hasVolumeLinks(selected)) {
+                files = CabVolumeResolver.resolve(selected).parts;
+                family = "cab";
+            } else if (numericStem != null) {
                 files = SevenZSplitVolumeResolver.resolveNumeric(selected).parts;
                 family = "numeric";
+            } else if (LhaVolumeResolver.isCandidate(selected.getName())) {
+                files = LhaVolumeResolver.resolve(selected);
+                family = files.size() > 1 ? "lha-split" : "single";
             } else if (rar) {
                 files = RarArchiveLocator.collectReadableVolumes(selected);
                 family = "rar";
@@ -79,8 +86,10 @@ public final class ArchiveSourceSnapshot {
                 }
             }
             if (!selectedFound) throw new IOException("Selected volume is not in the resolved chain");
+            ArchiveCancellation.checkpoint(null);
             return new ArchiveSourceSnapshot(selectedStamp.path, family, stamps);
         } catch (IOException | SecurityException unavailable) {
+            ArchiveCancellation.restoreIfCancelled(unavailable, null);
             return new ArchiveSourceSnapshot(null, "unresolved", Collections.emptyList());
         }
     }
@@ -89,12 +98,43 @@ public final class ArchiveSourceSnapshot {
     @NonNull
     public String cacheFingerprint() { return fingerprint; }
 
+    /** Worker-only recheck of known volumes without reparsing archive headers. */
+    public boolean matchesKnownFiles(@NonNull File selected) {
+        if (selectedPath == null || Thread.currentThread().isInterrupted()) return false;
+        try {
+            if (!selectedPath.equals(selected.getCanonicalPath())) return false;
+            for (Stamp stamp : volumes) {
+                ArchiveCancellation.checkpoint(null);
+                if (!stamp.matches(new Stamp(new File(stamp.path)))) return false;
+            }
+            ArchiveCancellation.checkpoint(null);
+            return true;
+        } catch (IOException | SecurityException unavailable) {
+            ArchiveCancellation.restoreIfCancelled(unavailable, null);
+            return false;
+        }
+    }
+
     /** Membership only; this does not certify current bytes or validate a failed snapshot. */
     boolean containsFile(@NonNull File candidate) throws IOException {
         if (selectedPath == null) return false;
         String path = candidate.getCanonicalPath();
         for (Stamp stamp : volumes) if (stamp.path.equals(path)) return true;
         return false;
+    }
+
+    /** Replacing a tree must not remove any source volume; unresolved capture is not permission. */
+    void requireOutsideReplacementTree(@NonNull File destination) throws IOException {
+        if (selectedPath == null) throw new IOException("Cannot resolve archive sources for destination replacement");
+        File root = destination.getCanonicalFile();
+        for (Stamp stamp : volumes) {
+            ArchiveCancellation.checkpoint(null);
+            // File equality respects the host filesystem's case rules. Do not use
+            // string prefixes, which confuse sibling names such as book / book-old.
+            for (File current = new File(stamp.path); current != null; current = current.getParentFile()) {
+                if (root.equals(current)) throw new IOException("Replacement destination contains an archive source volume");
+            }
+        }
     }
 
     /** Re-resolve at handoff boundaries, not once for every cached bitmap or page. */
@@ -112,7 +152,7 @@ public final class ArchiveSourceSnapshot {
     private static String fingerprint(String family, List<Stamp> volumes) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            putText(digest, "readwide-preview-v3");
+            putText(digest, "readwide-preview-v4");
             putText(digest, family);
             putLong(digest, volumes.size());
             for (Stamp stamp : volumes) {

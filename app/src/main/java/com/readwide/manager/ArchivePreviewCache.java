@@ -3,6 +3,8 @@ package com.readwide.manager;
 import android.content.Context;
 
 import com.readwide.manager.archive.ArchiveSourceSnapshot;
+import com.readwide.manager.util.FileTreeWalk;
+import com.readwide.manager.util.FileSystemOps;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -18,8 +20,8 @@ import java.util.Comparator;
 /**
  * Builds stable, metadata-aware cache paths for archive preview extraction.
  *
- * <p>The versioned namespace uses a source snapshot: complete RAR/numeric volume metadata,
- * or one source stamp for other families. Capture once per sequence/session. Each
+ * <p>The versioned namespace uses a source snapshot with resolved volume metadata
+ * for the multipart families handled by ArchiveSourceSnapshot. Capture once per sequence/session. Each
  * entry file name also includes a hash of the full internal entry path, avoiding collisions such as
  * {@code a/b.png} and {@code a_b.png} after filesystem-name sanitization.</p>
  */
@@ -64,6 +66,17 @@ final class ArchivePreviewCache {
                                   @NonNull ArchiveSourceSnapshot snapshot,
                                   @NonNull String entryPath,
                                   boolean sensitive) {
+        return prepareEntries(context, snapshot, sensitive).file(entryPath);
+    }
+
+    /** Session-scoped namespace: directory I/O happens once, not once per page. */
+    static final class EntryFiles {
+        private final File directory;
+        private EntryFiles(File directory) { this.directory = directory; }
+        File file(String entryPath) { return new File(directory, cacheFileNameForEntry(entryPath)); }
+    }
+
+    static EntryFiles prepareEntries(Context context, ArchiveSourceSnapshot snapshot, boolean sensitive) {
         File root = new File(context.getCacheDir(), sensitive ? SENSITIVE_ROOT_NAME : ROOT_NAME);
         File archiveDir = new File(root, snapshot.cacheFingerprint());
         // Touch the archive cache directory when it is used so pruning prefers
@@ -74,7 +87,7 @@ final class ArchivePreviewCache {
             archiveDir.setLastModified(System.currentTimeMillis());
         } catch (SecurityException ignored) {
         }
-        return new File(archiveDir, cacheFileNameForEntry(entryPath));
+        return new EntryFiles(archiveDir);
     }
 
 
@@ -128,9 +141,10 @@ final class ArchivePreviewCache {
             long childSize = sizeOf(child);
             totalBytes = safeAdd(totalBytes, childSize);
             if (!activeFingerprint.equals(child.getName()) && now - child.lastModified() > maxAgeMs) {
-                deleteRecursively(child);
-                dirCount--;
-                totalBytes = Math.max(0L, totalBytes - childSize);
+                if (deleteRecursively(child)) {
+                    dirCount--;
+                    if (totalBytes != Long.MAX_VALUE) totalBytes = Math.max(0L, totalBytes - childSize);
+                }
             }
         }
 
@@ -143,9 +157,10 @@ final class ArchivePreviewCache {
             if (child == null || !child.isDirectory()) continue;
             if (activeFingerprint.equals(child.getName())) continue;
             long childSize = sizeOf(child);
-            deleteRecursively(child);
-            dirCount--;
-            totalBytes = Math.max(0L, totalBytes - childSize);
+            if (deleteRecursively(child)) {
+                dirCount--;
+                if (totalBytes != Long.MAX_VALUE) totalBytes = Math.max(0L, totalBytes - childSize);
+            }
         }
     }
 
@@ -156,7 +171,7 @@ final class ArchivePreviewCache {
 
     @NonNull
     static String normalizeEntryPath(@NonNull String entryPath) {
-        return com.readwide.manager.util.ArchiveEntryPaths.normalize(entryPath.trim());
+        return com.readwide.manager.util.ArchiveEntryPaths.normalize(entryPath);
     }
 
     @NonNull
@@ -219,13 +234,18 @@ final class ArchivePreviewCache {
     }
 
     private static long sizeOf(@Nullable File file) {
-        if (file == null || !file.exists()) return 0L;
-        if (file.isFile()) return Math.max(0L, file.length());
-        File[] children = file.listFiles();
-        if (children == null) return 0L;
-        long total = 0L;
-        for (File child : children) total = safeAdd(total, sizeOf(child));
-        return total;
+        if (file == null) return 0L;
+        long[] total = {0L};
+        try {
+            FileTreeWalk.walk(file, () -> true, entry -> {
+                entry.recheck();
+                if (entry.kind == FileTreeWalk.Kind.FILE) total[0] = safeAdd(total[0], entry.bytes);
+                return true;
+            });
+            return total[0];
+        } catch (IOException | SecurityException unavailable) {
+            return Long.MAX_VALUE; // An unreadable tree is not known to consume zero bytes.
+        }
     }
 
     private static long safeAdd(long left, long right) {
@@ -234,12 +254,7 @@ final class ArchivePreviewCache {
         return left + right;
     }
 
-    private static void deleteRecursively(@Nullable File file) {
-        if (file == null || !file.exists()) return;
-        File[] children = file.listFiles();
-        if (children != null) {
-            for (File child : children) deleteRecursively(child);
-        }
-        try { file.delete(); } catch (SecurityException ignored) {}
+    private static boolean deleteRecursively(@Nullable File file) {
+        return file == null || FileSystemOps.delete(file);
     }
 }

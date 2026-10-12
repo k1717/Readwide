@@ -11,12 +11,15 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 
+import com.readwide.manager.archive.ArchiveCancellation;
+import com.readwide.manager.util.FileClipboardBatch;
 import com.readwide.manager.util.FileClipboardController;
 import com.readwide.manager.util.FileOperationProgress;
-import com.readwide.manager.util.FileTreeProgressTracker;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 
 final class MainClipboardController {
@@ -27,8 +30,7 @@ final class MainClipboardController {
     }
 
     void startFileClipboardOperation(@NonNull File source, boolean copy) {
-        activity.archiveExtractInProgress = false;
-        activity.archiveCreateInProgress = false;
+        if (activity.activityDestroyed) return;
         FileClipboardController.StartResult result = activity.fileClipboardController.start(source, copy);
         if (result != FileClipboardController.StartResult.STARTED) {
             ShortToast.show(activity, R.string.file_operation_source_unavailable);
@@ -49,33 +51,36 @@ final class MainClipboardController {
     }
 
     void clearPendingActionQueue() {
+        if (activity.activityDestroyed || activity.fileClipboardController.isInProgress()
+                || activity.archiveExtractInProgress || activity.archiveCreateInProgress) return;
         activity.fileClipboardController.cancel();
         activity.pendingExtractArchives.clear();
         activity.pendingExtractArchive = null;
         activity.pendingArchiveCreations.clear();
         activity.pendingArchiveCreation = null;
-        activity.archiveExtractInProgress = false;
-        activity.archiveCreateInProgress = false;
         activity.updateMainOverflowButtonVisibility();
     }
 
     void cancelPendingClipboardOperation(long pendingId) {
+        if (activity.activityDestroyed || activity.fileClipboardController.isInProgress()) return;
         activity.fileClipboardController.cancel(pendingId);
         activity.updateMainOverflowButtonVisibility();
         ShortToast.show(activity, R.string.file_operation_cancelled);
     }
 
     void pastePendingClipboardItemToCurrentDirectory() {
-        FileClipboardController.PastePlan plan = activity.fileClipboardController.preparePaste(activity.currentDirectory);
+        if (activity.activityDestroyed || activity.fileClipboardController.isInProgress()) return;
+        FileClipboardController.PendingItem item = activity.fileClipboardController.getActiveItem();
+        FileClipboardController.PastePlan plan = activity.fileClipboardController.preparePaste(item, activity.currentDirectory);
         File source = plan.getSource();
         switch (plan.getStatus()) {
             case NO_SOURCE:
                 return;
             case SOURCE_UNAVAILABLE:
-                activity.fileClipboardController.clearAfterSuccess();
+                if (item != null) activity.fileClipboardController.clearAfterSuccess(item);
                 activity.updateMainOverflowButtonVisibility();
                 ShortToast.show(activity, R.string.file_operation_source_unavailable);
-                refreshVisibleFileListAfterClipboardOperation(null);
+                activity.refreshVisibleFileListAfterFileSystemChange();
                 return;
             case DESTINATION_UNAVAILABLE:
                 ShortToast.show(activity, R.string.file_move_destination_unavailable);
@@ -88,19 +93,19 @@ final class MainClipboardController {
                 return;
             case CONFLICT:
                 if (source != null && plan.getDestinationDir() != null && plan.getDestination() != null) {
-                    showPasteConfirmDialog(source, plan.getDestinationDir(), plan.getDestination(), true);
+                    showPasteConfirmDialog(item, plan.getDestinationDir(), plan.getDestination(), true);
                 }
                 return;
             case READY:
                 if (source != null && plan.getDestinationDir() != null && plan.getDestination() != null) {
-                    showPasteConfirmDialog(source, plan.getDestinationDir(), plan.getDestination(), false);
+                    showPasteConfirmDialog(item, plan.getDestinationDir(), plan.getDestination(), false);
                 }
                 return;
         }
     }
 
     void pasteAllPendingClipboardItemsToCurrentDirectory() {
-        if (activity.fileClipboardController.isInProgress()) return;
+        if (activity.activityDestroyed || activity.fileClipboardController.isInProgress()) return;
         File destinationDir = activity.currentDirectory;
         if (destinationDir == null || !destinationDir.exists()
                 || !destinationDir.isDirectory() || !destinationDir.canWrite()) {
@@ -119,26 +124,28 @@ final class MainClipboardController {
                 () -> continueAllPendingClipboardOperations(destinationDir, items));
     }
 
-    private void showPasteConfirmDialog(@NonNull File source,
+    private void showPasteConfirmDialog(@NonNull FileClipboardController.PendingItem item,
                                         @NonNull File destinationDir,
                                         @NonNull File destination,
                                         boolean hasConflict) {
-        if (!activity.fileClipboardController.isSource(source)) return;
-        final boolean copy = activity.fileClipboardController.isCopy();
+        if (!canStart(item)) return;
+        File source = item.getSource();
+        final boolean copy = item.isCopy();
         final String titleText = activity.getString(copy ? R.string.confirm_copy_here_title : R.string.confirm_move_here_title);
         final String messageText = activity.getString(copy ? R.string.confirm_copy_here_message : R.string.confirm_move_here_message,
                 source.getName(), destinationDir.getName().length() > 0 ? destinationDir.getName() : destinationDir.getAbsolutePath());
         activity.showSimpleConfirmDialog(titleText, messageText, activity.getString(copy ? R.string.copy : R.string.move), () -> {
-            if (!activity.fileClipboardController.isSource(source)) return;
-            if (hasConflict) showClipboardTargetExistsDialog(source, destinationDir, destination);
-            else continuePendingClipboardOperation(source, destinationDir, destination, false);
+            if (!canStart(item)) return;
+            if (hasConflict) showClipboardTargetExistsDialog(item, destinationDir, destination);
+            else continuePendingClipboardOperation(item, destinationDir, destination, false);
         });
     }
 
-    private void showClipboardTargetExistsDialog(@NonNull File source,
+    private void showClipboardTargetExistsDialog(@NonNull FileClipboardController.PendingItem item,
                                                 @NonNull File destinationDir,
                                                 @NonNull File existingTarget) {
-        if (!activity.fileClipboardController.isSource(source)) return;
+        if (!canStart(item)) return;
+        File source = item.getSource();
 
         final boolean dark = activity.prefs == null || activity.prefs.shouldUseDarkColors(activity);
         final int bg = activity.prefs != null ? activity.prefs.getMainBgColor(activity) : (dark ? Color.rgb(33, 33, 33) : Color.rgb(255, 255, 255));
@@ -186,20 +193,21 @@ final class MainClipboardController {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
         final android.app.Dialog[] ref = new android.app.Dialog[1];
-        if (activity.fileClipboardController.canOverwrite(existingTarget)) {
+        if (activity.fileClipboardController.canOverwrite(item, existingTarget)) {
             activity.addFileOpsRow(box, activity.getString(R.string.overwrite), fg, panel, () -> {
                 if (ref[0] != null) ref[0].dismiss();
-                continuePendingClipboardOperation(source, destinationDir, existingTarget, true);
+                continuePendingClipboardOperation(item, destinationDir, existingTarget, true);
             });
         }
         activity.addFileOpsRow(box, activity.getString(R.string.create_copy), fg, panel, () -> {
             if (ref[0] != null) ref[0].dismiss();
+            if (!canStart(item)) return;
             File copyDestination = activity.fileClipboardController.buildCopyDestination(destinationDir, source);
             if (copyDestination == null) {
                 ShortToast.show(activity, R.string.file_operation_failed);
                 return;
             }
-            continuePendingClipboardOperation(source, destinationDir, copyDestination, false);
+            continuePendingClipboardOperation(item, destinationDir, copyDestination, false);
         });
 
         TextView cancel = new TextView(activity);
@@ -223,214 +231,123 @@ final class MainClipboardController {
         dialog.show();
     }
 
-    private void continuePendingClipboardOperation(@NonNull File source,
+    private boolean canStart(FileClipboardController.PendingItem item) {
+        return !activity.activityDestroyed && !activity.fileClipboardController.isInProgress()
+                && activity.fileClipboardController.isPending(item);
+    }
+
+    private void continuePendingClipboardOperation(@NonNull FileClipboardController.PendingItem item,
                                                    @NonNull File destinationDir,
                                                    @NonNull File destination,
                                                    boolean overwrite) {
-        if (!activity.fileClipboardController.isSource(source)) return;
-        if (activity.fileClipboardController.isInProgress()) return;
-        final boolean copy = activity.fileClipboardController.isCopy();
-        activity.fileClipboardController.setInProgress(true);
+        if (!canStart(item)) return;
+        FileClipboardBatch.Transfer transfer = new FileClipboardBatch.Transfer(item, destination);
+        List<FileClipboardController.PendingItem> claimed = Collections.singletonList(item);
+        activity.fileClipboardController.setItemsInProgress(claimed, true);
         activity.updateMainOverflowButtonVisibility();
         FileOperationProgress progress = activity.showFileOperationProgress(
-                activity.getString(copy ? R.string.file_copying : R.string.file_moving),
-                source.getName());
-        progress.setFolder(destinationDir.getName().length() > 0 ? destinationDir.getName() : destinationDir.getAbsolutePath());
+                activity.getString(item.isCopy() ? R.string.file_copying : R.string.file_moving),
+                transfer.source.getName());
+        progress.setFolder(destinationDir.getName().isEmpty() ? destinationDir.getAbsolutePath() : destinationDir.getName());
 
-        String oldPath = source.getAbsolutePath();
-        String newPath = destination.getAbsolutePath();
-        boolean sourceWasDirectory = source.isDirectory();
-        activity.executeFolderBackgroundTask(() -> {
-            boolean done = activity.fileClipboardController.performOperation(destination, overwrite, progress);
-            activity.fileSearchHandler.post(() -> {
-                activity.fileClipboardController.setInProgress(false);
-                activity.finishFileOperationProgress(progress);
-                if (activity.activityDestroyed) return;
-                if (!done && progress.isCancelled()) {
-                    activity.updateMainOverflowButtonVisibility();
-                    ShortToast.show(activity, R.string.file_operation_cancelled);
-                    return;
-                }
-                if (!done) {
-                    activity.updateMainOverflowButtonVisibility();
-                    ShortToast.show(activity, copy ? R.string.file_copy_failed : R.string.file_move_failed);
-                    return;
-                }
+        boolean accepted = activity.executeFolderBackgroundTask(() -> {
+            boolean done = false;
+            try {
+                done = activity.fileClipboardController.performOperation(item, destination, overwrite, progress, true);
+            } catch (RuntimeException failure) {
+                ArchiveCancellation.restoreIfCancelled(failure, progress);
+            } finally {
+                final boolean completed = done;
+                // Independent of search-handler teardown: shared claims and
+                // committed metadata must still be settled after screen closure.
+                activity.runOnUiThread(() -> finishSinglePaste(transfer, destinationDir, progress, completed));
+            }
+        }, () -> activity.fileClipboardController.setItemsInProgress(claimed, false));
+        if (!accepted) finishClipboardClaim(claimed, progress);
+    }
 
-                activity.fileClipboardController.clearAfterSuccess();
-                if (!copy && activity.bookmarkManager != null) {
-                    if (sourceWasDirectory) activity.bookmarkManager.movePathPrefixReferences(oldPath, newPath);
-                    else activity.bookmarkManager.moveFileReferences(oldPath, newPath);
-                }
-                if (activity.prefs != null) {
-                    activity.prefs.addRecentFolder(destinationDir.getAbsolutePath());
-                }
-                refreshVisibleFileListAfterClipboardOperation(destinationDir);
-                activity.updateMainOverflowButtonVisibility();
-                ShortToast.show(activity, copy ? R.string.file_copied : R.string.file_moved);
-            });
-        });
+    private void finishSinglePaste(FileClipboardBatch.Transfer transfer, File destinationDir,
+                                   FileOperationProgress progress, boolean completed) {
+        finishClipboardClaim(Collections.singletonList(transfer.item), progress);
+        if (completed) {
+            activity.fileClipboardController.clearAfterSuccess(transfer.item);
+            updateMovedReferences(transfer);
+            if (activity.prefs != null) activity.prefs.addRecentFolder(destinationDir.getAbsolutePath());
+        }
+        if (activity.activityDestroyed) return;
+        activity.updateMainOverflowButtonVisibility();
+        if (!completed) {
+            ShortToast.show(activity, progress.isCancelled() ? R.string.file_operation_cancelled
+                    : transfer.item.isCopy() ? R.string.file_copy_failed : R.string.file_move_failed);
+            return;
+        }
+        activity.refreshVisibleFileListAfterFileSystemChange();
+        ShortToast.show(activity, transfer.item.isCopy() ? R.string.file_copied : R.string.file_moved);
     }
 
     private void continueAllPendingClipboardOperations(@NonNull File destinationDir,
                                                        @NonNull List<FileClipboardController.PendingItem> items) {
-        if (activity.fileClipboardController.isInProgress()) return;
-        activity.fileClipboardController.setItemsInProgress(items, true);
+        if (activity.activityDestroyed || activity.fileClipboardController.isInProgress()) return;
+        List<FileClipboardController.PendingItem> claimed = new ArrayList<>(items);
+        claimed.retainAll(new HashSet<>(activity.fileClipboardController.getPendingItems()));
+        if (claimed.isEmpty()) return;
+        activity.fileClipboardController.setItemsInProgress(claimed, true);
         activity.updateMainOverflowButtonVisibility();
         FileOperationProgress progress = activity.showFileOperationProgress(
-                activity.getString(R.string.file_batch_operating),
-                destinationDir.getAbsolutePath());
-        progress.setFolder(destinationDir.getName().length() > 0 ? destinationDir.getName() : destinationDir.getAbsolutePath());
+                activity.getString(R.string.file_batch_operating), destinationDir.getAbsolutePath());
+        progress.setFolder(destinationDir.getName().isEmpty() ? destinationDir.getAbsolutePath() : destinationDir.getName());
+        FileClipboardBatch batch = new FileClipboardBatch(activity.fileClipboardController, claimed, destinationDir, progress);
 
-        activity.executeFolderBackgroundTask(() -> {
-            ArrayList<BatchClipboardOperation> operations = new ArrayList<>();
-            ArrayList<FileClipboardController.PendingItem> handledWithoutCopy = new ArrayList<>();
-            for (FileClipboardController.PendingItem item : items) {
-                if (!progress.checkpoint()) break;
-                FileClipboardController.PastePlan plan = activity.fileClipboardController.preparePaste(item, destinationDir);
-                File source = plan.getSource();
-                File destination = plan.getDestination();
-                switch (plan.getStatus()) {
-                    case READY:
-                        if (source != null && destination != null) {
-                            operations.add(new BatchClipboardOperation(item, source, destination));
-                        }
-                        break;
-                    case CONFLICT:
-                        if (source != null) {
-                            File copyDestination = activity.fileClipboardController.buildCopyDestination(destinationDir, source);
-                            if (copyDestination != null) {
-                                operations.add(new BatchClipboardOperation(item, source, copyDestination));
-                            } else {
-                                handledWithoutCopy.add(item);
-                            }
-                        }
-                        break;
-                    case SOURCE_UNAVAILABLE:
-                    case CUT_SAME_FOLDER:
-                    case DIRECTORY_INTO_SELF:
-                        handledWithoutCopy.add(item);
-                        break;
-                    case NO_SOURCE:
-                    case DESTINATION_UNAVAILABLE:
-                        break;
-                }
-                if (progress.isCancelled()) break;
+        boolean accepted = activity.executeFolderBackgroundTask(() -> {
+            try {
+                batch.run();
+            } finally {
+                activity.runOnUiThread(() -> finishBatchPaste(batch, claimed, destinationDir, progress));
             }
-            int totalOperations = operations.size();
-            if (totalOperations > 1) {
-                progress.setFolder(displayName(destinationDir));
-                progress.setFolderProgress(1, totalOperations);
-            }
-            FileTreeProgressTracker treeProgress = FileTreeProgressTracker.create(progress, sourcesForOperations(operations));
-            progress.setTotalBytes(treeProgress.totalBytes());
-
-            ArrayList<BatchClipboardOperation> succeeded = new ArrayList<>();
-            int failedCount = treeProgress.isReady() ? 0 : operations.size();
-            int operationIndex = 0;
-            for (BatchClipboardOperation op : operations) {
-                if (!treeProgress.isReady() || !progress.checkpoint()) break;
-                operationIndex++;
-                if (totalOperations > 1) {
-                    progress.setFolder(operationFolderDisplayName(op, destinationDir));
-                    progress.setFolderProgress(operationIndex, totalOperations);
-                }
-                boolean done = activity.fileClipboardController.performOperation(op.item, op.destination, false, progress, false, treeProgress);
-                if (done) {
-                    succeeded.add(op);
-                } else if (!progress.isCancelled()) {
-                    failedCount++;
-                }
-            }
-
-            final int totalCount = items.size();
-            final int finalFailedCount = failedCount;
-            activity.fileSearchHandler.post(() -> {
-                activity.fileClipboardController.setItemsInProgress(items, false);
-                activity.finishFileOperationProgress(progress);
-                if (activity.activityDestroyed) return;
-                for (BatchClipboardOperation op : succeeded) {
-                    activity.fileClipboardController.clearAfterSuccess(op.item);
-                    if (!op.item.isCopy() && activity.bookmarkManager != null) {
-                        if (op.sourceWasDirectory) {
-                            activity.bookmarkManager.movePathPrefixReferences(op.oldPath, op.newPath);
-                        } else {
-                            activity.bookmarkManager.moveFileReferences(op.oldPath, op.newPath);
-                        }
-                    }
-                }
-                for (FileClipboardController.PendingItem item : handledWithoutCopy) {
-                    activity.fileClipboardController.clearAfterSuccess(item);
-                }
-                if (activity.prefs != null && !succeeded.isEmpty()) {
-                    activity.prefs.addRecentFolder(destinationDir.getAbsolutePath());
-                }
-                refreshVisibleFileListAfterClipboardOperation(destinationDir);
-                activity.updateMainOverflowButtonVisibility();
-                if (progress.isCancelled()) {
-                    ShortToast.show(activity, R.string.file_operation_cancelled);
-                    return;
-                }
-                ShortToast.show(activity, activity.getString(
-                        finalFailedCount > 0 || succeeded.size() < totalCount
-                                ? R.string.file_batch_operation_partial
-                                : R.string.file_batch_operation_done,
-                        succeeded.size(),
-                        totalCount));
-            });
-        });
+        }, () -> activity.fileClipboardController.setItemsInProgress(claimed, false));
+        if (!accepted) finishClipboardClaim(claimed, progress);
     }
 
-    @NonNull
-    private ArrayList<File> sourcesForOperations(@NonNull List<BatchClipboardOperation> operations) {
-        ArrayList<File> sources = new ArrayList<>();
-        for (BatchClipboardOperation operation : operations) {
-            if (operation != null && operation.source != null) sources.add(operation.source);
+    private void finishBatchPaste(FileClipboardBatch batch, List<FileClipboardController.PendingItem> claimed,
+                                  File destinationDir, FileOperationProgress progress) {
+        finishClipboardClaim(claimed, progress);
+        List<FileClipboardBatch.Transfer> completed = batch.completedTransfers();
+        List<FileClipboardController.PendingItem> completedItems = new ArrayList<>(completed.size());
+        for (FileClipboardBatch.Transfer transfer : completed) completedItems.add(transfer.item);
+        // Failed or blocked items are not successful no-ops. Keep them available
+        // for a different destination or retry instead of silently discarding them.
+        activity.fileClipboardController.clearAfterSuccess(completedItems);
+        for (FileClipboardBatch.Transfer transfer : completed) updateMovedReferences(transfer);
+        if (activity.prefs != null && !completed.isEmpty()) {
+            activity.prefs.addRecentFolder(destinationDir.getAbsolutePath());
         }
-        return sources;
-    }
-
-    @NonNull
-    private String operationFolderDisplayName(@NonNull BatchClipboardOperation op, @NonNull File destinationDir) {
-        if (op.sourceWasDirectory && op.destination != null) return displayName(op.destination);
-        return displayName(destinationDir);
-    }
-
-    @NonNull
-    private String displayName(@NonNull File file) {
-        String name = file.getName();
-        return name == null || name.length() == 0 ? file.getAbsolutePath() : name;
-    }
-
-    private static final class BatchClipboardOperation {
-        final FileClipboardController.PendingItem item;
-        final File source;
-        final File destination;
-        final String oldPath;
-        final String newPath;
-        final boolean sourceWasDirectory;
-
-        BatchClipboardOperation(@NonNull FileClipboardController.PendingItem item,
-                                @NonNull File source,
-                                @NonNull File destination) {
-            this.item = item;
-            this.source = source;
-            this.destination = destination;
-            this.oldPath = source.getAbsolutePath();
-            this.newPath = destination.getAbsolutePath();
-            this.sourceWasDirectory = source.isDirectory();
+        if (activity.activityDestroyed) return;
+        activity.refreshVisibleFileListAfterFileSystemChange();
+        activity.updateMainOverflowButtonVisibility();
+        if (progress.isCancelled()) {
+            ShortToast.show(activity, R.string.file_operation_cancelled);
+            return;
         }
+        ShortToast.show(activity, activity.getString(
+                completed.size() == batch.totalCount() ? R.string.file_batch_operation_done : R.string.file_batch_operation_partial,
+                completed.size(), batch.totalCount()));
     }
 
-    private void refreshVisibleFileListAfterClipboardOperation(File destinationDir) {
-        if (destinationDir != null && !activity.homeMode && !activity.searchMode) {
-            activity.loadDirectory(destinationDir);
-        } else if (activity.homeMode) {
-            activity.loadRecentFiles();
-        } else if (activity.searchMode) {
-            activity.runLiveFileSearchNow();
-        } else if (activity.currentDirectory != null) {
-            activity.loadDirectory(activity.currentDirectory);
+    private void finishClipboardClaim(List<FileClipboardController.PendingItem> items, FileOperationProgress progress) {
+        activity.fileClipboardController.setItemsInProgress(items, false);
+        activity.finishFileOperationProgress(progress);
+        if (!activity.activityDestroyed) activity.updateMainOverflowButtonVisibility();
+    }
+
+    private void updateMovedReferences(FileClipboardBatch.Transfer transfer) {
+        if (transfer.item.isCopy()) return;
+        String oldPath = transfer.source.getAbsolutePath();
+        String newPath = transfer.destination.getAbsolutePath();
+        if (activity.bookmarkManager != null) {
+            activity.bookmarkManager.moveReferences(oldPath, newPath, transfer.sourceWasDirectory);
+        }
+        if (transfer.sourceWasDirectory && activity.prefs != null) {
+            activity.prefs.moveFolderReferences(oldPath, newPath);
         }
     }
 }

@@ -33,6 +33,9 @@ final class LibarchiveArchiveReader {
     @NonNull
     static List<ArchiveSupport.EntryInfo> listEntries(@NonNull File archive,
                                                       @Nullable char[] password) throws IOException {
+        try (CabArchiveReader.Session cab = CabArchiveReader.openIfNeeded(archive,null)) {
+            if (cab != null) return cab.listEntries();
+        }
         ensureAvailable();
         String listing = LibarchiveNativeBridge.listEntries(archive.getAbsolutePath(), password);
         return RarLibarchiveFallback.parseListingRows(listing);
@@ -52,6 +55,9 @@ final class LibarchiveArchiveReader {
                                                @Nullable char[] password,
                                                @Nullable FileOperationProgress progress,
                                                @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
+        try (CabArchiveReader.Session cab = CabArchiveReader.openIfNeeded(archive,progress)) {
+            if (cab != null) return cab.extractAll(targetDir,entryProgress);
+        }
         ensureAvailable();
         if (progress != null && !progress.checkpoint()) throw new IOException("Archive extraction cancelled");
         return LibarchiveNativeBridge.extractArchive(
@@ -67,6 +73,9 @@ final class LibarchiveArchiveReader {
                                       @NonNull File outFile,
                                       @Nullable char[] password,
                                       @Nullable FileOperationProgress progress) throws IOException {
+        try (CabArchiveReader.Session cab = CabArchiveReader.openIfNeeded(archive,progress)) {
+            if (cab != null) return cab.extractSingle(entryPath,outFile);
+        }
         ensureAvailable();
         if (progress != null && !progress.checkpoint()) throw new IOException("Archive extraction cancelled");
         File parent = outFile.getParentFile();

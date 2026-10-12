@@ -58,7 +58,8 @@ final class RarSplitStoredFailure {
         if (error instanceof ArchiveSupport.PasswordRequiredException) {
             return new RarSplitStoredFailure(Code.PASSWORD_REQUIRED, Kind.USER_ACTION, path, raw);
         }
-        if (lower.contains("cancelled") || lower.contains("canceled")) {
+        if (error instanceof java.io.InterruptedIOException
+                || lower.contains("cancelled") || lower.contains("canceled")) {
             return new RarSplitStoredFailure(Code.CANCELLED, Kind.USER_ACTION, path, raw);
         }
         if (lower.contains("crc") || lower.contains("checksum")) {
@@ -104,6 +105,7 @@ final class RarSplitStoredFailure {
     static IOException wrap(@Nullable RarArchiveReader.RarEntry first,
                             @Nullable RarSplitStoredPlan plan,
                             @NonNull IOException error) {
+        if (error instanceof java.io.InterruptedIOException) return error;
         if (error instanceof ArchiveSupport.PasswordRequiredException) return error;
         if (error instanceof ExtractionException) return error;
         return new ExtractionException(classify(first, plan, error), error);

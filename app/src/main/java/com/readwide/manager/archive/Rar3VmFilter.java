@@ -2,14 +2,17 @@ package com.readwide.manager.archive;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.zip.CRC32;
 
 /**
- * RAR3 VM filter support, limited to the six standard filters emitted by common RAR3 encoders
- * (E8, E8E9, Itanium, Delta, RGB, Audio). This is an independent Java implementation based on
- * publicly documented filter behavior and local fixture validation. The general RAR VM bytecode
- * interpreter is not implemented; a non-standard filter program causes an explicit failure.
+ * RAR3 filter parsing and fast paths for the six standard filters (E8, E8E9,
+ * Itanium, Delta, RGB, Audio). Custom programs use the separately attributed
+ * {@link Rar3VirtualMachine}. Streaming same-start chains may resize results;
+ * final file bytes are counted separately from raw within-entry dictionary positions.
+ * Forward descriptors can carry between checked solid entries; partially consumed
+ * cross-entry blocks and late ranges still fail explicitly.
  */
 final class Rar3VmFilter {
     enum StandardFilter { NONE, E8, E8E9, ITANIUM, DELTA, RGB, AUDIO }
@@ -31,10 +34,12 @@ final class Rar3VmFilter {
     /** A pending filter to apply to a region of the output, in decode order. */
     static final class PendingFilter {
         StandardFilter type;
-        long blockStartAbs; // absolute output position where the filtered block begins
+        long blockStartAbs; // raw dictionary position within the current entry
         long fileOffset; // output position within the current unpacked file
         int blockLength;
         final int[] initR = new int[7];
+        Rar3VirtualMachine.Program customProgram;
+        byte[] globalData = new byte[0];
     }
 
     /** Persistent program slots used by consecutive VM records (and solid entries). */
@@ -46,38 +51,45 @@ final class Rar3VmFilter {
 
         private final List<Program> programs = new ArrayList<>();
         private int lastProgramNumber;
+        // Bounds expanded bytecode metadata across slots, not file/output size.
+        private static final int MAX_TOTAL_INSTRUCTIONS = 131072;
+        private int totalInstructions;
 
         static final class Parsed {
             final PendingFilter filter;
-            final boolean resetPendingFilters;
+            final boolean resetProgramSlots;
 
-            Parsed(PendingFilter filter, boolean resetPendingFilters) {
+            Parsed(PendingFilter filter, boolean resetProgramSlots) {
                 this.filter = filter;
-                this.resetPendingFilters = resetPendingFilters;
+                this.resetProgramSlots = resetProgramSlots;
             }
         }
 
         private static final class Program {
             final StandardFilter type;
+            final Rar3VirtualMachine.Program customProgram;
             int oldBlockLength;
             int usageCount;
 
-            Program(StandardFilter type) {
+            Program(StandardFilter type, Rar3VirtualMachine.Program customProgram) {
                 this.type = type;
+                this.customProgram = customProgram;
             }
         }
 
         Parsed parse(int flags, byte[] code, long currentOutput, int dictionarySize)
                 throws IOException {
             checkpoint();
+            if (code == null || currentOutput < 0 || dictionarySize <= 0) {
+                throw invalid("record context");
+            }
             VmCodeReader reader = new VmCodeReader(code);
-            boolean resetPending = false;
+            boolean resetSlots = false;
             int number;
             if ((flags & 0x80) != 0) {
                 long encoded = reader.readData();
                 if (encoded == 0) {
-                    programs.clear();
-                    resetPending = true;
+                    resetSlots = true;
                     number = 0;
                 } else {
                     encoded--;
@@ -85,18 +97,25 @@ final class Rar3VmFilter {
                     number = (int) encoded;
                 }
                 if (number > programs.size()) throw invalid("program number");
-                lastProgramNumber = number;
             } else {
                 number = lastProgramNumber;
                 if (number > programs.size()) throw invalid("remembered program number");
             }
 
-            Program program = number < programs.size() ? programs.get(number) : null;
-            if (program != null && program.usageCount < Integer.MAX_VALUE) program.usageCount++;
+            // Stage changes until the complete record (including user globals) is valid.
+            // A truncated reset/reuse must not clear slots or alter cached lengths/counts.
+            int programCount = resetSlots ? 0 : programs.size();
+            int instructionCount = resetSlots ? 0 : totalInstructions;
+            Program program = number < programCount ? programs.get(number) : null;
+            boolean newProgram = program == null;
+            int usageCount = newProgram ? 0
+                    : program.usageCount == Integer.MAX_VALUE ? Integer.MAX_VALUE : program.usageCount + 1;
 
             long relativeStart = reader.readData();
-            if ((flags & 0x40) != 0) relativeStart += 258L;
-            if (relativeStart < 0 || currentOutput > Long.MAX_VALUE - relativeStart) {
+            // The record integer is unsigned 32-bit; apply its bias before widening
+            // to the entry's long position (compact negative encodings can wrap).
+            if ((flags & 0x40) != 0) relativeStart = (relativeStart + 258L) & 0xffffffffL;
+            if (currentOutput > Long.MAX_VALUE - relativeStart) {
                 throw invalid("block start");
             }
             long blockStart = currentOutput + relativeStart;
@@ -114,7 +133,7 @@ final class Rar3VmFilter {
             pending.blockLength = blockLength;
             pending.initR[3] = PROGRAM_SYSTEM_GLOBAL_ADDRESS;
             pending.initR[4] = blockLength;
-            pending.initR[5] = program == null ? 0 : program.usageCount;
+            pending.initR[5] = usageCount;
 
             if ((flags & 0x10) != 0) {
                 int initMask = reader.readBits(7);
@@ -124,7 +143,7 @@ final class Rar3VmFilter {
             }
 
             if (program == null) {
-                if (programs.size() >= MAX_PROGRAM_SLOTS) {
+                if (programCount >= MAX_PROGRAM_SLOTS) {
                     throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3 VM program-state memory limit");
                 }
                 long encodedCodeSize = reader.readData();
@@ -134,30 +153,43 @@ final class Rar3VmFilter {
                 byte[] inner = new byte[(int) encodedCodeSize];
                 for (int i = 0; i < inner.length; i++) inner[i] = (byte) reader.readBits(8);
                 StandardFilter type = identify(inner);
-                if (type == StandardFilter.NONE) {
-                    throw new RarArchiveReader.UnsupportedRarFeatureException(
-                            "RAR3 uses a non-standard VM filter program");
+                Rar3VirtualMachine.Program custom = type == StandardFilter.NONE
+                        ? Rar3VirtualMachine.compile(inner) : null;
+                if (custom != null) {
+                    if (custom.instructionCount() > MAX_TOTAL_INSTRUCTIONS - instructionCount) {
+                        throw invalid("total instruction metadata size");
+                    }
+                    instructionCount += custom.instructionCount();
                 }
-                program = new Program(type);
-                programs.add(program);
+                program = new Program(type, custom);
             }
-            program.oldBlockLength = blockLength;
             pending.type = program.type;
+            pending.customProgram = program.customProgram;
+            if (pending.customProgram != null && blockLength > Rar3VirtualMachine.GLOBAL_ADDRESS) {
+                throw invalid("custom program block overlaps VM globals");
+            }
 
             if ((flags & 0x08) != 0) {
                 long globalLength = reader.readData();
                 if (globalLength > MAX_USER_GLOBAL_SIZE) throw invalid("global data length");
-                for (long i = 0; i < globalLength; i++) reader.readBits(8);
-                // Standard filters do not consume user global data. Reading and validating it
-                // still preserves the VM-record grammar and rejects truncated records.
+                pending.globalData = new byte[(int) globalLength];
+                for (int i = 0; i < pending.globalData.length; i++) pending.globalData[i] = (byte) reader.readBits(8);
             }
             reader.requireNotPastEnd();
-            return new Parsed(pending, resetPending);
+            checkpoint();
+            if (resetSlots) programs.clear();
+            if (newProgram) programs.add(program);
+            program.oldBlockLength = blockLength;
+            program.usageCount = usageCount;
+            lastProgramNumber = number;
+            totalInstructions = instructionCount;
+            return new Parsed(pending, resetSlots);
         }
 
         void reset() {
             programs.clear();
             lastProgramNumber = 0;
+            totalInstructions = 0;
         }
 
         int programCount() {
@@ -167,6 +199,36 @@ final class Rar3VmFilter {
         private static IOException invalid(String field) {
             return new IOException("Invalid RAR3 VM filter " + field);
         }
+    }
+
+    /** Queued programs can outlive slot resets; bound their distinct bytecode too. */
+    static final class ProgramRetention {
+        static final int MAX_PENDING_FILTERS = 1024;
+        private final IdentityHashMap<Rar3VirtualMachine.Program, Integer> references = new IdentityHashMap<>();
+        private int instructions;
+
+        void retain(Rar3VirtualMachine.Program program) throws IOException {
+            if (program == null) return;
+            Integer uses = references.get(program);
+            if (uses == null) {
+                if (program.instructionCount() > ProgramState.MAX_TOTAL_INSTRUCTIONS - instructions) {
+                    throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3 queued VM instruction memory limit");
+                }
+                references.put(program, 1);
+                instructions += program.instructionCount();
+            } else references.put(program, uses + 1);
+        }
+
+        void release(Rar3VirtualMachine.Program program) {
+            if (program == null) return;
+            int uses = references.get(program);
+            if (uses == 1) {
+                references.remove(program);
+                instructions -= program.instructionCount();
+            } else references.put(program, uses - 1);
+        }
+
+        void clear() { references.clear(); instructions = 0; }
     }
 
     /** MSB-first reader for the compact integer grammar used inside RAR VM records. */
@@ -222,6 +284,14 @@ final class Rar3VmFilter {
 
     private Rar3VmFilter() {}
 
+    static byte[] apply(PendingFilter filter, byte[] data, int length, int[] registers) throws IOException {
+        if (filter.customProgram != null) {
+            return Rar3VirtualMachine.apply(filter.customProgram, data, length, registers,
+                    filter.globalData, filter.fileOffset);
+        }
+        return apply(filter.type, data, length, registers, filter.fileOffset);
+    }
+
     /** Identifies a standard filter from the inner VM code, or NONE. */
     static StandardFilter identify(byte[] innerCode) {
         if (innerCode.length == 0) return StandardFilter.NONE;
@@ -256,10 +326,10 @@ final class Rar3VmFilter {
             case E8:
             case E8E9:
                 applyE8(type, data, length, fileOffset);
-                return java.util.Arrays.copyOf(data, length);
+                return filteredRegion(data, length);
             case ITANIUM:
                 applyItanium(data, length, fileOffset);
-                return java.util.Arrays.copyOf(data, length);
+                return filteredRegion(data, length);
             case DELTA:
                 return applyDelta(data, length, r[0]);
             case RGB:
@@ -269,6 +339,12 @@ final class Rar3VmFilter {
             default:
                 throw new IOException("Unsupported RAR3 VM filter");
         }
+    }
+
+    private static byte[] filteredRegion(byte[] data, int length) {
+        // These filters already modify their input; the queued block normally owns
+        // an exact-sized array. Copy only when the caller supplied a larger region.
+        return data.length == length ? data : java.util.Arrays.copyOf(data, length);
     }
 
     private static long rawGet4(byte[] d, int p) {
@@ -363,7 +439,7 @@ final class Rar3VmFilter {
         }
     }
 
-    // Delta/RGB/Audio write into a second half and return that region.
+    // Delta/RGB/Audio need a separate output array for their channel traversal.
     private static byte[] applyDelta(byte[] data, int dataSize, int channels) throws IOException {
         if (channels <= 0) throw new IOException("RAR3 delta filter: invalid channels");
         byte[] out = new byte[dataSize];
@@ -384,9 +460,12 @@ final class Rar3VmFilter {
 
     private static byte[] applyRgb(byte[] data, int dataSize, int r0, int posR) throws IOException {
         int width = r0 - 3;
-        if (dataSize < 3 || r0 <= 3 || width <= 0 || width > dataSize || posR < 0 || posR > 2) {
+        if (r0 < 3 || posR < 0 || posR > 2) {
             throw new IOException("RAR3 RGB filter: invalid params");
         }
+        // A partial row need not contain three bytes or span the full stride.
+        // Stride three (width zero) is also valid; the predictor reads zero from
+        // the not-yet-written current byte in the fresh destination array.
         byte[] dest = new byte[dataSize];
         final int channels = 3;
         int src = 0;

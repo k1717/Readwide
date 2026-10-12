@@ -65,6 +65,7 @@ public class SettingsActivity extends AppCompatActivity {
     PrefsManager prefs;
     private ThemeManager themeManager;
     private SettingsCollapsibleSectionController collapsibleSections;
+    private SettingsReaderControlsController readerControls;
     private SettingsBackupViewModel backupModel;
     private android.app.Dialog backupBusyDialog;
     private android.app.Dialog backupConfirmDialog;
@@ -256,7 +257,7 @@ public class SettingsActivity extends AppCompatActivity {
                 ScrollView.LayoutParams.MATCH_PARENT,
                 ScrollView.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, languageDialogListHeightPx());
+                LinearLayout.LayoutParams.MATCH_PARENT, settingsSelectionListHeightPx());
         panel.addView(languageScroll, scrollLp);
 
         showRoundedSettingsDialog(dialog, panel, true, 0.76f, 280);
@@ -269,10 +270,26 @@ public class SettingsActivity extends AppCompatActivity {
                                            int outline,
                                            @NonNull android.app.Dialog dialog,
                                            @NonNull TextView value) {
+        TextView row = makeSettingsSelectionRow(option.label, selected, text, sub, outline);
+        row.setOnClickListener(v -> {
+            if (prefs.getLanguageMode() != option.mode) {
+                prefs.setLanguageMode(option.mode);
+            } else {
+                updateLanguageValue(value);
+            }
+            dialog.dismiss();
+        });
+        return row;
+    }
+
+    /** Shared plain-row presentation for the language and EPUB default-font pickers. */
+    TextView makeSettingsSelectionRow(@NonNull String label, boolean selected,
+                                      int text, int sub, int outline) {
         TextView row = new TextView(this);
         row.setText(selected
-                ? getString(R.string.settings_language_selected, option.label)
-                : option.label);
+                ? getString(R.string.settings_language_selected, label)
+                : label);
+        row.setSelected(selected);
         row.setTextColor(selected ? text : sub);
         row.setTextSize(14.5f);
         row.setTypeface(selected ? android.graphics.Typeface.DEFAULT_BOLD : android.graphics.Typeface.DEFAULT);
@@ -286,14 +303,6 @@ public class SettingsActivity extends AppCompatActivity {
         bg.setCornerRadius(dpToPx(13));
         bg.setStroke(dpToPx(1), selected ? prefs.getMainFileLongHoldColor(this) : outline);
         row.setBackground(bg);
-        row.setOnClickListener(v -> {
-            if (prefs.getLanguageMode() != option.mode) {
-                prefs.setLanguageMode(option.mode);
-            } else {
-                updateLanguageValue(value);
-            }
-            dialog.dismiss();
-        });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(40));
         lp.setMargins(0, dpToPx(4), 0, 0);
@@ -301,7 +310,7 @@ public class SettingsActivity extends AppCompatActivity {
         return row;
     }
 
-    private int languageDialogListHeightPx() {
+    int settingsSelectionListHeightPx() {
         int visibleHeight = currentVisibleWindowHeightPx();
         int target = visibleHeight > 0 ? Math.round(visibleHeight * 0.54f) : dpToPx(420);
         return Math.max(dpToPx(260), Math.min(dpToPx(420), target));
@@ -405,7 +414,8 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void setupReaderControls() {
-        new SettingsReaderControlsController(this).setupReaderControls();
+        readerControls = new SettingsReaderControlsController(this);
+        readerControls.setupReaderControls();
     }
 
     private void setupCollapsibleSections(@Nullable Bundle savedInstanceState) {
@@ -1305,6 +1315,7 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     @Override protected void onDestroy() {
+        if (readerControls != null) readerControls.close();
         if (backupBusyDialog != null) backupBusyDialog.dismiss();
         if (backupConfirmDialog != null) backupConfirmDialog.dismiss();
         backupBusyDialog = null;

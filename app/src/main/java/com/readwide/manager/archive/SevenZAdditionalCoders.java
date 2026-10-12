@@ -16,7 +16,15 @@ final class SevenZAdditionalCoders {
     static InputStream open(byte[] id, byte[] properties, InputStream input) throws IOException {
         SevenZCoderRegistry.Entry entry = SevenZCoderRegistry.find(id);
         if (entry == null || !entry.isAdditional()) return null;
-        // Additional coders don't need a declared size; the archive planner supplies real sizes.
+        // Historical facade callers use size-independent codecs. New Brotli framing
+        // requires the real coder size; the archive planner always supplies it.
+        if (entry.id.equals("04F71102")) throw new IOException("7z Brotli requires a declared output size");
         return entry.prepare(properties, 0).open(new InputStream[]{input}, null);
+    }
+
+    static InputStream open(byte[] id, byte[] properties, InputStream input, long outputSize) throws IOException {
+        SevenZCoderRegistry.Entry entry = SevenZCoderRegistry.find(id);
+        if (entry == null || !entry.isAdditional()) return null;
+        return entry.prepare(properties, outputSize).open(new InputStream[]{input}, null);
     }
 }

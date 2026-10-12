@@ -32,8 +32,13 @@ final class RarSolidProbeFailure {
     enum NextStep {
         NONE,
         KEEP_LIBARCHIVE_PRIMARY,
+        // Retained for reading older diagnostic reports; new classifications use
+        // route/state checks below rather than claiming these decoders are absent.
         IMPLEMENT_PPMD_MODEL,
         IMPLEMENT_VM_STATE_DECODING,
+        CHECK_PPMD_ROUTE,
+        CHECK_VM_FILTER_ROUTE,
+        SUPPLY_VM_EXECUTION_STATE,
         FIX_CLASSIC_LZ_DECODER,
         FIX_SOLID_DICTIONARY_CONTINUATION,
         INVESTIGATE_REFERENCE_OUTPUT,
@@ -96,20 +101,22 @@ final class RarSolidProbeFailure {
     static RarSolidProbeFailure classifyMessage(@Nullable String message, boolean unsupportedGap) {
         String text = message == null ? "" : message;
         String lower = text.toLowerCase(Locale.ROOT);
-        if (lower.contains("ppmd statistical model") || lower.contains("ppmd model")) {
+        if (lower.contains("ppmd statistical model") || lower.contains("ppmd model")
+                || lower.contains("lz table reader cannot parse this ppmd block")) {
             return of(Cause.PPMD_MODEL_GAP,
-                    NextStep.IMPLEMENT_PPMD_MODEL,
-                    "RAR3/RAR4 PPMd statistical model is still a first-party gap");
+                    NextStep.CHECK_PPMD_ROUTE,
+                    "this helper did not handle the PPMd block; check the archive PPMd decoder route");
         }
-        if (lower.contains("register state") || lower.contains("execution-state")) {
+        if (lower.contains("register state") || lower.contains("execution-state")
+                || lower.contains("execution state")) {
             return of(Cause.VM_EXECUTION_STATE_GAP,
-                    NextStep.IMPLEMENT_VM_STATE_DECODING,
-                    "RAR VM register/state decoding is needed before filtered output can be planned");
+                    NextStep.SUPPLY_VM_EXECUTION_STATE,
+                    "this filter plan lacks its decoded output length or file offset");
         }
-        if (lower.contains("vm filters") || lower.contains("vm-filter")) {
+        if (lower.contains("vm filters") || lower.contains("vm-filter") || lower.contains("vm program")) {
             return of(Cause.VM_FILTER_GAP,
-                    NextStep.IMPLEMENT_VM_STATE_DECODING,
-                    "RAR VM filter execution remains a first-party gap");
+                    NextStep.CHECK_VM_FILTER_ROUTE,
+                    "this helper/filter program was not handled; check the standard-filter route and custom-program boundary");
         }
         if (lower.contains("classiclz=crc_mismatch_single_block")
                 || lower.contains("classiclz=crc_mismatch_after_size_match")) {

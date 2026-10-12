@@ -27,6 +27,13 @@ public final class ArchiveImageSpreadNavigator {
     public int backward(int currentIndex,
                         int itemCount,
                         boolean[] pairAtStart) {
+        return backwardWithPairLookup(currentIndex, itemCount,
+                index -> pairAtStart != null && index < pairAtStart.length && pairAtStart[index]);
+    }
+
+    /** History needs no pair lookup; fallback asks only about the adjacent candidate. */
+    public int backwardWithPairLookup(int currentIndex, int itemCount,
+                                      java.util.function.IntPredicate pairAtStart) {
         int current = ImageSequenceNavigationMath.clampIndex(currentIndex, itemCount);
         while (!previousStarts.isEmpty()) {
             int candidate = previousStarts.pop();
@@ -34,7 +41,9 @@ public final class ArchiveImageSpreadNavigator {
                 return candidate;
             }
         }
-        return ArchiveImageSpreadMath.previousTarget(current, itemCount, pairAtStart);
+        if (current <= 0) return 0;
+        int pairCandidate = current - 2;
+        return pairCandidate >= 0 && pairAtStart.test(pairCandidate) ? pairCandidate : current - 1;
     }
 
     public void clear() {

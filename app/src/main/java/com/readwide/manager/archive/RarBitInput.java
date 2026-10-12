@@ -3,6 +3,7 @@ package com.readwide.manager.archive;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 
 /** Bounded MSB-first reservoir shared by bit reads and an aligned byte view. */
 final class RarBitInput {
@@ -13,7 +14,7 @@ final class RarBitInput {
     private long consumedBits;
     private long reservoir;
     private int bufferedBits;
-    private IOException failure;
+    private Throwable failure;
 
     RarBitInput(byte[] data) {
         this.data = data != null ? data : new byte[0];
@@ -102,10 +103,13 @@ final class RarBitInput {
     }
 
     private void ensureAvailable(int count) throws IOException {
-        if (failure != null) throw failure;
+        if (failure instanceof IOException) throw (IOException) failure;
+        if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+        if (failure instanceof Error) throw (Error) failure;
         if (Thread.currentThread().isInterrupted()) {
-            failure = new IOException("RAR bit reading cancelled");
-            throw failure;
+            InterruptedIOException cancelled = new InterruptedIOException("RAR bit reading cancelled");
+            failure = cancelled;
+            throw cancelled;
         }
         if (remainingBits() < count) throw new EOFException("RAR bit stream ended unexpectedly");
     }
@@ -113,14 +117,15 @@ final class RarBitInput {
     private void fill(int count) throws IOException {
         try {
             while (bufferedBits < count) {
-                if (Thread.currentThread().isInterrupted()) throw new IOException("RAR bit reading cancelled");
+                if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("RAR bit reading cancelled");
                 int value = data != null ? data[(int) bytesFetched] & 255 : stream.read();
                 if (value < 0) throw new EOFException("Truncated RAR packed bit stream");
+                if (value > 255) throw new IOException("Invalid RAR packed source byte");
                 bytesFetched++;
                 reservoir = (reservoir << 8) | value;
                 bufferedBits += 8;
             }
-        } catch (IOException error) {
+        } catch (IOException | RuntimeException | Error error) {
             failure = error;
             throw error;
         }

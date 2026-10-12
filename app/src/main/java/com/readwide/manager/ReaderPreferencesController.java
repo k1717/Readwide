@@ -26,12 +26,15 @@ final class ReaderPreferencesController {
     private int appliedPagingOverlapLines = Integer.MIN_VALUE;
     private Typeface appliedTypeface = null;
     private int appliedTextAlignment = Integer.MIN_VALUE;
+    private String appliedLayoutPreferencesSignature = "";
+    private com.readwide.manager.view.CustomReaderView appliedLayoutView;
 
     ReaderPreferencesController(@NonNull ReaderActivity activity) {
         this.activity = activity;
     }
 
     void applyPreferences() {
+        String layoutSignature = activity.readerLayoutPreferencesSignature();
         float fontSize = activity.prefs.getFontSize();
         float lineSpacing = activity.prefs.getLineSpacing();
         int marginH = activity.dpToPx(activity.prefs.getMarginHorizontal());
@@ -51,10 +54,33 @@ final class ReaderPreferencesController {
         int toolbarColor = theme != null ? theme.getToolbarColor() : bgColor;
 
         if (activity.readerView != null) {
-            applyReaderViewPreferences(fontSize, lineSpacing, marginH, marginV,
+            // Callbacks inside presentation updates must not certify intermediate
+            // geometry. Publish only after all captured settings have been applied.
+            appliedLayoutPreferencesSignature = "";
+            appliedLayoutView = null;
+            boolean overlapChanged = appliedPagingOverlapLines != Integer.MIN_VALUE
+                    && appliedPagingOverlapLines != overlapLines;
+            boolean pageModelChanged = Float.compare(appliedFontSize, fontSize) != 0
+                    || Float.compare(appliedLineSpacing, lineSpacing) != 0 || appliedTypeface != tf
+                    || appliedMarginHorizontalPx != marginH || appliedMarginVerticalPx != marginV
+                    || appliedTopTextZoneOffsetPx != topTextZoneOffsetPx
+                    || appliedBottomTextZoneOffsetPx != bottomTextZoneOffsetPx
+                    || appliedLeftTextInsetPx != leftTextInsetPx || appliedRightTextInsetPx != rightTextInsetPx
+                    || overlapChanged;
+            activity.readerView.updatePresentation(() -> applyReaderViewPreferences(fontSize, lineSpacing, marginH, marginV,
                     topTextZoneOffsetPx, bottomTextZoneOffsetPx,
                     leftTextInsetPx, rightTextInsetPx, overlapLines,
-                    tf, textColor, bgColor);
+                    tf, textColor, bgColor));
+            if (layoutSignature.equals(activity.readerLayoutPreferencesSignature())) {
+                appliedLayoutView = activity.readerView;
+                appliedLayoutPreferencesSignature = layoutSignature;
+            }
+            // Only publish/reindex the final geometry, never the intermediate
+            // margin-only layout while the matching insets are still pending.
+            if (activity.largeTextEstimateActive && pageModelChanged) {
+                if (overlapChanged) activity.scheduleLargeTextExactPageIndexingRestartForUserPageModelChange();
+                else activity.scheduleLargeTextExactPageIndexingRestart();
+            } else if (overlapChanged) activity.updatePositionLabel();
         }
 
         activity.applyReaderSystemBarColors(bgColor, textColor, toolbarColor);
@@ -68,6 +94,14 @@ final class ReaderPreferencesController {
         activity.applyStatusBarVisibilityPreference();
         activity.applyPageStatusAlignment(activity.lastReaderTopInset);
         if (activity.readerRoot != null) ViewCompat.requestApplyInsets(activity.readerRoot);
+    }
+
+    boolean hasCurrentLayoutPreferences() {
+        return appliedLayoutView != null && appliedLayoutView == activity.readerView
+                && !appliedLayoutPreferencesSignature.isEmpty()
+                && (!activity.largeTextEstimateActive
+                        || activity.appliedLargeTextPartitionMode == activity.getLargeTextPartitionMode())
+                && appliedLayoutPreferencesSignature.equals(activity.readerLayoutPreferencesSignature());
     }
 
     private void applyReaderViewPreferences(float fontSize,
@@ -92,17 +126,8 @@ final class ReaderPreferencesController {
         activity.updateReaderContentTopPadding();
 
         activity.readerView.setLargeTextPartitionMode(activity.largeTextEstimateActive);
-        boolean overlapChanged = appliedPagingOverlapLines != Integer.MIN_VALUE
-                && appliedPagingOverlapLines != overlapLines;
         activity.readerView.setOverlapLines(overlapLines);
         appliedPagingOverlapLines = overlapLines;
-        if (overlapChanged) {
-            if (activity.largeTextEstimateActive) {
-                activity.scheduleLargeTextExactPageIndexingRestartForUserPageModelChange();
-            } else {
-                activity.updatePositionLabel();
-            }
-        }
 
         // Horizontal alignment does not change line breaks or layout height, so the
         // page model is identical across alignments. Apply on change, never reindex.
@@ -112,21 +137,7 @@ final class ReaderPreferencesController {
             appliedTextAlignment = textAlignment;
         }
 
-        if (appliedTopTextZoneOffsetPx != topTextZoneOffsetPx
-                || appliedBottomTextZoneOffsetPx != bottomTextZoneOffsetPx
-                || appliedLeftTextInsetPx != leftTextInsetPx
-                || appliedRightTextInsetPx != rightTextInsetPx) {
-            activity.readerView.setTextZoneAdjustments(topTextZoneOffsetPx, bottomTextZoneOffsetPx,
-                    leftTextInsetPx, rightTextInsetPx);
-            if (activity.largeTextEstimateActive) {
-                activity.scheduleLargeTextExactPageIndexingRestart();
-            }
-            appliedTopTextZoneOffsetPx = topTextZoneOffsetPx;
-            appliedBottomTextZoneOffsetPx = bottomTextZoneOffsetPx;
-            appliedLeftTextInsetPx = leftTextInsetPx;
-            appliedRightTextInsetPx = rightTextInsetPx;
-        }
-
+        boolean horizontalMarginChanged = appliedMarginHorizontalPx != marginH;
         boolean geometryChanged = Float.compare(appliedFontSize, fontSize) != 0
                 || Float.compare(appliedLineSpacing, lineSpacing) != 0
                 || appliedMarginHorizontalPx != marginH
@@ -145,11 +156,19 @@ final class ReaderPreferencesController {
             appliedMarginHorizontalPx = marginH;
             appliedMarginVerticalPx = marginV;
             appliedTypeface = tf;
-            // Colors do not affect pagination geometry, so a color-only change
-            // re-renders via setReaderStyle but must not restart page indexing.
-            if (activity.largeTextEstimateActive && geometryChanged) {
-                activity.scheduleLargeTextExactPageIndexingRestart();
-            }
+        }
+        // Negative insets are relative to the NEW horizontal margin. Applying
+        // them before the style clamps them against the View's initial 24px.
+        if (horizontalMarginChanged || appliedTopTextZoneOffsetPx != topTextZoneOffsetPx
+                || appliedBottomTextZoneOffsetPx != bottomTextZoneOffsetPx
+                || appliedLeftTextInsetPx != leftTextInsetPx
+                || appliedRightTextInsetPx != rightTextInsetPx) {
+            activity.readerView.setTextZoneAdjustments(topTextZoneOffsetPx, bottomTextZoneOffsetPx,
+                    leftTextInsetPx, rightTextInsetPx);
+            appliedTopTextZoneOffsetPx = topTextZoneOffsetPx;
+            appliedBottomTextZoneOffsetPx = bottomTextZoneOffsetPx;
+            appliedLeftTextInsetPx = leftTextInsetPx;
+            appliedRightTextInsetPx = rightTextInsetPx;
         }
     }
 }

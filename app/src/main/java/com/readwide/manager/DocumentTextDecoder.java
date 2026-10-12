@@ -8,6 +8,7 @@ import java.util.regex.Pattern;
 
 /** Decodes EPUB/HTML/XML text entries without assuming every book is UTF-8. */
 final class DocumentTextDecoder {
+    private static final Pattern CSS_ENCODING = Pattern.compile("\\A@charset \"([^\"]+)\";");
     private static final Pattern XML_ENCODING = Pattern.compile(
             "(?is)<\\?xml[^>]*encoding\\s*=\\s*['\"]\\s*([^'\"\\s]+)");
     private static final Pattern HTML_CHARSET = Pattern.compile(
@@ -79,7 +80,16 @@ final class DocumentTextDecoder {
         }
     }
     private static String declaredCharset(String head) {
-        Matcher matcher = XML_ENCODING.matcher(head);
+        Matcher matcher = CSS_ENCODING.matcher(head);
+        if (matcher.find()) {
+            String cssCharset = normalize(matcher.group(1));
+            // An ASCII @charset header cannot itself establish UTF-16 byte order.
+            // Real UTF-16 input has already been handled by BOM/sniff detection.
+            if ("UTF-16".equals(cssCharset) || "UTF-16LE".equals(cssCharset)
+                    || "UTF-16BE".equals(cssCharset)) return "UTF-8";
+            return cssCharset;
+        }
+        matcher = XML_ENCODING.matcher(head);
         if (matcher.find()) return normalize(matcher.group(1));
         matcher = HTML_CHARSET.matcher(head);
         if (matcher.find()) return normalize(matcher.group(1));

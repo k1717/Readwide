@@ -24,8 +24,11 @@ final class DocumentPageDisplayController {
         if (activity.epubPageIsFixedLayout(page)
                 && (activity.webView.getWidth() <= 0 || activity.webView.getHeight() <= 0)) {
             final int requestedPage = page;
+            final int requestedLoad = activity.loadGeneration;
+            final android.webkit.WebView target = activity.webView;
             activity.webView.post(() -> {
-                if (!activity.activityDestroyed && activity.webView != null) {
+                if (!activity.activityDestroyed && activity.webView == target
+                        && activity.loadGeneration == requestedLoad) {
                     activity.showPage(requestedPage, 0);
                 }
             });

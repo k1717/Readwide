@@ -24,7 +24,7 @@ public class RarSolidProbeSummaryTest {
         assertEquals(2, summary.count(RarSolidProbeFailure.Cause.PPMD_MODEL_GAP));
         assertEquals(1, summary.count(RarSolidProbeFailure.Cause.VM_EXECUTION_STATE_GAP));
         assertEquals(RarSolidProbeFailure.Cause.PPMD_MODEL_GAP, summary.dominantCause);
-        assertEquals(RarSolidProbeFailure.NextStep.IMPLEMENT_PPMD_MODEL, summary.dominantNextStep);
+        assertEquals(RarSolidProbeFailure.NextStep.CHECK_PPMD_ROUTE, summary.dominantNextStep);
     }
 
     @Test

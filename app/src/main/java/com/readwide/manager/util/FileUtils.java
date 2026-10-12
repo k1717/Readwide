@@ -503,7 +503,8 @@ public class FileUtils {
         }
         return lower.endsWith(".zip") || lower.endsWith(".zipx") || lower.endsWith(".cbz")
                 || lower.endsWith(".rar") || lower.endsWith(".cbr")
-                || lower.endsWith(".cab") || lower.endsWith(".lha") || lower.endsWith(".lzh")
+                || com.readwide.manager.archive.ArchiveSupport.getSupportedArchiveType(lower)
+                    == com.readwide.manager.archive.ArchiveSupport.Type.LIBARCHIVE
                 || lower.matches(".*\\.r\\d{2,3}$")
                 || lower.endsWith(".alz")
                 || lower.endsWith(".egg")

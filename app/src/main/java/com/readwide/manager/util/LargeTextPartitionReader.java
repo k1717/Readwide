@@ -12,6 +12,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.InputStreamReader;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
@@ -24,7 +25,7 @@ import java.util.List;
 /**
  * File I/O helper for large TXT partition loading.
  *
- * This class intentionally owns only deterministic file/line-window assembly.
+ * This class owns file/line-window assembly and serialized cursor resource ownership.
  * ReaderActivity still decides when to switch partitions, how exact page anchors
  * are applied, and how scroll handoff is performed. Keeping the partition body
  * range construction here makes the continuity contract explicit: lookbehind is
@@ -37,6 +38,36 @@ public final class LargeTextPartitionReader {
     // Minimum trimmed length of an anchor line fragment that is specific enough to
     // locate a unique partition. Shorter fragments fall back to char-offset.
     private static final int MIN_ANCHOR_LINE_NEEDLE = 16;
+
+    private static final ThreadLocal<java.util.function.BooleanSupplier> READ_CHECKPOINT = new ThreadLocal<>();
+
+    @FunctionalInterface
+    public interface ReadOperation<T> { T run() throws IOException; }
+
+    /** Scope only this worker read; never interrupt a shared executor's next task. */
+    public static <T> T readWhile(java.util.function.BooleanSupplier keepReading,
+                                  ReadOperation<T> operation) throws IOException {
+        java.util.function.BooleanSupplier previous = READ_CHECKPOINT.get();
+        READ_CHECKPOINT.set(previous == null ? keepReading
+                : () -> previous.getAsBoolean() && keepReading.getAsBoolean());
+        try {
+            checkInterrupted();
+            T result = operation.run();
+            checkInterrupted();
+            return result;
+        } finally {
+            if (previous == null) READ_CHECKPOINT.remove();
+            else READ_CHECKPOINT.set(previous);
+        }
+    }
+
+    private static void checkInterrupted() throws InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("TXT read cancelled");
+        java.util.function.BooleanSupplier checkpoint = READ_CHECKPOINT.get();
+        if (checkpoint != null && !checkpoint.getAsBoolean()) {
+            throw new InterruptedIOException("TXT read superseded");
+        }
+    }
 
     public static float estimateBytesPerChar(@NonNull File file,
                                              int previewBytes) {
@@ -61,9 +92,11 @@ public final class LargeTextPartitionReader {
                                                    @NonNull String encoding,
                                                    boolean collapseBlankLines,
                                                    int targetCharPosition) throws IOException {
+        checkInterrupted();
+        long sourceLength = file.length(), sourceModified = file.lastModified();
         int targetChar = Math.max(0, targetCharPosition);
         long charCount = 0L;
-        int line = 1;
+        long line = 1L;
         int targetLine = -1;
         boolean sawAnyLine = false;
 
@@ -73,25 +106,32 @@ public final class LargeTextPartitionReader {
         try (BufferedReader reader = openReader(file, encoding)) {
             String lineText;
             while ((lineText = reader.readLine()) != null) {
+                checkInterrupted();
                 sawAnyLine = true;
                 String normalized = FileUtils.enforceTextPresentationSelectors(lineText);
                 normalized = TextDisplayRuleManager.apply(normalized, activeRules);
                 String emitted = collapseFilter.accept(normalized);
                 if (emitted == null) continue;
                 normalized = emitted;
-                int lineChars = normalized.length() + 1; // TextView normalizes line breaks to '\n'.
-                if (targetLine < 0 && targetChar >= charCount && targetChar < charCount + lineChars) {
-                    targetLine = line;
+                int currentLine = LargeTextCoordinateMath.checkedLineNumber(line);
+                long nextChar = LargeTextCoordinateMath.advancePastLine(charCount, normalized.length());
+                if (targetLine < 0 && targetChar >= charCount && targetChar < nextChar) {
+                    targetLine = currentLine;
                 }
-                charCount += lineChars;
+                charCount = nextChar;
                 line++;
             }
         }
 
-        int totalLines = sawAnyLine ? Math.max(1, line - 1) : 1;
+        checkInterrupted();
+        if (!file.isFile() || file.length() != sourceLength || file.lastModified() != sourceModified) {
+            throw new IOException("TXT changed while reading partition statistics");
+        }
+        int totalLines = sawAnyLine ? LargeTextCoordinateMath.checkedLineNumber(Math.max(1L, line - 1L)) : 1;
         if (targetLine < 0) targetLine = totalLines;
+        // Only a validated final synthetic separator may exceed the real coordinate range.
         return new LargeTextLineStats(targetLine, totalLines,
-                (int) Math.max(0L, Math.min(Integer.MAX_VALUE, charCount)));
+                (int) Math.min(Integer.MAX_VALUE, charCount));
     }
 
     /**
@@ -113,46 +153,125 @@ public final class LargeTextPartitionReader {
                                                 boolean collapseBlankLines,
                                                 String anchorBefore,
                                                 String anchorAfter) throws IOException {
-        String before = anchorBefore != null ? anchorBefore : "";
-        String after = anchorAfter != null ? anchorAfter : "";
+        return findCharPositionForAnchor(context, file, encoding, collapseBlankLines, 0, anchorBefore, anchorAfter);
+    }
 
-        int lastBreak = before.lastIndexOf('\n');
-        String beforeTail = lastBreak >= 0 ? before.substring(lastBreak + 1) : before;
-        int firstBreak = after.indexOf('\n');
-        String afterHead = firstBreak >= 0 ? after.substring(0, firstBreak) : after;
-
-        String needle;
-        int cursorInNeedle;
-        String currentLine = beforeTail + afterHead;
-        if (currentLine.trim().length() >= MIN_ANCHOR_LINE_NEEDLE) {
-            needle = currentLine;
-            cursorInNeedle = beforeTail.length();
-        } else {
-            needle = firstLongLine(after);
-            cursorInNeedle = 0;
-            if (needle == null) return -1;
-        }
-
+    public static int findCharPositionForAnchor(@NonNull Context context,
+                                                @NonNull File file,
+                                                @NonNull String encoding,
+                                                boolean collapseBlankLines,
+                                                int fallbackPosition,
+                                                String anchorBefore,
+                                                String anchorAfter) throws IOException {
         TextDisplayRuleManager.CompiledRules activeRules = TextDisplayRuleManager.captureActive(
                 context.getApplicationContext(), file.getAbsolutePath()).compiled;
-        TxtBlankLineCollapser.Filter collapseFilter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
-        long charCount = 0L;
+        return findCharPositionForAnchorTransformed(file, encoding, collapseBlankLines,
+                fallbackPosition, anchorBefore, anchorAfter, line -> TextDisplayRuleManager.apply(
+                        FileUtils.enforceTextPresentationSelectors(line), activeRules));
+    }
+
+    static int findCharPositionForAnchorTransformed(File file, String encoding, boolean collapseBlankLines,
+                                                   int fallbackPosition, String anchorBefore, String anchorAfter,
+                                                   LineTransform transform) throws IOException {
+        AnchorSearch search = new AnchorSearch(anchorBefore, anchorAfter, fallbackPosition);
+        if (search.needle == null) return -1;
+        TxtBlankLineCollapser.Filter filter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
+        checkInterrupted();
         try (BufferedReader reader = openReader(file, encoding)) {
-            String lineText;
-            while ((lineText = reader.readLine()) != null) {
-                String normalized = FileUtils.enforceTextPresentationSelectors(lineText);
-                normalized = TextDisplayRuleManager.apply(normalized, activeRules);
-                String emitted = collapseFilter.accept(normalized);
-                if (emitted == null) continue;
-                int hit = emitted.indexOf(needle);
-                if (hit >= 0) {
-                    long pos = charCount + hit + cursorInNeedle;
-                    return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, pos));
-                }
-                charCount += emitted.length() + 1;
+            String line;
+            while ((line = reader.readLine()) != null) {
+                checkInterrupted();
+                String emitted = filter.accept(transform.apply(line));
+                if (emitted != null) search.appendLine(emitted);
             }
         }
-        return -1;
+        search.scan(true);
+        return search.bestPosition;
+    }
+
+    /** A rolling context window, not a whole-file buffer or a list of matching positions. */
+    private static final class AnchorSearch {
+        final String before, after, needle;
+        final int cursorInNeedle, fallback;
+        final String normalizedBefore, normalizedAfter;
+        final StringBuilder window = new StringBuilder();
+        long base;
+        int scanFrom, bestPosition = -1, bestContext = -1;
+        long bestDistance = Long.MAX_VALUE;
+
+        AnchorSearch(String anchorBefore, String anchorAfter, int fallbackPosition) {
+            String before = anchorBefore != null ? anchorBefore : "";
+            String after = anchorAfter != null ? anchorAfter : "";
+            int lastBreak = before.lastIndexOf('\n');
+            String beforeTail = lastBreak >= 0 ? before.substring(lastBreak + 1) : before;
+            int firstBreak = after.indexOf('\n');
+            String afterHead = firstBreak >= 0 ? after.substring(0, firstBreak) : after;
+
+            String currentLine = beforeTail + afterHead;
+            if (currentLine.trim().length() >= MIN_ANCHOR_LINE_NEEDLE) {
+                needle = currentLine;
+                cursorInNeedle = beforeTail.length();
+                this.before = before;
+                this.after = after;
+            } else {
+                needle = firstLongLine(after);
+                cursorInNeedle = 0;
+                // Preserve the old short/blank-line fallback to the next specific line.
+                this.before = "";
+                this.after = needle != null ? needle : "";
+            }
+            fallback = Math.max(0, fallbackPosition);
+            normalizedBefore = TxtBlankLineCollapser.collapse(this.before);
+            normalizedAfter = TxtBlankLineCollapser.collapse(this.after);
+        }
+
+        void appendLine(String line) throws IOException {
+            LargeTextCoordinateMath.advancePastLine(base + window.length(), line.length());
+            // Do not retain a second full copy of unusually long source lines.
+            for (int start = 0; start < line.length();) {
+                int end = (int) Math.min(line.length(), (long) start + 4096);
+                window.append(line, start, end);
+                scan(false);
+                start = end;
+            }
+            window.append('\n');
+            scan(false);
+        }
+
+        void scan(boolean eof) throws IOException {
+            while (scanFrom < window.length()) {
+                checkInterrupted();
+                int hit = window.indexOf(needle, scanFrom);
+                if (hit < 0) {
+                    scanFrom = Math.max(scanFrom, window.length() - needle.length() + 1);
+                    break;
+                }
+                int cursor = hit + cursorInNeedle;
+                if (!eof && (long) cursor + after.length() > window.length()) {
+                    scanFrom = hit; // wait for the following lines before comparing context
+                    break;
+                }
+                String actualBefore = window.substring(Math.max(0, cursor - before.length()), cursor);
+                String actualAfter = window.substring(cursor, (int) Math.min(window.length(), (long) cursor + after.length()));
+                int context = 0;
+                if (!normalizedBefore.isEmpty() && TxtBlankLineCollapser.collapse(actualBefore).endsWith(normalizedBefore)) context++;
+                if (!normalizedAfter.isEmpty() && TxtBlankLineCollapser.collapse(actualAfter).startsWith(normalizedAfter)) context++;
+                long position = base + cursor;
+                long distance = Math.abs(position - fallback);
+                if (context > bestContext || (context == bestContext && distance < bestDistance)) {
+                    bestContext = context;
+                    bestDistance = distance;
+                    bestPosition = LargeTextCoordinateMath.checkedPosition(position);
+                }
+                scanFrom = hit + 1; // consider overlapping occurrences, too
+            }
+            int discard = Math.max(0, scanFrom - before.length());
+            if (discard > 0) {
+                window.delete(0, discard);
+                base += discard;
+                scanFrom -= discard;
+            }
+        }
     }
 
     /**
@@ -177,10 +296,85 @@ public final class LargeTextPartitionReader {
                                                                      int partitionLines,
                                                                      int lookaheadLines,
                                                                      int lookbehindLines) throws IOException {
-        LargeTextLineStats stats = scanLineStats(context, file, encoding, collapseBlankLines, targetCharPosition);
-        int startLine = LargeTextContinuityMath.partitionStartLineForLine(stats.targetLine, partitionLines);
-        return readPartitionAtStartLine(context, file, encoding, collapseBlankLines, startLine, stats.totalLines, stats.totalChars,
-                partitionLines, lookaheadLines, lookbehindLines, false);
+        TextDisplayRuleManager.CompiledRules rules = TextDisplayRuleManager.captureActive(
+                context.getApplicationContext(), file.getAbsolutePath()).compiled;
+        return readPartitionForCharTransformed(file, encoding, collapseBlankLines,
+                targetCharPosition, partitionLines, lookaheadLines, line -> TextDisplayRuleManager.apply(
+                        FileUtils.enforceTextPresentationSelectors(line), rules));
+    }
+
+    /**
+     * Stats and the requested canonical partition share one decoded pass. Before
+     * finding the target, retain only its candidate body; afterwards retain that
+     * body plus lookahead while continuing to count the rest of the file. This
+     * does not combine layout with startup or retain the entire document. The
+     * known-stats/forward-cursor and manual-lookbehind paths stay unchanged.
+     */
+    static LargeTextLinePartitionResult readPartitionForCharTransformed(
+            File file, String encoding, boolean collapseBlankLines, int targetCharPosition,
+            int partitionLines, int lookaheadLines, LineTransform transform) throws IOException {
+        checkInterrupted();
+        long length = file.length(), modified = file.lastModified();
+        int targetChar = Math.max(0, targetCharPosition);
+        long line = 1L;
+        int startLine = 1, bodyCharCount = 0;
+        long charCount = 0L, baseChars = 0L;
+        boolean targetFound = false, capturedAny = false;
+        StringBuilder out = new StringBuilder();
+        LargeTextContinuityMath.PartitionWindow window =
+                LargeTextContinuityMath.partitionWindowForStartLine(
+                        startLine, Integer.MAX_VALUE, partitionLines, lookaheadLines, 0, false);
+        TxtBlankLineCollapser.Filter filter = new TxtBlankLineCollapser.Filter(collapseBlankLines);
+        try (BufferedReader reader = openReader(file, encoding)) {
+            String raw;
+            while ((raw = reader.readLine()) != null) {
+                checkInterrupted();
+                String emitted = filter.accept(transform.apply(raw));
+                if (emitted == null) continue;
+                int currentLine = LargeTextCoordinateMath.checkedLineNumber(line);
+                long nextChar = LargeTextCoordinateMath.advancePastLine(charCount, emitted.length());
+                if (!targetFound) {
+                    int candidateStart = LargeTextContinuityMath.partitionStartLineForLine(currentLine, partitionLines);
+                    if (candidateStart != startLine) {
+                        startLine = candidateStart;
+                        baseChars = charCount;
+                        out.setLength(0);
+                        capturedAny = false;
+                        bodyCharCount = 0;
+                        window = LargeTextContinuityMath.partitionWindowForStartLine(
+                                startLine, Integer.MAX_VALUE, partitionLines, lookaheadLines, 0, false);
+                    }
+                }
+                if (!targetFound && targetChar >= charCount && targetChar < nextChar) {
+                    targetFound = true;
+                }
+                if (line <= window.captureEndLine) {
+                    // Preserve the reader's no-synthetic-terminal-newline contract.
+                    if (capturedAny) out.append('\n');
+                    out.append(emitted);
+                    capturedAny = true;
+                    if (line <= window.bodyEndLine) bodyCharCount = out.length();
+                }
+                charCount = nextChar;
+                line++;
+            }
+        }
+        checkInterrupted();
+        if (!file.isFile() || file.length() != length || file.lastModified() != modified) {
+            throw new IOException("TXT changed while reading partition statistics");
+        }
+        int totalLines = LargeTextCoordinateMath.checkedLineNumber(Math.max(1L, line - 1L));
+        // If the saved character lies beyond EOF, the last candidate is already
+        // the same last canonical partition selected by the former stats+clamp.
+        window = LargeTextContinuityMath.partitionWindowForStartLine(
+                startLine, totalLines, partitionLines, lookaheadLines, 0, false);
+        String content = out.toString();
+        LargeTextCoordinateMath.checkedPosition(baseChars + content.length());
+        return new LargeTextLinePartitionResult(content, TextSearchMath.countLines(content),
+                window.startLine, window.bodyEndLine, totalLines,
+                LargeTextCoordinateMath.checkedPosition(baseChars), 0, bodyCharCount,
+                window.windowStartLine, false,
+                (int) Math.min(Integer.MAX_VALUE, charCount));
     }
 
     public static LargeTextLinePartitionResult readPartitionAtStartLine(@NonNull Context context,
@@ -230,17 +424,47 @@ public final class LargeTextPartitionReader {
                 includeLookbehind, null);
     }
 
+    /** Serializes worker reads; retirement never waits for the I/O monitor on the caller. */
+    public static final class ForwardCursorSession {
+        private final Object lock = new Object();
+        private final java.util.concurrent.atomic.AtomicBoolean closing =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        private ForwardCursor cursor;
+
+        @FunctionalInterface
+        public interface Read<T> { T run(ForwardCursor cursor) throws IOException; }
+
+        public <T> T read(Read<T> operation) throws IOException {
+            checkInterrupted();
+            synchronized (lock) {
+                checkInterrupted();
+                if (closing.get()) throw new InterruptedIOException("TXT cursor session retired");
+                if (cursor == null) cursor = new ForwardCursor();
+                try { return operation.run(cursor); }
+                finally { if (closing.get()) closeLocked(); }
+            }
+        }
+
+        public void closeAsync() {
+            if (!closing.compareAndSet(false, true)) return;
+            // Independent of the activity executors: shutdownNow must not discard cleanup.
+            new Thread(() -> {
+                synchronized (lock) { closeLocked(); }
+            }, "ReadwideTxtCursorClose").start();
+        }
+
+        private void closeLocked() {
+            if (cursor != null) {
+                cursor.closeQuietly();
+                cursor = null;
+            }
+        }
+    }
+
     /**
-     * Session-scoped forward read cursor. A partition's first load used to
-     * stream the file from line 1 every time, so sequential reading of a huge
-     * file cost O(N^2) total decode work. The cursor keeps the session's
-     * reader open together with the tiny streaming state (next canonical line,
-     * emitted-char total, the blank-collapse flag, and the one already-decoded
-     * carry line consumed past the previous window), so FORWARD requests
-     * continue from where the last read stopped; backward jumps, file or
-     * encoding or collapse changes, and display-rule edits (versioned) reset
-     * it to a fresh scan, which also re-primes it. Owner (the read controller)
-     * must serialize access and close it on teardown.
+     * Forward reads reuse the decoded line queue and reader position. Backward
+     * jumps or source/encoding/transform changes reset to a fresh scan. Access
+     * and teardown are serialized by the owning ForwardCursorSession.
      */
     public static final class ForwardCursor {
         String filePath;
@@ -348,6 +572,10 @@ public final class LargeTextPartitionReader {
             int rulesVersion,
             @NonNull LineTransform lineTransform,
             ForwardCursor cursor) throws IOException {
+        // Bind both a fresh stream and a resumed queue to the source observed
+        // before the read. Never stamp old buffered text with newer metadata.
+        final long sourceLength = file.length();
+        final long sourceModified = file.lastModified();
         LargeTextContinuityMath.PartitionWindow window =
                 LargeTextContinuityMath.partitionWindowForStartLine(
                         requestedStartLine,
@@ -363,7 +591,7 @@ public final class LargeTextPartitionReader {
 
         StringBuilder out = new StringBuilder();
         long baseChars = 0L;
-        int line = 1;
+        long line = 1L;
         int bodyStartCharCount = 0;
         int bodyCharCount = 0;
         boolean capturedAny = false;
@@ -399,9 +627,11 @@ public final class LargeTextPartitionReader {
         long tailChars = 0L;
         String carryText = null;
         boolean hitEof = false;
+        long nextLineChar = baseChars;
         try {
             boolean firstCapturedLine = true;
             while (true) {
+                checkInterrupted();
                 String emitted;
                 boolean fromPending = !pending.isEmpty();
                 if (fromPending) {
@@ -422,13 +652,16 @@ public final class LargeTextPartitionReader {
                     emitted = collapseFilter.accept(normalized);
                     if (emitted == null) continue;
                 }
-                int lineChars = emitted.length() + 1; // TextView normalizes line breaks to '\n'.
+                LargeTextCoordinateMath.checkedLineNumber(line);
+                long afterLineChar = LargeTextCoordinateMath.advancePastLine(nextLineChar, emitted.length());
+                long lineChars = afterLineChar - nextLineChar;
+                nextLineChar = afterLineChar;
 
                 if (tailBuf != null && line <= bodyEndLine && tailKeep > 0) {
                     tailBuf.addLast(emitted);
                     tailChars += lineChars;
                     if (tailBuf.size() > tailKeep) {
-                        tailChars -= tailBuf.pollFirst().length() + 1;
+                        tailChars -= tailBuf.pollFirst().length() + 1L;
                     }
                 }
                 if (line < windowStartLine) {
@@ -459,7 +692,15 @@ public final class LargeTextPartitionReader {
                 }
                 line++;
             }
-        } catch (IOException e) {
+            // Cancellation must close the in-progress reader before publishing a cursor.
+            checkInterrupted();
+            LargeTextCoordinateMath.checkedPosition(baseChars);
+            LargeTextCoordinateMath.checkedPosition(baseChars + out.length());
+            if (!file.isFile() || file.length() != sourceLength
+                    || file.lastModified() != sourceModified) {
+                throw new IOException("TXT changed while reading a partition");
+            }
+        } catch (IOException | RuntimeException | Error e) {
             if (reader != null) {
                 try {
                     reader.close();
@@ -477,7 +718,7 @@ public final class LargeTextPartitionReader {
             // emitted line below the checkpoint is accounted for: pre-window
             // lines in baseChars, window lines up to the body end in
             // bodyCharCount (k joined lines always total length+1 chars).
-            int checkpointLine = Math.min(bodyEndLine + 1, line);
+            long checkpointLine = Math.min((long) bodyEndLine + 1L, line);
             java.util.ArrayDeque<String> nextQueue = new java.util.ArrayDeque<>();
             int tailSize = tailBuf != null ? tailBuf.size() : 0;
             if (tailBuf != null) nextQueue.addAll(tailBuf);
@@ -487,8 +728,8 @@ public final class LargeTextPartitionReader {
             boolean sourceLeft = !hitEof || !nextQueue.isEmpty();
             if (sourceLeft) {
                 cursor.filePath = file.getAbsolutePath();
-                cursor.fileLength = file.length();
-                cursor.fileModified = file.lastModified();
+                cursor.fileLength = sourceLength;
+                cursor.fileModified = sourceModified;
                 cursor.encoding = encoding;
                 cursor.collapseBlankLines = collapseBlankLines;
                 cursor.rulesVersion = rulesVersion;
@@ -500,7 +741,9 @@ public final class LargeTextPartitionReader {
                     reader = null;
                 }
                 cursor.reader = reader;
-                cursor.queueStartLine = checkpointLine - tailSize;
+                // A one-past-last checkpoint may be MAX+1; queued real rows
+                // bring it back into the validated line-number range.
+                cursor.queueStartLine = (int) (checkpointLine - tailSize);
                 cursor.charsBeforeQueue =
                         baseChars + (capturedAny ? bodyCharCount + 1L : 0L) - tailChars;
                 cursor.prevEmittedBlank = collapseFilter.isPrevEmittedBlank();
@@ -533,7 +776,7 @@ public final class LargeTextPartitionReader {
                 startLine,
                 bodyEndLine,
                 knownTotalLines,
-                (int) Math.max(0L, Math.min(Integer.MAX_VALUE, baseChars)),
+                (int) baseChars, // range checked before publishing or retaining a cursor
                 bodyStartCharCount,
                 bodyCharCount,
                 windowStartLine,

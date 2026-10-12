@@ -24,6 +24,7 @@ final class ReaderLargeTextJumpController {
             activity.scrollToCharPosition(charPosition);
             return;
         }
+        if (!activity.ensureLoadedTextCurrent()) return;
 
         if (activity.largeTextActivePartitionUsesLookbehind) {
             activity.reloadLargeTextPreviewAround(
@@ -47,12 +48,14 @@ final class ReaderLargeTextJumpController {
                 return;
             }
 
+            activity.cancelLargeTextPartitionSwitchForLocalJump();
             if (activity.isActiveSearchTarget(resolvedPosition)) {
                 activity.scrollToSearchResultPosition(resolvedPosition);
             } else {
                 activity.scrollToCharPosition(resolvedPosition);
             }
             activity.recomputeLargeTextDisplayPageOffset(displayPage, totalPages);
+            activity.textContentReadyForPersistence = true;
             activity.updatePositionLabel();
             return;
         }

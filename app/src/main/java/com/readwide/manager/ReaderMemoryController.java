@@ -1,18 +1,18 @@
 package com.readwide.manager;
 
+import com.readwide.manager.util.ReaderSaveAnchorMath;
+
 import android.content.Intent;
 
 import androidx.annotation.NonNull;
 
 import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.util.ReaderRestoreTargetMath;
-import com.readwide.manager.util.ReaderSaveAnchorMath;
-import com.readwide.manager.view.CustomReaderView;
-
-import java.io.File;
 
 final class ReaderMemoryController {
     private final ReaderActivity activity;
+    private static final String EXTRA_BACKGROUND_LAYOUT_SIGNATURE = "txt_background_layout_signature";
+    private static final String UNAPPLIED_LAYOUT_SIGNATURE = "txt-layout-unapplied-v1";
 
     ReaderMemoryController(@NonNull ReaderActivity activity) {
         this.activity = activity;
@@ -43,6 +43,15 @@ final class ReaderMemoryController {
             discardTransientRestoreStateForNewLoad();
             return false;
         }
+        // The source/policy may change after memory was released. The old
+        // context is still useful, but its page hints no longer describe it.
+        if (!activity.loadedTextMatchesCurrentSourceAndTransform()
+                || !activity.hasCurrentReaderLayoutPreferences()
+                || !activity.readerPageLayoutSignatureForPath(activity.filePath).equals(
+                        restoreIntent.getStringExtra(EXTRA_BACKGROUND_LAYOUT_SIGNATURE))) {
+            discardRestorePageHints(restoreIntent);
+        }
+        restoreIntent.removeExtra(EXTRA_BACKGROUND_LAYOUT_SIGNATURE);
         activity.backgroundTextMemoryReleased = false;
         activity.backgroundTextRestoreIntent = null;
         activity.clearLoadedTextSnapshot();
@@ -62,6 +71,7 @@ final class ReaderMemoryController {
      */
     void discardTransientRestoreStateForNewLoad() {
         cancelBackgroundMemoryTrim();
+        activity.cancelLargeTextBoundaryHandoffs();
         activity.backgroundTextMemoryReleased = false;
         activity.backgroundTextRestoreIntent = null;
         activity.clearLoadedTextSnapshot();
@@ -83,31 +93,21 @@ final class ReaderMemoryController {
         if (!activity.textContentReadyForPersistence || activity.activityDestroyed || activity.backgroundTextMemoryReleased || activity.filePath == null || activity.readerView == null) return;
         if (!force && !activity.isFinishing() && !activity.isChangingConfigurations() && activity.hasWindowFocus()) return;
 
-        int currentPosition = Math.max(0, activity.getBookmarkSaveCharPosition());
-        int currentDisplayPage = Math.max(1, activity.getDisplayedCurrentPageNumber());
-        int currentTotalPages = Math.max(1, activity.getDisplayedTotalPageCount());
-        String anchorBefore = activity.getAnchorTextBefore(currentPosition);
-        String anchorAfter = activity.getAnchorTextAfter(currentPosition);
-
-        Intent restoreIntent = new Intent(activity.getIntent());
-        restoreIntent.putExtra(ReaderActivity.EXTRA_FILE_PATH, activity.filePath);
-        restoreIntent.removeExtra(ReaderActivity.EXTRA_FILE_URI);
-        restoreIntent.putExtra(ReaderActivity.EXTRA_JUMP_TO_POSITION, currentPosition);
-        restoreIntent.putExtra(ReaderActivity.EXTRA_JUMP_DISPLAY_PAGE, currentDisplayPage);
-        restoreIntent.putExtra(ReaderActivity.EXTRA_JUMP_TOTAL_PAGES, currentTotalPages);
-        if (activity.largeTextEstimateActive) {
-            restoreIntent.putExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_BYTE, activity.largeTextPartitionStartByte);
-            restoreIntent.putExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE, activity.largeTextPartitionStartLine);
+        // Persist and restore one coherent target. A pending explicit jump can
+        // point outside the old window; a viewport handoff still owns its top row.
+        ReaderState state = withoutStaleLayoutHints(captureReadingState());
+        if (state == null) return;
+        boolean currentContent = activity.loadedTextMatchesCurrentSourceAndTransform();
+        activity.backgroundTextRestoreIntent = backgroundRestoreIntent(activity.getIntent(), state);
+        if (!currentContent) discardRestorePageHints(activity.backgroundTextRestoreIntent);
+        if (currentContent && activity.prefs != null && activity.prefs.getAutoSavePosition()) {
+            activity.bookmarkManager.saveReadingState(state);
         }
-        if (!anchorBefore.isEmpty()) restoreIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE, anchorBefore);
-        if (!anchorAfter.isEmpty()) restoreIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER, anchorAfter);
-        activity.backgroundTextRestoreIntent = restoreIntent;
-
-        saveReadingState();
         activity.textContentReadyForPersistence = false;
         activity.clearLoadedTextSnapshot();
 
         // Cancel outstanding readers/indexers/searches before dropping their backing data.
+        activity.cancelLargeTextBoundaryHandoffs();
         activity.clearTextSearchWork();
         activity.loadGeneration.incrementAndGet();
         activity.largeTextPartitionSwitchGeneration.incrementAndGet();
@@ -162,6 +162,9 @@ final class ReaderMemoryController {
     }
 
     void releaseReaderMemory() {
+        activity.cancelPendingFileLayout();
+        activity.cancelPendingSnapshotRestore();
+        activity.cancelLargeTextBoundaryHandoffs();
         activity.textContentReadyForPersistence = false;
         activity.clearTextSearchWork();
         activity.activeSearchQuery = "";
@@ -204,57 +207,120 @@ final class ReaderMemoryController {
     }
 
     void saveReadingState() {
+        if (activity.prefs == null || !activity.prefs.getAutoSavePosition()) return;
+        ReaderState state = captureReadingStateForPersistence();
+        if (state != null) activity.bookmarkManager.saveReadingState(state);
+    }
+
+    ReaderState captureReadingStateForPersistence() {
+        // Unlike recreation/reload targets, durable state must not label old
+        // text with a changed file/decoding policy. Never start a reload here:
+        // this method also runs from onDestroy after workers are cancelled.
+        if (!activity.loadedTextMatchesCurrentSourceAndTransform()) return null;
+        return withoutStaleLayoutHints(captureReadingState());
+    }
+
+    private ReaderState withoutStaleLayoutHints(ReaderState state) {
+        if (state != null && !activity.hasCurrentReaderLayoutPreferences()) {
+            // Character/context still belongs to the loaded text. Only the page
+            // and pixel hints depend on rendering settings not yet on screen.
+            state.setPageNumber(0);
+            state.setTotalPages(0);
+            state.setScrollY(0);
+            state.setPresentationSignature(UNAPPLIED_LAYOUT_SIGNATURE);
+        }
+        return state;
+    }
+
+    private static void discardRestorePageHints(Intent restored) {
+        restored.removeExtra(ReaderActivity.EXTRA_JUMP_DISPLAY_PAGE);
+        restored.removeExtra(ReaderActivity.EXTRA_JUMP_TOTAL_PAGES);
+        restored.putExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION, true);
+    }
+
+    static Intent backgroundRestoreIntent(Intent launch, ReaderState state) {
+        Intent restored = new Intent(launch);
+        restored.putExtra(ReaderActivity.EXTRA_FILE_PATH, state.getFilePath());
+        // Keep the launch URI as ownership evidence for SAF/picker opens. The
+        // loader prefers the resolved local path, but the still-current launch
+        // may name only the URI; removing it makes our own restore look stale.
+        // The saved character may be in lookbehind/lookahead or in a queued
+        // destination. Never force it into the old canonical partition.
+        restored.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_BYTE);
+        restored.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE);
+        restored.putExtra(ReaderActivity.EXTRA_JUMP_TO_POSITION, state.getCharPosition());
+        restored.putExtra(ReaderActivity.EXTRA_JUMP_DISPLAY_PAGE, state.getPageNumber());
+        restored.putExtra(ReaderActivity.EXTRA_JUMP_TOTAL_PAGES, state.getTotalPages());
+        restored.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE, state.getAnchorTextBefore());
+        restored.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER, state.getAnchorTextAfter());
+        restored.putExtra(EXTRA_BACKGROUND_LAYOUT_SIGNATURE, state.getPresentationSignature());
+        return restored;
+    }
+
+    /**
+     * Instance-state capture may retain an owned destination before layout. This
+     * must not weaken normal autosave's guard against mixed/failed-load content.
+     */
+    ReaderState captureReadingStateForRecreation() {
+        ReaderState ready = captureReadingState();
+        if (ready != null || activity.backgroundTextMemoryReleased) return ready;
+        int destination = activity.largeTextPartitionSwitchState.destinationChar();
+        if (!activity.largeTextEstimateActive || activity.filePath == null
+                || !activity.largeTextPartitionSwitchState.isInProgress() || destination < 0) {
+            return null;
+        }
+        // The applier has retained this absolute target while waiting for layout.
+        // A queued explicit jump remains authoritative, even outside this window.
+        ReaderState pending = new ReaderState(activity.filePath);
+        pending.setCharPosition(destination);
+        long local = (long) destination - activity.largeTextPreviewBaseCharOffset;
+        boolean inWindow = activity.fileContent != null
+                && local >= 0 && local < activity.fileContent.length();
+        pending.setAnchorTextBefore(inWindow ? activity.getAnchorTextBefore(destination) : "");
+        pending.setAnchorTextAfter(inWindow ? activity.getAnchorTextAfter(destination) : "");
+        return pending;
+    }
+
+    ReaderState captureReadingState() {
         // A pending/failed load can retain the previous view and path after
         // clearing its text and partition base. Only save after this load's
         // position is restored, or those mixed coordinates overwrite the real
         // reading state. A completed empty file is still safe to save.
-        if (!activity.textContentReadyForPersistence || activity.backgroundTextMemoryReleased) return;
-        if (activity.filePath != null && activity.prefs.getAutoSavePosition()) {
+        if (!activity.textContentReadyForPersistence || activity.backgroundTextMemoryReleased
+                || activity.readerView == null || !activity.readerView.hasCurrentTextLayout()) return null;
+        if (activity.filePath != null) {
             ReaderState state = new ReaderState(activity.filePath);
             int savePosition = activity.getBookmarkSaveCharPosition();
             String anchorBefore = activity.getAnchorTextBefore(savePosition);
             String anchorAfter = activity.getAnchorTextAfter(savePosition);
 
-            // During an in-flight large-TXT partition switch, getDisplayedCurrentPageNumber()
-            // already returns the *pending* page (LargeTextPageModelMath.displayedCurrentPage
-            // prefers pendingDisplayPage). If we saved the raw readerView char position and
-            // anchors here, the persisted pageNumber (pending) and charPosition/anchors
-            // (current view) would disagree, so a pause mid-switch could restore to the
-            // wrong place. When the exact page index is ready, override all three from the
-            // pending page's exact anchor so they stay consistent with the saved pageNumber.
-            // The anchor carries its own before/after text built from the correct partition,
-            // which is why we take them from the anchor rather than re-deriving from
-            // fileContent (the pending page may live in a partition not currently loaded).
-            if (activity.largeTextEstimateActive
-                    && activity.largeTextPartitionSwitchState.isInProgress()
-                    && activity.isLargeTextExactPageIndexReady()) {
-                int pendingPage = activity.largeTextPartitionSwitchState.pendingDisplayPage();
-                CustomReaderView.PageTextAnchor anchor = pendingPage > 0
-                        ? activity.getExactLargeTextAnchorForPage(pendingPage) : null;
-                if (ReaderSaveAnchorMath.shouldUsePendingPageAnchor(
-                        activity.largeTextEstimateActive,
-                        activity.largeTextPartitionSwitchState.isInProgress(),
-                        activity.isLargeTextExactPageIndexReady(),
-                        pendingPage,
-                        anchor != null)) {
-                    savePosition = anchor.charPosition;
-                    anchorBefore = anchor.anchorTextBefore;
-                    anchorAfter = anchor.anchorTextAfter;
-                }
+            // Save the request's character, not its old estimated page number
+            // interpreted against anchors that may have just become ready.
+            // Automatic window replacement still saves the visible row.
+            int destination = activity.largeTextPartitionSwitchState.destinationChar();
+            if (ReaderSaveAnchorMath.shouldUsePendingTarget(activity.largeTextEstimateActive,
+                    activity.largeTextPartitionSwitchState.isInProgress(),
+                    activity.largeTextPartitionSwitchState.shouldPreserveVisiblePosition(), destination)) {
+                savePosition = destination;
+                long local = (long) destination - activity.largeTextPreviewBaseCharOffset;
+                boolean inWindow = activity.fileContent != null
+                        && local >= 0 && local < activity.fileContent.length();
+                anchorBefore = inWindow ? activity.getAnchorTextBefore(destination) : "";
+                anchorAfter = inWindow ? activity.getAnchorTextAfter(destination) : "";
             }
 
             state.setCharPosition(savePosition);
             state.setScrollY(activity.readerView != null ? activity.readerView.getReaderScrollY() : 0);
-            state.setPageNumber(activity.getDisplayedCurrentPageNumber());
+            state.setPageNumber(activity.getStatusCurrentPageNumber());
             state.setTotalPages(activity.getDisplayedTotalPageCount());
             state.setAnchorTextBefore(anchorBefore);
             state.setAnchorTextAfter(anchorAfter);
-            if (activity.filePath != null) {
-                File f = new File(activity.filePath);
-                if (f.exists()) state.setFileLength(f.length());
-            }
+            // This coordinate belongs to the loaded bytes, not a newer file
+            // that may now exist at the same path.
+            if (activity.contentsSourceLength >= 0L) state.setFileLength(activity.contentsSourceLength);
             state.setPresentationSignature(activity.readerPageLayoutSignatureForPath(activity.filePath));
-            activity.bookmarkManager.saveReadingState(state);
+            return state;
         }
+        return null;
     }
 }

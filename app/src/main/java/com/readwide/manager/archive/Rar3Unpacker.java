@@ -14,12 +14,36 @@ import java.io.OutputStream;
  *
  * <p>Native libarchive remains primary. Production decoding streams LZ/PPMd blocks through
  * shared raw history and standard-filter output; the extractor restricts extended solid
- * admission to CRC/boundary-checked plain runs. Mixed-mode and new solid behavior still
- * require real-fixture runtime validation. The old array PPMd adapter below is test-only.</p>
+ * admission to CRC/boundary-checked plain runs. Independent AES/split entries instead supply
+ * a bounded logical stream without solid history. Mixed-mode and newly admitted input paths
+ * still require real-fixture runtime validation. The old array PPMd adapter below is test-only.</p>
  */
 final class Rar3Unpacker {
 
     private Rar3Unpacker() {}
+
+    private static void checkpoint(FileOperationProgress progress) throws java.io.InterruptedIOException {
+        if (Thread.currentThread().isInterrupted() || (progress != null && !progress.checkpoint())) {
+            throw new java.io.InterruptedIOException("RAR extraction cancelled");
+        }
+    }
+
+    private static OutputStream streamingTarget(RarDecodedOutput out, FileOperationProgress progress) {
+        return new OutputStream() {
+            @Override public void write(int value) throws IOException {
+                checkpoint(progress);
+                out.writeDecodedByte(value);
+                if (progress != null) progress.addDoneBytes(1);
+                checkpoint(progress);
+            }
+            @Override public void write(byte[] bytes, int offset, int length) throws IOException {
+                checkpoint(progress);
+                out.writeDecodedBytes(bytes, offset, length);
+                if (progress != null) progress.addDoneBytes(length);
+                checkpoint(progress);
+            }
+        };
+    }
 
     static void unpack(@NonNull Rar3UnpackContext context,
                        @NonNull File outFile,
@@ -57,7 +81,7 @@ final class Rar3Unpacker {
                                                      @Nullable FileOperationProgress progress,
                                                      boolean failOnCrcMismatch) throws IOException {
         context.ensureUsable();
-        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        checkpoint(progress);
         File parent = outFile.getParentFile();
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
             throw new IOException("Could not create RAR output directory");
@@ -101,7 +125,7 @@ final class Rar3Unpacker {
                                                        @NonNull RarCrcDecodedOutput checked,
                                                        @Nullable FileOperationProgress progress,
                                                        boolean failOnCrcMismatch) throws IOException {
-        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        checkpoint(progress);
         context.resetWindow();
         if (context.windowSize() <= 0 || (!context.solid && context.writePosition() != 0)) {
             throw new RarArchiveReader.UnsupportedRarFeatureException("Invalid RAR3/RAR4 unpacker state");
@@ -111,7 +135,8 @@ final class Rar3Unpacker {
             boolean reuse = context.reuseClassicTables();
             context.setReuseClassicTables(false);
             result = unpackStreamingPayload(context, new RarBitInput(packed, context.packedSize),
-                    checked, !failOnCrcMismatch, reuse);
+                    checked, !failOnCrcMismatch, reuse, progress);
+            context.finishPackedPayload(progress);
         }
         if (result.written != context.unpackedSize || checked.written() != context.unpackedSize) {
             throw new RarArchiveReader.UnsupportedRarFeatureException(
@@ -155,7 +180,7 @@ final class Rar3Unpacker {
                                                   @NonNull RarDecodedOutput out,
                                                   @Nullable FileOperationProgress progress,
                                                   boolean collectClassicLzTrace) throws IOException {
-        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        checkpoint(progress);
         boolean reuseClassicTables = context.reuseClassicTables();
         context.setReuseClassicTables(false);
         // A table-less solid payload starts with Huffman data, not a PPMd mode bit.
@@ -167,7 +192,7 @@ final class Rar3Unpacker {
         }
 
         return unpackStreamingPayload(context, new RarBitInput(packed), out,
-                collectClassicLzTrace, reuseClassicTables);
+                collectClassicLzTrace, reuseClassicTables, progress);
     }
 
     @NonNull
@@ -175,25 +200,34 @@ final class Rar3Unpacker {
                                                          @NonNull RarBitInput input,
                                                          @NonNull RarDecodedOutput out,
                                                          boolean collectClassicLzTrace,
-                                                         boolean reuseClassicTables) throws IOException {
+                                                         boolean reuseClassicTables,
+                                                         @Nullable FileOperationProgress progress) throws IOException {
         long limit = Math.max(0L, context.unpackedSize);
 
-        OutputStream target = new OutputStream() {
-            @Override public void write(int value) throws IOException { out.writeDecodedByte(value); }
-            @Override public void write(byte[] b, int off, int len) throws IOException {
-                out.writeDecodedBytes(b, off, len);
-            }
-        };
-        // Only pending standard-filter regions are retained; normal bytes flow to the checked sink.
+        OutputStream target = streamingTarget(out, progress);
+        // Only pending filter regions are retained; normal bytes flow to the checked sink.
         // This stream never closes/commits the caller's file. Failure leaves cleanup to its guard.
         try (Rar3PpmdFilterOutput filtered = new Rar3PpmdFilterOutput(
                 new java.io.BufferedOutputStream(target, 64 * 1024), limit, context.vmFilterState(),
-                4 * 1024 * 1024)) {
+                4 * 1024 * 1024, context.deferredFilters())) {
             OutputStream clipped = new OutputStream() {
-                private long published;
                 @Override public void write(int value) throws IOException {
                     // Preserve legacy final-match dictionary surplus, without publishing it.
-                    if (published < limit) { filtered.write(value); published++; }
+                    if (filtered.rawBytesUntilBoundary() > 0) filtered.write(value);
+                    else if (filtered.needsInput()) throw new IOException("RAR3 filter starts beyond final entry size");
+                }
+                @Override public void write(byte[] bytes, int offset, int length) throws IOException {
+                    if (bytes == null) throw new NullPointerException("bytes");
+                    if ((offset | length) < 0 || length > bytes.length - offset) throw new IndexOutOfBoundsException();
+                    while (length > 0) {
+                        int count = (int) Math.min(length, filtered.rawBytesUntilBoundary());
+                        if (count == 0) {
+                            if (filtered.needsInput()) throw new IOException("RAR3 filter starts beyond final entry size");
+                            return; // Legacy final LZ match surplus stays in raw history.
+                        }
+                        filtered.write(bytes, offset, count);
+                        offset += count; length -= count;
+                    }
                 }
             };
             RarLzWindow window = context.openWindow(clipped);
@@ -204,12 +238,13 @@ final class Rar3Unpacker {
             if (context.requiresFileBoundary() && !engine.fileEndSeen()) {
                 throw new IOException("RAR3 solid fallback requires an explicit file boundary");
             }
-            filtered.finish();
+            filtered.finish(engine.fileEndSeen());
+            checkpoint(progress);
             System.arraycopy(engine.tableState(), 0, context.oldTableLengths(), 0,
                     Math.min(engine.tableState().length, context.oldTableLengths().length));
             context.saveWindow(window);
             context.setReuseClassicTables(engine.reuseTablesForNextEntry());
-            return new Rar3DecodeResult(Math.min(window.written(), limit), input.bitsRead(),
+            return new Rar3DecodeResult(filtered.outputBytes(), input.bitsRead(),
                     Math.max(1, engine.tableReads()),
                     collectClassicLzTrace ? new Rar3ClassicLzStateTrace().snapshot() : null);
         }
@@ -222,7 +257,7 @@ final class Rar3Unpacker {
                                                        @NonNull RarDecodedOutput out,
                                                        @Nullable FileOperationProgress progress,
                                                        @NonNull Rar3PpmdBlockHeader ppmdHeader) throws IOException {
-        if (progress != null && !progress.checkpoint()) throw new IOException("RAR extraction cancelled");
+        checkpoint(progress);
         long limit = Math.max(0L, context.unpackedSize);
         java.io.ByteArrayOutputStream collected = new java.io.ByteArrayOutputStream(
                 (int) Math.min(Math.max(limit, 0L), 1 << 24));

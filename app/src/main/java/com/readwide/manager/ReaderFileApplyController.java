@@ -1,14 +1,22 @@
 package com.readwide.manager;
 
+import android.content.Intent;
+import android.view.View;
+
 import androidx.annotation.NonNull;
 
 import com.readwide.manager.model.LargeTextLinePartitionResult;
 import com.readwide.manager.model.ReaderState;
 import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.TextDisplayRuleManager;
+import com.readwide.manager.util.TextSearchMath;
+import com.readwide.manager.view.CustomReaderView;
 
 final class ReaderFileApplyController {
     private final ReaderActivity activity;
+    private CustomReaderView pendingLayoutView;
+    private View.OnLayoutChangeListener pendingLayoutListener;
+    private Runnable pendingLayoutCheck;
 
     ReaderFileApplyController(@NonNull ReaderActivity activity) {
         this.activity = activity;
@@ -36,7 +44,8 @@ final class ReaderFileApplyController {
                                   int partitionStartLine,
                                   int partitionEndLine,
                                   int partitionTotalLines) {
-        final int layoutGeneration = activity.loadGeneration.get();
+        cancelPendingLayout();
+        activity.textContentReadyForPersistence = false;
         applyDocumentIdentity(previewContent, previewLineCount, loadedFilePath, loadedFileName);
         applyLargeTextPreviewState(
                 fullByteLength,
@@ -56,8 +65,7 @@ final class ReaderFileApplyController {
                 partitionTotalLines);
         renderLoadedContent(true);
 
-        activity.readerView.post(() -> {
-            if (activity.activityDestroyed || layoutGeneration != activity.loadGeneration.get()) return;
+        finishWhenLayoutReady(() -> {
             finishLargeTextPreviewLayout(
                 jumpPosition,
                 cachedDisplayPage,
@@ -74,7 +82,8 @@ final class ReaderFileApplyController {
                       int jumpPosition,
                       String jumpAnchorBefore,
                       String jumpAnchorAfter) {
-        final int layoutGeneration = activity.loadGeneration.get();
+        cancelPendingLayout();
+        activity.textContentReadyForPersistence = false;
         boolean replacingLargePreview = activity.largeTextEstimateActive;
         int preservePosition = replacingLargePreview ? activity.getCurrentCharPosition() : -1;
         int deferredRestorePosition = activity.pendingLargeTextRestorePosition;
@@ -83,8 +92,7 @@ final class ReaderFileApplyController {
         applyNormalTextState();
         renderLoadedContent(false);
 
-        activity.readerView.post(() -> {
-            if (activity.activityDestroyed || layoutGeneration != activity.loadGeneration.get()) return;
+        finishWhenLayoutReady(() -> {
             finishNormalTextLayout(
                 replacingLargePreview,
                 preservePosition,
@@ -95,13 +103,57 @@ final class ReaderFileApplyController {
         });
     }
 
+    /** Keep first-load completion owned by the adopted text, not a queued post. */
+    private void finishWhenLayoutReady(Runnable finish) {
+        final CustomReaderView targetView = activity.readerView;
+        if (targetView == null) return;
+        final int loadGeneration = activity.loadGeneration.get();
+        final int switchGeneration = activity.largeTextPartitionSwitchGeneration.get();
+        final String expectedPath = activity.filePath;
+        final String expectedContent = activity.fileContent;
+        pendingLayoutView = targetView;
+        pendingLayoutCheck = () -> {
+            if (activity.activityDestroyed || loadGeneration != activity.loadGeneration.get()
+                    || switchGeneration != activity.largeTextPartitionSwitchGeneration.get()
+                    || targetView != activity.readerView || expectedContent != activity.fileContent
+                    || targetView.getTextContent() != expectedContent
+                    || !java.util.Objects.equals(expectedPath, activity.filePath)) {
+                cancelPendingLayout();
+            } else if (targetView.hasCurrentTextLayout()) {
+                // Landing can synchronously notify scrolling. Detach before reentry.
+                cancelPendingLayout();
+                if (!activity.ensureLoadedTextCurrent()) return;
+                finish.run();
+            }
+        };
+        pendingLayoutListener = (view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
+                finishPendingLayoutIfReady();
+        targetView.addOnLayoutChangeListener(pendingLayoutListener);
+        // Sized views rebuild synchronously in setTextContent; no frame delay needed.
+        finishPendingLayoutIfReady();
+    }
+
+    void finishPendingLayoutIfReady() {
+        // Style/inset changes can make geometry usable without changing View bounds.
+        if (pendingLayoutCheck != null) pendingLayoutCheck.run();
+    }
+
+    void cancelPendingLayout() {
+        if (pendingLayoutView != null && pendingLayoutListener != null) {
+            pendingLayoutView.removeOnLayoutChangeListener(pendingLayoutListener);
+        }
+        pendingLayoutView = null;
+        pendingLayoutListener = null;
+        pendingLayoutCheck = null;
+    }
+
     private void applyDocumentIdentity(String content,
                                        int lineCount,
                                        String loadedFilePath,
                                        String loadedFileName) {
         activity.filePath = loadedFilePath;
-        activity.appliedTextDisplayRuleSignature =
-                activity.textContentTransformSignatureForPath(activity.filePath);
+        // The loader has already published the transform and source stamps
+        // captured for these bytes. Do not replace them with live preferences.
         activity.fileName = com.readwide.manager.util.FileUtils.displayNameOrBasename(
                 loadedFileName, loadedFilePath, activity.getString(R.string.app_name));
         activity.updateReaderFileTitle();
@@ -207,7 +259,8 @@ final class ReaderFileApplyController {
                 ? activity.filePath
                 : activity.fileName;
         activity.readerView.setMarkdownHighlightingEnabled(FileUtils.isMarkdownFile(markdownName));
-        activity.readerView.setTextContent(activity.fileContent);
+        activity.readerView.setTextContent(activity.fileContent,
+                activity.loadedTextWindowReachesDocumentEnd());
         activity.refreshTxtAnnotationHighlights();
         activity.applySearchHighlight();
     }
@@ -247,9 +300,15 @@ final class ReaderFileApplyController {
         }
 
         updateLargeTextEstimatedPageModel();
+        int completedLoad = activity.loadGeneration.get();
+        // Check saved exact anchors as soon as the first partition is laid out.
+        // The debounced callback below still handles later inset/layout changes.
+        if (activity.filePath != null) activity.startLargeTextExactPageIndexing(activity.filePath);
+        if (completedLoad != activity.loadGeneration.get()) return;
         activity.updatePositionLabel();
         activity.scheduleLargeTextExactPageIndexingRestart();
         activity.prefetchNeighborLargeTextPartitions();
+        if (completedLoad != activity.loadGeneration.get()) return;
         activity.textContentReadyForPersistence = true;
         activity.readerView.setAlpha(1f);
         activity.hideLoadingWindow();
@@ -269,39 +328,47 @@ final class ReaderFileApplyController {
                                                     int cachedTotalPages,
                                                     String jumpAnchorBefore,
                                                     String jumpAnchorAfter) {
-        int anchoredRestorePosition = activity.resolveAnchoredAbsolutePosition(
-                activity.fileContent,
-                activity.largeTextPreviewBaseCharOffset,
-                restorePosition,
-                jumpAnchorBefore,
-                jumpAnchorAfter);
+        // The general in-window resolver clamps an unmatched fallback to this
+        // buffer. Initial restoration must retain an outside character so the
+        // loader can select its real owner instead of saving a buffer-edge jump.
+        int fallbackLocal = (int) Math.max(0L, Math.min(activity.fileContent.length(),
+                (long) restorePosition - activity.largeTextPreviewBaseCharOffset));
+        int matchedLocal = TextSearchMath.findBestAnchorPosition(activity.fileContent,
+                fallbackLocal, jumpAnchorBefore, jumpAnchorAfter);
+        int anchoredRestorePosition = matchedLocal >= 0
+                ? activity.largeTextPreviewBaseCharOffset + matchedLocal
+                : Math.max(0, restorePosition);
         int localRestorePosition = anchoredRestorePosition - activity.largeTextPreviewBaseCharOffset;
         if (localRestorePosition >= 0 && localRestorePosition < activity.fileContent.length()) {
             activity.scrollToCharPosition(anchoredRestorePosition);
             return true;
         }
-        if (localRestorePosition < 0 && activity.hasPreviousLargeTextPartition()) {
-            activity.reloadLargeTextPreviewAround(
-                    anchoredRestorePosition,
-                    cachedDisplayPage,
-                    cachedTotalPages,
-                    jumpAnchorBefore,
-                    jumpAnchorAfter,
-                    activity.getLargeTextPartitionStartLineForLine(
-                            activity.largeTextPartitionStartLine - activity.getLargeTextPartitionLines()));
+        if ((localRestorePosition < 0 && activity.hasPreviousLargeTextPartition())
+                || (localRestorePosition >= activity.fileContent.length()
+                        && activity.hasNextLargeTextPartition())) {
+            // This is still the initial load: an ordinary in-place switch does
+            // not reveal its alpha-zero view, close its loading overlay or start
+            // its exact index. Re-enter the owned load lifecycle at the resolved
+            // character, without carrying a stale partition hint forward.
+            Intent reload = new Intent(activity.getIntent());
+            reload.putExtra(ReaderActivity.EXTRA_FILE_PATH, activity.filePath);
+            reload.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE);
+            reload.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_BYTE);
+            reload.putExtra(ReaderActivity.EXTRA_JUMP_TO_POSITION, anchoredRestorePosition);
+            reload.putExtra(ReaderActivity.EXTRA_JUMP_DISPLAY_PAGE, cachedDisplayPage);
+            reload.putExtra(ReaderActivity.EXTRA_JUMP_TOTAL_PAGES, cachedTotalPages);
+            reload.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE, jumpAnchorBefore);
+            reload.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER, jumpAnchorAfter);
+            activity.loadFileFromIntent(reload);
             return false;
         }
-        if (localRestorePosition >= activity.fileContent.length() && activity.hasNextLargeTextPartition()) {
-            activity.reloadLargeTextPreviewAround(
-                    anchoredRestorePosition,
-                    cachedDisplayPage,
-                    cachedTotalPages,
-                    jumpAnchorBefore,
-                    jumpAnchorAfter,
-                    activity.getLargeTextPartitionStartLineForLine(activity.largeTextPartitionEndLine + 1));
-            return false;
-        }
-        activity.pendingLargeTextRestorePosition = anchoredRestorePosition;
+        // No neighboring window can own this coordinate (notably EOF after
+        // truncation). Land now: large TXT never receives the normal/full-text
+        // callback that would consume pendingLargeTextRestorePosition later.
+        activity.scrollToCharPosition(ReaderLargeTextPartitionApplier.clampResolvedPosition(
+                anchoredRestorePosition, activity.largeTextPreviewBaseCharOffset,
+                activity.fileContent, activity.loadedTextWindowReachesDocumentEnd()));
+        activity.pendingLargeTextRestorePosition = -1;
         return true;
     }
 

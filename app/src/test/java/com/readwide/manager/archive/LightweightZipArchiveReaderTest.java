@@ -3,6 +3,8 @@ package com.readwide.manager.archive;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 
 import net.lingala.zip4j.ZipFile;
 import net.lingala.zip4j.model.ZipParameters;
@@ -38,6 +40,65 @@ public class LightweightZipArchiveReaderTest {
         assertEquals("images/", entries.get(0).path);
         assertEquals("images/page000.txt", entries.get(1).path);
         assertEquals(7, entries.size());
+    }
+
+    @Test public void existingFileCannotSatisfyZipDirectoryEntry() throws Exception {
+        File archive = namedZip("earlier.txt", "folder/");
+        File output = tempFolder.newFolder();
+        File collision = new File(output, "folder");
+        Files.write(collision.toPath(), new byte[]{42});
+        assertThrows(java.io.IOException.class,
+                () -> LightweightZipArchiveReader.extractArchiveIntoDirectory(archive, output));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(collision.toPath()));
+        assertFalse(new File(output, "earlier.txt").exists());
+    }
+
+    @Test public void existingParentCollisionFailsBeforeParallelZipWorkersStart() throws Exception {
+        File archive = namedZip("first.txt", "second.txt", "third.txt", "folder/page.txt");
+        File output = tempFolder.newFolder();
+        File collision = new File(output, "folder");
+        Files.write(collision.toPath(), new byte[]{42});
+        assertThrows(java.io.IOException.class,
+                () -> LightweightZipArchiveReader.extractArchiveIntoDirectory(archive, output));
+        assertEquals(1, output.list().length);
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(collision.toPath()));
+    }
+
+    @Test public void zipCannotReplaceExistingDirectoryWithAFile() throws Exception {
+        File archive = namedZip("earlier.txt", "folder");
+        File output = tempFolder.newFolder();
+        File directory = new File(output, "folder");
+        assertTrue(directory.mkdir());
+        Files.write(new File(directory, "keep").toPath(), new byte[]{42});
+        assertThrows(java.io.IOException.class,
+                () -> LightweightZipArchiveReader.extractArchiveIntoDirectory(archive, output));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(new File(directory, "keep").toPath()));
+        assertFalse(new File(output, "earlier.txt").exists());
+    }
+
+    @Test public void zipAcceptsExistingRealDirectoryAndRejectsFileRoot() throws Exception {
+        File archive = namedZip("folder/", "folder/page.txt");
+        File output = tempFolder.newFolder();
+        assertTrue(new File(output, "folder").mkdir());
+        assertTrue(LightweightZipArchiveReader.extractArchiveIntoDirectory(archive, output));
+        assertArrayEquals(new byte[]{1}, Files.readAllBytes(new File(output, "folder/page.txt").toPath()));
+        File fileRoot = tempFolder.newFile();
+        Files.write(fileRoot.toPath(), new byte[]{42});
+        assertThrows(java.io.IOException.class,
+                () -> LightweightZipArchiveReader.extractArchiveIntoDirectory(archive, fileRoot));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(fileRoot.toPath()));
+    }
+
+    private File namedZip(String... names) throws Exception {
+        File archive = tempFolder.newFile();
+        try (ZipOutputStream output = new ZipOutputStream(new FileOutputStream(archive))) {
+            for (String name : names) {
+                output.putNextEntry(new ZipEntry(name));
+                if (!name.endsWith("/")) output.write(new byte[]{1});
+                output.closeEntry();
+            }
+        }
+        return archive;
     }
 
     @Test

@@ -1,1 +1,7 @@
 -keep class com.readwide.codecs.ZipxNativeCodecs { *; }
+-keep class com.readwide.codecs.LzFamilyInputStream { *; }
+-keep class com.readwide.codecs.CabNativeDecoder { *; }
+-keep class com.readwide.codecs.CabNativeDecoder$Entry { *; }
+-keep class com.readwide.codecs.PpmdZipInputStream { *; }
+-keep class com.readwide.codecs.PpmdZipInputStream$DataException { *; }
+-keep class com.readwide.codecs.LzhamInputStream { *; }

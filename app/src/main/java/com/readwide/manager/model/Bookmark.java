@@ -369,7 +369,8 @@ public class Bookmark {
 
     private int getPcEditPosition() {
         if (lineNumber > 0) return lineNumber;
-        return Math.max(1, charPosition + 1);
+        // Only the 1-based editing hint saturates; the stored character is unchanged.
+        return (int) Math.max(1L, Math.min(Integer.MAX_VALUE, (long) charPosition + 1L));
     }
 
     public int getPcEditPositionForManager() {

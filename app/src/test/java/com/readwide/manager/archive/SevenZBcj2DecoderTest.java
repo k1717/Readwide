@@ -45,16 +45,16 @@ public class SevenZBcj2DecoderTest {
     @Test public void convertedJumpUsesJumpStreamAndWrapsRelativeAddress() throws Exception {
         assertArrayEquals(new byte[] {(byte) 0xe9, (byte) 0xfb, (byte) 0xff, (byte) 0xff, (byte) 0xff},
                 SevenZBcj2Decoder.decode(new byte[] {(byte) 0xe9}, new byte[0], new byte[4],
-                        new byte[] {0, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff}, 5));
+                        new byte[] {0, 0x7f, (byte) 0xff, (byte) 0xfc, 0}, 5));
     }
 
     @Test public void truncatedControlMainAndAddressAreIoFailures() throws Exception {
         expectFailure(bytes(65), empty(), new byte[4], 1);
         expectFailure(empty(), empty(), new byte[5], 1);
         expectFailure(bytes(0xe8), bytes(0, 0, 0),
-                new byte[] {0, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff}, 5);
+                new byte[] {0, 0x7f, (byte) 0xff, (byte) 0xfc, 0}, 5);
         expectFailure(bytes(0xe8), bytes(0, 0, 0, 5),
-                new byte[] {0, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff}, 4);
+                new byte[] {0, 0x7f, (byte) 0xff, (byte) 0xfc, 0}, 4);
     }
 
     @Test public void closeReleasesEveryInputEvenIfOneCloseFails() throws Exception {
@@ -88,8 +88,53 @@ public class SevenZBcj2DecoderTest {
         } catch (IOException expected) { }
     }
 
+    @Test public void reservedInitialRangeCodeIsRejectedEvenForEmptyOutput() throws Exception {
+        try (InputStream decoded = SevenZBcj2Decoder.decodeStream(empty(), empty(), empty(), bytes(0,255,255,255,255), 0)) {
+            org.junit.Assert.assertThrows(IOException.class, () -> decoded.read());
+        }
+    }
+
+    @Test public void truncatedAddressFailureIsStickyAfterPartialStateChange() throws Exception {
+        try (InputStream decoded = SevenZBcj2Decoder.decodeStream(bytes(0xe8,65), bytes(0,0,0), empty(), convertedControl(), 5)) {
+            IOException first = org.junit.Assert.assertThrows(IOException.class, () -> decoded.read());
+            org.junit.Assert.assertSame(first, org.junit.Assert.assertThrows(IOException.class, () -> decoded.read()));
+        }
+    }
+
+    @Test public void interruptionStopsPendingAddressAndRemainsTerminal() throws Exception {
+        try (InputStream decoded = SevenZBcj2Decoder.decodeStream(bytes(0xe8), bytes(0,0,0,5), empty(), convertedControl(), 5)) {
+            assertEquals(0xe8, decoded.read());
+            Thread.currentThread().interrupt();
+            try { org.junit.Assert.assertThrows(java.io.InterruptedIOException.class, () -> decoded.read()); }
+            finally { Thread.interrupted(); }
+            org.junit.Assert.assertThrows(java.io.InterruptedIOException.class, () -> decoded.read());
+        }
+    }
+
+    @Test public void uncheckedCloseFailureStillClosesAllInputs() throws Exception {
+        TrackingInput main = new TrackingInput(new byte[0]) {
+            @Override public void close() throws IOException { super.close(); throw new IllegalStateException("close"); }
+        };
+        TrackingInput call = new TrackingInput(new byte[0]), jump = new TrackingInput(new byte[0]), rc = new TrackingInput(new byte[5]);
+        InputStream decoded = SevenZBcj2Decoder.decodeStream(main, call, jump, rc, 0);
+        org.junit.Assert.assertThrows(IllegalStateException.class, decoded::close);
+        assertTrue(main.closed && call.closed && jump.closed && rc.closed);
+        decoded.close();
+    }
+
+    @Test public void sharedCloseFailureDoesNotAbortRemainingCloses() throws Exception {
+        IOException shared = new IOException("shared");
+        TrackingInput throwing = new TrackingInput(new byte[0]) {
+            @Override public void close() throws IOException { super.close(); throw shared; }
+        };
+        TrackingInput rc = new TrackingInput(new byte[5]);
+        InputStream decoded = SevenZBcj2Decoder.decodeStream(throwing, throwing, throwing, rc, 0);
+        org.junit.Assert.assertSame(shared, org.junit.Assert.assertThrows(IOException.class, decoded::close));
+        assertTrue(rc.closed);
+    }
+
     private static InputStream empty() { return bytes(); }
-    private static InputStream convertedControl() { return bytes(0, 255, 255, 255, 255); }
+    private static InputStream convertedControl() { return bytes(0, 127, 255, 252, 0); }
     private static InputStream bytes(int... values) {
         byte[] data = new byte[values.length];
         for (int i = 0; i < values.length; i++) data[i] = (byte) values[i];

@@ -48,8 +48,6 @@ final class SevenZPpmd7Decoder {
     private static final int MIN_ORDER = 2;
     private static final int MAX_ORDER = 64;
     private static final int MIN_MEM = 1 << 11;
-    /** Cap on the model memory declared by the archive, to bound allocations. */
-    private static final int MAX_MEM = 1 << 28; // 256 MiB
 
     private static final int[] K_INIT_BIN_ESC = {0x3CDD, 0x1F3F, 0x59BF, 0x48F3, 0x64A1, 0x5ABC, 0x6632, 0x6051};
     private static final int[] K_EXP_ESCAPE = {25, 14, 9, 7, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2};
@@ -128,6 +126,8 @@ final class SevenZPpmd7Decoder {
                 if (count < 0) throw new EOFException("7z PPMd output ended early");
                 offset += count;
             }
+            // Also validates the range initializer for zero-length output.
+            if (decoded.read() != -1) throw new IOException("7z PPMd output size mismatch");
             return out;
         }
     }
@@ -142,7 +142,7 @@ final class SevenZPpmd7Decoder {
         return new DecodedStream(packed, options[0], options[1], unpackSize);
     }
 
-    /** Validates the existing model guard without constructing or reading a decoder. */
+    /** Validate format properties and array indexing without allocating the model. */
     static int[] validateProperties(@Nullable byte[] properties) throws IOException {
         if (properties == null || properties.length < 5) {
             throw new IOException("7z PPMd properties missing");
@@ -153,9 +153,12 @@ final class SevenZPpmd7Decoder {
         if (order < MIN_ORDER || order > MAX_ORDER) {
             throw new IOException("7z PPMd order out of range: " + order);
         }
-        if (mem < MIN_MEM || mem > MAX_MEM) {
+        // Include alignment and the sentinel unit in the signed array length.
+        // No app-imposed model-memory quota; allocation can still fail on the device.
+        long arraySize = mem + 4 - (mem & 3) + UNIT_SIZE;
+        if (mem < MIN_MEM || arraySize > Integer.MAX_VALUE) {
             throw new ArchiveSupport.UnsupportedArchiveFeatureException(
-                    "7z PPMd memory size unsupported: " + mem);
+                    "7z PPMd model cannot be represented by the byte-array decoder: " + mem);
         }
         return new int[]{order, (int) mem};
     }
@@ -168,6 +171,7 @@ final class SevenZPpmd7Decoder {
         private SevenZPpmd7Decoder decoder;
         private IOException failure;
         private boolean closed;
+        private boolean finished;
 
         DecodedStream(InputStream packed, int order, int memory, long size) {
             this.packed = packed; this.order = order; this.memory = memory; remaining = size;
@@ -185,7 +189,10 @@ final class SevenZPpmd7Decoder {
             if (length == 0) return 0;
             try {
                 checkCancelled();
-                if (remaining == 0) return -1;
+                if (remaining == 0) {
+                    finish();
+                    return -1;
+                }
                 if (decoder == null) decoder = new SevenZPpmd7Decoder(order, memory, packed);
                 int count = (int) Math.min(remaining, length);
                 for (int i = 0; i < count; i++) {
@@ -196,7 +203,8 @@ final class SevenZPpmd7Decoder {
                     position++;
                     remaining--;
                 }
-                if (remaining == 0) decoder = null;
+                // Check before returning the last bytes, even if the caller never reads EOF.
+                if (remaining == 0) finish();
                 return count;
             } catch (IOException error) {
                 retire(error);
@@ -205,15 +213,31 @@ final class SevenZPpmd7Decoder {
                 IOException wrapped = new IOException("Invalid 7z PPMd model state", error);
                 retire(wrapped);
                 throw wrapped;
+            } catch (OutOfMemoryError error) {
+                IOException wrapped = new IOException("Not enough memory for the 7z PPMd model", error);
+                retire(wrapped);
+                throw wrapped;
             } catch (Error error) {
                 retire(new IOException("7z PPMd decoder aborted", error));
                 throw error;
             }
         }
 
+        private void finish() throws IOException {
+            if (finished) return;
+            // Empty output still has a range initializer, but needs no PPMd model.
+            long finalCode = decoder == null ? readInitialCode(packed) : decoder.code;
+            // Ppmd7z_RangeDec_IsFinishedOK in the public-domain reference.
+            if (finalCode != 0) throw new IOException("7z PPMd range coder did not finish");
+            decoder = null;
+            finished = true;
+        }
+
         private void retire(IOException error) {
             failure = error;
-            try { close(); } catch (IOException closeError) { error.addSuppressed(closeError); }
+            try { close(); } catch (IOException | RuntimeException | Error closeError) {
+                if (closeError != error) error.addSuppressed(closeError);
+            }
         }
 
         @Override public void close() throws IOException {
@@ -918,6 +942,10 @@ final class SevenZPpmd7Decoder {
 
     // ---- range decoder (7z Ppmd7z variant) ----
     private int inByte() throws IOException {
+        return readPackedByte(input);
+    }
+
+    private static int readPackedByte(InputStream input) throws IOException {
         checkCancelled();
         int value = input.read();
         if (value < 0) throw new EOFException("Truncated 7z PPMd range stream");
@@ -925,15 +953,20 @@ final class SevenZPpmd7Decoder {
     }
 
     private void rangeInit() throws IOException {
-        code = 0;
         range = 0xFFFFFFFFL;
-        if (inByte() != 0) {
+        code = readInitialCode(input);
+    }
+
+    private static long readInitialCode(InputStream input) throws IOException {
+        long code = 0;
+        if (readPackedByte(input) != 0) {
             throw new IOException("7z PPMd range coder header invalid");
         }
         for (int i = 0; i < 4; i++) {
-            code = ((code << 8) | inByte()) & 0xFFFFFFFFL;
+            code = ((code << 8) | readPackedByte(input)) & 0xFFFFFFFFL;
         }
         if (code == 0xFFFFFFFFL) throw new IOException("7z PPMd range coder state invalid");
+        return code;
     }
 
     private void rangeNormalize() throws IOException {

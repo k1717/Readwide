@@ -85,7 +85,8 @@ final class DocumentHwpLayoutExtractor {
         HWPFile hwp = HWPReader.fromFile(file);
         if (hwp == null || hwp.getBodyText() == null) return null;
         List<BorderFill> borderFills = hwp.getDocInfo() != null ? hwp.getDocInfo().getBorderFillList() : null;
-        float pageWidthPt = hwpContentWidthPt(hwp);
+        PageMetrics pageMetrics = readBinaryPageMetrics(firstHwpPageDefinition(hwp));
+        float pageWidthPt = pageMetrics.widthPt - pageMetrics.marginLeftPt - pageMetrics.marginRightPt;
 
         ArrayList<RenderedBlock> blocks = new ArrayList<>();
         Map<Integer, byte[]> embeddedImages = hwpEmbeddedBinaryDataById(hwp);
@@ -137,16 +138,8 @@ final class DocumentHwpLayoutExtractor {
         // extraction).
         if ((!sawTable && !sawImage) || blocks.isEmpty()) return null;
 
-        RenderedPage.Builder page = RenderedPage.builder(0)
-                .pageSizePt(DEFAULT_PAGE_WIDTH_PT, DEFAULT_PAGE_HEIGHT_PT)
-                .marginsPt(DEFAULT_MARGIN_TOP_PT, DEFAULT_MARGIN_RIGHT_PT,
-                        DEFAULT_MARGIN_BOTTOM_PT, DEFAULT_MARGIN_LEFT_PT);
-        for (RenderedBlock block : blocks) page.addBlock(block);
-        return RenderedDocument.builder("hwp")
-                .title(title != null ? title : "HWP")
-                .addPage(page.build())
-                .plainText(plainText != null ? plainText : "")
-                .build();
+        return buildDocument(title, "hwp", blocks, paragraphsPerPage, targetCharsPerPage,
+                pageMetrics, plainText);
     }
 
     static RenderedTable renderedTableFromControl(ControlTable control, List<BorderFill> borderFills) {
@@ -191,6 +184,16 @@ final class DocumentHwpLayoutExtractor {
                         .colSpan(colSpan)
                         .rowSpan(rowSpan);
                 if (edges != null) builder.borderEdges(edges[0], edges[1], edges[2], edges[3]);
+                if (h != null && h.getProperty() != null) {
+                    String vertical = String.valueOf(h.getProperty().getTextVerticalAlignment());
+                    if ("Center".equalsIgnoreCase(vertical)) builder.verticalAlignment(RenderedTableCell.VerticalAlignment.MIDDLE);
+                    else if ("Bottom".equalsIgnoreCase(vertical)) builder.verticalAlignment(RenderedTableCell.VerticalAlignment.BOTTOM);
+                    else if ("Top".equalsIgnoreCase(vertical)) builder.verticalAlignment(RenderedTableCell.VerticalAlignment.TOP);
+                    if (h.getProperty().isApplyInnerMagin()) {
+                        builder.paddingPt(h.getTopMargin() / 100f, h.getRightMargin() / 100f,
+                                h.getBottomMargin() / 100f, h.getLeftMargin() / 100f);
+                    }
+                }
                 if (h != null && totalWidthUnits > 0 && h.getWidth() > 0) {
                     builder.widthPercent((float) (h.getWidth() * 100.0 / totalWidthUnits));
                 }
@@ -209,7 +212,8 @@ final class DocumentHwpLayoutExtractor {
             if (!rendered.isEmpty()) rows.add(rendered);
         }
         if (rows.isEmpty()) return null;
-        return new RenderedTable(rows, 100f);
+        return new RenderedTable(rows, 100f, null, totalWidthUnits > 0 ? totalWidthUnits / 100f : null,
+                null, null);
     }
 
     /** A cell shows a border when its resolved BorderFill has any non-None edge. */
@@ -534,11 +538,9 @@ final class DocumentHwpLayoutExtractor {
     }
 
     /**
-     * Page content width (left/right margins removed) in points, found from the
-     * section definition's PageDef. HWP stores lengths in HWPUNIT (1pt = 100).
-     * Returns -1 when no page definition is available.
+     * First available binary page definition. Mixed-section layout remains approximate.
      */
-    private static float hwpContentWidthPt(HWPFile hwp) {
+    private static PageDef firstHwpPageDefinition(HWPFile hwp) {
         try {
             for (Section section : hwp.getBodyText().getSectionList()) {
                 if (section == null) continue;
@@ -547,11 +549,7 @@ final class DocumentHwpLayoutExtractor {
                     for (Control control : paragraph.getControlList()) {
                         if (control instanceof ControlSectionDefine) {
                             PageDef pd = ((ControlSectionDefine) control).getPageDef();
-                            if (pd != null && pd.getPaperWidth() > 0) {
-                                long content = pd.getPaperWidth() - pd.getLeftMargin() - pd.getRightMargin();
-                                if (content <= 0) content = pd.getPaperWidth();
-                                return content / 100f;
-                            }
+                            if (pd != null && pd.getPaperWidth() > 0 && pd.getPaperHeight() > 0) return pd;
                         }
                     }
                 }
@@ -559,7 +557,26 @@ final class DocumentHwpLayoutExtractor {
         } catch (Exception ignored) {
             // fall through
         }
-        return -1f;
+        return null;
+    }
+
+    private static PageMetrics readBinaryPageMetrics(PageDef definition) {
+        PageMetrics metrics = PageMetrics.defaults();
+        if (definition == null) return metrics;
+        metrics.widthPt = definition.getPaperWidth() / 100f;
+        metrics.heightPt = definition.getPaperHeight() / 100f;
+        if (definition.getProperty() != null
+                && "Landscape".equalsIgnoreCase(String.valueOf(definition.getProperty().getPaperDirection()))
+                && metrics.widthPt < metrics.heightPt) {
+            float width = metrics.widthPt;
+            metrics.widthPt = metrics.heightPt;
+            metrics.heightPt = width;
+        }
+        metrics.marginTopPt = definition.getTopMargin() / 100f;
+        metrics.marginRightPt = definition.getRightMargin() / 100f;
+        metrics.marginBottomPt = definition.getBottomMargin() / 100f;
+        metrics.marginLeftPt = definition.getLeftMargin() / 100f;
+        return metrics;
     }
 
     /**
@@ -698,7 +715,7 @@ final class DocumentHwpLayoutExtractor {
                 RenderedDocument structural = extractBinaryHwpStructure(
                         file, title != null ? title : name, text, paragraphsPerPage, targetCharsPerPage);
                 if (structural != null && structural.pageCount() > 0) return structural;
-            } catch (Throwable ignored) {
+            } catch (Exception | LinkageError ignored) {
                 // Fall back to the heuristic official-letter / plain-text paths.
             }
         }
@@ -734,7 +751,7 @@ final class DocumentHwpLayoutExtractor {
         }
         if (blocks.isEmpty()) throw new IllegalArgumentException("HWPX contains no renderable blocks");
         return buildDocument(title, "hwpx", blocks, paragraphsPerPage, targetCharsPerPage,
-                context != null ? context.pageMetrics : PageMetrics.defaults());
+                context != null ? context.pageMetrics : PageMetrics.defaults(), null);
     }
 
 
@@ -978,12 +995,12 @@ final class DocumentHwpLayoutExtractor {
         if (blocks.isEmpty()) {
             blocks.add(RenderedBlock.paragraph(RenderedParagraph.of(RenderedRun.text(""))));
         }
-        return buildDocument(title, format, blocks, paragraphsPerPage, targetCharsPerPage, PageMetrics.defaults());
+        return buildDocument(title, format, blocks, paragraphsPerPage, targetCharsPerPage, PageMetrics.defaults(), null);
     }
 
     private static RenderedDocument buildDocument(String title, String format, List<RenderedBlock> blocks,
                                                   int paragraphsPerPage, int targetCharsPerPage,
-                                                  PageMetrics pageMetrics) {
+                                                  PageMetrics pageMetrics, String plainText) {
         int blockBudget = Math.max(4, paragraphsPerPage > 0 ? paragraphsPerPage : DEFAULT_PARAGRAPHS_PER_PAGE);
         int charBudget = Math.max(900, targetCharsPerPage > 0 ? targetCharsPerPage : DEFAULT_TARGET_CHARS_PER_PAGE);
         ArrayList<RenderedPage> pages = new ArrayList<>();
@@ -994,6 +1011,7 @@ final class DocumentHwpLayoutExtractor {
 
         RenderedDocument.Builder document = RenderedDocument.builder(format != null ? format : "hwp").title(title != null ? title : "HWP");
         for (RenderedPage page : pages) document.addPage(page);
+        if (plainText != null) document.plainText(plainText);
         return document.build();
     }
 
@@ -1168,6 +1186,18 @@ final class DocumentHwpLayoutExtractor {
 
     private static RenderedTableCell readHwpxTableCell(Node cellNode, HwpxDocumentContext context) {
         RenderedTableCell.Builder builder = RenderedTableCell.builder().borderVisible(true);
+        String vertical = firstAttr(cellNode, false, "vertAlign", "verticalAlign", "vAlign");
+        if (vertical == null) {
+            for (Node child = cellNode.getFirstChild(); child != null; child = child.getNextSibling()) {
+                if ("subList".equals(localName(child))) {
+                    vertical = attr(child, "vertAlign", "verticalAlign", "vAlign");
+                    break;
+                }
+            }
+        }
+        if ("CENTER".equalsIgnoreCase(vertical) || "MIDDLE".equalsIgnoreCase(vertical)) builder.verticalAlignment(RenderedTableCell.VerticalAlignment.MIDDLE);
+        else if ("BOTTOM".equalsIgnoreCase(vertical)) builder.verticalAlignment(RenderedTableCell.VerticalAlignment.BOTTOM);
+        else if ("TOP".equalsIgnoreCase(vertical)) builder.verticalAlignment(RenderedTableCell.VerticalAlignment.TOP);
         int colSpan = intAttr(cellNode, 1, "colSpan", "colspan", "colCnt", "colCount");
         int rowSpan = intAttr(cellNode, 1, "rowSpan", "rowspan", "rowCnt", "rowCount");
         if (colSpan > 1) builder.colSpan(colSpan);
@@ -1505,11 +1535,19 @@ final class DocumentHwpLayoutExtractor {
         String bg = colorAttrDeep(node, recursive, "backgroundColor", "bgColor", "shadeColor", "fillColor", "highlightColor");
         if (color != null) info.color = color;
         if (bg != null) info.backgroundColor = bg;
-        String vert = firstAttr(node, recursive, "vertAlign", "verticalAlign", "superscript", "subscript");
+        // HWPX uses empty hh:supscript / hh:subscript elements; their names are
+        // the value, unlike a vertAlign attribute. Do not interpret "false" as a script.
+        Boolean superscript = booleanStyle(node, recursive, "supscript", "superscript");
+        Boolean subscript = booleanStyle(node, recursive, "subscript");
+        if (Boolean.TRUE.equals(superscript)) info.verticalAlign = TextStyle.VerticalAlign.SUPERSCRIPT;
+        else if (Boolean.TRUE.equals(subscript)) info.verticalAlign = TextStyle.VerticalAlign.SUBSCRIPT;
+        else if (superscript != null || subscript != null) info.verticalAlign = TextStyle.VerticalAlign.BASELINE;
+        String vert = firstAttr(node, recursive, "vertAlign", "verticalAlign");
         if (vert != null) {
             String lower = vert.toLowerCase(Locale.ROOT);
             if (lower.contains("super")) info.verticalAlign = TextStyle.VerticalAlign.SUPERSCRIPT;
             else if (lower.contains("sub")) info.verticalAlign = TextStyle.VerticalAlign.SUBSCRIPT;
+            else if ("baseline".equals(lower) || "normal".equals(lower)) info.verticalAlign = TextStyle.VerticalAlign.BASELINE;
         }
         return info.toStyleOrNull();
     }
@@ -1979,15 +2017,15 @@ final class DocumentHwpLayoutExtractor {
 
         void apply(TextStyle style) {
             if (style == null) return;
-            fontFamily = style.fontFamily;
-            fontSizePt = style.fontSizePt;
-            bold = style.bold;
-            italic = style.italic;
-            underline = style.underline;
-            strike = style.strike;
-            color = style.color;
-            backgroundColor = style.backgroundColor;
-            verticalAlign = style.verticalAlign;
+            if (style.fontFamily != null) fontFamily = style.fontFamily;
+            if (style.fontSizePt != null) fontSizePt = style.fontSizePt;
+            if (style.bold != null) bold = style.bold;
+            if (style.italic != null) italic = style.italic;
+            if (style.underline != null) underline = style.underline;
+            if (style.strike != null) strike = style.strike;
+            if (style.color != null) color = style.color;
+            if (style.backgroundColor != null) backgroundColor = style.backgroundColor;
+            if (style.verticalAlignSpecified) verticalAlign = style.verticalAlign;
         }
 
         TextStyle toStyleOrNull() {

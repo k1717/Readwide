@@ -1455,37 +1455,32 @@ static int parse_file_extra_redir(struct archive_read* a,
     struct archive_entry* e, struct rar5 *rar5, int64_t* extra_data_size)
 {
 	uint64_t value_size = 0;
-	size_t target_size = 0;
+	uint64_t fields[3];
+	size_t target_size;
+	int i;
 	char target_utf8_buf[MAX_NAME_IN_BYTES];
 	const uint8_t* p;
 
-	if(!read_var(a, &rar5->file.redir_type, &value_size))
-		return ARCHIVE_EOF;
-	if(ARCHIVE_OK != consume(a, (int64_t)value_size))
-		return ARCHIVE_EOF;
-	*extra_data_size -= value_size;
-
-	if(!read_var(a, &rar5->file.redir_flags, &value_size))
-		return ARCHIVE_EOF;
-	if(ARCHIVE_OK != consume(a, (int64_t)value_size))
-		return ARCHIVE_EOF;
-	*extra_data_size -= value_size;
-
-	if(!read_var_sized(a, &target_size, NULL))
-		return ARCHIVE_EOF;
-	*extra_data_size -= target_size + 1;
-
-	if(target_size > (MAX_NAME_IN_CHARS - 1)) {
-		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
-		    "Link target is too long");
-		return ARCHIVE_FATAL;
+	if(rar5->file.redir_type != REDIR_TYPE_NONE)
+		goto invalid_redirection;
+	/* The caller supplies this record's body size, not the whole extra
+	 * area. Keep vint widths and 64-bit lengths until bounds are checked. */
+	for(i = 0; i < 3; i++) {
+		if(*extra_data_size <= 0 ||
+		    !read_var(a, &fields[i], &value_size) ||
+		    value_size > (uint64_t)*extra_data_size)
+			goto invalid_redirection;
+		if(ARCHIVE_OK != consume(a, (int64_t)value_size))
+			return ARCHIVE_EOF;
+		*extra_data_size -= (int64_t)value_size;
 	}
-
-	if(target_size == 0) {
-		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
-		    "No link target specified");
-		return ARCHIVE_FATAL;
-	}
+	if((fields[1] & ~(uint64_t)REDIR_SYMLINK_IS_DIR) != 0 ||
+	    fields[2] == 0 || fields[2] > MAX_NAME_IN_CHARS - 1 ||
+	    fields[2] > (uint64_t)*extra_data_size)
+		goto invalid_redirection;
+	rar5->file.redir_type = fields[0];
+	rar5->file.redir_flags = fields[1];
+	target_size = (size_t)fields[2];
 
 	if(!read_ahead(a, target_size, &p))
 		return ARCHIVE_EOF;
@@ -1495,13 +1490,16 @@ static int parse_file_extra_redir(struct archive_read* a,
 
 	if(ARCHIVE_OK != consume(a, (int64_t)target_size))
 		return ARCHIVE_EOF;
+	*extra_data_size -= (int64_t)target_size;
 
 	switch(rar5->file.redir_type) {
 		case REDIR_TYPE_UNIXSYMLINK:
 		case REDIR_TYPE_WINSYMLINK:
+		case REDIR_TYPE_JUNCTION:
 			archive_entry_set_filetype(e, AE_IFLNK);
 			archive_entry_update_symlink_utf8(e, target_utf8_buf);
-			if (rar5->file.redir_flags & REDIR_SYMLINK_IS_DIR) {
+			if (rar5->file.redir_type == REDIR_TYPE_JUNCTION ||
+			    (rar5->file.redir_flags & REDIR_SYMLINK_IS_DIR)) {
 				archive_entry_set_symlink_type(e,
 					AE_SYMLINK_TYPE_DIRECTORY);
 			} else {
@@ -1516,10 +1514,18 @@ static int parse_file_extra_redir(struct archive_read* a,
 			break;
 
 		default:
-			/* Unknown redir type, skip it. */
-			break;
+			/* File copies need target resolution, not empty regular-file
+			 * output. Let Readwide's checked fallback handle other entries. */
+			archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+			    "Unsupported RAR5 file redirection");
+			return ARCHIVE_FATAL;
 	}
 	return ARCHIVE_OK;
+
+invalid_redirection:
+	archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+	    "Invalid RAR5 redirection record");
+	return ARCHIVE_FATAL;
 }
 
 static int parse_file_extra_owner(struct archive_read* a,
@@ -1613,17 +1619,25 @@ static int process_head_file_extra(struct archive_read* a,
 		/* Make sure we won't fail if the file declares only unsupported
 		attributes. */
 		int ret = ARCHIVE_OK;
+		int64_t redirection_remaining;
 
 		if(!read_var(a, &extra_field_size, &var_size))
 			return ARCHIVE_EOF;
+		if(var_size > (uint64_t)extra_data_size)
+			goto invalid_extra_size;
 
 		extra_data_size -= var_size;
+		if(extra_field_size == 0 ||
+		    extra_field_size > (uint64_t)extra_data_size)
+			goto invalid_extra_size;
 		if(ARCHIVE_OK != consume(a, var_size)) {
 			return ARCHIVE_EOF;
 		}
 
 		if(!read_var(a, &extra_field_id, &var_size))
 			return ARCHIVE_EOF;
+		if(var_size > extra_field_size)
+			goto invalid_extra_size;
 
 		extra_field_size -= var_size;
 		extra_data_size -= var_size;
@@ -1641,8 +1655,15 @@ static int process_head_file_extra(struct archive_read* a,
 				    &extra_data_size);
 				break;
 			case EX_REDIR:
+				redirection_remaining = (int64_t)extra_field_size;
 				ret = parse_file_extra_redir(a, e, rar5,
-				    &extra_data_size);
+				    &redirection_remaining);
+				if(ret == ARCHIVE_OK) {
+					/* Ignore only trailing extension bytes in this record. */
+					if(ARCHIVE_OK != consume(a, redirection_remaining))
+						return ARCHIVE_EOF;
+					extra_data_size -= (int64_t)extra_field_size;
+				}
 				break;
 			case EX_UOWNER:
 				ret = parse_file_extra_owner(a, e,
@@ -1689,6 +1710,11 @@ static int process_head_file_extra(struct archive_read* a,
 	}
 
 	return ARCHIVE_OK;
+
+invalid_extra_size:
+	archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+	    "Invalid RAR5 extra record size");
+	return ARCHIVE_FATAL;
 }
 
 static int file_entry_sanity_checks(struct archive_read* a,

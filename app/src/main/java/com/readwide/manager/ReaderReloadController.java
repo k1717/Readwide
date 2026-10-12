@@ -8,6 +8,7 @@ import android.text.TextUtils;
 import androidx.annotation.NonNull;
 
 import com.readwide.manager.util.TextDisplayRuleManager;
+import com.readwide.manager.model.ReaderState;
 
 import java.io.File;
 
@@ -20,49 +21,54 @@ final class ReaderReloadController {
 
     boolean maybeReloadForPhysicallyEditedOriginalTxtFile() {
         if (activity.filePath == null || activity.filePath.isEmpty() || activity.readerView == null) return false;
+        if (activity.appliedTextDisplayRuleSignature.isEmpty()) return false;
         SharedPreferences markerPrefs = activity.getSharedPreferences(ReaderActivity.TXT_ACTUAL_FILE_EDIT_PREFS, Context.MODE_PRIVATE);
         String modifiedPath = markerPrefs.getString(ReaderActivity.KEY_TXT_ACTUAL_FILE_EDIT_PATH, "");
         long token = markerPrefs.getLong(ReaderActivity.KEY_TXT_ACTUAL_FILE_EDIT_TOKEN, 0L);
-        if (token <= 0L || modifiedPath == null || modifiedPath.isEmpty()) return false;
-
         File currentFile = new File(activity.filePath).getAbsoluteFile();
-        File modifiedFile = new File(modifiedPath).getAbsoluteFile();
-        if (!currentFile.getAbsolutePath().equals(modifiedFile.getAbsolutePath())) return false;
+        boolean markedEdit = token > 0L && modifiedPath != null && !modifiedPath.isEmpty()
+                && currentFile.equals(new File(modifiedPath).getAbsoluteFile());
+        boolean sourceChanged = activity.contentsSourceLength >= 0L
+                && activity.contentsSourceModified >= 0L
+                && !ReaderLoadedTextSnapshotController.sourceMatchesContent(currentFile,
+                        activity.contentsSourceLength, activity.contentsSourceModified);
+        if (!markedEdit && !sourceChanged) return false;
 
-        markerPrefs.edit()
+        if (markedEdit) markerPrefs.edit()
                 .remove(ReaderActivity.KEY_TXT_ACTUAL_FILE_EDIT_PATH)
                 .remove(ReaderActivity.KEY_TXT_ACTUAL_FILE_EDIT_TOKEN)
                 .remove(ReaderActivity.KEY_TXT_ACTUAL_FILE_EDIT_LENGTH)
                 .remove(ReaderActivity.KEY_TXT_ACTUAL_FILE_EDIT_LAST_MODIFIED)
                 .apply();
 
-        int currentPosition = Math.max(0, activity.getBookmarkSaveCharPosition());
-        String anchorBefore = activity.getAnchorTextBefore(currentPosition);
-        String anchorAfter = activity.getAnchorTextAfter(currentPosition);
-        Intent reloadIntent = new Intent(activity.getIntent());
-        reloadIntent.putExtra(ReaderActivity.EXTRA_FILE_PATH, currentFile.getAbsolutePath());
-        reloadIntent.removeExtra(ReaderActivity.EXTRA_FILE_URI);
-        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_TO_POSITION, currentPosition);
-        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION, true);
-        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE);
-        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_BYTE);
-        // The launch Intent may still contain the bookmark used to open this
-        // reader. Empty current context must clear that old anchor as well.
-        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE);
-        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER);
-        if (anchorBefore != null && !anchorBefore.isEmpty()) {
-            reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE, anchorBefore);
-        }
-        if (anchorAfter != null && !anchorAfter.isEmpty()) {
-            reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER, anchorAfter);
-        }
-        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_DISPLAY_PAGE, activity.getDisplayedCurrentPageNumber());
-        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_TOTAL_PAGES, activity.getDisplayedTotalPageCount());
+        Intent reloadIntent = contentReloadIntent(currentFile.getAbsolutePath());
         activity.clearLoadedTextSnapshot();
         activity.resetLargeTextExactPageIndex();
         activity.clearLargeTextPartitionCache();
+        activity.invalidateTxtTtsCheckpoint();
         activity.loadFileFromIntent(reloadIntent);
         return true;
+    }
+
+    /** UI-thread admission gate for disk-derived results and cached partitions. */
+    boolean ensureLoadedTextCurrent() {
+        if (activity.activityDestroyed || activity.filePath == null
+                || activity.contentsSourceLength < 0L || activity.contentsSourceModified < 0L) return false;
+        if (maybeReloadForPhysicallyEditedOriginalTxtFile()) return false;
+        if (!currentTextDisplayRuleSignature().equals(activity.appliedTextDisplayRuleSignature)) {
+            maybeReloadForTextDisplayRuleChange();
+            return false;
+        }
+        if (activity.largeTextEstimateActive && maybeReloadForLargeTextPartitionModeChange()) return false;
+        return true;
+    }
+
+    /** Read-only ownership check, also safe during final lifecycle persistence. */
+    boolean loadedTextMatchesCurrentSourceAndTransform() {
+        return activity.filePath != null && !activity.filePath.isEmpty()
+                && ReaderLoadedTextSnapshotController.sourceMatchesContent(new File(activity.filePath),
+                        activity.contentsSourceLength, activity.contentsSourceModified)
+                && currentTextDisplayRuleSignature().equals(activity.appliedTextDisplayRuleSignature);
     }
 
     boolean maybeReloadForLargeTextPartitionModeChange() {
@@ -75,61 +81,32 @@ final class ReaderReloadController {
         }
         if (activity.appliedLargeTextPartitionMode == currentMode) return false;
 
-        activity.appliedLargeTextPartitionMode = currentMode;
-        activity.resetLargeTextExactPageIndex();
-        activity.clearLargeTextPartitionCache();
-        activity.resetLargeTextPageDirectionTracking();
-        activity.clearLargeTextQueuedPageDelta();
-
-        // The old total/page denominator belongs to the previous partition
-        // policy.  Do not carry it through the mode switch as a stable total;
-        // let the refreshed partition produce a new immediate estimate, then
-        // let the full exact-index rebuild replace it with the authoritative
-        // page model.
-        activity.largeTextEstimatedTotalPages = 0;
-        activity.largeTextEstimatedBasePageOffset = 0;
-        activity.pendingLargeTextCachedDisplayPage = 0;
-        activity.pendingLargeTextCachedTotalPages = 0;
-
         if (!activity.largeTextEstimateActive || activity.readerView == null || activity.filePath == null || activity.filePath.isEmpty()) {
+            activity.appliedLargeTextPartitionMode = currentMode;
             return false;
         }
 
-        int currentPosition = Math.max(0, activity.getBookmarkSaveCharPosition());
-        activity.reloadLargeTextPreviewAround(currentPosition, 0, 0, null, null, -1, true);
-        // A partition-mode change alters the global page model, not just the
-        // visible runtime partition.  Rebuild the full exact page index under
-        // the new 4000/400 or 12000/600 model so totalPages, bookmark cached
-        // page metadata, slider/go-to-page anchors, and tap paging all converge
-        // to the same denominator after the mode switch.
-        activity.scheduleLargeTextExactPageIndexingRestart();
+        // Policy replacement is a new load, not an ordinary adjacent handoff.
+        // Capture its owned destination before invalidating the old window.
+        // The normal load path clears old totals/cache, waits for layout and
+        // indexes the replacement. Only acceptLoad publishes its applied mode;
+        // a failed read cannot relabel the old window with the requested mode.
+        Intent reload = contentReloadIntent(activity.filePath);
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION);
+        activity.clearLoadedTextSnapshot();
+        activity.loadFileFromIntent(reload);
         return true;
     }
 
     void maybeReloadForTextDisplayRuleChange() {
         if (activity.filePath == null || activity.filePath.isEmpty() || activity.readerView == null) return;
+        // A fresh load owns its target until acceptLoad validates the policy.
+        // onResume must not replace that target with the old/empty viewport.
+        if (activity.appliedTextDisplayRuleSignature.isEmpty()) return;
         String current = textContentTransformSignatureForPath(activity.filePath);
         if (current.equals(activity.appliedTextDisplayRuleSignature)) return;
-        int currentPosition = Math.max(0, activity.getBookmarkSaveCharPosition());
-        String anchorBefore = activity.getAnchorTextBefore(currentPosition);
-        String anchorAfter = activity.getAnchorTextAfter(currentPosition);
-        Intent reloadIntent = new Intent(activity.getIntent());
-        reloadIntent.putExtra(ReaderActivity.EXTRA_FILE_PATH, activity.filePath);
-        reloadIntent.removeExtra(ReaderActivity.EXTRA_FILE_URI);
-        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_TO_POSITION, currentPosition);
-        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION, true);
-        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE);
-        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_BYTE);
-        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE);
-        reloadIntent.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER);
-        if (anchorBefore != null && !anchorBefore.isEmpty()) {
-            reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE, anchorBefore);
-        }
-        if (anchorAfter != null && !anchorAfter.isEmpty()) {
-            reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER, anchorAfter);
-        }
-        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_DISPLAY_PAGE, activity.getDisplayedCurrentPageNumber());
-        reloadIntent.putExtra(ReaderActivity.EXTRA_JUMP_TOTAL_PAGES, activity.getDisplayedTotalPageCount());
+        activity.invalidateTxtTtsCheckpoint();
+        Intent reloadIntent = contentReloadIntent(activity.filePath);
         // A blank-line-collapse change (and, to a lesser degree, a display-rule
         // change) shifts character positions, line numbers, and the large-TXT
         // page model, so drop the cached exact page index, partition cache, and
@@ -146,11 +123,45 @@ final class ReaderReloadController {
         activity.loadFileFromIntent(reloadIntent);
     }
 
+    private Intent contentReloadIntent(String path) {
+        ReaderState target = activity.captureReaderViewport();
+        int position = target != null ? target.getCharPosition()
+                : Math.max(0, activity.getBookmarkSaveCharPosition());
+        String before = target != null ? target.getAnchorTextBefore() : activity.getAnchorTextBefore(position);
+        String after = target != null ? target.getAnchorTextAfter() : activity.getAnchorTextAfter(position);
+        Intent reload = new Intent(activity.getIntent());
+        reload.putExtra(ReaderActivity.EXTRA_FILE_PATH, path);
+        reload.removeExtra(ReaderActivity.EXTRA_FILE_URI);
+        reload.putExtra(ReaderActivity.EXTRA_JUMP_TO_POSITION, position);
+        reload.putExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION, true);
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_LINE);
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_PARTITION_START_BYTE);
+        // Both the launch bookmark and the previous page model are obsolete.
+        // Remote queued targets intentionally have no context in the old window.
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE);
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER);
+        if (before != null && !before.isEmpty()) reload.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_BEFORE, before);
+        if (after != null && !after.isEmpty()) reload.putExtra(ReaderActivity.EXTRA_JUMP_ANCHOR_AFTER, after);
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_DISPLAY_PAGE);
+        reload.removeExtra(ReaderActivity.EXTRA_JUMP_TOTAL_PAGES);
+        return reload;
+    }
+
     String textContentTransformSignatureForPath(String path) {
         if (path == null || path.isEmpty()) return "none";
         boolean collapse = activity.prefs != null && activity.prefs.isCollapseBlankLinesEnabled();
-        return TextDisplayRuleManager.getSignature(activity.getApplicationContext(), path)
-                + "|collapseBlank=" + collapse;
+        return TextDisplayRuleManager.getExactSignature(activity.getApplicationContext(), path)
+                + "|collapseBlank=" + collapse
+                + "|manualEncoding=" + manualEncodingSignature(path);
+    }
+
+    private String manualEncodingSignature(String path) {
+        String encoding = activity.prefs == null ? null : com.readwide.manager.util.FileUtils
+                .normalizeManualEncodingName(activity.prefs.getManualTextEncodingForFile(new File(path)));
+        // Do not include the auto-detection cache: initial loading populates it.
+        // Manual decoding policy can change through backup restore while the
+        // viewer is stopped, without changing the source bytes or display rules.
+        return encoding == null ? "auto" : encoding;
     }
 
     String currentTextDisplayRuleSignature() {
@@ -162,9 +173,10 @@ final class ReaderReloadController {
     }
 
     void acknowledgeTextDisplayRuleWindowNoContentChange() {
-        if (!activity.pendingTxtDisplayRuleContentRefresh) {
-            activity.appliedTextDisplayRuleSignature = currentTextDisplayRuleSignature();
-        }
+        // Never re-tag old content with a new transform. The exact signature
+        // already ignores metadata that does not affect this file's text.
+        if (!currentTextDisplayRuleSignature().equals(activity.appliedTextDisplayRuleSignature))
+            requestTextDisplayRuleContentRefreshOnWindowClose();
     }
 
     void applyPendingTextDisplayRuleWindowRefresh() {

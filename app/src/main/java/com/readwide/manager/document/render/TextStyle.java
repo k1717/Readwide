@@ -10,7 +10,10 @@ public final class TextStyle {
     public final Boolean strike;
     public final String color;
     public final String backgroundColor;
+    /** Separate from shading so inherited highlight keeps its precedence; "none" resets it. */
+    public final String highlightColor;
     public final VerticalAlign verticalAlign;
+    public final boolean verticalAlignSpecified;
 
     public enum VerticalAlign {
         BASELINE,
@@ -27,7 +30,9 @@ public final class TextStyle {
         this.strike = b.strike;
         this.color = b.color;
         this.backgroundColor = b.backgroundColor;
+        this.highlightColor = b.highlightColor;
         this.verticalAlign = b.verticalAlign != null ? b.verticalAlign : VerticalAlign.BASELINE;
+        this.verticalAlignSpecified = b.verticalAlign != null;
     }
 
     public static TextStyle plain() {
@@ -37,7 +42,7 @@ public final class TextStyle {
     public boolean isEmpty() {
         return fontFamily == null && fontSizePt == null && bold == null && italic == null
                 && underline == null && strike == null && color == null && backgroundColor == null
-                && verticalAlign == VerticalAlign.BASELINE;
+                && highlightColor == null && !verticalAlignSpecified;
     }
 
     public static final class Builder {
@@ -49,6 +54,7 @@ public final class TextStyle {
         private Boolean strike;
         private String color;
         private String backgroundColor;
+        private String highlightColor;
         private VerticalAlign verticalAlign;
 
         public Builder fontFamily(String v) { this.fontFamily = RenderStyleUtil.emptyToNull(v); return this; }
@@ -59,6 +65,7 @@ public final class TextStyle {
         public Builder strike(boolean v) { this.strike = v; return this; }
         public Builder color(String v) { this.color = RenderStyleUtil.emptyToNull(v); return this; }
         public Builder backgroundColor(String v) { this.backgroundColor = RenderStyleUtil.emptyToNull(v); return this; }
+        public Builder highlightColor(String v) { this.highlightColor = RenderStyleUtil.emptyToNull(v); return this; }
         public Builder verticalAlign(VerticalAlign v) { this.verticalAlign = v; return this; }
         public TextStyle build() { return new TextStyle(this); }
     }

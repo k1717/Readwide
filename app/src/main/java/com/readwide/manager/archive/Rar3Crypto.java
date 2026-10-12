@@ -1,6 +1,8 @@
 package com.readwide.manager.archive;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -27,8 +29,21 @@ final class Rar3Crypto {
 
     private Rar3Crypto() {}
 
+    private static void checkpoint(FileOperationProgress progress) throws java.io.InterruptedIOException {
+        if (Thread.currentThread().isInterrupted() || (progress != null && !progress.checkpoint())) {
+            throw new java.io.InterruptedIOException("RAR password derivation cancelled");
+        }
+    }
+
     @NonNull
     static Parameters deriveParameters(@NonNull char[] password, @NonNull byte[] salt) throws IOException {
+        return deriveParameters(password, salt, null);
+    }
+
+    @NonNull
+    static Parameters deriveParameters(@NonNull char[] password, @NonNull byte[] salt,
+                                       @Nullable FileOperationProgress progress) throws IOException {
+        checkpoint(progress);
         if (salt.length != 8) {
             throw new RarArchiveReader.UnsupportedRarFeatureException("RAR3/RAR4 encrypted file salt is missing");
         }
@@ -42,10 +57,7 @@ final class Rar3Crypto {
         try {
             MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
             for (int round = 0; round < RAR3_KDF_ROUNDS; round++) {
-                if ((round & 1023) == 0 && Thread.currentThread().isInterrupted()) {
-                    java.util.Arrays.fill(passwordBytes, (byte) 0);
-                    throw new IOException("RAR password derivation cancelled");
-                }
+                if ((round & 1023) == 0) checkpoint(progress);
                 sha1.update(passwordBytes, 0, usedPasswordBytes);
                 sha1.update(salt);
                 packetCounter[0] = (byte) round;
@@ -56,9 +68,12 @@ final class Rar3Crypto {
                     iv[round / RAR3_IV_STEP] = sha1DigestSnapshot(sha1)[19];
                 }
             }
+            checkpoint(progress);
             digest = sha1.digest();
         } catch (NoSuchAlgorithmException e) {
             throw new IOException("SHA-1 is not available for RAR3/RAR4 password derivation", e);
+        } finally {
+            java.util.Arrays.fill(passwordBytes, (byte) 0);
         }
         byte[] key = new byte[16];
         for (int i = 0; i < 16; i += 4) {
@@ -67,6 +82,7 @@ final class Rar3Crypto {
             key[i + 2] = digest[i + 1];
             key[i + 3] = digest[i];
         }
+        checkpoint(progress);
         return new Parameters(key, iv);
     }
 
@@ -74,7 +90,13 @@ final class Rar3Crypto {
     @NonNull
     static Cipher createAesCbcDecryptCipher(@NonNull char[] password,
                                              @NonNull byte[] salt) throws IOException {
-        Parameters parameters = deriveParameters(password, salt);
+        return createAesCbcDecryptCipher(password, salt, null);
+    }
+
+    @NonNull
+    static Cipher createAesCbcDecryptCipher(@NonNull char[] password, @NonNull byte[] salt,
+                                             @Nullable FileOperationProgress progress) throws IOException {
+        Parameters parameters = deriveParameters(password, salt, progress);
         try {
             Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE,

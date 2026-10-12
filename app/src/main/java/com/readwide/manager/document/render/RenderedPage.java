@@ -18,18 +18,26 @@ public final class RenderedPage {
 
     private RenderedPage(Builder b) {
         this.pageIndex = b.pageIndex;
-        this.widthPt = b.widthPt > 0 ? b.widthPt : 595f;
-        this.heightPt = b.heightPt > 0 ? b.heightPt : 842f;
-        this.marginTopPt = b.marginTopPt >= 0 ? b.marginTopPt : 54f;
-        this.marginRightPt = b.marginRightPt >= 0 ? b.marginRightPt : 54f;
-        this.marginBottomPt = b.marginBottomPt >= 0 ? b.marginBottomPt : 54f;
-        this.marginLeftPt = b.marginLeftPt >= 0 ? b.marginLeftPt : 54f;
+        this.widthPt = finite(b.widthPt) && b.widthPt >= 1f ? b.widthPt : 595f;
+        this.heightPt = finite(b.heightPt) && b.heightPt >= 1f ? b.heightPt : 842f;
+        float top = safeMargin(b.marginTopPt), right = safeMargin(b.marginRightPt);
+        float bottom = safeMargin(b.marginBottomPt), left = safeMargin(b.marginLeftPt);
+        // Invalid source margins must not collapse the content area or produce invalid CSS.
+        if ((double) left + right >= widthPt) left = right = Math.min(54f, widthPt / 10f);
+        if ((double) top + bottom >= heightPt) top = bottom = Math.min(54f, heightPt / 10f);
+        this.marginTopPt = top;
+        this.marginRightPt = right;
+        this.marginBottomPt = bottom;
+        this.marginLeftPt = left;
         this.headerBlocks = immutableCopy(b.headerBlocks);
         this.footerBlocks = immutableCopy(b.footerBlocks);
         this.blocks = immutableCopy(b.blocks);
     }
 
     public static Builder builder(int pageIndex) { return new Builder(pageIndex); }
+
+    private static boolean finite(float value) { return !Float.isNaN(value) && !Float.isInfinite(value); }
+    private static float safeMargin(float value) { return finite(value) && value >= 0 ? value : 54f; }
 
     public static final class Builder {
         private final int pageIndex;

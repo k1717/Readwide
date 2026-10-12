@@ -15,8 +15,8 @@ public final class FixedHtmlRenderer {
         out.append("html,body{margin:0;padding:0;width:100%;min-height:100%;background:var(--reader-canvas,#202124);color:var(--paper-fg,#111);}");
         out.append(".rw-rendered-doc{box-sizing:border-box;width:100%;min-height:100vh;padding:0;overflow-x:hidden;overflow-y:auto;}");
         out.append(".rw-rendered-doc,.rw-rendered-doc *{word-break:normal;overflow-wrap:normal;}");
-        out.append(".rw-page{box-sizing:border-box;width:100vw;max-width:100vw;min-height:100vh;margin:0 auto;background:var(--paper-bg,#fff);color:var(--paper-fg,#111);box-shadow:none;overflow:hidden;page-break-after:always;}");
-        out.append(".rw-page-inner{box-sizing:border-box;min-height:100vh;display:flex;flex-direction:column;}");
+        out.append(".rw-page{box-sizing:border-box;width:100%;max-width:100%;margin:0 auto;background:var(--paper-bg,#fff);color:var(--paper-fg,#111);box-shadow:none;overflow:hidden;page-break-after:always;font-size:calc(12 * var(--rw-point,1pt));-webkit-text-size-adjust:none;text-size-adjust:none;}");
+        out.append(".rw-page-inner{box-sizing:border-box;min-height:var(--rw-page-min-height,100vh);display:flex;flex-direction:column;}");
         out.append(".rw-page-header,.rw-page-footer{font-size:.9em;color:#333;}");
         out.append(".rw-page-header{flex:0 0 auto;margin-bottom:.7em;}");
         out.append(".rw-page-body{flex:1 1 auto;}");
@@ -25,18 +25,18 @@ public final class FixedHtmlRenderer {
         out.append(".rw-p,.rw-list-content{overflow-wrap:break-word;}");
         out.append(".rw-list-p{display:flex;gap:.45em;align-items:baseline;break-inside:avoid;}");
         out.append(".rw-list-marker{flex:0 0 auto;min-width:1.6em;text-align:right;}");
-        out.append(".rw-list-content{flex:1 1 auto;}");
+        out.append(".rw-list-content{flex:1 1 auto;min-width:0;}");
         out.append(".rw-table{border-collapse:collapse;width:100%;margin:.65em 0;table-layout:fixed;break-inside:avoid;}");
         out.append(".rw-table td{border:1px solid #777;padding:.35em .45em;vertical-align:top;min-width:0;overflow:visible;overflow-wrap:break-word;word-break:normal;}");
         out.append(".rw-table td *{max-width:100%;overflow-wrap:break-word;word-break:normal;}");
-        out.append(".rw-table .rw-p{max-width:100%;white-space:normal;overflow-wrap:break-word;word-break:normal;}");
+        out.append(".rw-table .rw-p{max-width:100%;white-space:pre-wrap;overflow-wrap:break-word;word-break:normal;}");
         out.append(".rw-inline-math{white-space:normal;font-family:inherit;}");
         out.append(".rw-display-math{display:block;margin:.45em 0;white-space:normal;overflow-wrap:anywhere;word-break:break-word;font-family:inherit;}");
-        out.append(".rw-display-math .frac{display:inline-flex;flex-direction:column;align-items:center;vertical-align:middle;margin:0 .12em;line-height:1.05;}");
-        out.append(".rw-display-math .frac .num{border-bottom:1px solid currentColor;padding:0 .12em;}");
-        out.append(".rw-display-math .frac .den{padding:0 .12em;}");
-        out.append(".rw-inline-math sup,.rw-inline-math sub{font-size:.72em;line-height:0;}");
-        out.append(".rw-image{display:block;max-width:100%;height:auto;margin:.6em auto;break-inside:avoid;}");
+        out.append(".rw-inline-math .frac,.rw-display-math .frac{display:inline-flex;flex-direction:column;align-items:center;vertical-align:middle;margin:0 .12em;line-height:1.05;}");
+        out.append(".rw-inline-math .frac .num,.rw-display-math .frac .num{border-bottom:1px solid currentColor;padding:0 .12em;}");
+        out.append(".rw-inline-math .frac .den,.rw-display-math .frac .den{padding:0 .12em;}");
+        out.append(".rw-inline-math sup,.rw-inline-math sub,.rw-display-math sup,.rw-display-math sub{font-size:.72em;line-height:0;}");
+        out.append(".rw-image{display:block;max-width:100%;height:auto;object-fit:contain;margin:.6em auto;break-inside:avoid;}");
         out.append(".rw-image-missing{display:flex;align-items:center;justify-content:center;box-sizing:border-box;"
                 + "max-width:100%;min-width:2.2em;min-height:2.2em;margin:.6em auto;border:1px dashed currentColor;"
                 + "border-radius:3px;opacity:.55;break-inside:avoid;}");
@@ -56,21 +56,28 @@ public final class FixedHtmlRenderer {
         out.append("body[data-format=\"hwp-official-letter\"] .rw-table td{border:none!important;padding:.05em 0!important;}");
         out.append("</style></head><body class=\"rw-rendered-doc\" data-format=\"")
                 .append(escapeAttribute(document.sourceFormat)).append("\">");
-        for (RenderedPage page : document.pages) renderPage(page, out);
+        boolean authoredGeometry = !"hwp-official-letter".equals(document.sourceFormat);
+        for (RenderedPage page : document.pages) renderPage(page, out, authoredGeometry);
         out.append("</body></html>");
         return out.toString();
     }
 
-    private static void renderPage(RenderedPage page, StringBuilder out) {
+    private static void renderPage(RenderedPage page, StringBuilder out, boolean authoredGeometry) {
         out.append("<section class=\"rw-page\" data-page=\"").append(page.pageIndex + 1).append("\" style=\"");
         appendNumberCustomProperty(out, "--rw-page-width-pt", page.widthPt);
         appendNumberCustomProperty(out, "--rw-page-height-pt", page.heightPt);
+        if (authoredGeometry) {
+            // One width-derived point scales text, margins, tables and images together.
+            // Minimum height preserves paper proportions without clipping overflow content.
+            out.append("--rw-point:calc(100vw / ").append(cssNumber(page.widthPt)).append(");");
+            out.append("--rw-page-min-height:calc(var(--rw-point) * ").append(cssNumber(page.heightPt)).append(");");
+        }
         out.append("\">");
         out.append("<div class=\"rw-page-inner\" style=\"");
-        appendViewportPadding(out, "padding-top", page.marginTopPt, page.heightPt, "vh", 6f, 24f);
-        appendViewportPadding(out, "padding-right", page.marginRightPt, page.widthPt, "vw", 6f, 22f);
-        appendViewportPadding(out, "padding-bottom", page.marginBottomPt, page.heightPt, "vh", 6f, 24f);
-        appendViewportPadding(out, "padding-left", page.marginLeftPt, page.widthPt, "vw", 6f, 22f);
+        appendPt(out, "padding-top", page.marginTopPt);
+        appendPt(out, "padding-right", page.marginRightPt);
+        appendPt(out, "padding-bottom", page.marginBottomPt);
+        appendPt(out, "padding-left", page.marginLeftPt);
         out.append("\">");
         if (!page.headerBlocks.isEmpty()) {
             out.append("<div class=\"rw-page-header\">");
@@ -128,21 +135,7 @@ public final class FixedHtmlRenderer {
                     .append("\">").append(escapeText(p.style.listLabel)).append("</span>");
             out.append("<span class=\"rw-list-content\">");
         }
-        if (mathSpansRuns(p.runs)) {
-            // LaTeX delimiters can straddle run boundaries (DOCX frequently splits
-            // a single $...$ across several runs). Per-run math detection would
-            // miss those, leaving raw LaTeX visible, so when a span crosses runs
-            // we render the joined run text as one unit. Uniform run styling is
-            // dropped for the joined text, which is acceptable because math spans
-            // carry no meaningful intra-run styling.
-            StringBuilder joined = new StringBuilder();
-            for (RenderedRun run : p.runs) {
-                if (run != null && run.text != null) joined.append(run.text);
-            }
-            appendRunText(joined.toString(), out);
-        } else {
-            for (RenderedRun run : p.runs) renderRun(run, out);
-        }
+        renderParagraphRuns(p.runs, out);
         if (listItem) out.append("</span>");
         // An empty paragraph in the source is a deliberate vertical spacer; with
         // no content it would collapse to just its bottom margin. Emit a
@@ -155,42 +148,76 @@ public final class FixedHtmlRenderer {
         out.append("</p>");
     }
 
-    private static boolean mathSpansRuns(java.util.List<RenderedRun> runs) {
-        if (runs == null || runs.size() < 2) return false;
-        StringBuilder joined = new StringBuilder();
-        boolean anyDollar = false;
-        int perRunSpans = 0;
-        for (RenderedRun run : runs) {
-            if (run != null && run.text != null) {
-                if (run.text.indexOf('$') >= 0) anyDollar = true;
-                perRunSpans += countCompleteMath(run.text);
-                joined.append(run.text);
+    private static void renderParagraphRuns(java.util.List<RenderedRun> runs, StringBuilder out) {
+        for (int start = 0; start < runs.size();) {
+            RenderedRun first = runs.get(start);
+            if (first == null || first.hasLink() || first.hasElementId() || first.hasAnchorRange()) {
+                // Never join across navigation/anchor identities.
+                renderRun(first, out);
+                start++;
+                continue;
             }
+            int end = start;
+            boolean hasDelimiter = false;
+            while (end < runs.size()) {
+                RenderedRun run = runs.get(end);
+                if (run == null || run.hasLink() || run.hasElementId() || run.hasAnchorRange()) break;
+                hasDelimiter |= run.text.indexOf('$') >= 0 || run.text.indexOf('\\') >= 0;
+                end++;
+            }
+            if (!hasDelimiter || end == start + 1) {
+                for (int i = start; i < end; i++) renderRun(runs.get(i), out);
+            } else {
+                StringBuilder joined = new StringBuilder();
+                for (int i = start; i < end; i++) joined.append(runs.get(i).text);
+                String text = joined.toString();
+                RunCursor cursor = new RunCursor(runs, start, end);
+                int position = 0;
+                MathSpan span;
+                while ((span = findMathSpan(text, position)) != null) {
+                    cursor.advance(span.start, out);
+                    TextStyle style = cursor.style();
+                    boolean styled = style != null && !style.isEmpty();
+                    if (styled) { out.append("<span style=\""); appendTextStyle(style, out); out.append("\">"); }
+                    out.append(span.html);
+                    if (styled) out.append("</span>");
+                    cursor.advance(span.end, null);
+                    position = span.end;
+                }
+                cursor.advance(text.length(), out);
+            }
+            start = end;
         }
-        if (!anyDollar) return false;
-        // If joining the runs reveals more renderable math spans than the runs
-        // expose individually, at least one span straddles a run boundary and the
-        // per-run path would leave it as raw LaTeX. Re-render the joined text in
-        // that case. (DOCX commonly splits a single $...$ across runs when only
-        // part of it is italic/bold.)
-        return countCompleteMath(joined.toString()) > perRunSpans;
     }
 
-    private static int countCompleteMath(String text) {
-        if (text == null) return 0;
-        int count = 0;
-        int cursor = 0;
-        while (cursor < text.length()) {
-            int start = text.indexOf('$', cursor);
-            if (start < 0) break;
-            boolean display = start + 1 < text.length() && text.charAt(start + 1) == '$';
-            int end = display ? findDisplayMathEnd(text, start + 2) : findInlineMathEnd(text, start + 1);
-            if (end < 0) { cursor = start + 1; continue; }
-            String math = display ? text.substring(start + 2, end) : text.substring(start + 1, end);
-            if (looksLikeReadableInlineMath(math)) count++;
-            cursor = end + (display ? 2 : 1);
+    /** Forward-only slices preserve surrounding styles without reparsing fragments. */
+    private static final class RunCursor {
+        final java.util.List<RenderedRun> runs;
+        final int end;
+        int index, offset, position;
+        RunCursor(java.util.List<RenderedRun> runs, int start, int end) {
+            this.runs = runs; this.index = start; this.end = end;
         }
-        return count;
+        TextStyle style() {
+            while (index < end && offset == runs.get(index).text.length()) { index++; offset = 0; }
+            return index < end ? runs.get(index).style : null;
+        }
+        void advance(int target, StringBuilder out) {
+            while (position < target && index < end) {
+                TextStyle style = style();
+                if (index == end) break;
+                RenderedRun run = runs.get(index);
+                int count = Math.min(target - position, run.text.length() - offset);
+                if (out != null) {
+                    boolean styled = style != null && !style.isEmpty();
+                    if (styled) { out.append("<span style=\""); appendTextStyle(style, out); out.append("\">"); }
+                    out.append(escapeText(run.text.substring(offset, offset + count)));
+                    if (styled) out.append("</span>");
+                }
+                offset += count;
+                position += count;
+            }
+        }
     }
 
     private static void renderRun(RenderedRun run, StringBuilder out) {
@@ -227,6 +254,10 @@ public final class FixedHtmlRenderer {
         if (table == null) return;
         out.append("<table class=\"rw-table\" style=\"");
         if (table.widthPercent != null) appendPercent(out, "width", table.widthPercent);
+        if (table.widthPt != null) appendPt(out, "width", table.widthPt);
+        if (table.alignment == ParagraphStyle.Alignment.CENTER) out.append("margin-left:auto;margin-right:auto;");
+        else if (table.alignment == ParagraphStyle.Alignment.RIGHT) out.append("margin-left:auto;margin-right:0;");
+        else if (table.indentPt != null) appendPt(out, "margin-left", table.indentPt);
         out.append("\">");
         if (table.columnWidthPercents != null && !table.columnWidthPercents.isEmpty()) {
             out.append("<colgroup>");
@@ -271,7 +302,13 @@ public final class FixedHtmlRenderer {
         if (cell.borderColor != null) out.append("border-color:").append(escapeCssToken(cell.borderColor)).append(';');
         if (cell.backgroundColor != null) out.append("background-color:").append(escapeCssToken(cell.backgroundColor)).append(';');
         if (cell.widthPercent != null) appendPercent(out, "width", cell.widthPercent);
-        if (cell.minHeightPt != null) appendPt(out, "min-height", cell.minHeightPt);
+        if (cell.minHeightPt != null) {
+            appendPt(out, "min-height", cell.minHeightPt);
+            // CSS table cells use height as a minimum; min-height alone is not reliable.
+            appendPt(out, "height", cell.minHeightPt);
+        }
+        if (cell.verticalAlignment != null) out.append("vertical-align:")
+                .append(cell.verticalAlignment.name().toLowerCase(Locale.US)).append(';');
         if (cell.paddingTopPt != null) appendPt(out, "padding-top", cell.paddingTopPt);
         if (cell.paddingRightPt != null) appendPt(out, "padding-right", cell.paddingRightPt);
         if (cell.paddingBottomPt != null) appendPt(out, "padding-bottom", cell.paddingBottomPt);
@@ -384,36 +421,26 @@ public final class FixedHtmlRenderer {
             out.append(';');
         }
         if (style.color != null) out.append("color:").append(escapeCssToken(style.color)).append(';');
-        if (style.backgroundColor != null) out.append("background-color:").append(escapeCssToken(style.backgroundColor)).append(';');
-        if (style.verticalAlign == TextStyle.VerticalAlign.SUPERSCRIPT) out.append("vertical-align:super;font-size:smaller;");
-        else if (style.verticalAlign == TextStyle.VerticalAlign.SUBSCRIPT) out.append("vertical-align:sub;font-size:smaller;");
+        String background = style.highlightColor != null && !"none".equals(style.highlightColor)
+                ? style.highlightColor : style.backgroundColor;
+        if (background != null) out.append("background-color:").append(escapeCssToken(background)).append(';');
+        if (style.verticalAlign == TextStyle.VerticalAlign.SUPERSCRIPT
+                || style.verticalAlign == TextStyle.VerticalAlign.SUBSCRIPT) {
+            out.append(style.verticalAlign == TextStyle.VerticalAlign.SUPERSCRIPT ? "vertical-align:super;" : "vertical-align:sub;");
+            // "smaller" alone scales the paragraph font, ignoring an explicit run size.
+            if (style.fontSizePt != null) appendPt(out, "font-size", style.fontSizePt * .72f);
+            else out.append("font-size:smaller;");
+        } else if (style.verticalAlignSpecified) out.append("vertical-align:baseline;");
     }
 
     private static void appendNumberCustomProperty(StringBuilder out, String name, float value) {
         out.append(name).append(':').append(cssNumber(value > 0 ? value : 0)).append(';');
     }
 
-    private static void appendViewportPadding(StringBuilder out, String name, float marginPt, float pagePt,
-                                              String viewportUnit, float minPx, float maxPx) {
-        if (marginPt <= 0f || pagePt <= 0f) {
-            out.append(name).append(":0;");
-            return;
-        }
-        float pct = (marginPt / pagePt) * 100f;
-        if (Float.isNaN(pct) || Float.isInfinite(pct)) pct = 0f;
-        pct = Math.max(0f, Math.min(18f, pct));
-        if (pct <= 0.1f) {
-            out.append(name).append(":0;");
-        } else {
-            out.append(name).append(":clamp(")
-                    .append(cssNumber(minPx)).append("px,")
-                    .append(cssNumber(pct)).append(viewportUnit).append(',')
-                    .append(cssNumber(maxPx)).append("px);");
-        }
-    }
-
     private static void appendPt(StringBuilder out, String name, float pt) {
+        if (Float.isNaN(pt) || Float.isInfinite(pt)) return;
         out.append(name).append(':').append(cssNumber(pt)).append("pt;");
+        out.append(name).append(":calc(var(--rw-point,1pt) * ").append(cssNumber(pt)).append(");");
     }
 
     private static void appendPercent(StringBuilder out, String name, float pct) {
@@ -443,42 +470,59 @@ public final class FixedHtmlRenderer {
     private static void appendRunText(String text, StringBuilder out) {
         if (text == null || text.isEmpty()) return;
         int cursor = 0;
-        while (cursor < text.length()) {
-            int start = text.indexOf('$', cursor);
-            if (start < 0) {
-                out.append(escapeText(text.substring(cursor)));
-                return;
-            }
-            boolean display = start + 1 < text.length() && text.charAt(start + 1) == '$';
-            int end = display ? findDisplayMathEnd(text, start + 2) : findInlineMathEnd(text, start + 1);
-            if (end < 0) {
-                out.append(escapeText(text.substring(cursor)));
-                return;
-            }
-            out.append(escapeText(text.substring(cursor, start)));
-            String math = display ? text.substring(start + 2, end) : text.substring(start + 1, end);
-            if (looksLikeReadableInlineMath(math)) {
-                out.append(display ? "<span class=\"rw-display-math\">" : "<span class=\"rw-inline-math\">");
-                appendInlineMath(math, out);
-                out.append("</span>");
-            } else {
-                out.append(escapeText(text.substring(start, end + (display ? 2 : 1))));
-            }
-            cursor = end + (display ? 2 : 1);
+        MathSpan span;
+        while ((span = findMathSpan(text, cursor)) != null) {
+            out.append(escapeText(text.substring(cursor, span.start))).append(span.html);
+            cursor = span.end;
         }
+        out.append(escapeText(text.substring(cursor)));
     }
 
-    private static int findDisplayMathEnd(String text, int from) {
-        return text.indexOf("$$", from);
-    }
-
-    private static int findInlineMathEnd(String text, int from) {
+    private static MathSpan findMathSpan(String text, int from) {
+        // Retain the existing conservative fragment-size policy. Bound each scan,
+        // too, so many unmatched openers cannot cause quadratic paragraph scans.
         for (int i = from; i < text.length(); i++) {
             char c = text.charAt(i);
-            if (c == '$') return i;
-            if (c == '\n' || c == '\r') return -1;
+            if (c == '\\' && i + 1 < text.length()
+                    && text.charAt(i + 1) != '(' && text.charAt(i + 1) != '[') { i++; continue; }
+            boolean dollar = c == '$';
+            boolean bracket = c == '\\' && i + 1 < text.length()
+                    && (text.charAt(i + 1) == '(' || text.charAt(i + 1) == '[');
+            if (!dollar && !bracket) continue;
+            boolean display = bracket ? text.charAt(i + 1) == '['
+                    : i + 1 < text.length() && text.charAt(i + 1) == '$';
+            int width = bracket || display ? 2 : 1;
+            String close = bracket ? (display ? "\\]" : "\\)") : (display ? "$$" : "$");
+            int body = i + width;
+            int limit = (int) Math.min((long) text.length(), (long) body + 201);
+            boolean foundClose = false;
+            for (int end = body; end < limit; end++) {
+                if (!display && (text.charAt(end) == '\n' || text.charAt(end) == '\r')) break;
+                if (text.startsWith(close, end)) {
+                    foundClose = true;
+                    String math = text.substring(body, end);
+                    // Dollar-delimited prose/currency must not be swallowed.
+                    boolean readable = bracket || ((display || math.equals(math.trim())) && looksLikeReadableInlineMath(math));
+                    StringBuilder rendered = new StringBuilder();
+                    if (readable && !math.trim().isEmpty() && appendInlineMath(math, rendered, 0)) {
+                        String html = (display ? "<span class=\"rw-display-math\">" : "<span class=\"rw-inline-math\">")
+                                + rendered + "</span>";
+                        return new MathSpan(i, end + width, html);
+                    }
+                    i = end + width - 1; // Unsupported formulas remain whole, literal text.
+                    break;
+                }
+                if (text.charAt(end) == '\\') end++;
+            }
+            if (!foundClose) i += width - 1;
         }
-        return -1;
+        return null;
+    }
+
+    private static final class MathSpan {
+        final int start, end;
+        final String html;
+        MathSpan(int start, int end, String html) { this.start = start; this.end = end; this.html = html; }
     }
 
     private static boolean looksLikeReadableInlineMath(String math) {
@@ -505,55 +549,70 @@ public final class FixedHtmlRenderer {
             }
             return false; // unexpected character -> treat as plain text
         }
-        return sawLetterOrDigit;
+        // Multiple bare words are prose, not a compact formula. Operators or
+        // structural markers still admit expressions such as x + y and \text{}.
+        return sawLetterOrDigit && (trimmed.indexOf(' ') < 0
+                || trimmed.matches(".*[=+*/(),<>|\\-].*"));
     }
 
-    private static void appendInlineMath(String math, StringBuilder out) {
+    private static boolean appendInlineMath(String math, StringBuilder out, int depth) {
+        if (depth > 24) return false;
         String src = math != null ? math.trim() : "";
         for (int i = 0; i < src.length(); i++) {
             char c = src.charAt(i);
-            if ((c == '^' || c == '_') && i + 1 < src.length()) {
+            if (c == '^' || c == '_') {
                 GroupToken token = readMathGroup(src, i + 1);
-                if (token != null) {
-                    out.append(c == '^' ? "<sup>" : "<sub>");
-                    appendInlineMath(token.text, out);
-                    out.append(c == '^' ? "</sup>" : "</sub>");
-                    i = token.endIndex;
-                    continue;
-                }
+                if (token == null) return false;
+                out.append(c == '^' ? "<sup>" : "<sub>");
+                if (!appendInlineMath(token.text, out, depth + 1)) return false;
+                out.append(c == '^' ? "</sup>" : "</sub>");
+                i = token.endIndex;
+                continue;
             }
             if (c == '\\') {
+                if (i + 1 >= src.length()) return false;
+                char escaped = src.charAt(i + 1);
+                if ("_^{ }$%&#\\".indexOf(escaped) >= 0) {
+                    out.append(escapeText(String.valueOf(escaped)));
+                    i++;
+                    continue;
+                }
+                if (escaped == ',' || escaped == ';' || escaped == ':') {
+                    out.append(' '); i++; continue;
+                }
                 String command = readMathCommand(src, i + 1);
                 if (command.length() > 0) {
                     int commandEnd = i + command.length();
-                    if ("text".equals(command) && commandEnd + 1 < src.length() && src.charAt(commandEnd + 1) == '{') {
-                        GroupToken token = readMathGroup(src, commandEnd + 1);
+                    int argument = skipMathSpace(src, commandEnd + 1);
+                    if (("text".equals(command) || "mathrm".equals(command)) && argument < src.length() && src.charAt(argument) == '{') {
+                        GroupToken token = readMathGroup(src, argument);
                         if (token != null) {
                             out.append(escapeText(token.text));
                             i = token.endIndex;
                             continue;
                         }
                     }
-                    if ("frac".equals(command) && commandEnd + 1 < src.length() && src.charAt(commandEnd + 1) == '{') {
-                        GroupToken numerator = readMathGroup(src, commandEnd + 1);
-                        if (numerator != null && numerator.endIndex + 1 < src.length() && src.charAt(numerator.endIndex + 1) == '{') {
-                            GroupToken denominator = readMathGroup(src, numerator.endIndex + 1);
+                    if ("frac".equals(command) && argument < src.length() && src.charAt(argument) == '{') {
+                        GroupToken numerator = readMathGroup(src, argument);
+                        int denominatorStart = numerator != null ? skipMathSpace(src, numerator.endIndex + 1) : src.length();
+                        if (denominatorStart < src.length() && src.charAt(denominatorStart) == '{') {
+                            GroupToken denominator = readMathGroup(src, denominatorStart);
                             if (denominator != null) {
                                 out.append("<span class=\"frac\"><span class=\"num\">");
-                                appendInlineMath(numerator.text, out);
+                                if (!appendInlineMath(numerator.text, out, depth + 1)) return false;
                                 out.append("</span><span class=\"den\">");
-                                appendInlineMath(denominator.text, out);
+                                if (!appendInlineMath(denominator.text, out, depth + 1)) return false;
                                 out.append("</span></span>");
                                 i = denominator.endIndex;
                                 continue;
                             }
                         }
                     }
-                    if ("sqrt".equals(command) && commandEnd + 1 < src.length() && src.charAt(commandEnd + 1) == '{') {
-                        GroupToken token = readMathGroup(src, commandEnd + 1);
+                    if ("sqrt".equals(command) && argument < src.length() && src.charAt(argument) == '{') {
+                        GroupToken token = readMathGroup(src, argument);
                         if (token != null) {
                             out.append("\u221a(");
-                            appendInlineMath(token.text, out);
+                            if (!appendInlineMath(token.text, out, depth + 1)) return false;
                             out.append(")");
                             i = token.endIndex;
                             continue;
@@ -566,21 +625,52 @@ public final class FixedHtmlRenderer {
                         continue;
                     }
                 }
+                return false; // Never erase an unknown command's backslash.
+            }
+            if (c == '{') {
+                GroupToken group = readMathGroup(src, i);
+                if (group == null || !appendInlineMath(group.text, out, depth + 1)) return false;
+                i = group.endIndex;
                 continue;
             }
-            if (c == '{' || c == '}') continue;
+            if (c == '}') return false;
             out.append(escapeText(String.valueOf(c)));
         }
+        return true;
     }
 
     private static GroupToken readMathGroup(String src, int start) {
+        start = skipMathSpace(src, start);
         if (start >= src.length()) return null;
-        if (src.charAt(start) != '{') return new GroupToken(String.valueOf(src.charAt(start)), start);
+        if (src.charAt(start) == '\\') {
+            if (start + 1 >= src.length()) return null;
+            String command = readMathCommand(src, start + 1);
+            int end = start + Math.max(1, command.length());
+            // A command with arguments is one script token, not a bare slash.
+            int groups = "frac".equals(command) ? 2
+                    : ("sqrt".equals(command) || "text".equals(command) || "mathrm".equals(command) ? 1 : 0);
+            // Argument parsing here is non-recursive: each required argument must be braced.
+            for (int n = 0; n < groups; n++) {
+                int next = skipMathSpace(src, end + 1);
+                if (next >= src.length() || src.charAt(next) != '{') return null;
+                GroupToken group = readMathGroup(src, next);
+                if (group == null) return null;
+                end = group.endIndex;
+            }
+            return new GroupToken(src.substring(start, end + 1), end);
+        }
+        if (src.charAt(start) != '{') {
+            if ("}^_".indexOf(src.charAt(start)) >= 0) return null;
+            int end = start + Character.charCount(src.codePointAt(start));
+            return new GroupToken(src.substring(start, end), end - 1);
+        }
         int depth = 1;
         StringBuilder text = new StringBuilder();
         for (int i = start + 1; i < src.length(); i++) {
             char c = src.charAt(i);
-            if (c == '{') {
+            if (c == '\\' && i + 1 < src.length()) {
+                text.append(c).append(src.charAt(++i));
+            } else if (c == '{') {
                 depth++;
                 text.append(c);
             } else if (c == '}') {
@@ -592,6 +682,11 @@ public final class FixedHtmlRenderer {
             }
         }
         return null;
+    }
+
+    private static int skipMathSpace(String src, int start) {
+        while (start < src.length() && Character.isWhitespace(src.charAt(start))) start++;
+        return start;
     }
 
     private static String readMathCommand(String src, int start) {

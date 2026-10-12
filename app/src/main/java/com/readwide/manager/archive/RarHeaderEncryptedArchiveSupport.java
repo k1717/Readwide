@@ -71,6 +71,84 @@ final class RarHeaderEncryptedArchiveSupport {
         }
     }
 
+    @Nullable
+    static ArchiveSupport.ForwardArchiveReader openForwardReader(File archive, char[] password,
+            File spoolDirectory, boolean nativeAvailable) throws IOException {
+        if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("RAR extraction cancelled");
+        if (spoolDirectory == null || !hasRar4HeaderEncryptedVolume(archive)) return null;
+        if (password == null || password.length == 0) throw new ArchiveSupport.PasswordRequiredException();
+        HeaderDecryptedChain chain = buildDecryptedChain(archive, password, null);
+        boolean transferred = false;
+        try {
+            List<RarArchiveReader.RarEntry> entries = RarArchiveReader.readEntries(chain.firstVolume, password);
+            // Header copies already belong to this first-party operation; permit its stored fallback.
+            ArchiveSupport.ForwardArchiveReader delegate = Rar3PpmdSolidArchiveExtractor.openForwardReader(
+                    entries, password, spoolDirectory, false);
+            if (delegate == null) delegate = Rar3CheckedForwardReader.open(entries, spoolDirectory, false);
+            if (delegate == null) return null;
+            OwnedForwardReader reader = new OwnedForwardReader(delegate, chain);
+            transferred = true;
+            return reader;
+        } finally {
+            if (!transferred) closeQuietly(chain);
+        }
+    }
+
+    private static final class OwnedForwardReader implements ArchiveSupport.ForwardArchiveReader {
+        private final ArchiveSupport.ForwardArchiveReader delegate;
+        private final HeaderDecryptedChain chain;
+        private boolean closed;
+        OwnedForwardReader(ArchiveSupport.ForwardArchiveReader delegate, HeaderDecryptedChain chain) {
+            this.delegate = delegate; this.chain = chain;
+        }
+        private void requireOpen() throws IOException {
+            if (closed) throw new IOException("RAR header-decrypted reader is closed");
+        }
+        @Override public ArchiveSupport.ForwardEntry nextEntry() throws IOException {
+            requireOpen();
+            try { return delegate.nextEntry(); }
+            catch (IOException | RuntimeException | Error failure) { retire(failure); throw failure; }
+        }
+        @Override public int read(byte[] buffer) throws IOException {
+            requireOpen();
+            try { return delegate.read(buffer); }
+            catch (IOException | RuntimeException | Error failure) { retire(failure); throw failure; }
+        }
+        @Override public boolean drainCurrentEntry(long maximum) throws IOException {
+            requireOpen();
+            try { return delegate.drainCurrentEntry(maximum); }
+            catch (IOException | RuntimeException | Error failure) { retire(failure); throw failure; }
+        }
+        private void retire(Throwable failure) {
+            try { close(); }
+            catch (IOException | RuntimeException | Error cleanup) {
+                if (cleanup != failure) failure.addSuppressed(cleanup);
+            }
+        }
+        @Override public void close() throws IOException {
+            closed = true;
+            try { delegate.close(); }
+            catch (IOException | RuntimeException | Error failure) {
+                try { deleteOwnedTree(chain.singleTempFile ? chain.firstVolume : chain.tempRoot); }
+                catch (IOException | RuntimeException | Error cleanup) {
+                    if (cleanup != failure) failure.addSuppressed(cleanup);
+                }
+                throw failure;
+            }
+            deleteOwnedTree(chain.singleTempFile ? chain.firstVolume : chain.tempRoot);
+        }
+    }
+
+    private static void deleteOwnedTree(File file) throws IOException {
+        if (file == null || !file.exists()) return;
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children == null) throw new IOException("Cannot inspect temporary RAR header directory");
+            for (File child : children) deleteOwnedTree(child);
+        }
+        if (!file.delete() && file.exists()) throw new IOException("Cannot delete temporary RAR header copy");
+    }
+
     private static boolean hasRar4HeaderEncryptedVolume(@NonNull File archive) throws IOException {
         for (File volume : RarArchiveLocator.collectVolumes(archive)) {
             if (Rar4HeaderEncryptedArchiveRewriter.isRar4HeaderEncrypted(volume)) return true;

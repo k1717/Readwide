@@ -152,6 +152,61 @@ public class RarSplitStoredPlanTest {
         }
     }
 
+    @Test public void unknownPlainFinalSizeUsesCompletePackedSum() throws Exception {
+        RarArchiveReader.RarEntry first = sizedEntry(5, -1L, 7L, false, true, null);
+        RarArchiveReader.RarEntry last = sizedEntry(5, -1L, 5L, true, false, null);
+        assignSources(first, last);
+        RarSplitStoredPlan plan = RarSplitStoredPlan.fromChain(Arrays.asList(first, last));
+        assertEquals(12L, plan.unpackedSize());
+        assertEquals(12L, plan.totalPackedSize());
+        assertEquals(-1L, last.unpackedSize); // Do not rewrite the archive's metadata.
+    }
+
+    @Test public void unknownEncryptedFinalSizeDefersLengthToFinalChecksum() throws Exception {
+        RarArchiveReader.EncryptionInfo encryption = new RarArchiveReader.EncryptionInfo(
+                0L, 0L, 5, new byte[16], new byte[16], new byte[0]);
+        RarArchiveReader.RarEntry first = sizedEntry(5, -1L, 13L, false, true, encryption);
+        RarArchiveReader.RarEntry last = sizedEntry(5, -1L, 19L, true, false, encryption);
+        assignSources(first, last);
+        RarSplitStoredPlan plan = RarSplitStoredPlan.fromChain(Arrays.asList(first, last));
+        assertEquals(-1L, plan.unpackedSize());
+        assertEquals(32L, plan.totalPackedSize());
+    }
+
+    @Test public void negativeLegacySizesAndInvalidSentinelsStillFail() throws Exception {
+        for (int version : new int[]{4, 5}) {
+            for (long size : new long[]{-1L, -2L}) {
+                if (version == 5 && size == -1L) continue;
+                RarArchiveReader.RarEntry entry = sizedEntry(version, size, 12L, false, false, null);
+                entry.sourceArchive = tempFolder.newFile();
+                org.junit.Assert.assertThrows(java.io.IOException.class,
+                        () -> RarSplitStoredPlan.fromChain(java.util.Collections.singletonList(entry)));
+            }
+        }
+    }
+
+    @Test public void unknownFinalSizeDoesNotHidePackedSumOverflow() throws Exception {
+        RarArchiveReader.RarEntry first = sizedEntry(5, -1L, Long.MAX_VALUE, false, true, null);
+        RarArchiveReader.RarEntry last = sizedEntry(5, -1L, 1L, true, false, null);
+        assignSources(first, last);
+        org.junit.Assert.assertThrows(java.io.IOException.class,
+                () -> RarSplitStoredPlan.fromChain(Arrays.asList(first, last)));
+    }
+
+    @Test public void knownPlainFinalSizeMustStillMatchPackedSum() throws Exception {
+        RarArchiveReader.RarEntry first = sizedEntry(5, -1L, 7L, false, true, null);
+        RarArchiveReader.RarEntry last = sizedEntry(5, 11L, 5L, true, false, null);
+        assignSources(first, last);
+        org.junit.Assert.assertThrows(java.io.IOException.class,
+                () -> RarSplitStoredPlan.fromChain(Arrays.asList(first, last)));
+    }
+
+    private static RarArchiveReader.RarEntry sizedEntry(int version, long unpacked, long packed,
+            boolean before, boolean after, RarArchiveReader.EncryptionInfo encryption) {
+        return new RarArchiveReader.RarEntry("file.bin", false, unpacked, packed, 64L,
+                version, version == 5 ? 0 : 0x30, false, before, after, encryption, 0L, 0L);
+    }
+
     private static RarArchiveReader.RarEntry entry(String path,
                                                    int rarVersion,
                                                    int method,

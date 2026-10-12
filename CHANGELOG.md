@@ -1,5 +1,96 @@
 # Changelog
 
+## Readwide 1.0.20 - 2026-10-11
+
+### TXT page counting and navigation
+
+- Reuse validated exact-page indexes when reopening large TXT files, including indexes that exceeded the former saved-index size limit. Distinguish checking a saved count from displaying an estimated count; source or layout changes can still require recalculation.
+- Reduce repeated partition reads, anchor copies, and search scans. Prepare neighboring partitions while scrolling and preserve the visible text position when joining them.
+- Keep sequential page turns and automatic turning independent of estimated totals. Wait for pending text/layout work and stop at the actual document end.
+- Correct overlap-only pages at the true end of a document. Rebuild affected old exact-page caches without rewriting existing bookmark characters or context.
+- Align page labels, in-page row labels, new bookmarks, and saved reading positions to the same visible row: retain the first row while at least half is visible.
+- Resolve percentage and line-number moves against the whole large document. Refresh page-move controls when exact totals arrive without changing their scale during a drag.
+- Harden initial loading, file-picker restoration, background-memory recovery, and pending navigation against stale layouts, changed files, encoding changes, and partition-mode changes.
+- Preserve an unmatched saved position outside the initial partition and restart loading at its actual owner, completing screen reveal and indexing. Report worker-side text allocation failures through the current load's error UI.
+- Correct fractional scrolling, multi-touch cancellation, selection boundaries, and restoration in very short viewports. Reject unrepresentable coordinates instead of allowing integer wraparound.
+
+### TXT table of contents and reader controls
+
+- Add searchable TXT Contents with detected headings, current-position titles, hide/delete actions, rescan, and hidden-title restoration.
+- Recognize English chapter/part/book headings, Korean episode/chapter headings, Chinese/Japanese numbered headings, `345===`, `345---`, and `<--Title-->`. Supported number markers can include the following title line.
+- Add per-file format and detection options, plus optional RE2/J regular expressions. There is no fixed chapter-number or heading-count cutoff; detection still depends on the chosen rules and available resources.
+- Reduce author-note false positives while allowing users to relax the detection conditions. Automatic heading detection remains heuristic.
+- Use rounded Contents actions and editors, clearer help spacing, compact font cards without list dividers, and adjusted bookmark-button spacing. Match the EPUB font picker to the language-picker layout.
+
+### Settings and backup recovery
+
+- Include durable TXT Contents options, manual titles, and hidden titles in optional JSON backup data. Older backups remain readable; automatic Contents caches are not backed up.
+- Validate record keys, Unicode, numeric ranges, and regular expressions before import. Include Contents records in failed-import rollback and preserve local records when an older backup lacks the new section.
+- Preserve reading characters/context when restored settings invalidate page or pixel hints. Do not save stale positions from an outdated source or decoding policy.
+- Resolve bookmark edits with the prospective restored text settings, retain edits for unavailable files, and reject settings changes that would invalidate an in-progress restore.
+- Keep valid local folder fallbacks and handle missing fonts safely. Backup does not transfer source documents, font/theme assets, storage permissions, or automatically relocate path-bound Contents data.
+
+### Archive image viewing and thumbnails
+
+- Recover the retained image after background return without resetting pan/zoom, or reload the same page if its display surface was released. Keep pending loads and password restoration from being duplicated.
+- Save the last successfully displayed image rather than a still-loading or failed requested page. Preserve that accepted position through memory cleanup.
+- Handle password-required/wrong-password failures on later archive pages through the existing password flow, and retry WebP/GIF decoding with smaller allocations under memory pressure.
+- Reuse prepared metadata and immutable image sequences; avoid redundant queued prefetch, image copies, and full list sorting. Eligible plain ZIP/CBZ image reads can use independent inputs.
+- Validate archive-volume identity across preview caches, extraction, decoding, and resume. Split-volume thumbnail keys include the resolved volume set; changed archives require reopening.
+- Cancel obsolete cover work when it has no remaining subscribers and keep slow reader creation/cache cleanup off the UI thread.
+- The reported long-background black screen has a recovery change, but its device-specific cause and runtime resolution are not yet confirmed.
+
+### PDF, EPUB, Markdown, and office documents
+
+- Use one system-bar appearance controller in document/PDF readers. Document scroll geometry prefers validated scale callbacks scoped to the current WebView/load; bounded zoom reset stops on the zoom operation's result.
+- Reduce avoidable PDF render work during rapid page changes and retire renderer resources off the UI thread. Incremental text search reuses bounded page/glyph data; scanned PDFs still require OCR, which is not provided.
+- Preserve DOC/DOCX/HWP structure more faithfully, including inherited styles, explicit resets, visible content wrappers, text boxes, table spacing, and page proportions.
+- Improve supported scientific subscript/superscript notation and simple equation previews without treating ordinary underscores as formulas. Complex office layout and equation compatibility remain partial.
+- Protect Markdown code and generated links from later inline parsing and preserve fenced-code/source-anchor behavior.
+- Resolve EPUB layout hints per chapter and improve safe CSS declaration, alias, import, and media handling. The WebView still performs the actual CSS cascade.
+- Keep document resources alive while in use and reject stale restoration/anchor callbacks after replacing a document.
+
+### Read aloud
+
+- Buffer bounded text segments with stable source positions and keep continuous TXT narration from replaying page overlap.
+- Isolate callbacks, highlights, pause/resume state, timers, and audio focus across playback generations.
+- Reject incompatible legacy relative checkpoints while preserving ordinary bookmarks. Background playback still depends on the selected Android TTS engine and system lifecycle.
+
+### RAR compatibility
+
+- Extend first-party RAR3/RAR4 LZ/PPMd paths to admitted encrypted, split, and mixed-solid runs, with checked primer history and stored-member handling.
+- Add scoped custom RAR VM support, within-entry filter resizing, and supported deferred descriptors. Cross-file/straddling and unsupported filter schedules remain excluded.
+- Improve RAR5/RAR6/RAR7 streaming boundaries, empty solid entries, dictionary planning, and standard filter handling.
+- Resolve an encrypted stored entry's unknown size only when its checksum identifies a unique result. Unsupported redirection records are not exposed as empty ordinary files.
+- Verify split-chain metadata, packed bounds, integrity, and cancellation consistently across selected, bulk, and forward extraction. Complete RAR compatibility is not claimed.
+
+### 7z and other archive formats
+
+- Extend shared 7z/CB7 plain/AES graph handling, encoded/external metadata streams, PPMd/BCJ2 finalization, and readable contents in differential archives.
+- Add scoped supplemental 7z Zstandard, modern/legacy LZ4, LZ5, Lizard, Brotli, and LZHAM decoding. Unsupported profiles and external-dictionary requirements still fail explicitly.
+- Extend admitted ZIP/ZIPX routes with independent PPMd-I decoding and stronger AES, split-volume, concatenated-stream, and duplicate-name checks. JPEG/WavPack and other methods remain subject to their documented engine boundaries.
+- Add EGG LEA and authenticated encrypted-solid handling, parent-directory name resolution, and checked password-encoding alternatives for EGG/ALZ.
+- Extend ALZ split-name rollover handling, linked multi-volume CAB reading, and LHA LH4/Amiga byte-split handling. Validate compressed-TAR completion on full extraction.
+- Remove additional fixed extraction/preview size quotas while retaining free-space protection, integrity checks, overflow checks, and actual decoder/platform limits. This is not a promise of unlimited archive size or memory.
+
+### File browser and file operations
+
+- Reduce the Recent files and Pinned folders headings from 15 sp to 12 sp and their minimum row height from 42 dp to 38 dp.
+- Refresh recent-file rows and progress without resetting unchanged thumbnails. Keep archive-volume identity checks and clear covers rejected by those checks.
+- Restore Home/folder/search context after recreation, with safe fallback when a folder is unavailable. Keep recent-file and font loading off blocking UI paths.
+- Apply returned settings to sorting and visibility. Subfolder search continues to use the selected folder as its starting point.
+- Rebind saved folder references after successful moves/renames and protect active archive sources from replacement.
+- Separate clipboard planning, UI ownership, queue state, and filesystem commit/rollback. Reject stale callbacks and unsafe destinations; preserve failed items for retry.
+- Harden case-only rename, cancellation, staged output, and cleanup without overwriting unrelated files. File operations are not durable transactions across process death.
+
+### Resources and release boundary
+
+- Make archive test-fixture text I/O compatible with the Android local-test compilation API surface, retaining strict UTF-8 and existing assertions.
+- Add supported-launcher themed icons, localized reader/Contents text, and notices for the added source-built archive decoders and RE2/J.
+- Release date: `2026-10-11`; version `1.0.20 / 10020`. No ads, analytics, account, cloud sync, or `INTERNET` permission; documents remain locally processed.
+- Latest changes have static review and regression test sources, not a current full build/device-validation result. Earlier checkpoint results do not establish current device behavior, complete format coverage, or measured speedups.
+- Detailed implementation and remaining boundaries: [development changes](docs/DEV_CHANGES_1_0_20.md), [archive support notes](docs/ARCHIVE_BOUNDARY_SUPPORT_NOTES.md), and [license report](docs/LICENSE_REPORT_READWIDE_1_0_20.md).
+
 ## Readwide 1.0.19 - 2026-09-19
 
 ### Home and settings

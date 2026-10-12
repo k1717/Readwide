@@ -4,6 +4,10 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
+import java.io.IOException;
 
 import org.junit.Rule;
 import org.junit.Test;
@@ -75,9 +79,14 @@ public class Rar4HeaderEncryptedArchiveRewriterTest {
     }
 
     private File buildRar4HeaderEncryptedStoredArchive(String entryName, byte[] payload, char[] password) throws Exception {
+        return buildHeaderEncryptedArchive(entryName, payload, payload, 0x30, password);
+    }
+
+    private File buildHeaderEncryptedArchive(String entryName, byte[] payload, byte[] packed,
+            int method, char[] password) throws Exception {
         byte[] salt = headerSalt();
         byte[] rawName = entryName.getBytes(StandardCharsets.UTF_8);
-        byte[] encryptedPayload = encryptRar3(password, salt, Arrays.copyOf(payload, aesPaddedSize(payload.length)));
+        byte[] encryptedPayload = encryptRar3(password, salt, Arrays.copyOf(packed, aesPaddedSize(packed.length)));
         byte[] fileBody = bytes(
                 uint32(encryptedPayload.length),
                 uint32(payload.length),
@@ -85,7 +94,7 @@ public class Rar4HeaderEncryptedArchiveRewriterTest {
                 uint32(crc32(payload)),
                 uint32(0),
                 new byte[] {29},
-                new byte[] {0x30},
+                new byte[] {(byte) method},
                 uint16(rawName.length),
                 uint32(0),
                 rawName,
@@ -105,6 +114,112 @@ public class Rar4HeaderEncryptedArchiveRewriterTest {
             out.write(encryptedEndHeader);
         }
         return archive;
+    }
+
+    @Test public void checkedForwardOwnsHeaderCopyUntilClose() throws Exception {
+        char[] password = "hello".toCharArray();
+        File archive = compressedArchive(password, new byte[]{'A','B'});
+        File spool = tempFolder.newFolder("spool");
+        int originalCount = tempFolder.getRoot().list().length;
+        try (ArchiveSupport.ForwardArchiveReader reader = Rar3PpmdSolidArchiveExtractor.openForwardReader(
+                archive, password, spool, true)) {
+            assertNotNull(reader);
+            assertTrue(tempFolder.getRoot().list().length > originalCount);
+            assertNotNull(reader.nextEntry());
+            byte[] bytes = new byte[8];
+            assertEquals(2, reader.read(bytes));
+            assertArrayEquals(new byte[]{'A','B'}, Arrays.copyOf(bytes, 2));
+            assertNull(reader.nextEntry());
+        }
+        assertEquals(originalCount, tempFolder.getRoot().list().length);
+        assertEquals(0, spool.list().length);
+        assertTrue(archive.isFile());
+    }
+
+    @Test public void checkedForwardEarlyCloseDeletesOnlyOwnedFiles() throws Exception {
+        char[] password = "hello".toCharArray();
+        File archive = compressedArchive(password, new byte[]{'A','B'});
+        File spool = tempFolder.newFolder("spool");
+        int originalCount = tempFolder.getRoot().list().length;
+        ArchiveSupport.ForwardArchiveReader reader = RarHeaderEncryptedArchiveSupport.openForwardReader(
+                archive, password, spool, true);
+        assertNotNull(reader);
+        reader.close(); reader.close();
+        assertThrows(IOException.class, () -> reader.nextEntry());
+        assertEquals(originalCount, tempFolder.getRoot().list().length);
+        assertTrue(archive.isFile());
+    }
+
+    @Test public void checkedForwardCrcFailureReleasesHeaderAndSpool() throws Exception {
+        char[] password = "hello".toCharArray();
+        File archive = compressedArchive(password, new byte[]{'X','Y'});
+        File spool = tempFolder.newFolder("spool");
+        int originalCount = tempFolder.getRoot().list().length;
+        try (ArchiveSupport.ForwardArchiveReader reader = RarHeaderEncryptedArchiveSupport.openForwardReader(
+                archive, password, spool, true)) {
+            assertNotNull(reader);
+            reader.nextEntry();
+            byte[] bytes = {42,42};
+            assertThrows(IOException.class, () -> reader.read(bytes));
+            assertArrayEquals(new byte[]{42,42}, bytes);
+            assertEquals(originalCount, tempFolder.getRoot().list().length);
+            assertEquals(0, spool.list().length);
+        }
+    }
+
+    @Test public void checkedForwardWrongPasswordLeavesNoHeaderCopy() throws Exception {
+        File archive = compressedArchive("hello".toCharArray(), new byte[]{'A','B'});
+        File spool = tempFolder.newFolder("spool");
+        int originalCount = tempFolder.getRoot().list().length;
+        assertThrows(ArchiveSupport.PasswordRequiredException.class,
+                () -> RarHeaderEncryptedArchiveSupport.openForwardReader(archive, "wrong".toCharArray(), spool, true));
+        assertEquals(originalCount, tempFolder.getRoot().list().length);
+    }
+
+    @Test public void checkedForwardMissingPasswordDoesNotCreateHeaderCopy() throws Exception {
+        File archive = compressedArchive("hello".toCharArray(), new byte[]{'A','B'});
+        File spool = tempFolder.newFolder("spool");
+        int originalCount = tempFolder.getRoot().list().length;
+        assertThrows(ArchiveSupport.PasswordRequiredException.class,
+                () -> RarHeaderEncryptedArchiveSupport.openForwardReader(archive, null, spool, true));
+        assertEquals(originalCount, tempFolder.getRoot().list().length);
+    }
+
+    @Test public void checkedForwardDrainFailureRetiresOwnedHeaderCopy() throws Exception {
+        char[] password = "hello".toCharArray();
+        File archive = compressedArchive(password, new byte[]{'A','B'});
+        File spool = tempFolder.newFolder("spool");
+        int originalCount = tempFolder.getRoot().list().length;
+        try (ArchiveSupport.ForwardArchiveReader reader = RarHeaderEncryptedArchiveSupport.openForwardReader(
+                archive, password, spool, true)) {
+            reader.nextEntry();
+            assertThrows(IOException.class, () -> reader.drainCurrentEntry(1));
+            assertThrows(IOException.class, () -> reader.nextEntry());
+            assertEquals(originalCount, tempFolder.getRoot().list().length);
+        }
+    }
+
+    @Test public void encryptedHeaderStoredArchiveCanReadForwardWithoutNative() throws Exception {
+        char[] password = "hello".toCharArray();
+        File archive = buildRar4HeaderEncryptedStoredArchive("stored.bin", new byte[]{42,43}, password);
+        File spool = tempFolder.newFolder("spool");
+        int originalCount = tempFolder.getRoot().list().length;
+        try (ArchiveSupport.ForwardArchiveReader reader = Rar3PpmdSolidArchiveExtractor.openForwardReader(
+                archive, password, spool, false)) {
+            assertNotNull(reader);
+            assertNotNull(reader.nextEntry());
+            byte[] bytes = new byte[4];
+            assertEquals(2, reader.read(bytes));
+            assertArrayEquals(new byte[]{42,43}, Arrays.copyOf(bytes, 2));
+            assertNull(reader.nextEntry());
+        }
+        assertEquals(originalCount, tempFolder.getRoot().list().length);
+        assertEquals(0, spool.list().length);
+    }
+
+    private File compressedArchive(char[] password, byte[] expected) throws Exception {
+        return buildHeaderEncryptedArchive("selected.bin", expected,
+                Rar3FirstPartyArchiveExtractorTest.independentLzFixture(), 0x33, password);
     }
 
     private static byte[] encryptHeaderBlock(char[] password, byte[] salt, byte[] header) throws Exception {

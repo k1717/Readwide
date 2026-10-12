@@ -196,7 +196,9 @@ final class ReaderDialogStyleController {
         row.setGravity(Gravity.CENTER_VERTICAL);
         // Keep the rounded row "bubble" used by EPUB/Word, but remove the small
         // radio/circle bubble. Selection is shown by text weight and row outline.
-        row.setPadding(dpToPx(18), 0, dpToPx(18), 0);
+        row.setPadding(dpToPx(18), dpToPx(4), dpToPx(18), dpToPx(4));
+        row.setMinHeight(dpToPx(40));
+        row.setSingleLine(false);
         row.setCompoundDrawables(null, null, null, null);
         row.setCompoundDrawablePadding(0);
 
@@ -216,7 +218,7 @@ final class ReaderDialogStyleController {
         row.setBackground(bg);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48));
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.setMargins(0, 0, 0, dpToPx(8));
         row.setLayoutParams(lp);
         return row;

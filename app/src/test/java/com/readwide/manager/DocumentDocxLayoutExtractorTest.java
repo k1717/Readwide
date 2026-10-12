@@ -17,6 +17,268 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
 public class DocumentDocxLayoutExtractorTest {
+    @Test public void officeMathScriptsKeepPositionAndWordRunStyle() throws Exception {
+        RenderedDocument doc = extractPreviewFixture("<w:p xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">"
+                + "<m:oMath><m:sSubSup><m:e><m:r><m:t>x</m:t></m:r></m:e>"
+                + "<m:sub><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><w:rPr><w:b/><w:color w:val=\"aa0000\"/></w:rPr>"
+                + "<m:t>i</m:t></m:r></m:sub><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSubSup></m:oMath>"
+                + "<w:r><w:t> done</w:t></w:r></w:p>", "");
+        java.util.List<com.readwide.manager.document.render.RenderedRun> runs = doc.pages.get(0).blocks.get(0).paragraph.runs;
+        assertEquals("xi2 done", doc.plainText);
+        assertEquals(com.readwide.manager.document.render.TextStyle.VerticalAlign.SUBSCRIPT, runs.get(1).style.verticalAlign);
+        assertEquals(com.readwide.manager.document.render.TextStyle.VerticalAlign.SUPERSCRIPT, runs.get(2).style.verticalAlign);
+        assertEquals(Boolean.TRUE, runs.get(1).style.bold);
+        assertEquals("#aa0000", runs.get(1).style.color);
+        assertFalse(runs.get(0).style.verticalAlignSpecified);
+        assertFalse(runs.get(3).style.verticalAlignSpecified);
+    }
+
+    @Test public void scriptPositionsRequireOfficeMathNamespaceAndOwner() throws Exception {
+        RenderedDocument doc = extractPreviewFixture("<w:p xmlns:m=\"urn:not-math\">"
+                + "<m:sSub><m:sub><w:r><w:t>Plain</w:t></w:r></m:sub></m:sSub>"
+                + "<w:r><w:rPr><w:vertAlign w:val=\"superscript\"/></w:rPr><w:t>2</w:t></w:r>"
+                + "<w:r><w:rPr><w:vertAlign w:val=\"baseline\"/></w:rPr><w:t>Base</w:t></w:r></w:p>", "");
+        java.util.List<com.readwide.manager.document.render.RenderedRun> runs = doc.pages.get(0).blocks.get(0).paragraph.runs;
+        assertFalse(runs.get(0).style.verticalAlignSpecified);
+        assertEquals(com.readwide.manager.document.render.TextStyle.VerticalAlign.SUPERSCRIPT, runs.get(1).style.verticalAlign);
+        assertEquals(com.readwide.manager.document.render.TextStyle.VerticalAlign.BASELINE, runs.get(2).style.verticalAlign);
+    }
+
+    @Test public void tableKeepsFixedWidthCenteringRowHeightAndCellAlignment() throws Exception {
+        RenderedDocument doc = extractPreviewFixture("<w:tbl><w:tblPr><w:tblW w:type=\"dxa\" w:w=\"6000\"/>"
+                + "<w:jc w:val=\"center\"/><w:tblCellMar><w:top w:w=\"120\"/><w:left w:w=\"180\"/></w:tblCellMar></w:tblPr>"
+                + "<w:tr><w:trPr><w:trHeight w:val=\"1600\" w:hRule=\"exact\"/></w:trPr>"
+                + "<w:tc><w:tcPr><w:vAlign w:val=\"center\"/><w:tcMar><w:top w:w=\"0\"/></w:tcMar></w:tcPr>"
+                + "<w:p><w:r><w:t>Form cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>", "");
+        com.readwide.manager.document.render.RenderedTable table = doc.pages.get(0).blocks.get(0).table;
+        com.readwide.manager.document.render.RenderedTableCell cell = table.rows.get(0).get(0);
+        assertEquals(300f, table.widthPt, 0f);
+        assertEquals(com.readwide.manager.document.render.ParagraphStyle.Alignment.CENTER, table.alignment);
+        assertEquals(80f, cell.minHeightPt, 0f);
+        assertEquals(0f, cell.paddingTopPt, 0f);
+        assertEquals(9f, cell.paddingLeftPt, 0f);
+        assertEquals(com.readwide.manager.document.render.RenderedTableCell.VerticalAlignment.MIDDLE, cell.verticalAlignment);
+        assertTrue(FixedHtmlRenderer.render(doc).contains("margin-left:auto;margin-right:auto;"));
+    }
+
+    @Test public void leftTableKeepsIndentWithoutTurningPercentageWidthIntoPoints() throws Exception {
+        RenderedDocument doc = extractPreviewFixture("<w:tbl><w:tblPr><w:tblW w:type=\"pct\" w:w=\"2500\"/>"
+                + "<w:tblInd w:type=\"dxa\" w:w=\"400\"/></w:tblPr><w:tr><w:tc><w:p><w:r><w:t>Cell</w:t>"
+                + "</w:r></w:p></w:tc></w:tr></w:tbl>", "");
+        com.readwide.manager.document.render.RenderedTable table = doc.pages.get(0).blocks.get(0).table;
+        assertEquals(50f, table.widthPercent, 0f);
+        assertTrue(table.widthPt == null);
+        assertEquals(20f, table.indentPt, 0f);
+        assertTrue(FixedHtmlRenderer.render(doc).contains("margin-left:calc(var(--rw-point,1pt) * 20);"));
+    }
+
+    @Test public void cellsWithoutPropertiesDoNotInventGridLines() throws Exception {
+        RenderedDocument doc = extractPreviewFixture("<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Borderless form</w:t>"
+                + "</w:r></w:p></w:tc></w:tr></w:tbl>", "");
+        assertEquals(Boolean.FALSE, doc.pages.get(0).blocks.get(0).table.rows.get(0).get(0).borderVisible);
+        assertTrue(FixedHtmlRenderer.render(doc).contains("<td style=\"border:none;"));
+    }
+
+    @Test public void textBoxKeepsStyledParagraphsAndTablesWithoutFallbackDuplicates() throws Exception {
+        RenderedDocument doc = extractPreviewFixture("<w:p><w:r><w:t>Before</w:t></w:r></w:p>"
+                + "<w:p><w:r><mc:AlternateContent><mc:Choice Requires=\"wps\"><w:drawing><wp:anchor>"
+                + "<wps:wsp><wps:txbx><w:txbxContent>"
+                + "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Box text</w:t></w:r></w:p>"
+                + "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Box cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+                + "</w:txbxContent></wps:txbx></wps:wsp></wp:anchor></w:drawing></mc:Choice>"
+                + "<mc:Fallback><w:pict><v:shape><v:textbox><w:txbxContent>"
+                + "<w:p><w:r><w:t>Box text</w:t><w:br w:type=\"page\"/></w:r></w:p>"
+                + "</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>"
+                + "<w:p><w:r><w:t>After</w:t></w:r></w:p>", "");
+        assertEquals(1, doc.pageCount());
+        assertEquals(4, doc.pages.get(0).blocks.size());
+        assertEquals("Box text", doc.pages.get(0).blocks.get(1).paragraph.plainText());
+        assertEquals(Boolean.TRUE, doc.pages.get(0).blocks.get(1).paragraph.runs.get(0).style.bold);
+        assertEquals("Box cell", doc.pages.get(0).blocks.get(2).table.rows.get(0).get(0).blocks.get(0).paragraph.plainText());
+        assertEquals(doc.plainText.indexOf("Box text"), doc.plainText.lastIndexOf("Box text"));
+        assertFalse(FixedHtmlRenderer.render(doc).contains("Text box content is shown"));
+    }
+
+    @Test public void alternativesRequireEveryNamespaceAndRetainNestedNamespaceContext() throws Exception {
+        RenderedDocument doc = extractPreviewFixture("<mc:AlternateContent xmlns:sh=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\""
+                + " xmlns:future=\"urn:future-word-feature\">"
+                + "<mc:Choice Requires=\"sh future\"><w:p><w:r><w:t>Unsupported</w:t></w:r></w:p></mc:Choice>"
+                + "<mc:Fallback><mc:AlternateContent><mc:Choice Requires=\"sh\">"
+                + "<w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>"
+                + "<w:p><w:r><w:t>Selected box</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>"
+                + "</mc:Choice><mc:Fallback><w:p><w:r><w:t>Wrong fallback</w:t></w:r></w:p></mc:Fallback>"
+                + "</mc:AlternateContent></mc:Fallback></mc:AlternateContent>", "");
+        assertEquals("Selected box", doc.plainText);
+    }
+
+    @Test public void unsupportedImageChoiceUsesItsVmlFallbackOnce() throws Exception {
+        RenderedDocument doc = extractPreviewFixture("<w:p><w:r><mc:AlternateContent xmlns:future=\"urn:future-image\">"
+                + "<mc:Choice Requires=\"future\"><w:drawing><wp:inline><a:blip r:embed=\"img\"/></wp:inline></w:drawing></mc:Choice>"
+                + "<mc:Fallback><w:pict><v:shape><v:imagedata r:id=\"img\"/></v:shape></w:pict></mc:Fallback>"
+                + "</mc:AlternateContent></w:r></w:p>",
+                "<Relationship Id=\"img\" Target=\"media/preview.png\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\"/>");
+        assertEquals(1, doc.pages.get(0).blocks.size());
+        assertEquals("https://readwide.local/word/media/preview.png", doc.pages.get(0).blocks.get(0).image.src);
+    }
+
+    @Test public void drawingDoesNotDropPicturesAfterItsFirstBlip() throws Exception {
+        RenderedDocument doc = extractPreviewFixture("<w:p><w:r><w:drawing><wp:inline>"
+                + "<a:blip r:embed=\"one\"/><a:blip r:embed=\"two\"/></wp:inline></w:drawing></w:r></w:p>",
+                "<Relationship Id=\"one\" Target=\"media/one.png\"/><Relationship Id=\"two\" Target=\"media/two.png\"/>");
+        assertEquals(2, doc.pages.get(0).blocks.size());
+        assertTrue(doc.pages.get(0).blocks.get(0).image.src.endsWith("/one.png"));
+        assertTrue(doc.pages.get(0).blocks.get(1).image.src.endsWith("/two.png"));
+    }
+
+    private static RenderedDocument extractPreviewFixture(String body, String relationships) throws Exception {
+        File file = File.createTempFile("readwide-word-preview", ".docx");
+        try {
+            try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(file))) {
+                put(out, "word/document.xml", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
+                        + " xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:v=\"urn:schemas-microsoft-com:vml\""
+                        + " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+                        + " xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\""
+                        + " xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\""
+                        + " xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">"
+                        + "<w:body>" + body + "</w:body></w:document>");
+                put(out, "word/_rels/document.xml.rels", "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+                        + relationships + "</Relationships>");
+            }
+            try (ZipFile zip = new ZipFile(file)) {
+                return DocumentDocxLayoutExtractor.extract(zip, "preview", "readwide.local", 28);
+            }
+        } finally { file.delete(); }
+    }
+
+    @Test public void preservesWrappedContentBlankParagraphsAndSpecialHyphens() throws Exception {
+        File file = File.createTempFile("readwide-word-content", ".docx");
+        try {
+            try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(file))) {
+                put(out, "word/document.xml", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>"
+                        + "<w:sdt><w:sdtPr><w:p><w:r><w:t>Metadata</w:t></w:r></w:p></w:sdtPr><w:sdtContent>"
+                        + "<w:customXml><w:p><w:r><w:t>First</w:t></w:r></w:p></w:customXml>"
+                        + "<w:p/><w:p><w:r><w:t xml:space=\"preserve\">  </w:t></w:r></w:p>"
+                        + "<w:tbl><w:sdt><w:sdtContent><w:tr><w:customXml><w:tc>"
+                        + "<w:sdt><w:sdtContent><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:sdtContent></w:sdt>"
+                        + "</w:tc></w:customXml></w:tr></w:sdtContent></w:sdt></w:tbl>"
+                        + "</w:sdtContent></w:sdt>"
+                        + "<w:p><w:sdt><w:sdtPr><w:r><w:t>Metadata</w:t></w:r></w:sdtPr><w:sdtContent>"
+                        + "<w:r><w:t>A</w:t><w:noBreakHyphen/><w:t>B</w:t><w:softHyphen/><w:t>C</w:t></w:r>"
+                        + "</w:sdtContent></w:sdt><w:moveFrom><w:r><w:t>Old</w:t></w:r></w:moveFrom>"
+                        + "<w:del><w:r><w:delText>Deleted</w:delText></w:r></w:del>"
+                        + "<w:moveTo><w:r><w:t>New</w:t></w:r></w:moveTo></w:p>"
+                        + "</w:body></w:document>");
+            }
+            try (ZipFile zip = new ZipFile(file)) {
+                RenderedDocument doc = DocumentDocxLayoutExtractor.extract(zip, "content", "readwide.local", 28);
+                assertEquals(5, doc.pages.get(0).blocks.size());
+                assertEquals("First", doc.pages.get(0).blocks.get(0).paragraph.plainText());
+                assertEquals("", doc.pages.get(0).blocks.get(1).paragraph.plainText());
+                assertEquals("  ", doc.pages.get(0).blocks.get(2).paragraph.plainText());
+                assertEquals("Cell", doc.pages.get(0).blocks.get(3).table.rows.get(0).get(0).blocks.get(0).paragraph.plainText());
+                assertEquals("A\u2011B\u00adCNew", doc.pages.get(0).blocks.get(4).paragraph.plainText());
+                assertFalse(doc.plainText.contains("Metadata"));
+                assertFalse(doc.plainText.contains("Old"));
+                assertFalse(doc.plainText.contains("Deleted"));
+                assertTrue(FixedHtmlRenderer.render(doc).contains("&#8203;"));
+            }
+        } finally { file.delete(); }
+    }
+
+    @Test public void unwrapsContentControlsInHeadersAndNotes() throws Exception {
+        File file = File.createTempFile("readwide-word-parts", ".docx");
+        String ns = " xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
+                + " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
+        try {
+            try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(file))) {
+                put(out, "word/document.xml", "<w:document" + ns + "><w:body><w:p><w:r><w:t>Body</w:t>"
+                        + "<w:footnoteReference w:id=\"1\"/></w:r></w:p><w:sectPr>"
+                        + "<w:headerReference w:type=\"default\" r:id=\"h1\"/></w:sectPr></w:body></w:document>");
+                put(out, "word/_rels/document.xml.rels", "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+                        + "<Relationship Id=\"h1\" Target=\"header1.xml\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/header\"/></Relationships>");
+                put(out, "word/header1.xml", "<w:hdr" + ns + "><w:sdt><w:sdtContent><w:p><w:r><w:t>Wrapped header</w:t>"
+                        + "</w:r></w:p></w:sdtContent></w:sdt></w:hdr>");
+                put(out, "word/footnotes.xml", "<w:footnotes" + ns + "><w:footnote w:id=\"1\"><w:sdt><w:sdtContent>"
+                        + "<w:p><w:r><w:t>Wrapped note</w:t></w:r></w:p></w:sdtContent></w:sdt></w:footnote></w:footnotes>");
+            }
+            try (ZipFile zip = new ZipFile(file)) {
+                RenderedDocument doc = DocumentDocxLayoutExtractor.extract(zip, "parts", "readwide.local", 28);
+                assertEquals("Wrapped header", doc.pages.get(0).headerBlocks.get(0).paragraph.plainText());
+                assertTrue(doc.plainText.contains("Wrapped note"));
+            }
+        } finally { file.delete(); }
+    }
+
+    @Test public void coalescesLongRunGroupsWithoutLosingLinksOrStyleBoundaries() throws Exception {
+        java.util.List<com.readwide.manager.document.render.RenderedRun> runs = new java.util.ArrayList<>();
+        for (int i = 0; i < 4096; i++) runs.add(com.readwide.manager.document.render.RenderedRun.text("x"));
+        com.readwide.manager.document.render.RenderedRun styled = com.readwide.manager.document.render.RenderedRun.text(
+                "bold", new com.readwide.manager.document.render.TextStyle.Builder().bold(true).build());
+        runs.add(styled);
+        com.readwide.manager.document.render.RenderedRun link = com.readwide.manager.document.render.RenderedRun.link(
+                "note", com.readwide.manager.document.render.TextStyle.plain(), "#note-1", "ref-1");
+        runs.add(link);
+        runs.add(com.readwide.manager.document.render.RenderedRun.text("end"));
+        java.lang.reflect.Method method = DocumentDocxLayoutExtractor.class.getDeclaredMethod("coalesceAdjacentTextRuns", java.util.List.class);
+        method.setAccessible(true);
+        @SuppressWarnings("unchecked") java.util.List<com.readwide.manager.document.render.RenderedRun> result =
+                (java.util.List<com.readwide.manager.document.render.RenderedRun>) method.invoke(null, runs);
+        assertEquals(4, result.size());
+        assertEquals(4096, result.get(0).text.length());
+        org.junit.Assert.assertSame(styled, result.get(1));
+        org.junit.Assert.assertSame(link, result.get(2));
+        assertEquals("end", result.get(3).text);
+    }
+
+    @Test public void explicitStyleResetsAndHighlightPrecedenceSurviveInheritance() throws Exception {
+        File file = File.createTempFile("readwide-word-styles", ".docx");
+        try {
+            try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(file))) {
+                String ns = " xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
+                put(out, "word/styles.xml", "<w:styles" + ns + ">"
+                        + "<w:style w:type=\"paragraph\" w:styleId=\"Base\">"
+                        + "<w:pPr><w:jc w:val=\"center\"/><w:spacing w:line=\"400\" w:lineRule=\"exact\"/></w:pPr>"
+                        + "<w:rPr><w:vertAlign w:val=\"superscript\"/><w:highlight w:val=\"yellow\"/></w:rPr></w:style>"
+                        + "<w:style w:type=\"paragraph\" w:styleId=\"Reset\"><w:basedOn w:val=\"Base\"/>"
+                        + "<w:pPr><w:jc w:val=\"left\"/><w:spacing w:line=\"360\" w:lineRule=\"auto\"/></w:pPr>"
+                        + "<w:rPr><w:vertAlign w:val=\"baseline\"/></w:rPr></w:style></w:styles>");
+                put(out, "word/document.xml", "<w:document" + ns + "><w:body>"
+                        + "<w:p><w:pPr><w:pStyle w:val=\"Base\"/></w:pPr><w:r><w:t>Inherited</w:t></w:r></w:p>"
+                        + "<w:p><w:pPr><w:pStyle w:val=\"Reset\"/></w:pPr>"
+                        + "<w:r><w:rPr><w:shd w:fill=\"aabbcc\"/></w:rPr><w:t>Highlighted</w:t></w:r>"
+                        + "<w:r><w:rPr><w:shd w:fill=\"aabbcc\"/><w:highlight w:val=\"none\"/></w:rPr><w:t>Shaded</w:t></w:r></w:p>"
+                        + "<w:p><w:pPr><w:pStyle w:val=\"Base\"/><w:jc w:val=\"left\"/>"
+                        + "<w:spacing w:line=\"240\" w:lineRule=\"auto\"/></w:pPr>"
+                        + "<w:r><w:rPr><w:vertAlign w:val=\"baseline\"/></w:rPr><w:t>DirectReset</w:t></w:r></w:p>"
+                        + "</w:body></w:document>");
+            }
+            try (ZipFile zip = new ZipFile(file)) {
+                RenderedDocument doc = DocumentDocxLayoutExtractor.extract(zip, "styles", "readwide.local", 28);
+                com.readwide.manager.document.render.RenderedParagraph inherited =
+                        doc.pages.get(0).blocks.get(0).paragraph;
+                com.readwide.manager.document.render.RenderedParagraph reset =
+                        doc.pages.get(0).blocks.get(1).paragraph;
+                com.readwide.manager.document.render.RenderedParagraph direct =
+                        doc.pages.get(0).blocks.get(2).paragraph;
+                assertEquals(com.readwide.manager.document.render.ParagraphStyle.Alignment.CENTER, inherited.style.alignment);
+                assertEquals(com.readwide.manager.document.render.TextStyle.VerticalAlign.SUPERSCRIPT, inherited.runs.get(0).style.verticalAlign);
+                for (com.readwide.manager.document.render.RenderedParagraph p : new com.readwide.manager.document.render.RenderedParagraph[] {reset, direct}) {
+                    assertEquals(com.readwide.manager.document.render.ParagraphStyle.Alignment.LEFT, p.style.alignment);
+                    assertEquals(com.readwide.manager.document.render.TextStyle.VerticalAlign.BASELINE, p.runs.get(0).style.verticalAlign);
+                    org.junit.Assert.assertNull(p.style.lineHeightPt);
+                }
+                assertEquals(1.5f, reset.style.lineHeightMultiplier, 0.001f);
+                assertEquals(1f, direct.style.lineHeightMultiplier, 0.001f);
+                assertEquals("#ffff00", reset.runs.get(0).style.highlightColor);
+                assertEquals("#aabbcc", reset.runs.get(0).style.backgroundColor);
+                assertEquals("none", reset.runs.get(1).style.highlightColor);
+                String html = FixedHtmlRenderer.render(doc);
+                assertTrue(html.contains("background-color:#ffff00;vertical-align:baseline;\">Highlighted"));
+                assertTrue(html.contains("background-color:#aabbcc;vertical-align:baseline;\">Shaded"));
+            }
+        } finally { file.delete(); }
+    }
+
     @Test
     public void extractsParagraphStyleTableAndImageIntoRenderedDocument() throws Exception {
         File docx = File.createTempFile("readwide-docx-layout", ".docx");
@@ -60,11 +322,9 @@ public class DocumentDocxLayoutExtractorTest {
             assertTrue(html.contains("src=\"https://readwide.local/word/media/image1.png\""));
             assertTrue(html.contains("colspan=\"2\""));
             assertTrue(html.contains("background-color:#ffeeaa"));
-            // Page margins are intentionally responsive: the top margin
-            // (720 twips / 16840 page height) renders as a viewport-clamped
-            // padding so the page scales on small screens, not a fixed 36pt.
-            assertTrue("page top margin should be a responsive clamp, html=" + html,
-                    html.contains("padding-top:clamp("));
+            // Both axes and source text use the same fitted page point.
+            assertTrue("page top margin should share the page scale, html=" + html,
+                    html.contains("padding-top:calc(var(--rw-point,1pt) * 36);"));
         }
     }
 
