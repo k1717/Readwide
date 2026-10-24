@@ -112,12 +112,11 @@ final class RarSplitStoredPlan {
         if (part.directory) {
             throw new RarArchiveReader.UnsupportedRarFeatureException("Directory entry cannot be a RAR split payload part");
         }
-        if (part.solid && !(part.rarVersion >= 5 && isStoredMethod(part))) {
-            throw new RarArchiveReader.UnsupportedRarFeatureException("Solid RAR split payload is not supported in the stored split path");
-        }
         if (!isStoredMethod(part)) {
             throw new RarArchiveReader.UnsupportedRarFeatureException("RAR compressed split payload is not supported by the stored split path");
         }
+        // A stored payload has no dictionary dependency, even when its header carries
+        // the solid flag. This applies to RAR3/RAR4 method 0x30 as well as RAR5.
         if (!part.path.equals(first.path)) {
             throw new RarArchiveReader.UnsupportedRarFeatureException("RAR split continuation path mismatch");
         }

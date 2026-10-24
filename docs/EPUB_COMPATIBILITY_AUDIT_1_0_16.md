@@ -97,7 +97,7 @@ fragment with the publisher active class when safe.
 
 Playback begins a clip only after the OEM `MediaPlayer` seek callback completes.
 Page-load generations prevent an obsolete WebView callback from starting a new cue
-on the previous DOM, and automatic overlay page turns bypass the short user-gesture
+on the previous DOM, and automatic overlay page turns bypass the short touch-gesture
 turn lock.
 
 This is a bounded sequential `par/text/audio` implementation, not a complete SMIL

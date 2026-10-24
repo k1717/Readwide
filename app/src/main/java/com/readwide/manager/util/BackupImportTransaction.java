@@ -23,16 +23,23 @@ final class BackupImportTransaction {
         int started = -1;
         try {
             for (int i = 0; i < steps.size(); i++) { started = i; steps.get(i).apply(); }
-        } catch (Exception failure) {
+        } catch (Exception | OutOfMemoryError | StackOverflowError failure) {
             boolean rollbackFailed = false;
             for (int i = started; i >= 0; i--) {
                 try { steps.get(i).rollback(); }
-                catch (Exception rollback) {
+                catch (Exception | OutOfMemoryError | StackOverflowError rollback) {
                     rollbackFailed = true;
-                    if (rollback != failure) failure.addSuppressed(rollback);
+                    if (rollback != failure) {
+                        try { failure.addSuppressed(rollback); }
+                        catch (OutOfMemoryError | StackOverflowError unavailable) {
+                            // Diagnostic allocation must not skip earlier undo steps.
+                        }
+                    }
                 }
             }
-            if (rollbackFailed) {
+            // Resource failures still need every started step's undo attempted.
+            // Keep the original Error identity for the outer recovery boundary.
+            if (rollbackFailed && !(failure instanceof Error)) {
                 throw new java.io.IOException("Backup import failed; restoring previous data also failed. Keep the original backup.", failure);
             }
             throw failure;

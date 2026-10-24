@@ -16,8 +16,10 @@ final class Rar3DecodePlan {
         final Action action;
         /** Step containing this compressed run's primer, or -1 for non-compressed entries. */
         final int runStart;
-        private Step(RarArchiveReader.RarEntry entry, Action action, int runStart) {
+        final boolean continuesSolid;
+        private Step(RarArchiveReader.RarEntry entry, Action action, int runStart, boolean continuesSolid) {
             this.entry = entry; this.action = action; this.runStart = runStart;
+            this.continuesSolid = continuesSolid;
         }
     }
 
@@ -25,13 +27,20 @@ final class Rar3DecodePlan {
     private final List<RarArchiveReader.RarEntry> entries;
     final long totalUnpackedBytes;
     final boolean independentLzOnly;
+    final boolean completeArchivePlan;
 
     private Rar3DecodePlan(List<Step> steps, List<RarArchiveReader.RarEntry> entries,
                            long totalUnpackedBytes, boolean independentLzOnly) {
+        this(steps, entries, totalUnpackedBytes, independentLzOnly, true);
+    }
+
+    private Rar3DecodePlan(List<Step> steps, List<RarArchiveReader.RarEntry> entries,
+                           long totalUnpackedBytes, boolean independentLzOnly, boolean completeArchivePlan) {
         this.steps = Collections.unmodifiableList(steps);
         this.entries = Collections.unmodifiableList(entries);
         this.totalUnpackedBytes = totalUnpackedBytes;
         this.independentLzOnly = independentLzOnly;
+        this.completeArchivePlan = completeArchivePlan;
     }
     int size() { return steps.size(); }
     Step step(int index) { return steps.get(index); }
@@ -63,7 +72,10 @@ final class Rar3DecodePlan {
             if (!isCompressedCandidate(entry)) return null;
             if (!entry.solid) break;
         }
-        return start < 0 ? null : forArchive(snapshot.subList(start, index + 1));
+        Rar3DecodePlan plan = start < 0 ? null : forArchive(snapshot.subList(start, index + 1));
+        // A selected prefix is not evidence that the actual solid run ends here.
+        return plan == null ? null : new Rar3DecodePlan(plan.steps, plan.entries,
+                plan.totalUnpackedBytes, plan.independentLzOnly, false);
     }
 
     /** One classification/probe per independent start; continuations are never probed as headers. */
@@ -74,9 +86,11 @@ final class Rar3DecodePlan {
             if (entry != null) entries.add(snapshot(entry));
         }
         Action[] actions = new Action[entries.size()];
+        boolean[] continuesSolid = new boolean[entries.size()];
         int[] runStarts = new int[entries.size()];
         java.util.Arrays.fill(runStarts, -1);
         int runStart = -1;
+        int previousCompressed = -1;
         boolean sawCompressed = false;
         long total = 0;
         for (int i = 0; i < entries.size(); i++) {
@@ -93,6 +107,7 @@ final class Rar3DecodePlan {
                     // Only a primer used by a later entry needs strict boundary/state retention.
                     actions[runStart] = Action.START_CHECKED;
                     actions[i] = Action.CONTINUE_CHECKED;
+                    continuesSolid[previousCompressed] = true;
                 } else {
                     Rar3PpmdBlockProbe.Result result = probe.probe(entry);
                     checkCancelled();
@@ -102,6 +117,7 @@ final class Rar3DecodePlan {
                     runStart = i;
                 }
                 runStarts[i] = runStart;
+                previousCompressed = i;
             }
             total = entry.unpackedSize > Long.MAX_VALUE - total ? Long.MAX_VALUE : total + entry.unpackedSize;
         }
@@ -110,14 +126,14 @@ final class Rar3DecodePlan {
         boolean independentOnly = true;
         for (int i = 0; i < entries.size(); i++) {
             checkCancelled();
-            steps.add(new Step(entries.get(i), actions[i], runStarts[i]));
+            steps.add(new Step(entries.get(i), actions[i], runStarts[i], continuesSolid[i]));
             independentOnly &= actions[i] != Action.START_CHECKED && actions[i] != Action.CONTINUE_CHECKED;
         }
         return new Rar3DecodePlan(steps, entries, total, independentOnly);
     }
 
     static boolean isCompressedCandidate(RarArchiveReader.RarEntry entry) {
-        return hasPlainData(entry) && entry.packedSize > 0
+        return hasPlainData(entry) && RarFeatureClassifier.hasRar3DecoderVersion(entry) && entry.packedSize > 0
                 && RarCompressedPayloadDecoder.isRar3Or4CompressionMethod(entry.method);
     }
 
@@ -147,7 +163,7 @@ final class Rar3DecodePlan {
         RarArchiveReader.RarEntry copy = new RarArchiveReader.RarEntry(entry.path, entry.directory,
                 entry.unpackedSize, entry.packedSize, entry.dataOffset, entry.rarVersion, entry.method,
                 entry.solid, entry.splitBefore, entry.splitAfter, encryption, entry.dataCrc,
-                entry.timeMillis, entry.rar5CompressionInfo, entry.blake2sp);
+                entry.timeMillis, entry.rar5CompressionInfo, entry.blake2sp, entry.archiveSolid, entry.unpackVersion);
         copy.sourceArchive = entry.sourceArchive;
         return copy;
     }

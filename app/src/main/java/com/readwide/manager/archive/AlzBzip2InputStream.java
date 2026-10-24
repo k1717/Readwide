@@ -42,6 +42,9 @@
 package com.readwide.manager.archive;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -102,24 +105,27 @@ final class AlzBzip2InputStream extends InputStream {
     /** Minimal MSB-first bit reader over the underlying stream. */
     private static final class BitReader {
         private final InputStream in;
+        @Nullable private final FileOperationProgress progress;
         private long bitCache;
         private int bitCount;
         private final byte[] buffer = new byte[64 * 1024];
         private int position, limit, calls;
 
-        BitReader(@NonNull InputStream in) {
+        BitReader(@NonNull InputStream in, @Nullable FileOperationProgress progress) {
             this.in = in;
+            this.progress = progress;
         }
 
         /** Reads {@code n} (1..24) bits; throws at end of stream. */
         int readBits(final int n) throws IOException {
-            if ((calls++ & 4095) == 0) checkpoint();
+            if ((calls++ & 4095) == 0) ArchiveCancellation.checkpoint(progress);
             while (bitCount < n) {
                 if (position == limit) {
-                    checkpoint();
+                    ArchiveCancellation.checkpoint(progress);
                     int count = in.read(buffer, 0, buffer.length);
                     if (count == -1) throw new IOException("Unexpected end of stream");
                     if (count <= 0 || count > buffer.length) throw new IOException("ALZ bzip2 input made invalid progress");
+                    ArchiveCancellation.checkpoint(progress);
                     position = 0;
                     limit = count;
                 }
@@ -150,9 +156,10 @@ final class AlzBzip2InputStream extends InputStream {
     private char su_z;
     private Data data;
     private IOException failure;
+    @Nullable private final FileOperationProgress progress;
 
-    private static void checkpoint() throws InterruptedIOException {
-        if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("ALZ bzip2 decoding cancelled");
+    private void checkpoint() throws InterruptedIOException {
+        ArchiveCancellation.checkpoint(progress);
     }
 
     private void requireReadable() throws IOException {
@@ -162,8 +169,15 @@ final class AlzBzip2InputStream extends InputStream {
     }
 
     AlzBzip2InputStream(@NonNull final InputStream in) throws IOException {
+        this(in, null);
+    }
+
+    AlzBzip2InputStream(@NonNull final InputStream in,
+                       @Nullable FileOperationProgress progress) throws IOException {
+        this.progress = progress;
+        checkpoint();
         this.source = in;
-        this.bin = new BitReader(in);
+        this.bin = new BitReader(in, progress);
         initBlock();
     }
 
@@ -654,6 +668,7 @@ final class AlzBzip2InputStream extends InputStream {
         }
 
         for (int i = 0, lastShadow = this.last; i <= lastShadow; i++) {
+            if ((i & 4095) == 0) checkpoint();
             final int tmp = cftab[ll8[i] & 0xff]++;
             checkBounds(tmp, ttLen, "tt index");
             tt[tmp] = i;

@@ -2,11 +2,11 @@
 
 Readwide first-party source code is licensed under the Apache License 2.0. Keep this file with source releases and with binary release materials such as APK/AAB release assets.
 
-This notice summarizes direct dependencies and bundled source for Readwide 1.0.20. The matching license report and source dependency SBOM record the declared versions and licenses. They do not replace a Gradle-resolved transitive dependency report.
+This notice summarizes direct dependencies and bundled source for Readwide 1.0.21, retaining the 1.0.20 dependency baseline. The matching license report and source dependency SBOM record the declared versions and licenses. They do not replace a Gradle-resolved transitive dependency report.
 
 ## Default build boundary
 
-The default Readwide 1.0.20 package is the FOSS-oriented public line:
+The default Readwide 1.0.21 package retains the FOSS-oriented public line:
 
 - first-party source: Apache-2.0;
 - no Junrar or RARLAB UnRAR-license code bundled;
@@ -16,18 +16,27 @@ The default Readwide 1.0.20 package is the FOSS-oriented public line:
 - no Hancom proprietary SDK, LibreOffice bundle, or server conversion service;
 - no ads, analytics, telemetry SDK, account system, or network update checker in the default app.
 
-See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_20.md`, and `docs/SBOM_READWIDE_1_0_20.spdx.json`.
+See `docs/FOSS_STATUS.md`, `docs/LICENSE_REPORT_READWIDE_1_0_21.md`, and `docs/SBOM_READWIDE_1_0_21.spdx.json`.
+
+## ALZ Obfuscated Deflate format references
+
+`AlzObfuscatedDeflateInputStream.java` is independently written Apache-2.0 source.
+Its bitstream grammar follows RFC 1951 and the method-3 format variation described
+in public XADMaster source. XADMaster is LGPL-2.1-or-later; no XADMaster code is
+copied, translated, linked or bundled. No proprietary Bandizip implementation is
+included. Format references and validation limits are in
+[ALZ format notes](docs/ALZ_FORMAT_NOTES.md).
 
 ## RE2/J contents rules
 
 `com.google.re2j:re2j:1.8` supplies the pure-Java, non-backtracking matcher for
-user-defined TXT contents expressions. Upstream source is unchanged; retain the
+custom TXT contents expressions. Upstream source is unchanged; retain the
 BSD-3-Clause copyright and full license in the APK asset
 `open_source_licenses/re2j_bsd_3_clause.txt`. See the
 [tagged source](https://github.com/google/re2j/tree/re2j-1.8) and
 [license](https://github.com/google/re2j/blob/re2j-1.8/LICENSE).
-This is a declared dependency; the updated APK and resolved dependency graph have
-not been built or audited here.
+This is a declared dependency; the source inventory does not verify the final APK
+contents or a resolved transitive dependency graph.
 
 ## 7z LZHAM and its private C++ runtime
 
@@ -193,6 +202,8 @@ License: Apache License 2.0.
 - Pinned source: wrapper commit `3a592be028c7be41847f667570bd343c0010bd9d`, advanced by Readwide to official libarchive commit `27cbc7827172698143e440801fc0ba39ccb4f1f5` (libarchive 3.8.9). Exact codec commits are recorded in `third_party/libarchive-android/UPSTREAM.md`.
 - Build boundary: Java/JNI and native codec sources are compiled by Gradle, Android NDK 29.0.14206865, and CMake 3.22.1. No prebuilt `.aar`, `.so`, or other native library is checked into the source module.
 - License position: Android wrapper under Apache License 2.0; libarchive and its native codec inputs under the permissive upstream notices retained within the vendored source tree.
+- Local LHA modification: CRC-bearing level-0 PMarc stored PM0 reuses the existing stored-data path, with matching size checks and comments kept separate from Unix metadata. Compressed PM1/PM2 are excluded. The retained `libarchive.patch` and `UPSTREAM.md` record this change; no PMarc reference-decoder source or new dependency is included.
+- Local 7z modification: encoded headers require one folder instead of silently decoding only the first of several. Ordinary multi-folder file data is unaffected. The retained patch records this check; native execution remains pending.
 - 7z method note: 7z BCJ2 and PPMd entries (which Commons Compress cannot handle for AES-encrypted archives) are decoded by first-party Java in `SevenZBcj2ArchiveReader`/`SevenZBcj2Decoder`/`SevenZAesDecoder`/`SevenZPpmd7Decoder` (see `docs/SEVENZ_BCJ2_READER_READWIDE_1_0_11.md` and `docs/SEVENZ_PPMD_READER_READWIDE_1_0_11.md`). `SevenZPpmd7Decoder` is a Java port of the public-domain Ppmd7 reference - Dmitry Shkarin's PPMd var.H (2001, public domain) as maintained in Igor Pavlov's Ppmd7 codec (public domain) - obtained from pyppmd's source distribution; public-domain code carries no license obligations and is Apache-2.0 compatible. Vendored libarchive also decodes unencrypted 7z PPMd as a fallback, via the public-domain `Ppmd7.c` carried under libarchive's BSD-style licensing. No 7-Zip archive-engine or UnRAR-license source is included; test fixtures for these methods are self-made with p7zip from first-party content.
 - Binary-release requirement: `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt` is packaged into the APK and reproduces the applicable wrapper, libarchive, UC Regents, BLAKE2, bzip2, liblzma, LZ4, Zstandard, zlib, Mbed TLS, and Apache-2.0 notices from the pinned source inputs. Keep this asset in binary builds and keep this project-level notice with source/release materials.
 
@@ -308,5 +319,5 @@ The Gradle packaging block may exclude duplicate dependency `META-INF/LICENSE*` 
 - `LICENSE`
 - `NOTICE`
 - `THIRD_PARTY_NOTICES.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_20.md` (current source-declared report)
-- `docs/SBOM_READWIDE_1_0_20.spdx.json` (current source-declared report)
+- `docs/LICENSE_REPORT_READWIDE_1_0_21.md` (current source-declared report)
+- `docs/SBOM_READWIDE_1_0_21.spdx.json` (current source-declared report)

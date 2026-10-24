@@ -1,8 +1,7 @@
 # LHA LH4 and Amiga byte-split integration — Readwide 1.0.20
 
-Source review: 2026-10-10; release date: 2026-10-11. The local release build
-completed successfully on 2026-10-11. No tests, benchmarks or native/device execution
-were run for this source review.
+The local release build completed successfully. No tests, benchmarks or
+native/device execution were run for this source review.
 
 ## Implemented method scope
 

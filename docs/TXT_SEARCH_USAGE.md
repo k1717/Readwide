@@ -4,7 +4,9 @@ The TXT reader's search dialog (the search button in the bottom toolbar) support
 
 Markdown, EPUB, HWP/HWPX, and Word-family document viewers use the same search option model for their document-search dialog instead of Android WebView native find. In those viewers, the current result is highlighted in the rendered document and revealed in a popup-safe position where possible; page counts and visual positions still depend on the rendered document layout rather than the TXT exact source-page model.
 
-Three options can be toggled in the dialog. The selected state is remembered until the dialog is next opened. Literal search uses NFC only when it preserves the input's UTF-16 length, to keep original offsets stable. Canonically equivalent spellings are therefore not guaranteed to match: precomposed `é` does not match decomposed `e` plus a combining acute accent when normalization changes length. Regex mode requests Java's canonical-equivalence matching instead.
+Case sensitive, whole word and regular expression are grouped under the expandable search options. Their states are saved locally and reused when the dialog opens again. Active conditions expand initially; collapsing the options does not turn them off, and the collapsed label lists active conditions.
+
+Literal search compares NFC-normalized text and maps matches back to original UTF-16 coordinates, including when normalization changes length. For example, precomposed `é` can match decomposed `e` plus a combining acute accent; highlighting covers the corresponding original span. Regex searches keep the original text and pattern unchanged and do not enable canonical-equivalence matching. Search normalization does not rewrite the document, change page calculation or move stored bookmark coordinates.
 
 ## Case sensitive
 
@@ -37,7 +39,7 @@ Multiline anchor mode is enabled by default: `^cat$` matches the `cat` line in `
 
 ## Document viewer notes
 
-For Markdown, EPUB, HWP/HWPX, and Word-family documents, the options below are applied to rendered text segments. Search results can move between rendered pages and can be pulled away from the bottom search dialog when they are near the end of the document. Exact source offsets and exact pagination remain a TXT-only guarantee.
+For Markdown, EPUB, HWP/HWPX, and Word-family documents, these options are applied to rendered text segments. Search results can move between rendered pages and can be pulled away from the bottom search dialog when they are near the end of the document. These viewers use rendered-document positions, not the TXT exact page index.
 
 Document search counts and highlights left-to-right, non-overlapping occurrences within each HTML text segment: `aa` in `aaaa` has two selectable results. TXT literal search retains overlapping occurrences (three in that example). Matches do not span HTML tags, and comments, attributes, head, script and style content are excluded. HTML entities are mapped back to intact source ranges so counting and selectable highlights use the same occurrence model. Regex line anchors refer to text-input newlines, not visual line wrapping in the viewer.
 

@@ -36,6 +36,8 @@ public class PrefsManager {
     private static final String KEY_READER_TEXT_LEFT_OFFSET = "reader_text_left_inset_px";
     private static final String KEY_READER_TEXT_RIGHT_OFFSET = "reader_text_right_inset_px";
     private static final String KEY_EPUB_FONT_FAMILY = "epub_font_family";
+    private static final String KEY_EPUB_FONT_SIZE = "epub_font_size";
+    private static final String KEY_EPUB_LINE_HEIGHT = "epub_line_height";
     // Legacy SharedPreferences store name from the TextView Reader lineage. Do NOT rename:
     // this is the live on-disk preferences key, so changing it would orphan the saved
     // settings of every existing install. The name is internal and never shown in the UI.
@@ -141,6 +143,7 @@ public class PrefsManager {
     }
 
     public JSONObject exportSettingsToJson() throws JSONException {
+        getEpubFontSize(); // Make the legacy size migration explicit in new backups.
         JSONObject root = new JSONObject();
         root.put("version", 1);
 
@@ -249,10 +252,13 @@ public class PrefsManager {
             // to compare, after applying the existing JSON numeric conversions.
             if (!valid || !PreferenceBackupSchema.accepts(key, value))
                 throw new JSONException("Invalid preference value/type: " + key);
-            if (("font_size".equals(key) && ((Float) value < 8f || (Float) value > 48f))
+            if ((("font_size".equals(key) || KEY_EPUB_FONT_SIZE.equals(key)) && ((Float) value < 8f || (Float) value > 48f))
                     || ("line_spacing".equals(key) && ((Float) value < 0.8f || (Float) value > 3f))
                     || ("brightness_value".equals(key) && ((Float) value < 0f || (Float) value > 1f)))
                 throw new JSONException("Preference outside supported rendering range: " + key);
+            if (KEY_EPUB_LINE_HEIGHT.equals(key)
+                    && ((Integer) value < 0 || (Integer) value >= EpubTypography.LINE_HEIGHT_CHOICE_COUNT))
+                throw new JSONException("Invalid EPUB line-height choice");
             if ("txt_display_replacement_rules_json".equals(key)) {
                 if (!(value instanceof String)) throw new JSONException("Invalid TXT display-rule preference");
                 JSONArray rules = new JSONArray((String) value);
@@ -283,6 +289,13 @@ public class PrefsManager {
             if (previous != null && !samePreferenceType(previous, entry.getValue()))
                 throw new JSONException("Preference type changed: " + entry.getKey());
             planned.put(entry.getKey(), entry.getValue());
+        }
+        if (!imported.containsKey(KEY_EPUB_FONT_SIZE) && !planned.containsKey(KEY_EPUB_FONT_SIZE)) {
+            // Replacement of an old backup adopts its shared size. A merge keeps
+            // the previous EPUB appearance, even before its first dedicated read.
+            Object legacySize = (merge ? before : imported).get("font_size");
+            planned.put(KEY_EPUB_FONT_SIZE, EpubTypography.normalizeFontSize(
+                    legacySize instanceof Float ? (Float) legacySize : EpubTypography.DEFAULT_FONT_SIZE));
         }
         // Resolve local folders before committing anything, preserving the existing
         // cross-device policy. These changes now share the same durable commit.
@@ -317,23 +330,27 @@ public class PrefsManager {
         for (Map.Entry<String, ?> entry : values.entrySet()) {
             String key = entry.getKey();
             if (isBackupExcludedKey(key)) continue; // Never restore/roll back PINs or device encoding caches.
-            Object value = entry.getValue();
-            if (value instanceof Boolean) editor.putBoolean(key, (Boolean) value);
-            else if (value instanceof Integer) editor.putInt(key, (Integer) value);
-            else if (value instanceof Long) editor.putLong(key, (Long) value);
-            else if (value instanceof Float) editor.putFloat(key, (Float) value);
-            else if (value instanceof String) editor.putString(key, (String) value);
-            else if (value instanceof Set) {
-                Set<String> copy = new LinkedHashSet<>();
-                for (Object member : (Set<?>) value) copy.add((String) member);
-                editor.putStringSet(key, copy);
-            } else throw new java.io.IOException("Unsupported preference value: " + key);
+            putStoredPreferenceValue(editor, key, entry.getValue());
         }
         try {
             if (!editor.commit()) throw new java.io.IOException("Could not save imported preferences");
         } finally {
             TextDisplayRuleManager.invalidateCache();
         }
+    }
+
+    private static void putStoredPreferenceValue(SharedPreferences.Editor editor, String key,
+                                                 Object value) throws java.io.IOException {
+        if (value instanceof Boolean) editor.putBoolean(key, (Boolean) value);
+        else if (value instanceof Integer) editor.putInt(key, (Integer) value);
+        else if (value instanceof Long) editor.putLong(key, (Long) value);
+        else if (value instanceof Float) editor.putFloat(key, (Float) value);
+        else if (value instanceof String) editor.putString(key, (String) value);
+        else if (value instanceof Set) {
+            Set<String> copy = new LinkedHashSet<>();
+            for (Object member : (Set<?>) value) copy.add((String) member);
+            editor.putStringSet(key, copy);
+        } else throw new java.io.IOException("Unsupported preference value: " + key);
     }
 
     private boolean isDeviceLocalDirectoryPreferenceKey(String key) {
@@ -382,13 +399,15 @@ public class PrefsManager {
     }
 
 
-    public void resetReaderAndAppSettings() {
-        SharedPreferences.Editor editor = prefs.edit();
+    public void resetReaderAndAppSettings() throws java.io.IOException {
+        Map<String, ?> before = snapshotForImport();
         String[] keys = new String[]{
                 "font_size",
                 "line_spacing",
                 "font_family",
                 KEY_EPUB_FONT_FAMILY,
+                KEY_EPUB_FONT_SIZE,
+                KEY_EPUB_LINE_HEIGHT,
                 "epub_left_padding_dp",
                 "epub_right_padding_dp",
                 "epub_side_padding_dp",
@@ -396,6 +415,7 @@ public class PrefsManager {
                 "epub_top_padding_dp",
                 "epub_bottom_padding_dp",
                 "epub_page_direction",
+                "epub_text_alignment",
                 "epub_force_reader_theme_colors",
                 "dark_mode",
                 "language_mode",
@@ -456,14 +476,52 @@ public class PrefsManager {
                 "reader_search_whole_word",
                 "reader_search_regex"
         };
-        for (String key : keys) editor.remove(key);
-        editor.commit();
+        try {
+            SharedPreferences.Editor editor = prefs.edit();
+            for (String key : keys) editor.remove(key);
+            if (!editor.commit()) throw new java.io.IOException("Could not save reset settings");
+        } catch (java.io.IOException | RuntimeException failure) {
+            // A failed commit can already have changed SharedPreferences memory.
+            // Restore only the reset keys, not unrelated values saved meanwhile.
+            try {
+                SharedPreferences.Editor rollback = prefs.edit();
+                for (String key : keys) {
+                    if (before.containsKey(key)) putStoredPreferenceValue(rollback, key, before.get(key));
+                    else rollback.remove(key);
+                }
+                if (!rollback.commit()) throw new java.io.IOException("Could not restore previous settings");
+            } catch (Exception rollbackFailure) {
+                if (rollbackFailure != failure) failure.addSuppressed(rollbackFailure);
+                throw new java.io.IOException(
+                        "Settings reset failed; restoring previous settings also failed", failure);
+            }
+            throw failure;
+        }
         applyDarkMode(getDarkMode());
         applyLanguage(getLanguageMode());
     }
 
     public float getFontSize() { return prefs.getFloat("font_size", DEFAULT_FONT_SIZE); }
-    public void setFontSize(float s) { prefs.edit().putFloat("font_size", Math.max(8f, Math.min(48f, s))).apply(); }
+    public void setFontSize(float s) {
+        getEpubFontSize(); // Freeze the previous shared size before TXT changes it.
+        prefs.edit().putFloat("font_size", Math.max(8f, Math.min(48f, s))).apply();
+    }
+    public float getEpubFontSize() {
+        if (prefs.contains(KEY_EPUB_FONT_SIZE))
+            return EpubTypography.normalizeFontSize(prefs.getFloat(KEY_EPUB_FONT_SIZE, EpubTypography.DEFAULT_FONT_SIZE));
+        float initial = EpubTypography.normalizeFontSize(getFontSize());
+        prefs.edit().putFloat(KEY_EPUB_FONT_SIZE, initial).apply();
+        return initial;
+    }
+    public void setEpubFontSize(float size) {
+        prefs.edit().putFloat(KEY_EPUB_FONT_SIZE, EpubTypography.normalizeFontSize(size)).apply();
+    }
+    public int getEpubLineHeight() {
+        return EpubTypography.normalizeLineHeight(prefs.getInt(KEY_EPUB_LINE_HEIGHT, EpubTypography.BOOK_LINE_HEIGHT));
+    }
+    public void setEpubLineHeight(int choice) {
+        prefs.edit().putInt(KEY_EPUB_LINE_HEIGHT, EpubTypography.normalizeLineHeight(choice)).apply();
+    }
     public float getLineSpacing() { return prefs.getFloat("line_spacing", DEFAULT_LINE_SPACING); }
     public void setLineSpacing(float s) { prefs.edit().putFloat("line_spacing", s).apply(); }
     public String getFontFamily() { return prefs.getString("font_family", "default"); }
@@ -592,6 +650,14 @@ public class PrefsManager {
 
     public boolean getEpubForceReaderThemeColors() {
         return prefs.getBoolean("epub_force_reader_theme_colors", true);
+    }
+
+    public int getEpubTextAlignment() {
+        return EpubTextAlignment.normalize(prefs.getInt("epub_text_alignment", EpubTextAlignment.BOOK_DEFAULT));
+    }
+
+    public void setEpubTextAlignment(int alignment) {
+        prefs.edit().putInt("epub_text_alignment", EpubTextAlignment.normalize(alignment)).apply();
     }
 
     public void setEpubForceReaderThemeColors(boolean enabled) {

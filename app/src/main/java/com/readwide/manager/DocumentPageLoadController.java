@@ -84,31 +84,7 @@ final class DocumentPageLoadController {
                 if (parsed.pages.isEmpty()) throw new IOException("No renderable pages found");
 
                 if (activity.activityDestroyed || generation != activity.loadGeneration) return;
-                activity.runOnUiThread(() -> {
-                    if (activity.activityDestroyed || generation != activity.loadGeneration) {
-                        parsed.close();
-                        return;
-                    }
-                    activity.adoptParsedDocument(parsed, file);
-                    activity.currentPage = resolveInitialPage(intent);
-                    activity.documentLoadAccepted = true;
-                    activity.rememberOpeningDocumentViewport();
-                    if (activity.getSupportActionBar() != null) {
-                        activity.getSupportActionBar().setTitle(activity.fileName);
-                    }
-                    activity.hideLoadingWindow();
-                    if (activity.webView != null) activity.webView.setVisibility(View.VISIBLE);
-                    // docType is resolved off-thread. Apply the EPUB-only compact
-                    // counter/system-bar policy and its stable safe frame before
-                    // the first page is shown.
-                    activity.applyDocumentTopPageStatusVisibility();
-                    activity.applyDocumentSystemBarColors();
-                    androidx.core.view.ViewCompat.requestApplyInsets(
-                            activity.findViewById(R.id.document_root));
-                    androidx.core.view.ViewCompat.requestApplyInsets(
-                            activity.findViewById(R.id.document_content_column));
-                    activity.showPage(activity.currentPage, 0);
-                });
+                activity.runOnUiThread(() -> acceptParsedDocument(generation, parsed, file, intent));
                 delivered = true;
             } catch (Exception e) {
                 reportLoadFailure(generation, e);
@@ -121,6 +97,59 @@ final class DocumentPageLoadController {
                 if (!delivered) parsed.close();
             }
         });
+    }
+
+    /** UI adoption can allocate again while copying metadata and preparing display HTML. */
+    void acceptParsedDocument(int generation, DocumentPageActivity.ParsedDocument parsed,
+                              File file, Intent intent) {
+        try {
+            if (activity.activityDestroyed || generation != activity.loadGeneration) return;
+            activity.adoptParsedDocument(parsed, file);
+            if (activity.activityDestroyed || generation != activity.loadGeneration) return;
+            activity.currentPage = resolveInitialPage(intent);
+            activity.documentLoadAccepted = true;
+            activity.rememberOpeningDocumentViewport();
+            if (activity.getSupportActionBar() != null) {
+                activity.getSupportActionBar().setTitle(activity.fileName);
+            }
+            activity.hideLoadingWindow();
+            if (activity.webView != null) activity.webView.setVisibility(View.VISIBLE);
+            // docType is resolved off-thread. Apply its stable safe frame before display.
+            activity.applyDocumentTopPageStatusVisibility();
+            activity.applyDocumentSystemBarColors();
+            androidx.core.view.ViewCompat.requestApplyInsets(activity.findViewById(R.id.document_root));
+            androidx.core.view.ViewCompat.requestApplyInsets(activity.findViewById(R.id.document_content_column));
+            activity.showPage(activity.currentPage, 0);
+        } catch (RuntimeException failure) {
+            failAcceptedDocument(generation, failure);
+        } catch (OutOfMemoryError | StackOverflowError failure) {
+            failAcceptedDocument(generation,
+                    new IOException("Document exceeds available memory or nesting depth", failure));
+        } finally {
+            // Successful adoption transferred its ZIP and set resourceZip=null.
+            // Otherwise this closes only the untransferred parse-owned handle.
+            parsed.close();
+        }
+    }
+
+    private void failAcceptedDocument(int generation, Exception failure) {
+        if (activity.activityDestroyed || generation != activity.loadGeneration) return;
+        // Revoke saves before retiring any partially published content. Failure
+        // must never overwrite a previously persisted bookmark/reading position.
+        activity.documentLoadAccepted = false;
+        activity.beginDocumentViewportLoad();
+        activity.documentAnchorPageGeneration++;
+        activity.invalidateDocumentPageLoad(activity.webView);
+        activity.invalidateDocumentPageLoad(activity.rightWebView);
+        activity.primaryDocumentPageReadyGeneration = -1;
+        activity.rightDocumentPageReadyGeneration = -1;
+        activity.closeResourceZip();
+        activity.pages.clear();
+        activity.wordRelationships.clear();
+        activity.pendingDocumentRestoreAnchorJson = "";
+        activity.lastDocumentContentAnchorJson = "";
+        if (activity.webView != null) activity.webView.setVisibility(View.INVISIBLE);
+        showLoadError(failure);
     }
 
     private void reportLoadFailure(int generation, Exception failure) {
@@ -139,6 +168,10 @@ final class DocumentPageLoadController {
             Uri uri = Uri.parse(uriString);
             String displayName = FileUtils.getFileNameFromUri(activity, uri);
             if (displayName == null || displayName.trim().isEmpty()) displayName = "document";
+            String mime = null;
+            try { mime = activity.getContentResolver().getType(uri); }
+            catch (RuntimeException unavailable) { /* A recognized filename remains usable. */ }
+            displayName = UriOpenRequest.documentFileName(displayName, mime);
             return FileUtils.copyUriToLocal(activity, uri, displayName);
         } else {
             throw new IOException("No file path or URI supplied");

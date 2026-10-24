@@ -62,6 +62,10 @@ final class MainRecentFilesController {
     // everything, not just the displayed rows.
     private List<FileListItem> fullRecentItems = new ArrayList<>();
     private List<ReaderState> fullRecentStates = new ArrayList<>();
+    private int fullRecentFilter = MainActivity.FILTER_ALL;
+    private boolean hasDisplayedCriteria;
+    private String displayedQuery = "";
+    private int displayedFilter = MainActivity.FILTER_ALL;
 
     MainRecentFilesController(@NonNull MainActivity activity) {
         this.activity = activity;
@@ -90,7 +94,7 @@ final class MainRecentFilesController {
         }
         resetRecyclerBeforeReload();
         if (activity.bookmarkManager == null) {
-            applyRecentFiles(new ArrayList<>(), new ArrayList<>());
+            applyRecentFiles(new ArrayList<>(), new ArrayList<>(), "", activity.activeFileFilter);
             return;
         }
         final long token = recentLoadToken;
@@ -120,13 +124,14 @@ final class MainRecentFilesController {
             pendingLoad = null;
             fullRecentStates = recent;
             fullRecentItems = allItems;
+            fullRecentFilter = filter;
             // The live search box, not a captured query, owns the display.
             String liveQuery = activity.homeMode ? currentSearchBoxQuery() : "";
             if (!liveQuery.isEmpty()) {
                 applyRecentSearchInternal(liveQuery);
             } else {
                 hideRecentSearchBanner();
-                applyRecentFiles(recent, displayItems(allItems));
+                applyRecentFiles(recent, displayItems(allItems), "", filter);
             }
         });
     }
@@ -183,8 +188,16 @@ final class MainRecentFilesController {
     }
 
     private void applyRecentFiles(@NonNull List<ReaderState> recent,
-                                  @NonNull List<FileListItem> recentItems) {
+                                  @NonNull List<FileListItem> recentItems,
+                                  @NonNull String query, int filter) {
         if (activity.recentAdapter != null) {
+            String normalizedQuery = query.trim().toLowerCase(java.util.Locale.ROOT);
+            if (hasDisplayedCriteria && activity.homeMode && !activity.searchMode
+                    && (filter != displayedFilter || !normalizedQuery.equals(displayedQuery))) {
+                // A row can be selected after the query/chip event but before
+                // its debounced search or asynchronous type snapshot arrives.
+                activity.exitFileSelectionMode(true);
+            }
             activity.recentAdapter.setReadingProgressStates(recent);
             int recentSort = activity.prefs != null
                     ? activity.prefs.getRecentSortMode()
@@ -199,6 +212,9 @@ final class MainRecentFilesController {
                 activity.recentAdapter.setSortMode(recentSort);
                 activity.recentAdapter.setItems(recentItems);
             }
+            hasDisplayedCriteria = true;
+            displayedQuery = normalizedQuery;
+            displayedFilter = filter;
             activity.recentAdapter.refreshReadingProgress();
             if (activity.navigationState.restoreScroll(true)) {
                 savedFirstVisiblePosition = RecyclerView.NO_POSITION;
@@ -253,14 +269,16 @@ final class MainRecentFilesController {
         }
         showRecentSearchBanner(query, matches.size());
         preserveScrollOnApply = false;
-        applyRecentFiles(fullRecentStates, matches);
+        // The corpus may still belong to the previous chip while a newer type
+        // is loading. Only its accepted snapshot can advance the type owner.
+        applyRecentFiles(fullRecentStates, matches, query, fullRecentFilter);
     }
 
     // Leave recent search and restore the capped display.
     void clearRecentSearch() {
         hideRecentSearchBanner();
         preserveScrollOnApply = false;
-        applyRecentFiles(fullRecentStates, displayItems(fullRecentItems));
+        applyRecentFiles(fullRecentStates, displayItems(fullRecentItems), "", fullRecentFilter);
     }
 
     // While searching, a banner below the "Recently Read" header shows

@@ -31,6 +31,8 @@ final class ReaderSearchController {
     // Accessed on the UI thread only; matching inside the snapshot stays on one worker.
     private TextMatchIndex textMatchIndex;
     private Future<?> textSearchTask;
+    // UI-thread ownership of the cache ticket, separate from cancellation of work.
+    private int inFlightCountGeneration = -1;
 
     ReaderSearchController(@NonNull ReaderActivity activity) {
         this.activity = activity;
@@ -44,6 +46,7 @@ final class ReaderSearchController {
         activity.largeTextSearchCountGeneration.incrementAndGet();
         activity.largeTextSearchGeneration.incrementAndGet();
         activity.largeTextSearchTotalCache.clear();
+        inFlightCountGeneration = -1;
         activity.applySearchHighlight();
     }
 
@@ -60,6 +63,7 @@ final class ReaderSearchController {
 
     void clearLargeTextSearchTotalCache() {
         activity.largeTextSearchTotalCache.clear();
+        inFlightCountGeneration = -1;
         // Invalidate any in-flight count so it cannot repopulate the cleared cache with a stale total.
         activity.largeTextSearchCountGeneration.incrementAndGet();
     }
@@ -99,16 +103,18 @@ final class ReaderSearchController {
         final int generation = activity.loadGeneration.get();
         final com.readwide.manager.util.SearchOptions countOptions = activity.currentSearchOptions();
         final String optionsSignature = countOptions.signature();
-        if (activity.largeTextSearchTotalCache.isInFlight(expectedPath, query, generation, optionsSignature)) {
+        if (inFlightCountGeneration == activity.largeTextSearchCountGeneration.get()
+                && activity.largeTextSearchTotalCache.isInFlight(expectedPath, query, generation, optionsSignature)) {
             return;
         }
 
         final int countGeneration = activity.largeTextSearchCountGeneration.incrementAndGet();
         activity.largeTextSearchTotalCache.markInFlight(expectedPath, query, generation, optionsSignature);
+        inFlightCountGeneration = countGeneration;
 
         activity.largeTextSearchCountExecutor.execute(() -> {
             int total = -1;
-            String error = null;
+            boolean countFailed = false;
             try {
                 total = activity.largeTextSearchEngine.countMatches(new File(expectedPath), query, countOptions,
                         activity.largeTextActiveCollapseBlankLines,
@@ -117,14 +123,25 @@ final class ReaderSearchController {
                                 || expectedPath == null
                                 || !expectedPath.equals(activity.filePath)
                                 || countGeneration != activity.largeTextSearchCountGeneration.get());
-            } catch (IOException | RuntimeException t) {
-                error = t.getClass().getSimpleName();
+            } catch (IOException | RuntimeException | OutOfMemoryError | StackOverflowError t) {
+                // Counting is optional background work, but execute() otherwise
+                // lets decoder/allocation or regex-stack errors escape the worker.
+                // Keep the total unknown and release this request below so Find
+                // can recover after a failed count without publishing a false zero.
+                countFailed = true;
             }
 
             final int finalTotal = total;
-            final String finalError = error;
+            final boolean finalCountFailed = countFailed;
             activity.handler.post(() -> {
-                activity.largeTextSearchTotalCache.clearInFlightIf(expectedPath, query, generation, optionsSignature);
+                // A retry can have exactly the same path/query/load/options.
+                // The superseded callback must not clear that newer request's ticket.
+                // Cancellation without a replacement may still release its own
+                // ticket; a newer request changes this owner before being queued.
+                if (countGeneration == inFlightCountGeneration) {
+                    activity.largeTextSearchTotalCache.clearInFlightIf(expectedPath, query, generation, optionsSignature);
+                    inFlightCountGeneration = -1;
+                }
 
                 if (activity.activityDestroyed
                         || generation != activity.loadGeneration.get()
@@ -135,7 +152,7 @@ final class ReaderSearchController {
                 }
 
                 if (!activity.ensureLoadedTextCurrent()) return;
-                if (finalError != null || finalTotal < 0) {
+                if (finalCountFailed || finalTotal < 0) {
                     return;
                 }
 

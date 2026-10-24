@@ -28,6 +28,25 @@ import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 
 public class RarArchiveReaderTest {
+    @Test public void legacyContainerRetainsActualDecoderGeneration() throws Exception {
+        for (int version : new int[]{15, 20, 26, 29, 36, 255}) {
+            File archive = tempFolder.newFile("decoder-" + version + ".rar");
+            byte[] name = "file.bin".getBytes(StandardCharsets.US_ASCII);
+            try (FileOutputStream out = new FileOutputStream(archive)) {
+                out.write(new byte[]{0x52, 0x61, 0x72, 0x21, 0x1a, 7, 0});
+                out.write(rar4Header(0x73, 0, new byte[6]));
+                out.write(rar4Header(0x74, 0x8000, bytes(uint32(2), uint32(2), new byte[]{1},
+                        uint32(0), uint32(0), new byte[]{(byte) version, 0x33}, uint16(name.length), uint32(0), name)));
+                out.write(new byte[]{(byte) 0xa0, 0});
+                out.write(rar4Header(0x7b, 0, new byte[0]));
+            }
+            RarArchiveReader.RarEntry entry = RarArchiveReader.readEntries(archive, null).get(0);
+            assertEquals(4, entry.rarVersion);
+            assertEquals(version, entry.unpackVersion);
+            assertEquals(version, Rar3DecodePlan.snapshot(entry).unpackVersion);
+        }
+    }
+
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
 

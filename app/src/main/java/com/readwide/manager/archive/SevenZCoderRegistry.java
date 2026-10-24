@@ -6,7 +6,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 import org.apache.commons.compress.compressors.deflate64.Deflate64CompressorInputStream;
 import org.tukaani.xz.*;
 
@@ -109,14 +108,14 @@ final class SevenZCoderRegistry {
                     | ((props[3] & 255L) << 16) | ((props[4] & 255L) << 24);
             int dictionary = boundedDictionary(declared, size, LZMAInputStream.DICT_SIZE_MAX);
             LZMAInputStream.getMemoryUsage(dictionary, props[0]); // Validate lc/lp/pb without opening input.
-            return (CachedDecoder) (inputs, password, arrays) -> {
+            return (CachedDecoder) (inputs, password, arrays) -> openXzPayload(inputs[0], "LZMA", input -> {
                 LZMAInputStream decoded = new LZMAInputStream(
-                        new java.io.BufferedInputStream(inputs[0], 64 * 1024), size, props[0], dictionary, null, arrays);
+                        new java.io.BufferedInputStream(input, 64 * 1024), size, props[0], dictionary, null, arrays);
                 // Old 7z producers can include an EOS marker despite a known size.
                 // XZ >= 1.10 validates the actual marker; size and folder CRC checks remain in place.
                 decoded.enableRelaxedEndCondition();
                 return decoded;
-            };
+            });
         });
         add(entries, "21", "LZMA2", 1, false, Kind.CORE, (props, size) -> {
             requireLength(props, 1, "LZMA2");
@@ -129,11 +128,13 @@ final class SevenZCoderRegistry {
             if (dictionary <= LZMA2Options.DICT_SIZE_MAX) {
                 LZMA2Options options = new LZMA2Options();
                 options.setDictSize(dictionary);
-                return (CachedDecoder) (inputs, password, arrays) -> options.getInputStream(inputs[0], arrays);
+                return (CachedDecoder) (inputs, password, arrays) -> openXzPayload(
+                        inputs[0], "LZMA2", input -> options.getInputStream(input, arrays));
             }
             // Options has an encoder-sized ceiling (768 MiB), not a decoding limit.
             // Keep the larger raw-decoder range through its public constructor.
-            return (inputs, password) -> new LZMA2InputStream(inputs[0], dictionary);
+            return (inputs, password) -> openXzPayload(
+                    inputs[0], "LZMA2", input -> new LZMA2InputStream(input, dictionary));
         });
         add(entries, "06F10701", "AES", 1, false, Kind.CORE, (props, size) -> {
             SevenZAesDecoder.validateProperties(props);
@@ -230,23 +231,83 @@ final class SevenZCoderRegistry {
         return (int) effective;
     }
 
+    /** Distinguish a decoder's malformed/truncated payload from an upstream I/O failure. */
+    private static final class XzInput extends java.io.FilterInputStream {
+        private IOException failure;
+        XzInput(InputStream input) { super(input); }
+        @Override public int read() throws IOException {
+            try { return in.read(); }
+            catch (IOException error) { failure = error; throw error; }
+        }
+        @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+            try { return in.read(bytes, offset, length); }
+            catch (IOException error) { failure = error; throw error; }
+        }
+        IOException classify(IOException error, String codec) throws IOException {
+            ArchiveCancellation.rethrowIfCancelled(error, null);
+            // XZ retains the original input exception. A real I/O error, including
+            // an upstream EOFException, must not become a codec-integrity claim.
+            if (error == failure || !(error instanceof CorruptedInputException
+                    || error instanceof java.io.EOFException)) return error;
+            return payloadFailure(error, codec);
+        }
+    }
+
+    private static InputStream openXzPayload(InputStream input, String codec, UnaryDecoder decoder) throws IOException {
+        XzInput source = new XzInput(input);
+        final InputStream decoded;
+        try { decoded = decoder.open(source); }
+        catch (IOException error) { throw source.classify(error, codec); }
+        try {
+            return new java.io.FilterInputStream(decoded) {
+                private IOException failure;
+                @Override public int read() throws IOException {
+                    if (failure != null) throw failure;
+                    try { return in.read(); }
+                    catch (IOException error) { failure = source.classify(error, codec); throw failure; }
+                }
+                @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+                    if (failure != null && length != 0) throw failure;
+                    try { return in.read(bytes, offset, length); }
+                    catch (IOException error) { failure = source.classify(error, codec); throw failure; }
+                }
+            };
+        } catch (RuntimeException | Error failure) {
+            closeUnadopted(decoded, failure);
+            throw failure;
+        }
+    }
+
     private static InputStream openBzip2(InputStream input) throws IOException {
         try {
-            return terminalPayload(new BZip2CompressorInputStream(input, true), "BZip2");
+            return terminalPayload(new ArchiveBzip2InputStream(input, null), "BZip2");
         } catch (IOException failure) { throw payloadFailure(failure, "BZip2"); }
     }
 
     private static InputStream terminalPayload(InputStream input, String codec) {
-        return new java.io.FilterInputStream(input) {
-            @Override public int read() throws IOException {
-                try { return in.read(); }
-                catch (IOException failure) { throw payloadFailure(failure, codec); }
-            }
-            @Override public int read(byte[] bytes, int offset, int length) throws IOException {
-                try { return in.read(bytes, offset, length); }
-                catch (IOException failure) { throw payloadFailure(failure, codec); }
-            }
-        };
+        try {
+            return new java.io.FilterInputStream(input) {
+                @Override public int read() throws IOException {
+                    try { return in.read(); }
+                    catch (IOException failure) { throw payloadFailure(failure, codec); }
+                }
+                @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+                    try { return in.read(bytes, offset, length); }
+                    catch (IOException failure) { throw payloadFailure(failure, codec); }
+                }
+            };
+        } catch (RuntimeException | Error failure) {
+            closeUnadopted(input, failure);
+            throw failure;
+        }
+    }
+
+    /** A successfully opened decoder may own native resources before wrapper allocation. */
+    private static void closeUnadopted(InputStream input, Throwable failure) {
+        try { input.close(); }
+        catch (IOException | RuntimeException | Error cleanup) {
+            if (cleanup != failure) failure.addSuppressed(cleanup);
+        }
     }
 
     private static IOException payloadFailure(IOException failure, String codec) throws IOException {

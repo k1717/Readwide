@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">EPUB text size: %1$d%%</string>
+    <string name="epub_line_height">Line spacing</string>
+    <string name="epub_typography_hint">EPUB only. Book default keeps the book’s line spacing. Fixed-layout, image-based and vertical pages keep their paragraph layout.</string>
+    <string name="epub_paragraph_layout_kept">Paragraph formatting is unavailable on this page. The book’s layout is preserved.</string>
+</resources>

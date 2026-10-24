@@ -24,6 +24,29 @@ public class SevenZIntegrityRound5Test {
         assertSame(first,assertThrows(IOException.class,()->stream.read()));
         assertSame(first,assertThrows(IOException.class,()->stream.read(new byte[3])));
     }
+    @Test public void cleanShortOutputIsTypedAndStickyInBothSizeWrappers()throws Exception{
+        for(boolean useIntegrity:new boolean[]{false,true}){
+            InputStream input=new ByteArrayInputStream(new byte[]{42});
+            try(InputStream stream=useIntegrity?integrity(input,2,-1):exact(input,2)){
+                assertEquals(42,stream.read());
+                IOException first=assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,()->stream.read());
+                assertSame(first,assertThrows(IOException.class,()->stream.read(new byte[3])));
+            }
+        }
+    }
+    @Test public void sizeWrappersPreserveThrownInputErrorsRatherThanClaimingTruncation()throws Exception{
+        for(boolean useIntegrity:new boolean[]{false,true}){
+            for(IOException injected:new IOException[]{new IOException("input unavailable"),
+                    new EOFException("upstream EOF exception"),new InterruptedIOException("input cancelled")}){
+                InputStream input=new InputStream(){public int read()throws IOException{throw injected;}
+                    public int read(byte[] bytes,int offset,int length)throws IOException{throw injected;}};
+                try(InputStream stream=useIntegrity?integrity(input,1,-1):exact(input,1)){
+                    assertSame(injected,assertThrows(IOException.class,()->stream.read()));
+                    assertSame(injected,assertThrows(IOException.class,()->stream.read(new byte[3])));
+                }
+            }
+        }
+    }
     @Test public void exactOverflowFailureCannotBecomeEofOnRetry()throws Exception{
         try(InputStream s=exact(new ByteArrayInputStream(new byte[]{1,2}),1)){assertEquals(1,s.read());sticky(s);}
     }

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">Στοίχιση παραγράφων</string>
+    <string name="epub_alignment_book">Προεπιλογή βιβλίου</string>
+    <string name="epub_alignment_start">Στην αρχή της γραμμής</string>
+    <string name="epub_alignment_justify">Πλήρης στοίχιση</string>
+    <string name="epub_text_alignment_hint">Για κείμενο EPUB με προσαρμοζόμενη διάταξη. Η αρχή είναι αριστερά για γραφή LTR και δεξιά για RTL. Διατηρείται η ρητή στοίχιση στο κέντρο ή δεξιά.</string>
+</resources>

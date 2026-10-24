@@ -37,24 +37,12 @@ final class UriOpenRequest {
             mime = context.getContentResolver().getType(uri);
         } catch (Exception ignored) {
         }
+        String documentName = documentFileName(displayName, mime);
         boolean pdf = FileUtils.isPdfFile(displayName)
                 || "application/pdf".equalsIgnoreCase(mime);
-        boolean epub = FileUtils.isEpubFile(displayName)
-                || "application/epub+zip".equalsIgnoreCase(mime);
-        boolean markdown = FileUtils.isMarkdownFile(displayName)
-                || "text/markdown".equalsIgnoreCase(mime)
-                || "text/x-markdown".equalsIgnoreCase(mime);
-        boolean word = FileUtils.isWordOrHwpFile(displayName)
-                || "application/x-hwp".equalsIgnoreCase(mime)
-                || "application/haansofthwp".equalsIgnoreCase(mime)
-                || "application/vnd.hancom.hwp".equalsIgnoreCase(mime)
-                || "application/vnd.hancom.hwpx".equalsIgnoreCase(mime)
-                || "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        .equalsIgnoreCase(mime)
-                || "application/vnd.ms-word.document.macroEnabled.12".equalsIgnoreCase(mime)
-                || "application/vnd.openxmlformats-officedocument.wordprocessingml.template"
-                        .equalsIgnoreCase(mime)
-                || "application/vnd.ms-word.template.macroEnabled.12".equalsIgnoreCase(mime);
+        boolean epub = FileUtils.isEpubFile(documentName);
+        boolean markdown = FileUtils.isMarkdownFile(documentName);
+        boolean word = FileUtils.isWordOrHwpFile(documentName);
         boolean image = FileUtils.isImageFile(displayName)
                 || (mime != null && mime.toLowerCase(Locale.ROOT).startsWith("image/"));
 
@@ -74,5 +62,30 @@ final class UriOpenRequest {
             intent.putExtra(ReaderActivity.EXTRA_FILE_URI, uri.toString());
         }
         return new UriOpenRequest(intent, image);
+    }
+
+    /** Keep recognized document names; supply only a type suffix for MIME-only documents. */
+    static String documentFileName(String displayName, String mime) {
+        String name = displayName == null || displayName.trim().isEmpty() ? "document" : displayName;
+        if (FileUtils.isEpubFile(name) || FileUtils.isMarkdownFile(name)
+                || FileUtils.isWordOrHwpFile(name)) return name;
+        String type = mime == null ? "" : mime.trim().toLowerCase(Locale.ROOT);
+        String suffix;
+        switch (type) {
+            case "application/epub+zip": suffix = ".epub"; break;
+            case "text/markdown":
+            case "text/x-markdown": suffix = ".md"; break;
+            case "application/msword": suffix = ".doc"; break;
+            case "application/vnd.openxmlformats-officedocument.wordprocessingml.document": suffix = ".docx"; break;
+            case "application/vnd.ms-word.document.macroenabled.12": suffix = ".docm"; break;
+            case "application/vnd.openxmlformats-officedocument.wordprocessingml.template": suffix = ".dotx"; break;
+            case "application/vnd.ms-word.template.macroenabled.12": suffix = ".dotm"; break;
+            case "application/x-hwp":
+            case "application/haansofthwp":
+            case "application/vnd.hancom.hwp": suffix = ".hwp"; break;
+            case "application/vnd.hancom.hwpx": suffix = ".hwpx"; break;
+            default: return name;
+        }
+        return name + suffix;
     }
 }

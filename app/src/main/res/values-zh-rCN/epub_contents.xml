@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">脚注</string>
+    <string name="epub_return_to_text">返回正文</string>
+    <string name="epub_contents_fallback">未找到可读取的目录，按阅读顺序显示各节。</string>
+    <string name="epub_contents_empty">没有匹配的条目。</string>
+</resources>

@@ -856,4 +856,6 @@ Rules: %2$d enabled rules</string>
     <string name="txt_contents_error">Could not load contents. Reopen the file and try again.</string>
     <string name="txt_contents_save_error">Could not save contents changes.</string>
     <string name="txt_contents_page">%1$s · p. %2$d</string>
+    <string name="viewer_retry">Retry</string>
+    <string name="document_renderer_stopped">The document viewer stopped. Reopen the file to continue from the last saved position.</string>
 </resources>

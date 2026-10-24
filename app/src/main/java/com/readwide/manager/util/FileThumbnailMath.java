@@ -66,6 +66,7 @@ public final class FileThumbnailMath {
                 || lower.endsWith(".cab")
                 || lower.endsWith(".lha")
                 || lower.endsWith(".lzh")
+                || lower.endsWith(".pma")
                 || lower.endsWith(".7z")
                 || lower.endsWith(".cb7")
                 || lower.endsWith(".alz")

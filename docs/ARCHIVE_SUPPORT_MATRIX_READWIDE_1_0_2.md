@@ -1,6 +1,6 @@
 # Archive support matrix for Readwide 1.0.2
 
-> **Historical baseline:** This file preserves the original 1.0.2 matrix and its support-label model, not current compatibility claims. Use the [1.0.20 overview](../README.md), [current decode boundaries](ARCHIVE_DECODE_BOUNDARIES_1_0_20.md) and [release validation gate](RELEASE_READINESS_1_0_20.md). Later code adds scoped encrypted-header RAR, mixed LZ/PPMd/VM paths, newer 7z/ZIP codecs, split/encrypted EGG and other combinations; their implementation and validation boundaries are recorded there. Do not carry the historical exclusions or test results below forward as current results.
+> **Historical baseline:** This file preserves the original 1.0.2 matrix and its support-label model, not current compatibility claims. Use the [project overview](../README.md), [current archive support notes](ARCHIVE_BOUNDARY_SUPPORT_NOTES.md) and [release readiness](RELEASE_READINESS_1_0_21.md). Later code adds scoped encrypted-header RAR, mixed LZ/PPMd/VM paths, newer 7z/ZIP codecs, split/encrypted EGG and other combinations; their implementation and validation boundaries are recorded there. Do not carry the historical exclusions or test results below forward as current results.
 
 - Stream extraction safety: the historical fixed-size guards are superseded in 1.0.18 by an operation-wide budget based on usable storage minus a 64 MiB reserve, without the former 128 GiB ceiling. Unknown-size output and native libarchive writes share the same accounting; decoder memory/format limits remain separate.
 
@@ -117,7 +117,7 @@ Avoid wording such as:
 
 ## Archive preview cache and failure UI
 
-Archive image preview uses temporary app-private cache files so the normal image/PDF/TXT viewers can open archive entries through file paths. Readwide 1.0.2 separates ordinary preview cache from password/sensitive archive preview cache. The sensitive cache has smaller size/count limits and a shorter age limit. These files are disposable generated cache data, not user documents.
+Archive image preview uses temporary app-private cache files so the normal image/PDF/TXT viewers can open archive entries through file paths. Readwide 1.0.2 separates ordinary preview cache from password/sensitive archive preview cache. The sensitive cache has smaller size/count limits and a shorter age limit. These files are disposable generated cache data, not original documents.
 
 For RAR/CBR single-image extraction, libarchive-backed reads now sequentially consume earlier regular entries into temporary throwaway files before extracting a later solid RAR3/RAR4 member. This improves solid comic archives that require previous members to be read to prime the decoder dictionary, while broad solid RAR support remains backend-dependent rather than a guaranteed first-party claim.
 

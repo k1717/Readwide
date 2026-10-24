@@ -3,9 +3,8 @@
 ## Identity and verification
 
 - Signed Release APK assembly completed after build-setting/native warning cleanup, with v2 signature verification. The build displayed 100 deprecated-API warnings. An earlier successful build also compiled local tests and assembled the Android-test APK; neither build executed the test suites.
-- Release date: **2026-10-11**.
 - Android application ID: `com.readwide.manager`; version `1.0.20 / 10020`.
-- The successful 2026-10-11 release build includes the Home edits and Java/Gradle/native-warning cleanup, but precedes the system-bar/WebView changes described below.
+- The successful release build includes the Home edits and Java/Gradle/native-warning cleanup, but precedes the system-bar/WebView changes described below.
 - Successful assembly and signature verification do not establish test-suite execution, device behavior, F-Droid acceptance, or remote publication.
 - Subsequent source edits remove mixed system-bar appearance control and prefer owned scale callbacks for WebView scroll geometry. Their eight instrumentation regression methods are source additions, not executed tests; verification is static only. Initial-scale fallback, gesture zoom probes and required legacy APIs remain. TXT paging/viewport geometry and existing bookmarks are unchanged. Detailed deprecated-API/plugin diagnostics remain enabled.
 - First-party code remains Apache-2.0. Component provenance and licensing are recorded in the [license report](LICENSE_REPORT_READWIDE_1_0_20.md), [FOSS status](FOSS_STATUS.md), and source/direct-dependency SBOM.
@@ -21,7 +20,7 @@
 - Snapshot reuse checks source size/time and decoding/partition policy. Restoration waits for current-text layout; source or settings changes preserve characters/context while invalidating incompatible page/pixel hints.
 - Small viewports and coordinate arithmetic are guarded. TXT positions still have representability and memory limits; this is not unlimited or fully 64-bit document addressing.
 - Reading/transform allocation failures reach the owning load's error callback; this does not promise recovery from every UI/native/process-wide allocation failure.
-- Search, Contents and legacy line/percentage moves target the whole document. User display rules and blank-line collapse remain part of the coordinate policy.
+- Search, Contents and legacy line/percentage moves target the whole document. Configured display rules and blank-line collapse remain part of the coordinate policy.
 
 ## Contents, settings and backup
 

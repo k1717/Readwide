@@ -48,6 +48,68 @@ public class SevenZBcj2DecoderTest {
                         new byte[] {0, 0x7f, (byte) 0xff, (byte) 0xfc, 0}, 5));
     }
 
+    @Test public void unfinishedControlFailsOnLastByteAndFailureIsSticky() throws Exception {
+        try (InputStream decoded = SevenZBcj2Decoder.decodeStream(bytes(65, 66), empty(), empty(),
+                bytes(0, 0, 0, 0, 1), 2)) {
+            assertEquals(65, decoded.read());
+            IOException first = org.junit.Assert.assertThrows(
+                    SevenZBcj2ArchiveReader.IntegrityException.class, decoded::read);
+            org.junit.Assert.assertSame(first, org.junit.Assert.assertThrows(IOException.class, decoded::read));
+            org.junit.Assert.assertSame(first, org.junit.Assert.assertThrows(IOException.class,
+                    () -> decoded.read(new byte[1])));
+        }
+    }
+
+    @Test public void exactLengthBulkReadCannotHideUnfinishedControl() throws Exception {
+        try (InputStream decoded = SevenZBcj2Decoder.decodeStream(bytes(65, 66), empty(), empty(),
+                bytes(0, 0, 0, 0, 1), 2)) {
+            byte[] output = {9, 9, 9, 9};
+            org.junit.Assert.assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,
+                    () -> decoded.read(output, 1, 2));
+            // The final byte is not published, even when no subsequent EOF read is requested.
+            assertArrayEquals(new byte[] {9, 65, 9, 9}, output);
+        }
+    }
+
+    @Test public void unfinishedControlFailsAtLastConvertedAddressByte() throws Exception {
+        try (InputStream decoded = SevenZBcj2Decoder.decodeStream(bytes(0xe8), bytes(0, 0, 0, 5),
+                empty(), bytes(0, 127, 255, 252, 1), 5)) {
+            assertEquals(0xe8, decoded.read());
+            for (int i = 0; i < 3; i++) assertEquals(0, decoded.read());
+            org.junit.Assert.assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class, decoded::read);
+        }
+    }
+
+    @Test public void emptyArrayDecodeStillValidatesControl() throws Exception {
+        assertArrayEquals(new byte[0], SevenZBcj2Decoder.decode(
+                new byte[0], new byte[0], new byte[0], new byte[5], 0));
+        for (byte[] control : new byte[][] {new byte[4], {1, 0, 0, 0, 0}, {0, 0, 0, 0, 1}}) {
+            org.junit.Assert.assertThrows(IOException.class, () -> SevenZBcj2Decoder.decode(
+                    new byte[0], new byte[0], new byte[0], control, 0));
+        }
+    }
+
+    @Test public void zeroLengthReadAndPartialCloseDoNotForceControlValidation() throws Exception {
+        TrackingInput main = new TrackingInput(new byte[] {65, 66});
+        TrackingInput control = new TrackingInput(new byte[] {0, 0, 0, 0, 1});
+        try (InputStream decoded = SevenZBcj2Decoder.decodeStream(main, empty(), empty(), control, 2)) {
+            assertEquals(0, decoded.read(new byte[0]));
+            assertEquals(0, main.reads);
+            assertEquals(0, control.reads);
+            assertEquals(65, decoded.read());
+        }
+        assertEquals(1, main.reads);
+        assertEquals(5, control.reads);
+        assertTrue(main.closed && control.closed);
+    }
+
+    @Test public void unconvertedFinalMarkerAndControlNormalizationRemainValid() throws Exception {
+        byte[] main = new byte[64];
+        java.util.Arrays.fill(main, (byte) 0xe8);
+        // All-zero control selects no conversion, including the final truncated instruction.
+        assertArrayEquals(main, SevenZBcj2Decoder.decode(main, new byte[0], new byte[0], new byte[16], main.length));
+    }
+
     @Test public void truncatedControlMainAndAddressAreIoFailures() throws Exception {
         expectFailure(bytes(65), empty(), new byte[4], 1);
         expectFailure(empty(), empty(), new byte[5], 1);

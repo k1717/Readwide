@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">EPUB टेक्स्ट का आकार: %1$d%%</string>
+    <string name="epub_line_height">पंक्तियों के बीच अंतर</string>
+    <string name="epub_typography_hint">केवल EPUB पर लागू। पुस्तक की डिफ़ॉल्ट सेटिंग चुनने पर मूल पंक्ति अंतर बना रहता है। तय लेआउट, मुख्यतः चित्रों वाले और लंबवत लिखावट वाले पृष्ठों का अनुच्छेद लेआउट नहीं बदलेगा।</string>
+    <string name="epub_paragraph_layout_kept">इस पृष्ठ पर अनुच्छेद का स्वरूप नहीं बदला जा सकता। पुस्तक का मूल लेआउट बना रहेगा।</string>
+</resources>

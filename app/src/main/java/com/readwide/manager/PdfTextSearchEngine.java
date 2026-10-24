@@ -147,8 +147,13 @@ final class PdfTextSearchEngine {
         try {
             executor.execute(() -> {
                 if (closed || gen != generation.get()) return;
-                PdfSearchText.Query query = PdfSearchText.compile(rawQuery, caseSensitive, wholeWord, regex);
-                scan(gen, query, listener);
+                try {
+                    // Compilation allocates too, before scan's I/O boundary.
+                    PdfSearchText.Query query = PdfSearchText.compile(rawQuery, caseSensitive, wholeWord, regex);
+                    scan(gen, query, listener);
+                } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                    postSearchFailed(gen, listener);
+                }
             });
         } catch (java.util.concurrent.RejectedExecutionException ignored) {
             postCancelled(gen, listener);
@@ -196,16 +201,20 @@ final class PdfTextSearchEngine {
             main.post(() -> {
                 if (!closed && gen == generation.get()) listener.onSearchFinished(matchCount(), false);
             });
-        } catch (IOException | RuntimeException failure) {
-            synchronized (matches) {
-                if (closed || gen != generation.get()) return;
-                matches.clear();
-                currentIndex = -1;
-            }
-            main.post(() -> {
-                if (!closed && gen == generation.get()) listener.onSearchFailed();
-            });
+        } catch (IOException failure) {
+            postSearchFailed(gen, listener);
         }
+    }
+
+    private void postSearchFailed(int gen, Listener listener) {
+        synchronized (matches) {
+            if (closed || gen != generation.get()) return;
+            matches.clear();
+            currentIndex = -1;
+        }
+        main.post(() -> {
+            if (!closed && gen == generation.get()) listener.onSearchFailed();
+        });
     }
 
     private final class Scan {

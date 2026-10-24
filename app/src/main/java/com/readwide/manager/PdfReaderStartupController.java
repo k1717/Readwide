@@ -69,6 +69,8 @@ final class PdfReaderStartupController {
     }
 
     void onNewIntent(@NonNull android.content.Intent intent) {
+        if (TtsPlaybackBridge.isNotificationReturnTo(activity, intent,
+                PdfReaderActivity.EXTRA_FILE_PATH)) return;
         activity.saveReadingState();
         activity.setIntent(intent);
         activity.loadPdfFromIntent();

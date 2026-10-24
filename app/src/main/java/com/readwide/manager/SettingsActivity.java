@@ -282,7 +282,7 @@ public class SettingsActivity extends AppCompatActivity {
         return row;
     }
 
-    /** Shared plain-row presentation for the language and EPUB default-font pickers. */
+    /** Shared plain-row presentation for language and EPUB preference pickers. */
     TextView makeSettingsSelectionRow(@NonNull String label, boolean selected,
                                       int text, int sub, int outline) {
         TextView row = new TextView(this);
@@ -483,8 +483,7 @@ public class SettingsActivity extends AppCompatActivity {
             tintToolbarNavigation(toolbar, Color.WHITE);
         }
 
-        getWindow().setStatusBarColor(bar);
-        getWindow().setNavigationBarColor(bg);
+        com.readwide.manager.util.EdgeToEdgeUtil.setSystemBarColors(getWindow(), bar, bg);
 
         androidx.core.view.WindowInsetsControllerCompat controller =
                 androidx.core.view.WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
@@ -720,8 +719,14 @@ public class SettingsActivity extends AppCompatActivity {
 
         MaterialButton reset = makeSettingsDialogButtonNoShade(getString(R.string.settings_reset), text, outline);
         reset.setOnClickListener(v -> {
+            try {
+                prefs.resetReaderAndAppSettings();
+            } catch (java.io.IOException | RuntimeException failure) {
+                android.util.Log.e("SettingsActivity", "Could not reset settings", failure);
+                ShortToast.show(this, R.string.file_operation_failed);
+                return;
+            }
             discardCustomThemeDraftState();
-            prefs.resetReaderAndAppSettings();
             ShortToast.show(this, R.string.settings_reset_done);
             dialog.dismiss();
             recreate();

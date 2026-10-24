@@ -10,7 +10,7 @@ final class Rar3IndependentPayloadExtractor {
     private Rar3IndependentPayloadExtractor() {}
 
     static boolean isCandidate(RarArchiveReader.RarEntry entry) {
-        return entry != null && entry.rarVersion == 4 && !entry.directory
+        return entry != null && RarFeatureClassifier.hasRar3DecoderVersion(entry) && !entry.directory
                 && !entry.solid && !entry.splitBefore && entry.sourceArchive != null
                 && (entry.encrypted() || entry.splitAfter)
                 && (!entry.encrypted() || entry.encryption.isRar4Aes())

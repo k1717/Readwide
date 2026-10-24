@@ -4,7 +4,7 @@
 
 ## 1.0.2 implementation
 
-Readwide keeps the Java 7z path as the primary 7z/CB7 backend through Apache Commons Compress. The app passes the archive password to `SevenZFile` when the user provides one.
+Readwide keeps the Java 7z path as the primary 7z/CB7 backend through Apache Commons Compress. The app passes the archive password to `SevenZFile` when one is supplied.
 
 For standard 7-Zip split names, Readwide recognizes only the common raw split form:
 

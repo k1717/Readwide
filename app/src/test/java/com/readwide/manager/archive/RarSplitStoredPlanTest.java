@@ -67,6 +67,60 @@ public class RarSplitStoredPlanTest {
     }
 
     @Test
+    public void fromChain_acceptsRar4PlainStoredSplitWithSolidFlag() throws Exception {
+        RarArchiveReader.RarEntry first = entry("file.bin", 4, 0x30, false, true, null, 7L, true);
+        RarArchiveReader.RarEntry last = entry("file.bin", 4, 0x30, true, false, null, 5L, true);
+        assignSources(first, last);
+
+        RarSplitStoredPlan plan = RarSplitStoredPlan.fromChain(Arrays.asList(first, last));
+
+        assertEquals(RarSplitStoredPlan.Kind.PLAIN_STORED, plan.kind());
+        assertEquals(12L, plan.totalPackedSize());
+        assertEquals(12L, plan.unpackedSize());
+    }
+
+    @Test
+    public void fromChain_acceptsRar4AesStoredSplitWithSolidFlag() throws Exception {
+        RarArchiveReader.EncryptionInfo encryption =
+                RarArchiveReader.EncryptionInfo.rar4Unsupported(new byte[] {1,2,3,4,5,6,7,8});
+        RarArchiveReader.RarEntry first = entry("file.bin", 4, 0x30, false, true, encryption, 7L, true);
+        RarArchiveReader.RarEntry last = entry("file.bin", 4, 0x30, true, false, encryption, 9L, true);
+        assignSources(first, last);
+
+        RarSplitStoredPlan plan = RarSplitStoredPlan.fromChain(Arrays.asList(first, last));
+
+        assertEquals(RarSplitStoredPlan.Kind.RAR4_AES_STORED, plan.kind());
+        assertEquals(16L, plan.totalPackedSize());
+        assertEquals(12L, plan.unpackedSize());
+    }
+
+    @Test
+    public void fromChain_solidFlagDoesNotAdmitCompressedSplit() throws Exception {
+        RarArchiveReader.RarEntry first = entry("file.bin", 4, 0x33, false, true, null, 7L, true);
+        RarArchiveReader.RarEntry last = entry("file.bin", 4, 0x33, true, false, null, 5L, true);
+        assignSources(first, last);
+
+        java.io.IOException failure = org.junit.Assert.assertThrows(java.io.IOException.class,
+                () -> RarSplitStoredPlan.fromChain(Arrays.asList(first, last)));
+        assertTrue(failure.getMessage().contains("compressed split"));
+    }
+
+    @Test
+    public void fromChain_solidStoredStillRejectsChangedAesSalt() throws Exception {
+        RarArchiveReader.EncryptionInfo firstEncryption =
+                RarArchiveReader.EncryptionInfo.rar4Unsupported(new byte[] {1,2,3,4,5,6,7,8});
+        RarArchiveReader.EncryptionInfo lastEncryption =
+                RarArchiveReader.EncryptionInfo.rar4Unsupported(new byte[] {8,7,6,5,4,3,2,1});
+        RarArchiveReader.RarEntry first = entry("file.bin", 4, 0x30, false, true, firstEncryption, 7L, true);
+        RarArchiveReader.RarEntry last = entry("file.bin", 4, 0x30, true, false, lastEncryption, 9L, true);
+        assignSources(first, last);
+
+        java.io.IOException failure = org.junit.Assert.assertThrows(java.io.IOException.class,
+                () -> RarSplitStoredPlan.fromChain(Arrays.asList(first, last)));
+        assertTrue(failure.getMessage().contains("parameters changed"));
+    }
+
+    @Test
     public void fromChain_acceptsRar5AesStoredSplitEvenWhenSolidFlagIsSet() throws Exception {
         RarArchiveReader.EncryptionInfo encryption = new RarArchiveReader.EncryptionInfo(
                 0L,

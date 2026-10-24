@@ -65,7 +65,7 @@ the pre-close state. `RarHeaderEncryptionDetector` distinguishes RAR4 `-hp` (a
 first-party header rewriter exists; a failure there is the real fault) from
 RAR5 `-hp` (whose historical unsupported message said no decrypt path existed)
 in its unsupported message. No
-stored+encrypted RAR4 fixture could be generated in-sandbox (RAR 7.00 dropped
+stored+encrypted RAR4 fixture could be generated with that toolchain (RAR 7.00 dropped
 RAR4 archive *creation* - `-ma4` is rejected as an unknown option), so the RAR4
 stored-payload rewrite's end-to-end decrypt remains covered by the KDF mirror
 plus the existing unit tests rather than a real stored-encrypted RAR4 file.

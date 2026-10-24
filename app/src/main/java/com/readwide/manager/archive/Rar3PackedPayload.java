@@ -63,11 +63,17 @@ final class Rar3PackedPayload implements AutoCloseable {
             throw new RarArchiveReader.UnsupportedRarFeatureException("Missing RAR3/RAR4 logical entry head");
         }
         if (chain.isEmpty() || chain.get(0) != first) throw new IOException("Missing RAR3/RAR4 payload head");
+        if (!RarFeatureClassifier.isRar3Or4StoredMethod(first.method)
+                && !RarFeatureClassifier.hasRar3DecoderVersion(first)) {
+            throw new RarArchiveReader.UnsupportedRarFeatureException("Unsupported legacy RAR decoder version");
+        }
         long packedSize = 0;
         for (int i = 0; i < chain.size(); i++) {
             if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("RAR extraction cancelled");
             RarArchiveReader.RarEntry part = chain.get(i);
             if (part.rarVersion != 4 || part.directory || part.method != first.method
+                    || (!RarFeatureClassifier.isRar3Or4StoredMethod(first.method)
+                        && part.unpackVersion != first.unpackVersion)
                     || part.solid != first.solid || part.encrypted() != first.encrypted()
                     || part.packedSize < 0 || part.unpackedSize != first.unpackedSize
                     || (i > 0 && !part.splitBefore)

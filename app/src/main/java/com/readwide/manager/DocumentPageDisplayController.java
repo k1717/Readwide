@@ -25,10 +25,14 @@ final class DocumentPageDisplayController {
                 && (activity.webView.getWidth() <= 0 || activity.webView.getHeight() <= 0)) {
             final int requestedPage = page;
             final int requestedLoad = activity.loadGeneration;
+            final int requestedInteraction = activity.documentInteractionGeneration;
+            final int requestedPageGeneration = activity.documentAnchorPageGeneration;
             final android.webkit.WebView target = activity.webView;
             activity.webView.post(() -> {
                 if (!activity.activityDestroyed && activity.webView == target
-                        && activity.loadGeneration == requestedLoad) {
+                        && activity.loadGeneration == requestedLoad
+                        && activity.documentInteractionGeneration == requestedInteraction
+                        && activity.documentAnchorPageGeneration == requestedPageGeneration) {
                     activity.showPage(requestedPage, 0);
                 }
             });

@@ -82,4 +82,11 @@ public class FileThumbnailMathTest {
         assertEquals("cover.jpg", FileThumbnailMath.fileName("__MACOSX\\cover.jpg"));
         assertEquals("001.png", FileThumbnailMath.fileName("pages/001.png"));
     }
+
+    @Test public void pmarcThumbnailEligibilityIsExactAndCaseInsensitive() {
+        assertTrue(FileThumbnailMath.isThumbnailArchiveName("images.PMA"));
+        assertTrue(FileThumbnailMath.isThumbnailCandidateName("images.pma"));
+        assertFalse(FileThumbnailMath.isThumbnailArchiveName("images.pma.tmp"));
+        assertFalse(FileThumbnailMath.isThumbnailArchiveName("images.pma.001"));
+    }
 }

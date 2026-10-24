@@ -167,6 +167,11 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     int activeFileFilter = FILTER_ALL;
     final ExecutorService fileSearchExecutor = Executors.newSingleThreadExecutor();
     final ExecutorService fileOperationExecutor = Executors.newSingleThreadExecutor();
+    final java.util.concurrent.ThreadPoolExecutor uriOpenExecutor = new java.util.concurrent.ThreadPoolExecutor(
+            1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+            new java.util.concurrent.LinkedBlockingQueue<>());
+    private Future<?> pendingUriOpen;
+    private int uriOpenGeneration;
     // Folder-signature validation runs here, off the file-search executor, so a long
     // validation scan never delays a search/sort and cancelling a stale search/sort
     // never disturbs validation.
@@ -690,6 +695,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     @Override
     protected void onPause() {
         if (mainHomeShortcutsController != null) mainHomeShortcutsController.cancelPendingOpen();
+        cancelPendingUriOpen();
         stopVisibleFolderChangeObserver();
         super.onPause();
     }
@@ -701,6 +707,8 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         if (mainImageOpenController != null) mainImageOpenController.onDestroy();
         else hideImageOpenLoadingWindow();
         activityDestroyed = true;
+        cancelPendingUriOpen();
+        uriOpenExecutor.shutdownNow();
         if (mainFileOperationProgressController != null) mainFileOperationProgressController.close();
         pendingDrawerNavigationEntry = null;
         drawerNavigationPending = false;
@@ -1147,7 +1155,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
             window.setAttributes(lp);
             window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             window.setWindowAnimations(0);
-            window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            AdaptiveDialogLayoutHelper.setResizeSoftInputMode(window, 0);
         }
         applyAdaptiveDialogMaxHeight(dialog, adaptiveScroll);
         return dialog;
@@ -1434,6 +1442,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
                 getString(R.string.clear_recent_files),
                 () -> {
                     if (bookmarkManager != null) bookmarkManager.clearReadingStates();
+                    exitFileSelectionMode(true);
                     loadRecentFiles();
                     rebuildDrawerStorageEntries();
                     ShortToast.show(this, getString(R.string.recent_files_cleared));
@@ -1513,6 +1522,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
                 () -> {
                     // Continue: restore the timer that was set at the interruption,
                     // open the file at its saved position, and auto-start playback.
+                    cancelPendingUriOpen();
                     prefs.setTtsSleepTimerMinutes(prefs.getTtsLastSleepTimerMinutes());
                     String lower = file.getName().toLowerCase(java.util.Locale.ROOT);
                     if (FileUtils.isMarkdownFile(lower) || FileUtils.isEpubFile(file.getName())
@@ -2215,10 +2225,21 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     private static final long FILE_OPEN_DEBOUNCE_MS = 600L;
 
     private boolean acceptFileOpenNow() {
+        if (activityDestroyed || isFinishing() || isDestroyed()) return false;
         long now = android.os.SystemClock.elapsedRealtime();
         if (now - lastFileOpenElapsedMs < FILE_OPEN_DEBOUNCE_MS) return false;
         lastFileOpenElapsedMs = now;
+        cancelPendingUriOpen();
         return true;
+    }
+
+    private void cancelPendingUriOpen() {
+        uriOpenGeneration++;
+        Future<?> pending = pendingUriOpen;
+        pendingUriOpen = null;
+        if (pending != null) pending.cancel(true);
+        // A provider may ignore interruption. Retain only the newest queued open.
+        uriOpenExecutor.purge();
     }
 
     void openFile(File file) {
@@ -2311,15 +2332,44 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
 
     void openFileFromUri(Uri uri) {
         if (!acceptFileOpenNow()) return;
-        UriOpenRequest request = UriOpenRequest.create(this, uri);
-        request.intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        if (request.image) {
-            mainImageOpen().startWithLoading(request.intent);
+        final int generation = uriOpenGeneration;
+        final android.content.Context context = getApplicationContext();
+        try {
+            pendingUriOpen = uriOpenExecutor.submit(() -> {
+                UriOpenRequest request = null;
+                try {
+                    request = UriOpenRequest.create(context, uri);
+                } catch (RuntimeException | OutOfMemoryError | StackOverflowError unavailable) {
+                    // Resolve failure on the UI thread so the current open can retry.
+                }
+                final UriOpenRequest result = request;
+                fileSearchHandler.post(() -> completeUriOpen(generation, result));
+            });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError rejected) {
+            completeUriOpen(generation, null);
+        }
+    }
+
+    void completeUriOpen(int generation, @Nullable UriOpenRequest request) {
+        if (generation != uriOpenGeneration || activityDestroyed || isFinishing() || isDestroyed()) return;
+        pendingUriOpen = null;
+        if (request == null) {
+            lastFileOpenElapsedMs = 0L;
+            ShortToast.show(this, R.string.containing_folder_unavailable);
             return;
         }
-        startActivity(request.intent);
-
-        if (returnToViewerMode) finish();
+        request.intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        try {
+            if (request.image) {
+                mainImageOpen().startWithLoading(request.intent);
+                return;
+            }
+            startActivity(request.intent);
+            if (returnToViewerMode) finish();
+        } catch (RuntimeException unavailable) {
+            lastFileOpenElapsedMs = 0L;
+            ShortToast.show(this, R.string.containing_folder_unavailable);
+        }
     }
 
     void hideImageOpenLoadingWindow() {
@@ -2349,6 +2399,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
             ShortToast.show(this, R.string.archive_open_failed);
             return;
         }
+        cancelPendingUriOpen();
         saveArchiveRecentState(file);
         Intent intent = new Intent(this, ArchiveBrowserActivity.class);
         intent.putExtra(ArchiveBrowserActivity.EXTRA_ARCHIVE_PATH, file.getAbsolutePath());

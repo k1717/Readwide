@@ -222,7 +222,7 @@ public class BookmarkAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             btnDelete = itemView.findViewById(R.id.bookmark_delete);
 
             itemView.setOnClickListener(v -> {
-                int pos = getAdapterPosition();
+                int pos = getBindingAdapterPosition();
                 if (pos != RecyclerView.NO_POSITION && listener != null) {
                     Row row = rows.get(pos);
                     if (row.type == TYPE_BOOKMARK) listener.onBookmarkClick(row.bookmark);
@@ -230,7 +230,7 @@ public class BookmarkAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             });
 
             itemView.setOnLongClickListener(v -> {
-                int pos = getAdapterPosition();
+                int pos = getBindingAdapterPosition();
                 if (pos != RecyclerView.NO_POSITION && listener != null) {
                     Row row = rows.get(pos);
                     if (row.type == TYPE_BOOKMARK) listener.onBookmarkEdit(row.bookmark);
@@ -239,7 +239,7 @@ public class BookmarkAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             });
 
             btnDelete.setOnClickListener(v -> {
-                int pos = getAdapterPosition();
+                int pos = getBindingAdapterPosition();
                 if (pos != RecyclerView.NO_POSITION && listener != null) {
                     Row row = rows.get(pos);
                     if (row.type == TYPE_BOOKMARK) listener.onBookmarkDelete(row.bookmark);

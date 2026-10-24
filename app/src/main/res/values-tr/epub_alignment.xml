@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">Paragraf hizalaması</string>
+    <string name="epub_alignment_book">Kitabın varsayılanı</string>
+    <string name="epub_alignment_start">Satır başına hizalı</string>
+    <string name="epub_alignment_justify">İki yana yaslı</string>
+    <string name="epub_text_alignment_hint">Yeniden akışlı EPUB metni için. Satır başı LTR metinde solda, RTL metinde sağdadır. Açıkça ortalanmış veya sağa hizalanmış stiller korunur.</string>
+</resources>

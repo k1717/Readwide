@@ -28,6 +28,218 @@ import java.util.zip.CRC32;
  * against a caller-provided file when configured.</p>
  */
 public class Rar3PpmdEngineFixtureProbeTest {
+    @Test public void realPpmdModelSurvivesLzFileAndSymbolCodedVmChain() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new java.util.ArrayList<>(
+                RarArchiveReader.readEntries(writeEmbeddedFixture(), null));
+        byte[] packed = Rar3UnpackerTest.emptyLzFileBoundary();
+        File lz = temp.newFile(); Files.write(lz.toPath(), packed);
+        RarArchiveReader.RarEntry middle = new RarArchiveReader.RarEntry("empty-lz.bin", false,
+                0, packed.length, 0, 4, 0x33, true, false, false, null, 0, 0);
+        middle.sourceArchive = lz; entries.add(1, middle);
+        Rar3LogicalSolidArchiveExtractor.Decoder decoder = new Rar3LogicalSolidArchiveExtractor.Decoder(
+                Rar3LogicalSolidArchiveExtractor.prepareArchive(entries), null);
+        java.lang.reflect.Field stateField = decoder.getClass().getDeclaredField("state");
+        java.lang.reflect.Field modelField = Rar3MixedPpmdState.class.getDeclaredField("model");
+        stateField.setAccessible(true); modelField.setAccessible(true);
+        try {
+            File png = temp.newFile(); decoder.extractNext(png, null);
+            assertFile(png, PNG_SIZE, PNG_CRC);
+            Rar3SolidState state = (Rar3SolidState) stateField.get(decoder);
+            Object model = modelField.get(state.mixedPpmd());
+            org.junit.Assert.assertNotNull(model);
+            state.unpackState().rememberNewDistanceMatch(3, 7);
+            decoder.extractNext(null, null); // A real LZ table/file marker with no raw output.
+            org.junit.Assert.assertSame(state, stateField.get(decoder));
+            org.junit.Assert.assertSame(model, modelField.get(state.mixedPpmd()));
+            assertEquals(3, state.unpackState().oldDistance(0)); assertEquals(7, state.unpackState().lastLength());
+            assertEquals(PNG_SIZE, state.retained());
+            // The bodies use real range coding; the inserted VM records are synthetic
+            // symbol transport and must not be described as producer interoperability.
+            try (Rar3PpmdFilterOutput queue = new Rar3PpmdFilterOutput(new java.io.ByteArrayOutputStream(),
+                    0, state.vmFilterState(), Rar3PpmdFilterOutput.MAX_FILTER_BYTES, state.deferredFilters())) {
+                queue.acceptParsed(state.vmFilterState().parse(0xa0,
+                        Rar3VirtualMachineTest.resizingRecord(2, 2), 0, Rar3PpmdFilterOutput.MAX_FILTER_BYTES));
+                int[] record = {0,0}; int[] cursor = {0};
+                queue.readRecord(() -> cursor[0] < record.length ? record[cursor[0]++] : -1);
+                queue.finish(true);
+            }
+            File jpg = temp.newFile(); decoder.extractNext(jpg, null);
+            assertFile(jpg, JPG_SIZE, JPG_CRC);
+            assertEquals(PNG_SIZE + JPG_SIZE, state.retained());
+            assertNull(stateField.get(decoder)); assertNull(modelField.get(state.mixedPpmd()));
+            assertEquals(0, state.vmFilterState().programCount());
+            org.junit.Assert.assertThrows(IOException.class, state::ensureUsable);
+            state.deferredFilters().requireEmpty();
+        } finally { decoder.retire(); }
+    }
+
+    private static void assertFile(File file, int size, long expectedCrc) throws IOException {
+        byte[] data = Files.readAllBytes(file.toPath()); CRC32 crc = new CRC32(); crc.update(data);
+        assertEquals(size, data.length); assertEquals(expectedCrc, crc.getValue());
+    }
+
+    @Test public void verifiedRunReleasesHistoryBeforeCloseAndIndependentRunStartsFresh() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = RarArchiveReader.readEntries(writeEmbeddedFixture(), null);
+        entries = new java.util.ArrayList<>(entries);
+        entries.add(Rar3DecodePlan.snapshot(entries.get(0))); // Independent reset after the solid pair.
+        File spool = temp.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = Rar3PpmdSolidArchiveExtractor.openForwardReader(
+                entries, "owned-copy".toCharArray(), spool, false)) {
+            java.lang.reflect.Field field = Rar3PpmdForwardReader.class.getDeclaredField("decoder");
+            java.lang.reflect.Field password = Rar3PpmdForwardReader.class.getDeclaredField("password");
+            field.setAccessible(true); password.setAccessible(true);
+            assertEquals("testfile.png", reader.nextEntry().path);
+            assertForwardEntry(reader, PNG_SIZE, PNG_CRC);
+            Rar3PpmdSolidStreamDecoder first = (Rar3PpmdSolidStreamDecoder) field.get(reader);
+            org.junit.Assert.assertNotNull(first); // The JPEG still needs the model/history.
+            assertEquals("testfile.jpg", reader.nextEntry().path);
+            assertForwardEntry(reader, JPG_SIZE, JPG_CRC);
+            assertNull(field.get(reader));
+            assertRetired(first);
+            assertEquals("testfile.png", reader.nextEntry().path);
+            assertForwardEntry(reader, PNG_SIZE, PNG_CRC);
+            assertNull(field.get(reader));
+            assertNull(reader.nextEntry()); assertNull(reader.nextEntry());
+            assertEquals(-1, reader.read(new byte[1]));
+            for (char value : (char[]) password.get(reader)) assertEquals('\0', value);
+        }
+        assertEquals(0, spool.list().length);
+    }
+
+    @Test public void symbolCodedFilterReuseSurvivesRangeCodedSolidContinuation() throws Exception {
+        Rar3PpmdSolidStreamDecoder decoder = new Rar3PpmdSolidStreamDecoder();
+        seedFilterInput(decoder, false, 2);
+        assertEquals(PNG_CRC, decoder.decodeEntry(packedBody(false), PNG_SIZE).crc32);
+        decoder.requireCompleteFilterRun();
+        java.lang.reflect.Field programsField = Rar3PpmdSolidStreamDecoder.class.getDeclaredField("vmPrograms");
+        java.lang.reflect.Field queueField = Rar3PpmdSolidStreamDecoder.class.getDeclaredField("deferredFilters");
+        programsField.setAccessible(true); queueField.setAccessible(true);
+        Rar3VmFilter.ProgramState programs = (Rar3VmFilter.ProgramState) programsField.get(decoder);
+        Rar3PpmdFilterOutput.DeferredFilters queue = (Rar3PpmdFilterOutput.DeferredFilters) queueField.get(decoder);
+        assertEquals(1, programs.programCount());
+        // Synthetic PPMd-symbol record: reuse selected program and old length, relative start 0.
+        // Real range-coded file bodies follow; the archive itself does not carry this VM record.
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(
+                new java.io.ByteArrayOutputStream(), 0, programs, Rar3PpmdFilterOutput.MAX_FILTER_BYTES, queue)) {
+            int[] record = {0, 0}; int[] position = {0};
+            output.readRecord(() -> position[0] < record.length ? record[position[0]++] : -1);
+            assertEquals(2, position[0]); output.finish(true);
+        }
+        assertEquals(JPG_CRC, decoder.decodeEntry(packedBody(true), JPG_SIZE).crc32);
+        assertEquals(PNG_SIZE + JPG_SIZE, decoder.windowSize());
+        assertEquals(1, programs.programCount()); decoder.requireCompleteFilterRun();
+    }
+
+    @Test public void forwardMetadataCannotRetargetSolidSuccessorsOrChangeAesSalt() throws Exception {
+        for (boolean encrypted : new boolean[]{false, true}) for (boolean split : new boolean[]{false, true}) {
+            char[] password = encrypted ? "test-secret".toCharArray() : null;
+            List<RarArchiveReader.RarEntry> entries = transformedEntries(encrypted, split, password);
+            File spool = temp.newFolder();
+            try (ArchiveSupport.ForwardArchiveReader reader = Rar3PpmdSolidArchiveExtractor.openForwardReader(
+                    entries, password, spool, false)) {
+                assertTrue(reader instanceof Rar3PpmdForwardReader);
+                assertEquals("testfile.png", reader.nextEntry().path);
+                assertForwardEntry(reader, PNG_SIZE, PNG_CRC);
+                for (RarArchiveReader.RarEntry entry : entries) {
+                    entry.sourceArchive = new File(temp.getRoot(), "absent-retarget.rar");
+                    if (entry.encryption != null) java.util.Arrays.fill(entry.encryption.salt, (byte) 99);
+                }
+                entries.clear();
+                assertEquals("testfile.jpg", reader.nextEntry().path);
+                assertForwardEntry(reader, JPG_SIZE, JPG_CRC);
+                assertNull(reader.nextEntry());
+            }
+            assertEquals(0, spool.list().length);
+        }
+    }
+
+    @Test public void ownedForwardMetadataStillRejectsRepeatedEntryIdentity() throws Exception {
+        RarArchiveReader.RarEntry entry = RarArchiveReader.readEntries(writeEmbeddedFixture(), null).get(0);
+        File spool = temp.newFolder();
+        org.junit.Assert.assertThrows(IOException.class, () -> new Rar3PpmdForwardReader(
+                java.util.Arrays.asList(entry, entry), null, spool));
+        assertEquals(0, spool.list().length);
+    }
+
+    @Test public void rangeCodedContinuationConsumesSeededFutureAndPartialVmInput() throws Exception {
+        // Real range-coded PNG/JPEG bodies, but synthetic boundary state: not a producer VM fixture.
+        for (boolean partial : new boolean[]{false, true}) {
+            Rar3PpmdSolidStreamDecoder decoder = new Rar3PpmdSolidStreamDecoder();
+            assertEquals(PNG_CRC, decoder.decodeEntry(packedBody(false), PNG_SIZE).crc32);
+            seedFilterInput(decoder, partial, partial ? 1 : 2);
+            Rar3PpmdSolidStreamDecoder.EntryResult result = decoder.decodeEntry(packedBody(true), JPG_SIZE);
+            assertEquals(JPG_CRC, result.crc32); assertEquals(JPG_SIZE, result.data.length);
+            assertEquals(PNG_SIZE + JPG_SIZE, decoder.windowSize());
+            decoder.requireCompleteFilterRun();
+        }
+    }
+
+    @Test public void destinationFlushFailureRetiresPpmdBeforeAnotherFile() throws Exception {
+        Rar3PpmdSolidStreamDecoder decoder = new Rar3PpmdSolidStreamDecoder();
+        IOException sentinel = new IOException("destination flush failed");
+        java.io.OutputStream destination = new java.io.OutputStream() {
+            @Override public void write(int value) { }
+            @Override public void write(byte[] bytes, int offset, int length) { }
+            @Override public void flush() throws IOException { throw sentinel; }
+            @Override public void close() { fail("Decoder does not own the destination"); }
+        };
+        org.junit.Assert.assertSame(sentinel, org.junit.Assert.assertThrows(IOException.class,
+                () -> decoder.decodeEntry(new java.io.ByteArrayInputStream(packedBody(false)), PNG_SIZE, destination)));
+        assertRetired(decoder);
+    }
+
+    @Test public void externalCrcFailureRetiresPpmdBeforeAnotherFile() throws Exception {
+        RarArchiveReader.RarEntry original = RarArchiveReader.readEntries(writeEmbeddedFixture(), null).get(0);
+        RarArchiveReader.RarEntry bad = new RarArchiveReader.RarEntry(original.path, false,
+                original.unpackedSize, original.packedSize, original.dataOffset, 4, original.method,
+                false, false, false, null, original.dataCrc ^ 1L, 0);
+        bad.sourceArchive = original.sourceArchive;
+        Rar3PpmdSolidStreamDecoder decoder = new Rar3PpmdSolidStreamDecoder();
+        org.junit.Assert.assertThrows(IOException.class, () -> Rar3PpmdSolidArchiveExtractor.discardVerifiedEntry(
+                decoder, bad, java.util.Collections.singletonList(bad), null, null, true));
+        assertRetired(decoder);
+    }
+
+    @Test public void oversizedCarriedVmResultRetiresRealPpmdContinuationWithoutPublishingIt() throws Exception {
+        Rar3PpmdSolidStreamDecoder decoder = new Rar3PpmdSolidStreamDecoder();
+        assertEquals(PNG_CRC, decoder.decodeEntry(packedBody(false), PNG_SIZE).crc32);
+        seedFilterInput(decoder, true, JPG_SIZE + 1);
+        java.io.ByteArrayOutputStream destination = new java.io.ByteArrayOutputStream();
+        org.junit.Assert.assertThrows(IOException.class, () -> decoder.decodeEntry(
+                new java.io.ByteArrayInputStream(packedBody(true)), JPG_SIZE, destination));
+        assertEquals(0, destination.size()); assertRetired(decoder);
+    }
+
+    private static byte[] packedBody(boolean jpeg) {
+        byte[] archive = hexToBytes(FIXTURE_CBR_HEX);
+        return java.util.Arrays.copyOfRange(archive, jpeg ? 0xc0 : 0x40, jpeg ? 0x176 : 0x94);
+    }
+
+    private static void seedFilterInput(Rar3PpmdSolidStreamDecoder decoder, boolean partial,
+            int resultSize) throws Exception {
+        java.lang.reflect.Field programsField = Rar3PpmdSolidStreamDecoder.class.getDeclaredField("vmPrograms");
+        java.lang.reflect.Field queueField = Rar3PpmdSolidStreamDecoder.class.getDeclaredField("deferredFilters");
+        programsField.setAccessible(true); queueField.setAccessible(true);
+        Rar3VmFilter.ProgramState programs = (Rar3VmFilter.ProgramState) programsField.get(decoder);
+        Rar3PpmdFilterOutput.DeferredFilters queue = (Rar3PpmdFilterOutput.DeferredFilters) queueField.get(decoder);
+        try (Rar3PpmdFilterOutput out = new Rar3PpmdFilterOutput(new java.io.ByteArrayOutputStream(),
+                0, programs, Rar3PpmdFilterOutput.MAX_FILTER_BYTES, queue, partial)) {
+            out.acceptParsed(programs.parse(0xa0, Rar3VirtualMachineTest.slicingRecord(
+                    2, resultSize, partial ? 1 : 0), 0, Rar3PpmdFilterOutput.MAX_FILTER_BYTES));
+            if (partial) out.write(42); // Discarded by the synthetic slice; do not alter real history.
+            out.finish(true);
+        }
+    }
+
+    private static void assertRetired(Rar3PpmdSolidStreamDecoder decoder) throws Exception {
+        IOException failure = org.junit.Assert.assertThrows(IOException.class,
+                () -> decoder.decodeEntry(packedBody(true), JPG_SIZE));
+        assertTrue(failure.getMessage().contains("retired"));
+        // Also prohibit a reset header from reviving the same failed instance.
+        org.junit.Assert.assertThrows(IOException.class, () -> decoder.decodeEntry(packedBody(false), PNG_SIZE));
+        decoder.requireCompleteFilterRun(); // Retired work must not retain a deferred prefix.
+    }
+
     @Test public void forwardFailure_truncatedSpool() throws Exception {
         File archive = writeEmbeddedFixture();
         File spool = temp.newFolder();
@@ -73,7 +285,7 @@ public class Rar3PpmdEngineFixtureProbeTest {
         char[] expectedPassword = password.clone();
         File spool = temp.newFolder("owned-session-spool");
         Rar3PpmdForwardReader reader = new Rar3PpmdForwardReader(
-                entries, password, spool, RarVolumeChain.index(entries));
+                entries, password, spool);
         java.lang.reflect.Field passwordField = Rar3PpmdForwardReader.class.getDeclaredField("password");
         passwordField.setAccessible(true);
         char[] ownedPassword = (char[]) passwordField.get(reader);
@@ -319,10 +531,13 @@ public class Rar3PpmdEngineFixtureProbeTest {
             java.lang.reflect.Field decoder = reader.getClass().getDeclaredField("decoder");
             decoder.setAccessible(true);
             Object firstModel = decoder.get(reader);
+            org.junit.Assert.assertNotNull(firstModel);
             assertEquals("testfile.jpg", reader.nextEntry().path);
+            org.junit.Assert.assertSame(firstModel, decoder.get(reader));
             assertEquals(0, spool.list().length);
             assertForwardEntry(reader, JPG_SIZE, JPG_CRC);
-            org.junit.Assert.assertSame(firstModel, decoder.get(reader));
+            assertNull(decoder.get(reader)); // Verified terminal member no longer needs history.
+            assertRetired((Rar3PpmdSolidStreamDecoder) firstModel);
             assertNull(reader.nextEntry());
             assertEquals(0, spool.list().length);
         }
@@ -400,7 +615,7 @@ public class Rar3PpmdEngineFixtureProbeTest {
     }
 
     @Test
-    public void forwardPreflightRejectsIncompleteSplitEncryptionAndMixedLzHeaders() throws Exception {
+    public void forwardPreflightRejectsIncompleteMetadataAndChecksMixedPayloadBeforePublication() throws Exception {
         File fixture = writeEmbeddedFixture();
         byte[] original = Files.readAllBytes(fixture.toPath());
         File spool = temp.newFolder("scope-spool");
@@ -414,7 +629,20 @@ public class Rar3PpmdEngineFixtureProbeTest {
         }
         byte[] mixed = original.clone(); mixed[0xc0] &= 0x7f;
         Files.write(fixture.toPath(), mixed);
-        assertNull(Rar3PpmdSolidArchiveExtractor.openForwardReader(fixture, spool, false));
+        // A non-PPMd start belongs to the mixed-capable logical reader. Its
+        // header probe is not proof that this deliberately damaged body decodes.
+        try (ArchiveSupport.ForwardArchiveReader reader =
+                     Rar3PpmdSolidArchiveExtractor.openForwardReader(fixture, spool, false)) {
+            org.junit.Assert.assertNotNull(reader);
+            org.junit.Assert.assertFalse(reader instanceof Rar3PpmdForwardReader);
+            assertEquals("testfile.png", reader.nextEntry().path);
+            assertForwardEntry(reader, PNG_SIZE, PNG_CRC);
+            assertEquals("testfile.jpg", reader.nextEntry().path);
+            byte[] untouched = {42};
+            org.junit.Assert.assertThrows(IOException.class, () -> reader.read(untouched));
+            assertArrayEquals(new byte[]{42}, untouched);
+            org.junit.Assert.assertThrows(IOException.class, reader::nextEntry);
+        }
         assertEquals(0, spool.list().length);
     }
 
@@ -444,9 +672,9 @@ public class Rar3PpmdEngineFixtureProbeTest {
             reader.nextEntry(); assertForwardEntry(reader, PNG_SIZE, PNG_CRC);
             java.lang.reflect.Field decoder = reader.getClass().getDeclaredField("decoder");
             decoder.setAccessible(true);
-            Object firstModel = decoder.get(reader);
+            assertNull(decoder.get(reader)); // Independent entry completed and released its model.
             reader.nextEntry(); assertForwardEntry(reader, PNG_SIZE, PNG_CRC);
-            org.junit.Assert.assertNotSame(firstModel, decoder.get(reader));
+            assertNull(decoder.get(reader)); // The next independent entry also completed from a fresh reset.
         }
         assertEquals(0, spool.list().length);
     }

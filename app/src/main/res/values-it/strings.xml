@@ -828,4 +828,6 @@
     <string name="txt_contents_error">Impossibile caricare l’indice. Riapri il file e riprova.</string>
     <string name="txt_contents_save_error">Impossibile salvare le modifiche all’indice.</string>
     <string name="txt_contents_page">%1$s · pag. %2$d</string>
+    <string name="viewer_retry">Riprova</string>
+    <string name="document_renderer_stopped">Il visualizzatore di documenti si è arrestato. Riapri il file per continuare dall\'ultima posizione salvata.</string>
 </resources>

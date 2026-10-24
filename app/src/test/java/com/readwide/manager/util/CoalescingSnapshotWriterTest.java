@@ -15,6 +15,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import org.junit.Test;
 
@@ -199,6 +200,167 @@ public class CoalescingSnapshotWriterTest {
         assertEquals(Arrays.asList("history"), f.writes);
     }
 
+    @Test public void captureResourceFailureIsReportedWithoutSpinningAndSameRevisionCanRetry() {
+        for (Error failure : resourceFailures()) {
+            Fixture f = new Fixture();
+            f.captureError = failure;
+            f.request(1, "history");
+            f.executor.runNext();
+            assertSame(failure, f.failures.get(0).getCause());
+            assertEquals(1, f.captures);
+            assertEquals(0, f.encodes);
+            assertTrue(f.executor.tasks.isEmpty());
+            f.captureError = null;
+            f.request(1, "history");
+            f.executor.runNext();
+            assertEquals(Arrays.asList("history"), f.writes);
+        }
+    }
+
+    @Test public void encoderResourceFailureKeepsRevisionUnwrittenForLaterCheckpoint() throws Exception {
+        for (Error failure : resourceFailures()) {
+            Fixture f = new Fixture();
+            f.encoder = value -> { throw failure; };
+            f.request(1, "history");
+            f.executor.runNext();
+            assertSame(failure, f.failures.get(0).getCause());
+            assertEquals(1, f.encodes);
+            assertTrue(f.writes.isEmpty());
+            assertTrue(f.executor.tasks.isEmpty());
+            f.encoder = value -> value;
+            f.writer.writeNow(snapshot(1, "history"));
+            assertEquals(Arrays.asList("history"), f.writes);
+        }
+    }
+
+    @Test public void sinkResourceFailureDoesNotMarkRevisionCommitted() {
+        for (Error failure : resourceFailures()) {
+            Fixture f = new Fixture();
+            f.sink = value -> { throw failure; };
+            f.request(1, "history");
+            f.executor.runNext();
+            assertSame(failure, f.failures.get(0).getCause());
+            assertTrue(f.executor.tasks.isEmpty());
+            f.sink = f.writes::add;
+            f.request(1, "history");
+            f.executor.runNext();
+            assertEquals(Arrays.asList("history"), f.writes);
+        }
+    }
+
+    @Test public void resourceFailureDuringSubmissionReleasesTicketBeforeReportingAndRetry() {
+        for (Error failure : resourceFailures()) {
+            Fixture f = new Fixture();
+            f.executor.submissionError = failure;
+            f.request(1, "history");
+            assertSame(failure, f.failures.get(0).getCause());
+            assertTrue(f.executor.tasks.isEmpty());
+            f.executor.submissionError = null;
+            f.request(1, "history");
+            f.executor.runNext();
+            assertEquals(Arrays.asList("history"), f.writes);
+        }
+    }
+
+    @Test public void callbackResourceFailureDoesNotEscapeOrRetainTicket() {
+        for (Error failure : resourceFailures()) {
+            Fixture f = new Fixture();
+            f.failCapture = true;
+            f.failureHandler = ignored -> { throw failure; };
+            f.request(1, "history");
+            f.executor.runNext();
+            assertEquals(1, f.captures);
+            assertTrue(f.executor.tasks.isEmpty());
+            f.failCapture = false;
+            f.request(1, "history");
+            f.executor.runNext();
+            assertEquals(Arrays.asList("history"), f.writes);
+        }
+    }
+
+    @Test public void callbackRuntimeFailureDoesNotDropNewerRequestMadeDuringReporting() {
+        Fixture f = new Fixture();
+        f.failCapture = true;
+        f.failureHandler = ignored -> {
+            f.failCapture = false;
+            f.request(2, "new history");
+            throw new IllegalStateException("logging failed");
+        };
+        f.request(1, "old history");
+        f.executor.runNext();
+        assertEquals(Arrays.asList("new history"), f.writes);
+        assertEquals(2, f.captures);
+        assertTrue(f.executor.tasks.isEmpty());
+    }
+
+    @Test public void rejectedSubmissionCallbackFailureStillAllowsLaterSave() {
+        Fixture f = new Fixture();
+        f.executor.reject = true;
+        f.failureHandler = ignored -> { throw new OutOfMemoryError("logging failed"); };
+        f.request(1, "history");
+        f.executor.reject = false;
+        f.request(1, "history");
+        f.executor.runNext();
+        assertEquals(Arrays.asList("history"), f.writes);
+    }
+
+    @Test public void unexpectedCallbackErrorStillRunsTicketCleanup() {
+        Fixture f = new Fixture();
+        AssertionError failure = new AssertionError("unexpected callback failure");
+        f.failCapture = true;
+        f.failureHandler = ignored -> { throw failure; };
+        f.request(1, "history");
+        try {
+            f.executor.runNext();
+            fail("Unexpected callback error must propagate");
+        } catch (AssertionError expected) {
+            assertSame(failure, expected);
+        }
+        f.failCapture = false;
+        f.request(1, "history");
+        f.executor.runNext();
+        assertEquals(Arrays.asList("history"), f.writes);
+    }
+
+    @Test public void writeNowStillPropagatesOriginalResourceErrorAndCanRetry() throws Exception {
+        for (Error failure : resourceFailures()) {
+            Fixture f = new Fixture();
+            f.encoder = value -> { throw failure; };
+            try {
+                f.writer.writeNow(snapshot(1, "history"));
+                fail("Synchronous error must propagate");
+            } catch (OutOfMemoryError | StackOverflowError expected) {
+                assertSame(failure, expected);
+            }
+            assertTrue(f.failures.isEmpty());
+            f.encoder = value -> value;
+            f.writer.writeNow(snapshot(1, "history"));
+            assertEquals(Arrays.asList("history"), f.writes);
+        }
+    }
+
+    @Test public void unexpectedSubmissionErrorPropagatesButDoesNotRetainTicket() {
+        Fixture f = new Fixture();
+        AssertionError failure = new AssertionError("unexpected executor failure");
+        f.executor.submissionError = failure;
+        try {
+            f.request(1, "history");
+            fail("Unexpected error must propagate");
+        } catch (AssertionError expected) {
+            assertSame(failure, expected);
+        }
+        f.executor.submissionError = null;
+        f.request(1, "history");
+        f.executor.runNext();
+        assertEquals(Arrays.asList("history"), f.writes);
+    }
+
+    private static List<Error> resourceFailures() {
+        // Injected failures only: never exhaust the test process's heap or stack.
+        return Arrays.asList(new OutOfMemoryError("injected heap failure"),
+                new StackOverflowError("injected stack failure"));
+    }
+
     private static CoalescingSnapshotWriter.Snapshot<String> snapshot(long revision, String value) {
         return new CoalescingSnapshotWriter.Snapshot<>(revision, value);
     }
@@ -206,8 +368,10 @@ public class CoalescingSnapshotWriterTest {
     private static final class ManualExecutor implements Executor {
         final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
         boolean reject;
+        Error submissionError;
 
         @Override public void execute(Runnable task) {
+            if (submissionError != null) throw submissionError;
             if (reject) throw new RejectedExecutionException("rejected");
             tasks.add(task);
         }
@@ -226,15 +390,18 @@ public class CoalescingSnapshotWriterTest {
         int captures;
         int encodes;
         boolean failCapture;
+        Error captureError;
+        Consumer<Exception> failureHandler = failures::add;
         final CoalescingSnapshotWriter<String> writer = new CoalescingSnapshotWriter<>(
                 executor, () -> {
                     captures++;
+                    if (captureError != null) throw captureError;
                     if (failCapture) throw new IOException("capture failed");
                     return snapshot(revision, value);
                 }, captured -> {
                     encodes++;
                     return encoder.encode(captured);
-                }, encoded -> sink.write(encoded), failures::add);
+                }, encoded -> sink.write(encoded), failure -> failureHandler.accept(failure));
 
         void request(long nextRevision, String nextValue) {
             revision = nextRevision;

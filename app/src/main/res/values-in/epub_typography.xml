@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">Ukuran teks EPUB: %1$d%%</string>
+    <string name="epub_line_height">Jarak antarbaris</string>
+    <string name="epub_typography_hint">Khusus EPUB. Pengaturan bawaan buku mempertahankan jarak antarbaris aslinya. Halaman bertata letak tetap, berbasis gambar, atau bertulisan vertikal mempertahankan tata letak paragrafnya.</string>
+    <string name="epub_paragraph_layout_kept">Format paragraf tidak dapat diubah pada halaman ini. Tata letak buku dipertahankan.</string>
+</resources>

@@ -330,7 +330,60 @@
  }
 --- archive_read_support_format_lha.c
 +++ archive_read_support_format_lha.c
-@@ -1892,6 +1892,10 @@
+@@ -293,6 +293,11 @@
+ {
+ 	const unsigned char *p = h;
+ 	size_t next_skip_bytes;
+ 
++	/* PMarc stored members reuse the level-0 LHA header and data CRC. */
++	if (p[0] != 0 && p[H_LEVEL_OFFSET] == 0 &&
++	    memcmp(p + H_METHOD_OFFSET, "-pm0-", 5) == 0)
++		return (0);
++
+ 	switch (p[H_METHOD_OFFSET+3]) {
+ 	/*
+@@ -539,7 +544,8 @@
+ 		lha->directory = 0;
+ 	if (memcmp(lha->method, "lh0", 3) == 0 ||
+-	    memcmp(lha->method, "lz4", 3) == 0)
++	    memcmp(lha->method, "lz4", 3) == 0 ||
++	    memcmp(lha->method, "pm0", 3) == 0)
+ 		lha->entry_is_compressed = 0;
+ 	else
+ 		lha->entry_is_compressed = 1;
+ 
+@@ -811,12 +817,19 @@
+ 	lha->header_size = p[H0_HEADER_SIZE_OFFSET] + 2;
+ 	headersum = p[H0_HEADER_SUM_OFFSET];
+ 	lha->compsize = archive_le32dec(p + H0_COMP_SIZE_OFFSET);
+ 	lha->origsize = archive_le32dec(p + H0_ORIG_SIZE_OFFSET);
++	if (memcmp(lha->method, "pm0", 3) == 0 &&
++	    lha->compsize != lha->origsize) {
++		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
++		    "Invalid PMarc stored entry size");
++		return (ARCHIVE_FATAL);
++	}
+ 	lha->mtime = dos_to_unix(archive_le32dec(p + H0_DOS_TIME_OFFSET));
+ 	namelen = p[H0_NAME_LEN_OFFSET];
+ 	extdsize = (int)lha->header_size - H0_FIXED_SIZE - namelen;
+-	if ((namelen > 221 || extdsize < 0) && extdsize != -2) {
++	if (((namelen > 221 || extdsize < 0) && extdsize != -2) ||
++	    (memcmp(lha->method, "pm0", 3) == 0 && extdsize < 0)) {
+ 		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+ 		    "Invalid LHa header");
+ 		return (ARCHIVE_FATAL);
+ 	}
+@@ -832,7 +845,8 @@
+ 	sum_calculated = lha_calcsum(0, p, 2, lha->header_size - 2);
+ 
+ 	/* Read an extended header */
+-	if (extdsize > 0) {
++	/* PMarc uses this area for comments, not Unix ownership or mode data. */
++	if (extdsize > 0 && memcmp(lha->method, "pm0", 3) != 0) {
+ 		/* This extended data is set by 'LHa for UNIX' only.
+ 		 * Maybe fixed size.
+ 		 */
+@@ -1892,6 +1906,10 @@
  	if (method == NULL || method[0] != 'l' || method[1] != 'h')
  		return (ARCHIVE_FAILED);
  	switch (method[2]) {
@@ -341,3 +394,15 @@
  	case '5':
  		w_bits = 13;/* 8KiB for window */
  		break;
+--- archive_read_support_format_7zip.c
++++ archive_read_support_format_7zip.c
+@@ -3220,7 +3220,8 @@
+ 		return (ARCHIVE_FATAL);
+ 	}
+ 
+-	if (si->pi.numPackStreams == 0 || si->ci.numFolders == 0) {
++	/* An encoded header has one folder; later folders must not be ignored. */
++	if (si->pi.numPackStreams == 0 || si->ci.numFolders != 1) {
+ 		archive_set_error(&a->archive, -1, "Malformed 7-Zip archive");
+ 		return (ARCHIVE_FATAL);
+ 	}

@@ -18,7 +18,7 @@ public class RarSplitStoredMatrixReportTest {
     @Test
     public void analyze_reportsSupportedPlainAndEncryptedStoredSplitRows() throws Exception {
         RarArchiveReader.RarEntry plainFirst = entry("plain.bin", 4, 0x30, false, true, null, 4L, false);
-        RarArchiveReader.RarEntry plainLast = entry("plain.bin", 4, 0x30, true, false, null, 6L, false);
+        RarArchiveReader.RarEntry plainLast = entry("plain.bin", 4, 0x30, true, false, null, 28L, false);
         RarArchiveReader.EncryptionInfo rar5 = rar5Encryption();
         RarArchiveReader.RarEntry encFirst = entry("secret.bin", 5, 0, false, true, rar5, 16L, false);
         RarArchiveReader.RarEntry encLast = entry("secret.bin", 5, 0, true, false, rar5, 16L, false);
@@ -50,14 +50,65 @@ public class RarSplitStoredMatrixReportTest {
     }
 
     @Test
-    public void analyze_reportsSolidSplitAsUnsupported() throws Exception {
+    public void analyze_reportsStoredSolidSplitAsSupported() throws Exception {
         RarArchiveReader.RarEntry first = entry("solid.bin", 4, 0x30, false, true, null, 9L, true);
-        RarArchiveReader.RarEntry last = entry("solid.bin", 4, 0x30, true, false, null, 7L, true);
+        RarArchiveReader.RarEntry last = entry("solid.bin", 4, 0x30, true, false, null, 23L, true);
         assignSources(first, last);
 
         RarSplitStoredMatrixReport report = RarSplitStoredMatrixReport.analyze(Arrays.asList(first, last));
 
-        assertEquals(RarSplitStoredMatrixReport.Category.SOLID_SPLIT, report.rows().get(0).category);
+        assertEquals(RarSplitStoredMatrixReport.Category.PLAIN_STORED_SPLIT, report.rows().get(0).category);
+        assertEquals(RarSplitStoredMatrixReport.Status.SUPPORTED, report.rows().get(0).status);
+        assertTrue(report.rows().get(0).solid);
+    }
+
+    @Test
+    public void analyze_storedSolidMissingSourceIsInvalidForBothRarVersions() throws Exception {
+        for (int version : new int[]{4, 5}) {
+            int method = version == 4 ? 0x30 : 0;
+            RarArchiveReader.RarEntry first = entry("solid.bin", version, method, false, true, null, 9L, true);
+            RarArchiveReader.RarEntry last = entry("solid.bin", version, method, true, false, null, 23L, true);
+            first.sourceArchive = tempFolder.newFile();
+
+            RarSplitStoredMatrixReport report = RarSplitStoredMatrixReport.analyze(Arrays.asList(first, last));
+
+            assertEquals(RarSplitStoredMatrixReport.Category.MISSING_SOURCE_VOLUME, report.rows().get(0).category);
+            assertEquals(RarSplitStoredMatrixReport.Status.INVALID, report.rows().get(0).status);
+        }
+    }
+
+    @Test
+    public void analyze_storedSolidKeepsChangedEncryptionCauseForBothRarVersions() throws Exception {
+        for (int version : new int[]{4, 5}) {
+            int method = version == 4 ? 0x30 : 0;
+            RarArchiveReader.EncryptionInfo firstEncryption = version == 4
+                    ? RarArchiveReader.EncryptionInfo.rar4Unsupported(new byte[]{1,2,3,4,5,6,7,8})
+                    : rar5Encryption();
+            RarArchiveReader.EncryptionInfo lastEncryption = version == 4
+                    ? RarArchiveReader.EncryptionInfo.rar4Unsupported(new byte[]{8,7,6,5,4,3,2,1})
+                    : rar5Encryption();
+            if (version == 5) lastEncryption.iv[0] ^= 1;
+            RarArchiveReader.RarEntry first = entry("solid.bin", version, method, false, true, firstEncryption, 16L, true);
+            RarArchiveReader.RarEntry last = entry("solid.bin", version, method, true, false, lastEncryption, 16L, true);
+            first.sourceArchive = tempFolder.newFile();
+            last.sourceArchive = tempFolder.newFile();
+
+            RarSplitStoredMatrixReport report = RarSplitStoredMatrixReport.analyze(Arrays.asList(first, last));
+
+            assertEquals(RarSplitStoredMatrixReport.Category.ENCRYPTION_PARAMETERS_CHANGED, report.rows().get(0).category);
+            assertEquals(RarSplitStoredMatrixReport.Status.UNSUPPORTED, report.rows().get(0).status);
+        }
+    }
+
+    @Test
+    public void analyze_solidCompressedSplitStillUsesCompressedRejection() throws Exception {
+        RarArchiveReader.RarEntry first = entry("solid.bin", 4, 0x33, false, true, null, 9L, true);
+        RarArchiveReader.RarEntry last = entry("solid.bin", 4, 0x33, true, false, null, 7L, true);
+        assignSources(first, last);
+
+        RarSplitStoredMatrixReport report = RarSplitStoredMatrixReport.analyze(Arrays.asList(first, last));
+
+        assertEquals(RarSplitStoredMatrixReport.Category.COMPRESSED_SPLIT, report.rows().get(0).category);
         assertEquals(RarSplitStoredMatrixReport.Status.UNSUPPORTED, report.rows().get(0).status);
     }
 

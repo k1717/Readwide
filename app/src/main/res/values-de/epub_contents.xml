@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Fußnote</string>
+    <string name="epub_return_to_text">Zurück zum Text</string>
+    <string name="epub_contents_fallback">Kein lesbares Inhaltsverzeichnis gefunden; Abschnitte werden in Lesereihenfolge angezeigt.</string>
+    <string name="epub_contents_empty">Keine passenden Einträge.</string>
+</resources>

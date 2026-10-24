@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">फुटनोट</string>
+    <string name="epub_return_to_text">पाठ पर वापस जाएँ</string>
+    <string name="epub_contents_fallback">पढ़ने योग्य विषय-सूची नहीं मिली; खंड पढ़ने के क्रम में दिखाए गए हैं।</string>
+    <string name="epub_contents_empty">कोई मेल खाती प्रविष्टि नहीं मिली।</string>
+</resources>

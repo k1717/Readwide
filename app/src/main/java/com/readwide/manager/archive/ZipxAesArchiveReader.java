@@ -14,7 +14,6 @@ import net.lingala.zip4j.model.enums.AesKeyStrength;
 import net.lingala.zip4j.model.enums.AesVersion;
 
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 import org.apache.commons.compress.compressors.deflate64.Deflate64CompressorInputStream;
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream;
 import org.tukaani.xz.LZMAInputStream;
@@ -935,7 +934,7 @@ final class ZipxAesArchiveReader {
             case METHOD_DEFLATE64:
                 return new Deflate64CompressorInputStream(decrypted);
             case METHOD_BZIP2:
-                return new BZip2CompressorInputStream(decrypted, true);
+                return new ArchiveBzip2InputStream(decrypted, null);
             case METHOD_LZMA:
                 return wrapZipLzmaStream(decrypted, uncompressedSize, lzmaEndMarker);
             case METHOD_PPMD:
@@ -944,7 +943,8 @@ final class ZipxAesArchiveReader {
                 // XZ permits concatenated streams and four-byte-aligned padding.
                 // The ZIP payload/decryptor bounds input; outer size/CRC/MAC
                 // checks still cover the complete concatenated output.
-                return new XZCompressorInputStream(decrypted, true);
+                return XZCompressorInputStream.builder().setInputStream(decrypted)
+                        .setDecompressConcatenated(true).get();
             case METHOD_ZSTANDARD:
             case METHOD_ZSTANDARD_LEGACY:
                 return LibarchiveZstdInputStream.open(decrypted);

@@ -5,7 +5,7 @@ fixes in every viewer, Markdown start-position rework, case-only rename support,
 and Turkish-locale extension-matching fixes. The dependency set
 is identical to 1.0.12 (no new dependency, no version bumps), so the license
 report and SBOM carry the same packages with only the version stamp changed.
-minSdk 24, compileSdk/targetSdk 35 unchanged. The user-facing summary is in
+minSdk 24, compileSdk/targetSdk 35 unchanged. The public summary is in
 `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_13.md`; full technical detail is in
 `PATCHNOTES.md` under the 1.0.13 heading.
 

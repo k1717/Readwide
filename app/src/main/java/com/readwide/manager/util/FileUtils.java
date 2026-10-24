@@ -118,6 +118,11 @@ public class FileUtils {
         return TextEncodingDetector.readTextFile(file, encoding);
     }
 
+    /** Reads the already-open source with the same decoding policy; does not close it. */
+    public static String readTextFromStream(InputStream input, String encoding) throws IOException {
+        return TextEncodingDetector.readTextFromStream(input, encoding);
+    }
+
     public static List<TextChunk> readTextFileAsChunks(File file, int targetChunkChars) throws IOException {
         return TextEncodingDetector.readTextFileAsChunks(file, targetChunkChars);
     }

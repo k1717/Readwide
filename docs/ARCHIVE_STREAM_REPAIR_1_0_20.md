@@ -1,6 +1,5 @@
 # Archive stream corrections — Readwide 1.0.20
 
-Source review: 2026-10-04; follow-through and coverage wording: 2026-10-10.
 No builds, tests, native execution or benchmarks ran.
 These corrections extend the [codec additions](ARCHIVE_CODEC_ADDITIONS_1_0_20.md);
 they do not establish complete RAR/7z interoperability.

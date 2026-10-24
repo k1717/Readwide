@@ -24,6 +24,95 @@ import java.util.List;
 public class SplitVolumeInputTest {
     @Rule public TemporaryFolder temp = new TemporaryFolder();
 
+    @Test public void unchangedBoundaryCheckPreservesOwnerAndChildCursors() throws Exception {
+        File first = file(1, 2), second = file(3, 4);
+        try (SplitVolumeInput in = input(segment(first, 0, 2), segment(second, 0, 2));
+             InputStream child = in.boundedStream(1, 3)) {
+            assertEquals(1, in.read());
+            assertEquals(2, child.read());
+            in.requireUnchanged();
+            assertEquals(1, in.getFilePointer());
+            assertEquals(2, in.read());
+            assertEquals(3, child.read());
+            in.requireUnchanged();
+            assertEquals(4, child.read());
+        }
+    }
+
+    @Test public void boundaryDetectsChangedOpenVolumeAndCannotBeRevived() throws Exception {
+        for (boolean grow : new boolean[]{false, true}) {
+            File data = file(1, 2);
+            long modified = data.lastModified();
+            try (SplitVolumeInput in = input(segment(data, 0, 2));
+                 InputStream child = in.boundedStream(0, 2)) {
+                assertEquals(1, in.read()); // Keep the same physical handle open.
+                if (grow) {
+                    try (RandomAccessFile edit = new RandomAccessFile(data, "rw")) { edit.setLength(3); }
+                } else assertTrue(data.setLastModified(modified + 10000));
+                assertThrows(IOException.class, in::requireUnchanged);
+                Files.write(data.toPath(), new byte[]{1, 2});
+                assertTrue(data.setLastModified(modified));
+                assertThrows(IOException.class, in::requireUnchanged);
+                assertThrows(IOException.class, child::read);
+            }
+        }
+    }
+
+    @Test public void boundaryChecksUnreadAndEmptyPhysicalVolumes() throws Exception {
+        for (boolean missing : new boolean[]{false, true}) {
+            File first = file(1), unused = file(2);
+            try (SplitVolumeInput in = input(segment(first, 0, 1), segment(unused, 0, 0))) {
+                assertEquals(1, in.read());
+                if (missing) Files.delete(unused.toPath());
+                else assertTrue(unused.setLastModified(unused.lastModified() + 10000));
+                assertThrows(IOException.class, in::requireUnchanged);
+                assertThrows(IOException.class, in::read);
+            }
+        }
+    }
+
+    @Test public void interruptedBoundaryRetiresOwnerWithoutConsumingBytes() throws Exception {
+        File data = file(1);
+        try (SplitVolumeInput in = input(segment(data, 0, 1))) {
+            try {
+                Thread.currentThread().interrupt();
+                assertThrows(InterruptedIOException.class, in::requireUnchanged);
+                assertTrue(Thread.currentThread().isInterrupted());
+            } finally { Thread.interrupted(); }
+            assertEquals(0, in.getFilePointer());
+            assertThrows(IOException.class, in::read);
+        }
+    }
+
+    @Test public void uncheckedVolumeFailureCannotReplayPartialBytesOrReuseSiblingViews() throws Exception {
+        for (Throwable failure : new Throwable[]{new SecurityException("volume access revoked"),
+                new AssertionError("volume metadata failed")}) {
+            File first = file(1, 2), second = file(3, 4);
+            try (SplitVolumeInput in = input(segment(first, 0, 2), segment(second, 0, 2));
+                 InputStream child = in.boundedStream(0, 4);
+                 InputStream sibling = in.boundedStream(0, 1)) {
+                java.lang.reflect.Field field = SplitVolumeInput.class.getDeclaredField("files");
+                field.setAccessible(true);
+                File[] files = (File[]) field.get(in);
+                File original = files[1];
+                files[1] = new File(second.getPath()) {
+                    @Override public boolean isFile() {
+                        if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+                        throw (Error) failure;
+                    }
+                };
+                byte[] bytes = {42, 42, 42, 42};
+                org.junit.Assert.assertSame(failure, assertThrows(Throwable.class, () -> child.read(bytes)));
+                assertArrayEquals(new byte[]{1, 2, 42, 42}, bytes);
+                files[1] = original; // Restored access must not resurrect a partially advanced session.
+                org.junit.Assert.assertSame(failure, assertThrows(Throwable.class, child::read));
+                org.junit.Assert.assertSame(failure, assertThrows(Throwable.class, sibling::read));
+                org.junit.Assert.assertSame(failure, assertThrows(Throwable.class, () -> in.seek(0)));
+                Files.move(first.toPath(), new File(temp.getRoot(), first.getName() + ".closed").toPath());
+            }
+        }
+    }
+
     @Test public void littleEndianScalarsPreserveAllWidthsAcrossEveryVolumeBoundary() throws Exception {
         File data = file(90, 0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x81, 91);
         for (int width = 1; width <= 8; width++) {

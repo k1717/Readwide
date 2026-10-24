@@ -11,8 +11,8 @@ import java.util.zip.CRC32;
  * Itanium, Delta, RGB, Audio). Custom programs use the separately attributed
  * {@link Rar3VirtualMachine}. Streaming same-start chains may resize results;
  * final file bytes are counted separately from raw within-entry dictionary positions.
- * Forward descriptors can carry between checked solid entries; partially consumed
- * cross-entry blocks and late ranges still fail explicitly.
+ * Forward descriptors and scoped prefetched raw prefixes can carry between checked
+ * solid entries. Filtered results stay within one file; late ranges fail explicitly.
  */
 final class Rar3VmFilter {
     enum StandardFilter { NONE, E8, E8E9, ITANIUM, DELTA, RGB, AUDIO }
@@ -122,7 +122,9 @@ final class Rar3VmFilter {
 
             long encodedLength = (flags & 0x20) != 0
                     ? reader.readData() : program == null ? 0L : program.oldBlockLength;
-            if (encodedLength <= 0 || encodedLength > dictionarySize || encodedLength > Integer.MAX_VALUE) {
+            // Zero is meaningful for a successor of a size-changing VM filter.
+            // The output queue validates chain membership before accepting it.
+            if (encodedLength < 0 || encodedLength > dictionarySize || encodedLength > Integer.MAX_VALUE) {
                 throw invalid("block length");
             }
             int blockLength = (int) encodedLength;
@@ -285,11 +287,19 @@ final class Rar3VmFilter {
     private Rar3VmFilter() {}
 
     static byte[] apply(PendingFilter filter, byte[] data, int length, int[] registers) throws IOException {
+        return apply(filter, data, length, registers, null);
+    }
+
+    static byte[] apply(PendingFilter filter, byte[] data, int length, int[] registers,
+                        com.readwide.manager.util.FileOperationProgress progress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
         if (filter.customProgram != null) {
             return Rar3VirtualMachine.apply(filter.customProgram, data, length, registers,
-                    filter.globalData, filter.fileOffset);
+                    filter.globalData, filter.fileOffset, progress);
         }
-        return apply(filter.type, data, length, registers, filter.fileOffset);
+        byte[] result = apply(filter.type, data, length, registers, filter.fileOffset);
+        ArchiveCancellation.checkpoint(progress);
+        return result;
     }
 
     /** Identifies a standard filter from the inner VM code, or NONE. */

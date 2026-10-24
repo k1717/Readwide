@@ -21,6 +21,28 @@ import androidx.core.view.WindowInsetsControllerCompat;
 public final class EdgeToEdgeUtil {
     private EdgeToEdgeUtil() {}
 
+    /** Colors only: keep the existing inset, cutout and visibility policy untouched. */
+    @SuppressWarnings("deprecation")
+    public static void setSystemBarColors(Window window, int statusColor, int navigationColor) {
+        // Still needed before edge-to-edge enforcement and for three-button
+        // navigation. Drawing replacement scrims would change the reader frame.
+        window.setStatusBarColor(statusColor);
+        window.setNavigationBarColor(navigationColor);
+    }
+
+    /** Retain the document/PDF divider and contrast policy on the same API levels. */
+    @SuppressWarnings("deprecation")
+    public static void setReaderBarContrast(Window window, int navigationColor) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            window.setNavigationBarDividerColor(navigationColor);
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            window.setNavigationBarContrastEnforced(false);
+            // Deprecated does not mean ineffective on every supported window.
+            window.setStatusBarContrastEnforced(false);
+        }
+    }
+
     public interface ChromeVisibilityProvider {
         boolean isChromeVisible();
     }
@@ -290,8 +312,7 @@ public final class EdgeToEdgeUtil {
     private static void prepareWindow(Activity activity, View root) {
         Window window = activity.getWindow();
         WindowCompat.setDecorFitsSystemWindows(window, false);
-        window.setStatusBarColor(Color.TRANSPARENT);
-        window.setNavigationBarColor(Color.TRANSPARENT);
+        setSystemBarColors(window, Color.TRANSPARENT, Color.TRANSPARENT);
 
         boolean darkMode = (activity.getResources().getConfiguration().uiMode
                 & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;

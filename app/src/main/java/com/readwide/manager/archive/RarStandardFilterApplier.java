@@ -6,15 +6,15 @@ import java.io.IOException;
 import java.util.Arrays;
 
 /**
- * Standalone primitive implementations for a small, safe subset of RAR3/RAR4 standard filters.
+ * Isolated E8/E8E9 primitives for the legacy filter-planning scaffold.
  *
  * <p>RAR VM-filtered output cannot be wired into the archive decoder merely by applying a filter
  * when symbol {@code 257} is seen: the real pipeline needs queued filter metadata, delayed output
  * windows, and CRC validation after filtered bytes are emitted. This helper is therefore limited to
- * isolated byte ranges and tests. The live first-party path deliberately exposes only E8/E8E9
- * x86 branch conversion as a primitive, with an in-memory delayed-output queue scaffold on top.
- * Delta/RGB/Audio/
- * Itanium/Upcase/custom VM bytecode remain first-party gaps.</p>
+ * isolated byte ranges and tests, not live archive extraction. Live RAR3/RAR4 filtering uses
+ * {@link Rar3PpmdFilterOutput} and {@link Rar3VmFilter}, including all six recognized standard
+ * filters and the custom VM path. The standalone capabilities here do not describe that path's
+ * support coverage.</p>
  */
 final class RarStandardFilterApplier {
     private RarStandardFilterApplier() {}

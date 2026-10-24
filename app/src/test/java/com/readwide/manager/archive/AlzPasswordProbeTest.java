@@ -12,13 +12,13 @@ import org.junit.Test;
 public class AlzPasswordProbeTest {
     @Test public void decoderFormatFailuresRejectOnlyThatCandidate() throws Exception {
         // Deflate BTYPE=3 and a non-BZip2 header are malformed decoded content.
-        for (int method : new int[]{1, 2}) {
+        for (int method : new int[]{1, 2, 3}) {
             assertFalse(probe(encrypted(new byte[]{6,0,0,0}), method, 16, 0, null));
         }
     }
 
     @Test public void sourceFailuresRemainTerminalAndKeepTheirIdentity() throws Exception {
-        for (int method : new int[]{0, 1, 2}) {
+        for (int method : new int[]{0, 1, 2, 3}) {
             for (Throwable failure : new Throwable[]{new IOException("source"),
                     new InterruptedIOException("cancelled"), new IllegalStateException("source runtime"),
                     new AssertionError("source fatal")}) {
@@ -39,7 +39,7 @@ public class AlzPasswordProbeTest {
     }
 
     @Test public void closeFailureOverridesMatchingAndRejectedCandidates() throws Exception {
-        for (int method : new int[]{0, 1, 2}) {
+        for (int method : new int[]{0, 1, 2, 3}) {
             for (long crc : new long[]{crc(new byte[]{6,0,0,0}), 0}) {
                 IOException failure = new IOException("source close");
                 int[] closes = {0};
@@ -93,6 +93,47 @@ public class AlzPasswordProbeTest {
         assertFalse(probe(encrypted(plain), 0, plain.length - 1, crc(plain), null));
         assertFalse(probe(encrypted(plain), 0, plain.length + 1, crc(plain), null));
         assertFalse(probe(encrypted(plain), 0, plain.length, crc(plain) ^ 1, null));
+    }
+
+    @Test public void obfuscatedProbeUsesDeclaredSizeAndValidatesCrc() throws Exception {
+        byte[] plain = {1,2,3,4,5};
+        byte[] packed = AlzObfuscatedDeflateInputStreamTest.dynamic(plain, plain.length);
+        assertTrue(probe(encrypted(packed), 3, plain.length, crc(plain), null));
+        assertFalse(probe(encrypted(packed), 3, plain.length, crc(plain) ^ 1, null));
+        // Same order residue isolates decoded-length checking from table selection.
+        assertFalse(probe(encrypted(packed), 3, plain.length + 16, crc(plain), null));
+    }
+
+    @Test public void trimmedBzipProbeKeepsTokenAndCipherCrcContract() throws Exception {
+        byte[] plain = "ALZ bzip2 single block payload. ".repeat(40)
+                .getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        byte[] packed = java.util.Base64.getDecoder().decode(Round4Fixtures.ALZ_BZ_SINGLE_BLOCK_B64);
+        FileOperationProgress progress = new FileOperationProgress("test", null);
+        assertTrue(probe(encrypted(packed), 1, plain.length, crc(plain), progress));
+        assertFalse(probe(encrypted(packed), 1, plain.length, crc(plain) ^ 1, progress));
+        assertEquals(0, progress.snapshot().doneBytes);
+        assertFalse(progress.isCancelled());
+    }
+
+    @Test public void trimmedBzipProbeCancellationClosesOnceWithoutRejectingPassword() {
+        byte[] packed = java.util.Base64.getDecoder().decode(Round4Fixtures.ALZ_BZ_SINGLE_BLOCK_B64);
+        FileOperationProgress progress = new FileOperationProgress("test", null);
+        int[] reads = {0}, closes = {0};
+        InputStream source = new ByteArrayInputStream(ciphertext(packed)) {
+            @Override public synchronized int read(byte[] bytes, int offset, int length) {
+                int count = super.read(bytes, offset, length);
+                // First call is the three-byte DLZ probe; second feeds the decoder.
+                if (++reads[0] == 2) progress.cancel();
+                return count;
+            }
+            @Override public void close() { closes[0]++; }
+        };
+        long expectedSize = "ALZ bzip2 single block payload. ".length() * 40L;
+        assertThrows(InterruptedIOException.class, () -> probe(source, 1, expectedSize, 0, progress));
+        assertEquals(2, reads[0]);
+        assertEquals(1, closes[0]);
+        assertEquals(0, progress.snapshot().doneBytes);
+        assertFalse(Thread.currentThread().isInterrupted());
     }
 
     private static boolean probe(InputStream source, int method, long size, long crc,

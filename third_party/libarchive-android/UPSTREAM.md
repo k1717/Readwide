@@ -35,6 +35,17 @@ derive from that method window; `-lh5-`/`-lh6-`/`-lh7-` are unchanged. No new co
 source or dependency is imported. Five synthetic Android regression methods remain
 uncompiled/unrun; this does not implement LHA volume continuation or other methods.
 See [source reasoning and references](../../docs/LHA_LH4_INTEGRATION_1_0_20.md).
+The retained patch additionally admits PMarc stored `-pm0-` level-0 members through
+the existing LHA stored-data path. Packed/original sizes must match and the CRC
+field must be present; normal header checksum and output CRC validation remain.
+PMarc comment bytes are excluded from Unix mode/ownership interpretation. PM1/PM2
+and other PMarc header levels are not implemented. No reference implementation or
+new dependency is imported. Synthetic Android regression sources remain unrun;
+see [scope and references](../../docs/DEV_CHANGES_1_0_21.md#archive-compatibility).
+The native 7z reader also requires one encoded-header folder instead of decoding
+only the first of several. This does not restrict ordinary multi-folder file
+data. The same check is retained in `libarchive.patch`; synthetic Android
+list/selected/forward and split-route regressions remain uncompiled/unrun.
 `library/CMakeLists.txt` therefore compiles the sources directly without
 requiring a host `patch` executable.
 
@@ -44,6 +55,6 @@ metadata are intentionally excluded.
 
 Readwide's Gradle wrapper configuration uses Java 17 source/target, matching the
 app without introducing new Java APIs or changing minSdk. External native staging
-uses `cxx/archive` under the configured build root. The maintainer's 2026-10-11
-successful build compiled both native ABIs before these build-setting edits;
+uses `cxx/archive` under the configured build root. The successful 1.0.20 build
+on 2026-10-11 compiled both native ABIs before these build-setting edits;
 runtime validation and module-specific tests remain separate.

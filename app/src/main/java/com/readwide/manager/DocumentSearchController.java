@@ -9,7 +9,6 @@ import android.graphics.drawable.GradientDrawable;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
-import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -61,51 +60,73 @@ final class DocumentSearchController {
         }
         if (countsMatch(query) && countTask != null) return false; // includes queued UI completion
         if (countTask != null) countTask.cancel(true);
+        countTask = null;
         final int generation = ++countGeneration;
         final int load = activity.loadGeneration;
-        final SearchOptions options = currentSearchOptions();
-        countsQuery = query; countsOptions = options.signature();
-        countsFirstPage = firstPageIdentity(); countsPageSize = documentSearchPageCount();
-        final Object firstPage = countsFirstPage;
-        final String[] html = new String[countsPageSize];
-        for (int i = 0; i < html.length; i++) html[i] = documentSearchPageHtml(i);
-        countsIndex = null;
-        if (countWorker == null) countWorker = new java.util.concurrent.ThreadPoolExecutor(
-                1, 1, 10, java.util.concurrent.TimeUnit.SECONDS,
-                new java.util.concurrent.ArrayBlockingQueue<>(1),
-                new java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy());
-        countWorker.allowCoreThreadTimeOut(true);
-        countTask = countWorker.submit(() -> {
-            try {
-            SearchMatcher matcher = SearchMatcher.compile(query, options);
-            int[] counts = new int[html.length];
-
-            for (int i = 0; i < html.length; i++) {
-                if (Thread.currentThread().isInterrupted()) return;
-                counts[i] = matcher == null ? 0 : countHtmlTextSegmentMatches(html[i], matcher);
-
-            }
-            if (Thread.currentThread().isInterrupted()) return;
-            final DocumentSearchCounts completed = new DocumentSearchCounts(counts);
-            activity.runOnUiThread(() -> {
-                if (activity.activityDestroyed || generation != countGeneration || load != activity.loadGeneration
-                        || firstPage != firstPageIdentity() || !countsMatch(query)) return;
-                countTask = null;
-                countsIndex = completed; countedMatcher = matcher;
-                Runnable callback = afterCount; afterCount = null;
-                afterCountIsNavigation = false;
-                if (callback != null) callback.run();
+        try {
+            final SearchOptions options = currentSearchOptions();
+            countsQuery = query; countsOptions = options.signature();
+            countsFirstPage = firstPageIdentity(); countsPageSize = documentSearchPageCount();
+            final Object firstPage = countsFirstPage;
+            final String[] html = new String[countsPageSize];
+            for (int i = 0; i < html.length; i++) html[i] = documentSearchPageHtml(i);
+            countsIndex = null;
+            if (countWorker == null) countWorker = new java.util.concurrent.ThreadPoolExecutor(
+                    1, 1, 10, java.util.concurrent.TimeUnit.SECONDS,
+                    new java.util.concurrent.ArrayBlockingQueue<>(1),
+                    new java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy());
+            countWorker.allowCoreThreadTimeOut(true);
+            countTask = countWorker.submit(() -> {
+                try {
+                    SearchMatcher matcher = SearchMatcher.compile(query, options);
+                    int[] counts = new int[html.length];
+                    for (int i = 0; i < html.length; i++) {
+                        if (Thread.currentThread().isInterrupted()) return;
+                        counts[i] = matcher == null ? 0 : countHtmlTextSegmentMatches(html[i], matcher);
+                    }
+                    if (Thread.currentThread().isInterrupted()) return;
+                    final DocumentSearchCounts completed = new DocumentSearchCounts(counts);
+                    activity.runOnUiThread(() -> {
+                        if (activity.activityDestroyed || generation != countGeneration || load != activity.loadGeneration
+                                || firstPage != firstPageIdentity() || !countsMatch(query)) return;
+                        countTask = null;
+                        countsIndex = completed; countedMatcher = matcher;
+                        Runnable callback = afterCount; afterCount = null;
+                        afterCountIsNavigation = false;
+                        if (callback != null) callback.run();
+                    });
+                } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                    activity.runOnUiThread(() -> completeCountFailure(generation, load, failure));
+                }
             });
-            } catch (RuntimeException | StackOverflowError failure) {
-                activity.runOnUiThread(() -> {
-                    if (activity.activityDestroyed || generation != countGeneration) return;
-                    countTask = null; afterCount = null; afterCountIsNavigation = false; countsPageSize = -1;
-                    if (activity.documentSearchStatusView != null) activity.documentSearchStatusView.setText(
-                            getString(R.string.error_prefix) + failure.getClass().getSimpleName());
-                });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            // Snapshot allocation and executor setup happen before the worker's
+            // catch boundary. Clear their request state through the same owner.
+            activity.runOnUiThread(() -> completeCountFailure(generation, load, failure));
+        }
+        return false;
+    }
+
+    void completeCountFailure(int generation, int load, Throwable failure) {
+        if (activity.activityDestroyed || generation != countGeneration
+                || load != activity.loadGeneration) return;
+        countTask = null;
+        afterCount = null;
+        afterCountIsNavigation = false;
+        countedMatcher = null;
+        countsIndex = null;
+        countsFirstPage = null;
+        countsPageSize = -1;
+        TextView status = activity.documentSearchStatusView;
+        if (status != null) status.post(() -> {
+            // A synchronous setup failure returns false to a caller that writes
+            // its waiting label. Publish the failure after that label, but never
+            // into a later request or a replacement search dialog.
+            if (!activity.activityDestroyed && generation == countGeneration
+                    && load == activity.loadGeneration && status == activity.documentSearchStatusView) {
+                status.setText(getString(R.string.error_prefix) + failure.getClass().getSimpleName());
             }
         });
-        return false;
     }
 
     void close() {
@@ -195,13 +216,18 @@ final class DocumentSearchController {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dpToPx(52)));
 
+        TextView optionsToggle = makeSearchDialogButton(getString(R.string.txt_contents_options), fg);
+        LinearLayout advanced = new LinearLayout(activity);
+        advanced.setOrientation(LinearLayout.VERTICAL);
+        box.addView(optionsToggle, new LinearLayout.LayoutParams(-1, -2));
+        box.addView(advanced, new LinearLayout.LayoutParams(-1, -2));
         EditText occurrenceInput = activity.makeDialogInput(getString(R.string.search_occurrence_hint));
         occurrenceInput.setInputType(InputType.TYPE_CLASS_NUMBER);
         LinearLayout.LayoutParams occurrenceLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dpToPx(48));
         occurrenceLp.setMargins(0, dpToPx(8), 0, 0);
-        box.addView(occurrenceInput, occurrenceLp);
+        advanced.addView(occurrenceInput, occurrenceLp);
 
         TextView hint = new TextView(activity);
         hint.setText(getString(R.string.search_hint_multiple));
@@ -209,7 +235,7 @@ final class DocumentSearchController {
         hint.setTextSize(12f);
         hint.setGravity(Gravity.START);
         hint.setPadding(0, dpToPx(6), 0, dpToPx(8));
-        box.addView(hint, new LinearLayout.LayoutParams(
+        advanced.addView(hint, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -276,9 +302,11 @@ final class DocumentSearchController {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         optionsRow.addView(regexBox, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        box.addView(optionsRow, new LinearLayout.LayoutParams(
+        advanced.addView(optionsRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
+        // Persisted non-default conditions stay visible on opening; folding never resets them.
+        SearchOptionsDisclosure.bind(optionsToggle, advanced, caseBox, wholeBox, regexBox);
 
         LinearLayout buttons = new LinearLayout(activity);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
@@ -291,7 +319,7 @@ final class DocumentSearchController {
         TextView nextButton = makeSearchDialogButton(getString(R.string.find_next), fg);
 
         buttons.addView(prevButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        buttons.addView(nthButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        advanced.addView(nthButton, new LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT));
         buttons.addView(closeButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         buttons.addView(nextButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         box.addView(buttons, new LinearLayout.LayoutParams(
@@ -513,15 +541,9 @@ final class DocumentSearchController {
         if (activity.activityDestroyed || activity.webView == null) {
             return;
         }
-        final WebView targetView = activity.webView;
-        final int targetPage = activity.currentPage;
-        final int targetGeneration = activity.documentAnchorPageGeneration;
-        final String targetQuery = activity.activeDocumentSearchQuery;
-        WebSettings settings = targetView.getSettings();
-        boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
-        if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
-        final int selectedOrdinal = Math.max(1, activity.activeDocumentSearchOrdinal);
-        targetView.evaluateJavascript(
+        final SearchRevealRequest request = new SearchRevealRequest();
+        final int selectedOrdinal = request.ordinal;
+        activity.evaluateDocumentJavascript(request.view, request.page,
                 "(function(){try{"
                         + "var hits=document.querySelectorAll('span.rw-document-search-hit');"
                         + "if(!hits||!hits.length)return false;"
@@ -536,13 +558,7 @@ final class DocumentSearchController {
                         + "}"
                         + "return found;}catch(ex){return false;}})()",
                 value -> {
-                    if (activity.activityDestroyed || activity.webView == null) return;
-                    activity.restoreDocumentJavaScriptPolicy(
-                            targetView, targetPage, restoreJavascriptOff);
-                    if (activity.webView != targetView || activity.currentPage != targetPage
-                            || activity.documentAnchorPageGeneration != targetGeneration
-                            || !targetQuery.equals(activity.activeDocumentSearchQuery)
-                            || selectedOrdinal != activity.activeDocumentSearchOrdinal) return;
+                    if (!request.isCurrent()) return;
                     if ("true".equals(value)) {
                         scrollDocumentSearchCurrentIntoView();
                     } else {
@@ -586,14 +602,19 @@ final class DocumentSearchController {
     }
 
     void applyDocumentSearchHighlightAfterPageLoad() {
+        if (activity.activityDestroyed || activity.webView == null) return;
         if (activity.activeDocumentSearchQuery == null || activity.activeDocumentSearchQuery.trim().isEmpty()) return;
         if (activity.currentPage != activity.activeDocumentSearchPage || activity.activeDocumentSearchOrdinal <= 0) {
             updateDocumentSearchStatus(activity.documentSearchStatusView);
             return;
         }
-        activity.webView.postDelayed(this::scrollDocumentSearchCurrentIntoView, 80);
-        activity.webView.postDelayed(this::scrollDocumentSearchCurrentIntoView, 180);
-        activity.webView.postDelayed(this::scrollDocumentSearchCurrentIntoView, 320);
+        SearchRevealRequest request = new SearchRevealRequest();
+        Runnable reveal = () -> {
+            if (request.isCurrent()) scrollDocumentSearchCurrentIntoView();
+        };
+        request.view.postDelayed(reveal, 80);
+        request.view.postDelayed(reveal, 180);
+        request.view.postDelayed(reveal, 320);
         updateDocumentSearchStatus(activity.documentSearchStatusView);
     }
 
@@ -925,15 +946,33 @@ final class DocumentSearchController {
         final int safeBottomPx = currentSearchPanelTopInWebViewPx() - dpToPx(10);
         final WebView targetView = activity.webView;
         final int targetPage = activity.currentPage;
-        WebSettings settings = targetView.getSettings();
-        boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
-        if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
-        targetView.evaluateJavascript(
+        activity.invalidateDocumentContentPositionCapture();
+        activity.evaluateDocumentJavascript(targetView, targetPage,
                 DocumentSearchJavascript.revealCurrentMatch(safeBottomPx, targetView.getHeight()),
-                value -> {
-                    activity.restoreDocumentJavaScriptPolicy(
-                            targetView, targetPage, restoreJavascriptOff);
-                });
+                null);
+    }
+
+    /** A delayed reveal belongs to the selected result, not the next touch/load. */
+    private final class SearchRevealRequest {
+        final WebView view = activity.webView;
+        final int page = activity.currentPage;
+        final int load = activity.loadGeneration;
+        final int paneLoad = activity.primaryDocumentPageLoadGeneration;
+        final int anchorGeneration = activity.documentAnchorPageGeneration;
+        final int interaction = activity.documentInteractionGeneration;
+        final String query = activity.activeDocumentSearchQuery;
+        final int ordinal = Math.max(1, activity.activeDocumentSearchOrdinal);
+
+        boolean isCurrent() {
+            return !activity.activityDestroyed && view != null && activity.webView == view
+                    && activity.currentPage == page && activity.activeDocumentSearchPage == page
+                    && activity.loadGeneration == load
+                    && activity.primaryDocumentPageLoadGeneration == paneLoad
+                    && activity.documentAnchorPageGeneration == anchorGeneration
+                    && activity.documentInteractionGeneration == interaction
+                    && java.util.Objects.equals(query, activity.activeDocumentSearchQuery)
+                    && ordinal == activity.activeDocumentSearchOrdinal;
+        }
     }
 
     private int currentSearchPanelTopInWebViewPx() {
@@ -1034,7 +1073,11 @@ final class DocumentSearchController {
         button.setIncludeFontPadding(false);
         button.setMinHeight(dpToPx(44));
         button.setPadding(dpToPx(4), dpToPx(8), dpToPx(4), dpToPx(8));
-        button.setBackgroundColor(Color.TRANSPARENT);
+        GradientDrawable surface = new GradientDrawable();
+        surface.setColor(activity.readerPanel);
+        surface.setCornerRadius(dpToPx(10));
+        button.setBackground(new android.graphics.drawable.InsetDrawable(surface, dpToPx(2)));
+        button.setFocusable(true);
         return button;
     }
 

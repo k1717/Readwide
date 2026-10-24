@@ -20,6 +20,41 @@ public class RarOutputFileGuardTest {
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
+    @Test public void uncheckedProtectionFailureLeavesOriginalAndRemovesEmptyReservation() throws Exception {
+        for (Throwable failure : new Throwable[]{new IllegalStateException("rename"),
+                new OutOfMemoryError("simulated rename")}) {
+            File directory = tempFolder.newFolder();
+            File original = new File(directory, "original.bin");
+            byte[] bytes = {4, 5, 6}; write(original, bytes);
+            File target = new File(original.getPath()) {
+                @Override public boolean renameTo(File destination) {
+                    if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+                    throw (Error) failure;
+                }
+            };
+            Throwable caught = org.junit.Assert.assertThrows(failure.getClass(),
+                    () -> RarOutputFileGuard.forTarget(target));
+            org.junit.Assert.assertSame(failure, caught);
+            assertArrayEquals(bytes, read(original));
+            assertArrayEquals(new String[]{"original.bin"}, directory.list());
+        }
+    }
+
+    @Test public void deniedProtectionRetainsIoClassificationAndOriginal() throws Exception {
+        File directory = tempFolder.newFolder();
+        File original = new File(directory, "original.bin");
+        byte[] bytes = {4, 5, 6}; write(original, bytes);
+        SecurityException denied = new SecurityException("rename");
+        File target = new File(original.getPath()) {
+            @Override public boolean renameTo(File destination) { throw denied; }
+        };
+        IOException caught = org.junit.Assert.assertThrows(IOException.class,
+                () -> RarOutputFileGuard.forTarget(target));
+        org.junit.Assert.assertSame(denied, caught.getCause());
+        assertArrayEquals(bytes, read(original));
+        assertArrayEquals(new String[]{"original.bin"}, directory.list());
+    }
+
     @Test public void directoryEntriesRejectFilesButAcceptExistingAndNewDirectories() throws Exception {
         File occupied = tempFolder.newFile();
         write(occupied, new byte[]{42});

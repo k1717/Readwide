@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">Perataan paragraf</string>
+    <string name="epub_alignment_book">Bawaan buku</string>
+    <string name="epub_alignment_start">Rata awal baris</string>
+    <string name="epub_alignment_justify">Rata kiri-kanan</string>
+    <string name="epub_text_alignment_hint">Untuk teks EPUB dengan tata letak yang menyesuaikan layar. Awal baris ada di kiri untuk LTR dan di kanan untuk RTL. Gaya rata tengah atau kanan yang ditetapkan secara eksplisit tetap dipertahankan.</string>
+</resources>

@@ -46,10 +46,15 @@
                 <data android:mimeType="text/*" />
                 <data android:mimeType="application/pdf" />
                 <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/msword" />
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
                 <data android:mimeType="application/vnd.ms-word.document.macroenabled.12" />
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.template" />
                 <data android:mimeType="application/vnd.ms-word.template.macroenabled.12" />
+                <data android:mimeType="application/x-hwp" />
+                <data android:mimeType="application/haansofthwp" />
+                <data android:mimeType="application/vnd.hancom.hwp" />
+                <data android:mimeType="application/vnd.hancom.hwpx" />
                 <data android:mimeType="image/*" />
             </intent-filter>
         </activity>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">Rozmiar tekstu EPUB: %1$d%%</string>
+    <string name="epub_line_height">Interlinia</string>
+    <string name="epub_typography_hint">Tylko dla EPUB. Ustawienie domyślne książki zachowuje jej interlinię. Strony o stałym układzie, oparte na obrazach lub z tekstem pionowym zachowują układ akapitów.</string>
+    <string name="epub_paragraph_layout_kept">Na tej stronie nie można zmienić formatowania akapitów. Układ książki zostaje zachowany.</string>
+</resources>

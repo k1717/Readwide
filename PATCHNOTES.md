@@ -1,5 +1,111 @@
 # Patch Notes
 
+## Readwide 1.0.21 - 2026-10-24
+
+### EPUB typography and controls
+
+- Separate EPUB text size from TXT and retain the previous shared value during migration. Add Book default or 120–200% line spacing and Book default / start-aligned / justified paragraph alignment in Settings and More.
+- Include the preferences in typed backup/import/reset. Old replacement backups migrate the shared size; merging an old backup preserves the current independent EPUB size.
+- Adjust supported literal CSS conservatively, retaining explicit special-block formatting and original-value fallbacks. Fixed/image/vertical restrictions remain; mixed spreads apply zoom/reset per pane.
+- Use rounded, bullet-free font/alignment/spacing rows and repeated minus/current size/plus/reset controls.
+- Match the EPUB bottom menu, system navigation surface and icon contrast. Place side backgrounds on physical left/right edges and exclude cutout space already reserved by the root, preserving content geometry.
+- Report the current app version through EPUB reading-system information.
+
+### EPUB contents, notes and progress
+
+- Prefer EPUB 3 navigation, then EPUB 2 NCX, with nested searchable Contents and section-list fallback. Initially position near the current section; filtering does not move the book.
+- Show marked footnotes/endnotes as selectable text in a rounded popup, including paragraph breaks and image alternative text. Ordinary links retain navigation; closing a popup leaves both panes unchanged.
+- Handle standard legacy character references and adjacent marked-note blocks without crossing another heading or named target. Reject external XML resolution/internal DTD subsets and use fallback for malformed optional metadata.
+- Keep parsing, ZIP leases and link fallback tied to the current document/pane/request. Failed optional work cannot navigate a replacement document.
+- Display numeric section ranges with native scroll percentages for ready, scrollable horizontal single-pane text. Loading, restoration, slider previews and fixed/image/vertical/spread layouts omit percentages. Counts remain sections, not screen or printed pages.
+- Coalesce progress refreshes from existing scroll/scale/layout events, accepting a blank history URL only after current-load readiness. No polling or page scan is added.
+
+### Document loading and recovery
+
+- Retire matching partial resources after load/render-preparation failures. Explicit Contents/link destinations wait for the correct pane and replace older pending navigation.
+- Share temporary JavaScript permission across nested/overlapping helpers; settle duplicate, failed or rejected callbacks once and retire ownership with the load.
+- Validate viewport/load/interaction identity before reusing position captures. Bounded retries retain previous durable progress when a new capture is unstable; transient recreation coordinates remain separate.
+- Handle Android 8+ renderer termination by revoking work/saves, detaching both panes, retiring ZIP resources and closing the reader with reopening guidance. Keep clients installed until destruction for shared-process callbacks; normal teardown no longer queries a destroyed renderer.
+- Preserve the last saved position rather than guessing unsaved movement. Android 7.x lacks this callback; missing renderer callbacks and unobserved book-driven DOM movement remain limitations.
+- Accept every positive Markdown content height so shrinking content no longer retains stale extra pages.
+
+### TXT, search and saved data
+
+- Apply short-edge cutout layout before TXT inflation to address the Galaxy S20 hidden-status-bar strip, retaining setting semantics and body padding.
+- Recover current Contents scan/edit/options and partition state after worker submission or resource failures. Obsolete callbacks cannot clear newer requests or replace visible text.
+- Position TXT Contents near the active heading, fold detailed search controls without resetting conditions, and use the existing list area for empty-bookmark guidance.
+- Require current source/transform ownership for new bookmarks and annotations, and prevent annotation-coordinate wraparound.
+- Persist manual note/highlight additions, edits and deletions before publishing them. Detached edits preserve current relocated path/coordinate metadata; failed editors remain open for retry.
+- Release failed deferred reading-state work without an immediate retry loop. Preserve matching original bookmark bindings when an identical copy is opened.
+
+### PDF and image viewing
+
+- Route PDF menu zoom/reset to the displayed Matrix view in single/spread mode, retaining scale limits, viewport clamping and delayed sharpening. Continuous controls and gestures retain their paths.
+- Commit keyboard/accessibility slider changes immediately; touch dragging previews until release and programmatic refresh does not navigate.
+- Add source/range-validated image page entry and matching spread counters. The 48 dp field aligns with action surfaces, has a 10 dp visible input/action gap, and sits in a bottom-centered popup with a 12 dp offset. Rotation retains input; destruction dismisses it.
+- Use separate rounded failure cards with Close and guarded retry. Reserve action height before sizing long messages in short windows; changed archive sources require reopening.
+- Release temporary PDF spread buffers after clear/open/render/close failures, transferring ownership only after successful native-page closure.
+- Resume unfinished local-image decoding after rename while retaining healthy surfaces and zoom.
+- Retire partially advanced archive-image sessions after resource failure and release decoders at actual scan EOF. Verified cache/fallback paths remain available, and failed cleanup retains retry ownership.
+- Reuse a session-owned 64 KiB copy/drain buffer, clearing sensitive contents after each request and releasing it on retirement. Verified 7z folder reads seek on member entry rather than every chunk while retaining length/range checks.
+
+### RAR compatibility
+
+- Preserve legacy decoder-version metadata through snapshots and split planning. First-party compressed routes decline incompatible parsed generations; stored entries and native rewrite/fallback remain available.
+- Traverse excluded RAR4 names without losing packed framing. Reject omitted compressed-history dependencies and regular-file/directory-name conflicts, retaining earlier safe selected recovery.
+- Admit plain/AES stored RAR3/RAR4 split entries carrying a solid flag through the existing guarded input/output paths.
+- Promote a PPMd-starting session at its first internal LZ table without replaying decoded output. Retain the model, raw dictionary, current file offset, VM queue and solid Huffman/match state through switches and dependent members.
+- Preserve short Huffman codes at clean streamed tails without zero padding. Physical truncation, integrity, flush and output-close failures retire shared state; forward metadata snapshots retain duplicate-identity rejection.
+- Permit zero-byte intermediate VM stages within queued same-start chains. Bounded raw-prefix carry requires complete preceding output, explicit EOF and a planned compressed solid successor; the complete result belongs to the receiving file.
+- Check pending VM work before complete-run termination/reset and output commit, retaining selected-prefix scope. Late/overlapping schedules, incomplete preceding output and standalone zero-input regions remain excluded. Completed-result splitting is not implemented.
+- Honor Cancel/Pause during custom VM execution and between filter stages. Build Huffman tables from checked array ranges and reuse owned register snapshots while preserving caller isolation.
+
+### 7z compatibility and integrity
+
+- Carry a checked archive origin through prefixed/split encoded, additional and main streams. Require exactly one encoded-header folder; executable recognition or execution is not added.
+- Keep confirmed PPMd/LZMA/LZMA2 corruption and output shorter than the declared size terminal during probing. Preserve physical input errors, cancellation and unsupported-option distinctions.
+- Validate BCJ2 control termination before returning the final byte, including empty output. Finish intermediate decoders downstream-first, including unused CALL/JUMP branches, and reject unused bytes in BCJ2-bound decoded inputs.
+- Retain valid raw packed padding and lazy partial closure. Bulk extraction verifies unreferenced folders before visible output; selected/forward reads retain their existing scope.
+- Carry Cancel/Pause through decoded metadata, padding drains and folder completion. Pause waits precede final source validation; cancellation after validation rolls back the pending folder, including intermediate folders and empty-file replacements.
+- Keep retired physical inputs terminal even if path metadata is unchanged. Close unadopted packed/decoder wrappers and restore output guards after registration/allocation failures while preserving the original error.
+
+### EGG and ALZ compatibility
+
+- Add a separate streaming ALZ method-3 Obfuscated Deflate decoder using public format rules and the entry-size-dependent dynamic code-length order. Store/Deflate/BZip2 paths remain separate.
+- Retain split framing, ZipCrypto/password probes, exact length/CRC and guarded output. Method 3 checks cancellation through empty-block chains and rejects malformed tables, references, truncation and source failures.
+- Reuse method-3 fixed trees and checked dynamic-table ranges. Batch stored bytes and repeated matches within existing output checkpoints, preserving overlap and ring history; encrypted scalar reads reuse private scratch cleared on close.
+- Recognize bounded EGG SKIP records between entries/blocks. Accept COMMENT/DUMMY/SKIP block extras only when the legacy missing-END interpretation cannot continue structurally; possible legacy endpoints retain precedence.
+- Keep unknown/ambiguous block structures and encrypted EGG filenames outside the added support. Bounded opaque prefix skipping is not filename decryption.
+- Resolve distinct UTF-8/Windows-949 AES/LEA candidates that pass the short verifier using full owner-ciphertext authentication. Keep fresh cipher state for extraction and terminal source/cancellation failures.
+- Preserve source-volume metadata from before framing validation through reader creation, probes and output acceptance. Check authenticated packed and verified decoded solid spools before reuse/completion.
+- Roll back pending output after changed sources, failed guard adoption/close or final cancellation, including duplicate targets and trailing empty files. Earlier verified files remain; these checks are not filesystem locks.
+- Carry Cancel/Pause through Deflate/BZip2/LZMA preparation/refills, trimmed ALZ BZip2 work and AZO decode/filter checkpoints. Individual blocking/native calls and allocations can still delay cancellation.
+- Remove unused cumulative EGG CRC work while retaining block CRC/MAC, packed-tail drain and cipher continuity. Shared EGG/ALZ/7z split input remains retired after physical or unchecked access failures.
+
+### Other archives and file operations
+
+- Share bounded BZip2 input buffering across EGG/ALZ/7z/ZIPX after decryption/integrity wrappers, retaining the Commons decoder, concatenated streams and final validation.
+- Recognize `.pma` and CRC-bearing level-0 stored PM0 with matching packed/original sizes. PM1/PM2, other PMarc header levels and general multi-disc restoration remain excluded.
+- Observe cancellation during compressed TAR reads/skips without draining unrelated tails or selecting fallback.
+- Protect physical TXT edits with reporting encoding, serialized admission, source/descriptor checks and temporary-output cleanup. Reject changed/new copy targets while retaining intentional unchanged-target replacement.
+- Fallback moves delete only captured, copied, unchanged entries; retain new/changed source entries and refresh partial results.
+- Close unreturned extraction outputs after wrapper-adoption failure and allocate replacement guards before moving originals. Free-space protection remains in place.
+
+### Settings, home screen and platform compatibility
+
+- Check settings-reset commits, attempt rollback of resettable keys and report failure before applying language/theme changes or success feedback. Backup failures release ownership and attempt reverse undo plus atomic-write cleanup.
+- Resolve Main/SAF provider metadata asynchronously and reject late opens. Share MIME-based routing/cache suffixes and advertise supported Word/HWP aliases.
+- Increase Pinned folders/Recently read headings to 13sp without changing boxes. Clear selection on confirmed history removal or changed Recent search/type criteria, not equivalent refreshes.
+- Keep read-aloud notification returns in the same live session. Replacement documents own preparation/auto-start state; failed preparation requires explicit retry.
+- Use equivalent compression, bookmark-position, notification, audio-focus, Back and launch APIs while retaining older-Android paths, PIN/search behavior and transitions. EPUB double taps sample zoom eligibility once.
+- Keep non-equivalent platform contracts in narrowly documented compatibility helpers; compiler-wide warning reporting remains enabled.
+
+### Release boundary
+
+- Version metadata is `1.0.21` / `10021`. No permission or runtime dependency changed.
+- Exact TXT paging, partition sizes/overlap, half-visible-row selection, existing bookmark coordinates, free-space protection and signing are unchanged.
+- Implementation and support limits are in the [development notes](docs/DEV_CHANGES_1_0_21.md); verification status and remaining checks are in [release readiness](docs/RELEASE_READINESS_1_0_21.md).
+
 ## Readwide 1.0.20 - 2026-10-11
 
 ### TXT exact-page indexes and partition navigation
@@ -143,16 +249,19 @@
 - Handle just-in-time destination conflicts, failed-item retry, case-only rename rollback, cancellation, and partial completion without deleting unrelated targets or discarding committed success.
 - Preserve recoverable temporary rename data if rollback is blocked. No durable filesystem transaction or background-job restoration across process death is claimed.
 
-### Release boundary
+### Build and resources
 
 - Align the libarchive Java target with the app's Java 17 build, use explicit Gradle property assignments, and resolve legacy-cleanup paths before task execution. Shorten native staging/WavPack probe paths and scope encoder-only declarations and notices to the relevant native build. Decoder behavior and Android minimum versions are unchanged; remaining deprecations are reported with call-site detail rather than hidden.
 - Correct six document-test style constructors to use the existing `new TextStyle.Builder()` API. Preserve style parameters, fixtures and assertions without adding a production API solely for tests.
 - Replace unavailable `Files.readString`/`writeString` calls in local archive tests with a shared strict UTF-8 helper based on `Files.readAllBytes`/`write`. Replace the fixture tool's `Path.of` with `Paths.get`. Existing fixture contents, assertions and application code are unchanged; add helper regression sources for Unicode, truncation and malformed-input behavior.
-- Release date: `2026-10-11`; version `1.0.20 / 10020`. Add localized Contents/reader strings and supported-launcher themed icons.
-- Include RE2/J and source-built decoder notices, corresponding sources, and license boundaries. The app remains locally processing with no ads, analytics, account, cloud sync, or `INTERNET` permission.
-- Release APK assembly, local-test compilation and Android-test APK assembly completed successfully on 2026-10-11; a subsequent signed release build passed v2 signature verification. The later system-bar/WebView changes have static review only. Build success does not establish test-suite or device results; see [verification status](docs/CURRENT_SOURCE_STATUS_1_0_20.md).
-- Runtime checks remain for TXT partition/restore behavior, backup rollback and cross-device use, long-background image return, document layout, rapid PDF navigation, and producer-generated archive combinations.
-- See [development changes](docs/DEV_CHANGES_1_0_20.md), [archive support notes](docs/ARCHIVE_BOUNDARY_SUPPORT_NOTES.md), and [license report](docs/LICENSE_REPORT_READWIDE_1_0_20.md) for implementation boundaries.
+- Add localized Contents/reader strings and supported-launcher themed icons.
+- Include RE2/J and source-built decoder notices, corresponding sources, and license boundaries.
+
+### Release boundary
+
+- Version metadata is `1.0.20` / `10020`.
+- No ads, analytics, account, cloud sync, or `INTERNET` permission; documents remain locally processed.
+- Implementation and support limits are in the [development notes](docs/DEV_CHANGES_1_0_20.md); verification status and remaining checks are in [release readiness](docs/RELEASE_READINESS_1_0_20.md).
 
 ## Readwide 1.0.19 - 2026-09-19
 
@@ -185,7 +294,7 @@
 - PDF page loading prioritizes the visible page and nearby pages, reuses active preloads, and drops obsolete rendering work. History writes no longer delay each page turn, while pause and close still save progress.
 - Cached PDF images keep their logical size when rendered at lower resolution. Memory is shared with nearby pages, and zoom sharpening avoids work already covered by a detailed image.
 - Continuous PDF restoration keeps the page crossing the top of the reading area, including its offset in a page gap and horizontal pan. Repeated search updates leave a manual pan alone.
-- Enlarged-image double taps reset zoom without also turning the page. Image refreshes leave the slider thumb under the user's control until release.
+- Enlarged-image double taps reset zoom without also turning the page. Image refreshes leave the slider thumb under touch control until release.
 - Document, PDF, and image readers honor Keep screen on. TXT readers refresh brightness after a settings reset or import.
 
 ### TXT search, backups, and file operations
@@ -212,6 +321,9 @@
 
 - Updated AppCompat to 1.8.0, ConstraintLayout to 2.2.2, SwipeRefreshLayout to 1.2.0, hwplib to 1.1.11, and test-only zstd-jni to 1.5.7-17.
 - Corrected split-volume cleanup that prevented the earlier build from compiling.
+
+### Release boundary
+
 - Version metadata: `1.0.19` / `10019`.
 
 ## Readwide 1.0.18 - 2026-09-11
@@ -309,7 +421,7 @@
 ### Localization
 
 - Revised 216 strings across the default English resources and 21 translations. Archive limits retain codec names while explaining errors and supported combinations in the selected language.
-- Shared read-aloud dialog/service messages no longer instruct PDF/document users to open the TXT reader. Bookmark hints distinguish navigation from moving files; Korean resume, backup and voice labels are made more natural.
+- Shared read-aloud dialog/service messages no longer suggest opening the TXT reader. Bookmark hints distinguish navigation from moving files; Korean resume, backup and voice labels are made more natural.
 - Resource IDs, format placeholders and input/storage behavior are unchanged. XML/key/placeholder checks are static; native-speaker and on-device layout review remain separate.
 
 ### Release boundary
@@ -357,7 +469,7 @@
 - The Android backend no longer resolves the libarchive-android 1.1.6 AAR, which contained libarchive 3.8.1. The exact upstream wrapper and codec sources are pinned under `third_party/libarchive-android/`; Readwide advances the native baseline to official libarchive 3.8.9 and builds it for ARM32/ARM64 with NDK 29 and CMake. No prebuilt `.so` or AAR is committed.
 - The 3.8.9 update brings upstream ZIPX streaming and RAR/RAR5/7z/CAB/LHA parser hardening. It does not provide general RAR decryption or complete proprietary-format compatibility. CAB and LHA/LZH now use the already-compiled generic libarchive reader for read-only listing, image browsing, and extraction; creation, password support, and broad multi-volume support remain outside the claim.
 - Generated JVM fixtures cover AES-256+BZip2/XZ/LZMA (with and without the EOS marker), missing/wrong passwords, modified authentication data, byte-exact whole/single extraction, the normal AES-Deflate `.zipx` rename path, PPMd/Zstandard backend routing, and JPEG/WavPack native routing. An Android instrumentation fixture decodes the official WavPack 5.9.0 PCM regression stream and validates its reconstructed RIFF/WAVE length. No permission was added.
-- The Junrar-free RAR3/RAR4 classic-LZ path now follows the public VM-record grammar for program-slot reset/selection, standard-program reuse, omitted block-length reuse, usage registers, bounded user global data, and actual file offsets. It continues to recognize only the six published standard filter fingerprints (E8/E8E9/Itanium/Delta/RGB/Audio); custom VM programs fail explicitly and normal compressed RAR remains libarchive-primary.
+- The Junrar-free RAR3/RAR4 classic-LZ path now follows the public VM-record grammar for program-slot reset/selection, standard-program reuse, omitted block-length reuse, usage registers, bounded application-supplied global data, and actual file offsets. It continues to recognize only the six published standard filter fingerprints (E8/E8E9/Itanium/Delta/RGB/Audio); custom VM programs fail explicitly and normal compressed RAR remains libarchive-primary.
 - RAR 6 does not introduce a new container signature or compression algorithm: its archives continue through the existing RAR5-container algorithm-v0 decoder. RAR 7 algorithm version 1 is now admitted by the first-party fallback and uses an 80-symbol distance table, dynamic Huffman table geometry, 64-bit raw distance reads, fractional/non-power-of-two dictionary parsing, and the version-0 solid compatibility marker. A header may declare up to 1 TB, but the Android decoder retains a 64 MB ring and reports a clean unsupported boundary if real match history exceeds it instead of allocating attacker-controlled memory. A hand-built public-grammar stream covers the version-1 table and extended distance slot 64; broad real-archive RAR 7 compatibility is not inferred from that focused test.
 - Extraction safety accounting is now operation-wide rather than entry-local. Every file-producing archive engine uses the same path-aware decoded-output budget, including fallback retries; rewriting the same partial target replaces its earlier accounting instead of double-counting it. libarchive no longer calls its unbounded direct-to-file-descriptor writer: decoded native blocks pass through the same guarded output stream before disk writes, while solid-primer drains discard bounded blocks without a temporary file. The hard ceiling is now 128 GB, and a lower runtime ceiling is selected when usable storage minus the 64 MB free-space reserve is smaller.
 
@@ -366,7 +478,7 @@
 - Annotation completion/delete messages now name notes and highlights directly in locales where a generic translation meant comment, description, abstract, or note only.
 - Korean text-selection and theme labels now use consistent `텍스트`, `사이드 메뉴`, and `바로가기` terminology; Indonesian file-path, zoom, system-default, tile-view, and related labels were clarified.
 - `LockActivity`, the TXT reader menu, bookmark rows/dialogs, and the font picker no longer embed English or Korean UI literals. PIN setup/change feedback, bookmark metadata, font import/removal, empty states, and accessibility labels are backed by the default English resources plus all 21 bundled non-default locales.
-- Reader/document font options reuse the existing localized EPUB font-family labels. User-added and device font family names remain unchanged as proper names, while all surrounding actions, explanations, confirmations, and failures follow the selected app language.
+- Reader/document font options reuse the existing localized EPUB font-family labels. Imported and device font family names remain unchanged as proper names, while all surrounding actions, explanations, confirmations, and failures follow the selected app language.
 - Translation validation now has identical 802 translatable keys in every locale, matching format placeholders, and no Android lint `HardcodedText`, `SetTextI18n`, `MissingTranslation`, or `ExtraTranslation` findings.
 
 ### Release boundary
@@ -539,7 +651,7 @@
 - Neighbor bitmap warm-up uses the viewport display scale with two workers and an 8M-pixel tall-page safety backstop. A sampled cached page is final for normal viewing and is not automatically decoded again at detail size; pinch/double-tap zoom remains the only detail trigger. GIF/WebP candidates skip bitmap warm-up on API 28+, and the in-flight marker remains held until the main-thread cache decision.
 - Sensitive forward readers reuse a ready preview only when its path is verified by the current password session. An unverified ready marker/file is removed under the cache stripe before extraction. `ArchiveImageSequenceLoader.Result` carries the exact set of all sensitive cache paths successfully verified by lazy/full preparation and the prepared reader; `ImageSequenceHandoffStore` transfers that set to the viewer. Already-decoded entries therefore avoid a later `loadFully` re-extraction, while an unrelated old ready file in a mixed-password archive is never trusted merely because one password succeeded elsewhere.
 - Archive prefetch now returns an explicit extraction-success value before scheduling bitmap decode, and decode rechecks the committed ready marker. Bitmap work remains keyed by sequence/index/path rather than direction-plan generation, so an already-running valid neighbor decode can serve the next plan instead of being discarded while its `in-flight` key prevents replacement.
-- A superseded RAR/7z forward prefetch checks cancellation between completely drained entries. It never abandons a solid entry mid-stream, but it releases the reader before walking to an obsolete distant target when a user page request or newer plan is waiting.
+- A superseded RAR/7z forward prefetch checks cancellation between completely drained entries. It never abandons a solid entry mid-stream, but it releases the reader before walking to an obsolete distant target when a foreground page request or newer plan is waiting.
 - Password-backed prepared forward readers are handed to the viewer instead of being closed and reopened at byte zero. Handoff and sequence preparation compare a constructor/start snapshot of path, length, and modification time, carry it through the launch token, and recheck it immediately before applying the sequence; replacing the archive during preparation or launch rejects the stale reader and entry plan.
 - Added policy/ownership/search-index tests and reran the local RAR and password-protected 7z fixtures. No new dependency or permission was required; the later Android Zstandard audit only moved the existing `zstd-jni` declaration to JVM tests.
 
@@ -628,7 +740,7 @@
 
 ### Read-aloud (TTS) - PDF crash on start fixed (missing PdfBox init)
 
-- Starting PDF read-aloud crashed the app (or tore the viewer down) whenever it was the first PdfBox user in the process: `PDFBoxResourceLoader.init` was called only in `PdfSearchController`'s constructor, so a user who opened read-aloud without ever opening PDF search ran `PDFTextStripper` against an uninitialized resource loader. PdfBox's font/glyph machinery then fails partly with `Error`s (static-initializer failures such as `ExceptionInInitializerError`, then `NoClassDefFoundError` on retry), which the extractor's `catch (IOException | RuntimeException)` did not contain - and an uncaught throw on the bare extraction executor thread kills the process. Three-part fix, each verified: (1) `PdfPlainTextExtractor.extractPageText` now takes a `Context` and calls `PDFBoxResourceLoader.init` first, mirroring the search controller's best-effort pattern (root cause - the search path was immune precisely because its constructor inits); (2) the extractor's catch was widened to `Throwable`, proven by a stub harness that makes the stripper throw `ExceptionInInitializerError`: the pre-fix code lets it escape ("would kill the process"), the fixed code returns an empty map that surfaces as the existing scanned-PDF message; (3) the background build in `showPdfTtsDialog` is wrapped so any unexpected failure resets `pdfTtsTextBuilding` instead of freezing the entry point at "Preparing read-aloud..." forever, and a no-text result is still cached so scanned PDFs answer later taps from the fast path.
+- Starting PDF read-aloud crashed the app (or tore the viewer down) whenever it was the first PdfBox caller in the process: `PDFBoxResourceLoader.init` was called only in `PdfSearchController`'s constructor, so starting read-aloud before PDF search ran `PDFTextStripper` against an uninitialized resource loader. PdfBox's font/glyph machinery then fails partly with `Error`s (static-initializer failures such as `ExceptionInInitializerError`, then `NoClassDefFoundError` on retry), which the extractor's `catch (IOException | RuntimeException)` did not contain - and an uncaught throw on the bare extraction executor thread kills the process. Three-part fix, each verified: (1) `PdfPlainTextExtractor.extractPageText` now takes a `Context` and calls `PDFBoxResourceLoader.init` first, mirroring the search controller's best-effort pattern (root cause - the search path was immune precisely because its constructor inits); (2) the extractor's catch was widened to `Throwable`, proven by a stub harness that makes the stripper throw `ExceptionInInitializerError`: the pre-fix code lets it escape ("would kill the process"), the fixed code returns an empty map that surfaces as the existing scanned-PDF message; (3) the background build in `showPdfTtsDialog` is wrapped so any unexpected failure resets `pdfTtsTextBuilding` instead of freezing the entry point at "Preparing read-aloud..." forever, and a no-text result is still cached so scanned PDFs answer later taps from the fast path.
 
 ### Read-aloud (TTS) - quotation-mark muting at Aggressive pause reduction
 
@@ -640,7 +752,7 @@
 
 ### Main screen - double-tap no longer opens the same file twice
 
-- A main-screen and viewer-internal bug audit (excluding the read-aloud areas already covered this cycle) found one real papercut: the file-open funnels (`MainActivity.openFile` / `openFileFromUri`) had no debounce, so a fast double tap on a recent card fired two `startActivity` calls before the first viewer reached the top of the stack - and `singleTop` only dedupes an activity that is already on top, so the same file stacked twice and the user had to back out through it. Both funnels now accept one open per 600 ms window (`acceptFileOpenNow`), which cannot interfere with intentional use. Two merge artifacts (two constant declarations fused onto one line in `DocumentPageActivity` and `ReaderTtsController`) were also split back out; no behavior change.
+- A main-screen and viewer-internal bug audit (excluding the read-aloud areas already covered this cycle) found one real papercut: the file-open funnels (`MainActivity.openFile` / `openFileFromUri`) had no debounce, so a fast double tap on a recent card fired two `startActivity` calls before the first viewer reached the top of the stack - and `singleTop` only dedupes an activity that is already on top, so the same file stacked twice requiring repeated Back actions. Both funnels now accept one open per 600 ms window (`acceptFileOpenNow`), which cannot interfere with intentional use. Two merge artifacts (two constant declarations fused onto one line in `DocumentPageActivity` and `ReaderTtsController`) were also split back out; no behavior change.
 - Audited and verified clean, with the checks on record: `ButtonOrderManager` group lists vs the merged layouts (PDF 9/9 and document 8/8 one-to-one, TXT rollback intact, `btn_more`/`pdf_zoom_more` intentionally unmanaged outside the strips); resume-routing intents vs declared activity extras; an automated scan of every `executor`/`sequenceExecutor`/`prefetchDecodeExecutor` lambda for view calls outside `handler.post`/`runOnUiThread` (zero suspects); the image viewer's decoded-bitmap `LruCache` recycle policy (all `put` calls are posted to the main thread, so `entryRemoved`'s `currentBitmap` guard runs on the UI thread - no cross-thread visibility hazard); receiver and loading-dialog lifecycle pairing; `MarkdownVisualPageMath` divide/clamp edges; the PDF continuous adapter's generation-guarded binding; and the autostart-consumed flag, which never resets but is unreachable as a bug because `singleTop` cannot deliver a second autostart intent to a live viewer instance while `MainActivity` is on top.
 
 ### Refactor - PDF viewer read-aloud integration extracted to a controller
@@ -691,7 +803,7 @@
 
 ### Archives - RAR/7z encryption boundaries sharpened against real fixtures
 
-- The unsupported boundaries around RAR and 7z encryption were re-verified with real archives created in-sandbox (WinRAR 7.00 trial CLI for RAR5; p7zip for 7z), correcting two claims and one message:
+- The unsupported boundaries around RAR and 7z encryption were re-verified with real archives created in isolated host checks (WinRAR 7.00 trial CLI for RAR5; p7zip for 7z), correcting two claims and one message:
 - **Intermediate RAR5 `-hp` audit result (superseded later in the same 1.0.11 work):** bsdtar/libarchive 3.7.2 could not list a real WinRAR 7.00 header-encrypted RAR5 archive ("Encryption is not supported"), and no first-party RAR5 header decryptor existed at that checkpoint. `RarHeaderEncryptionDetector` gained `headerEncryptedRarVersion` so the temporary unsupported message distinguished RAR5 `-hp` from RAR4 `-hp`. The later “RAR5 header encryption (-hp) first-party decrypt” section records the implementation that closed this gap before release; current code treats a post-password RAR5 detector hit as a first-party parser failure, not as a missing decrypt capability.
 - **RAR5 stored + password is now real-file verified.** `Rar5Crypto`'s KDF (UTF-8 password, single HMAC-SHA256 U-chain, 8-byte check folded from the 32-byte accumulator itself) reproduces the exact password-check bytes of a genuine `rar a -ma5 -m0 -p...` archive, and AES-256-CBC decryption of the stored payload is byte-identical to bsdtar's output. This upgrades the first-party RAR5 stored-encrypted path from "mirrored KDF" to "verified against a real WinRAR file". (RAR 7.00 no longer *creates* RAR4 archives - `-ma4` is rejected - so RAR4 stored+encrypted end-to-end remains a device-test item.)
 - **Encrypted PPMd/BCJ2 7z: the failure is at the AES layer, not the coder.** Against real `7z a -m0=PPMd -p...` fixtures, libarchive fails with "The archive header is encrypted, but currently not supported" (`-mhe=on`, cannot list) or "The file content is encrypted, but currently not supported" (`-mhe=off`, lists but extracts nothing) - it never reaches the PPMd/BCJ2 stage, because libarchive has no 7z decryption at all. The earlier note ("libarchive decrypts the AES layer but then reports PPMd as unsupported") is corrected in `docs/RAR_7Z_SPLIT_ENCRYPTION_REVALIDATION_READWIDE_1_0_11.md`. App behavior is already correct (password prompt, then clean unsupported, no partial output); only the documented reasoning changed.
@@ -805,7 +917,7 @@
 
 ### Read-aloud (TTS) - toolbar button in every viewer, standardized next to bookmark
 
-- The PDF viewer gained a direct bottom-toolbar read-aloud button (`pdf_tts`), wired to the same `showPdfTtsDialog()` entry point as the More-dialog row and gated visible only once the PDF is loaded with pages (`updatePdfTtsButtonVisibility`, driven from the `updatePageStatus` funnel, which runs on the UI thread via the post-load `openPdfFile`). It is added to the theme-tint button array so its icon/label follow the reader theme. Across all three viewers the read-aloud button's default position is now immediately right of the bookmark button: this is set in `ButtonOrderManager.defaultItems` (the runtime source of truth for toolbar order, not the raw layout XML), where `tts` was moved up in the TXT group and added after `bookmark` in the document and PDF groups (both previously left the TTS button unmanaged/XML-positioned). The layout XML orderings were aligned to match. Because `ButtonOrderManager` is user-customizable, existing users with a saved custom order keep it (the newly-managed `tts` item appends for them); new users and anyone who resets get bookmark -> read-aloud. The button also now appears as a reorderable/hideable item in the document and PDF button-order settings, which it wasn't before.
+- The PDF viewer gained a direct bottom-toolbar read-aloud button (`pdf_tts`), wired to the same `showPdfTtsDialog()` entry point as the More-dialog row and gated visible only once the PDF is loaded with pages (`updatePdfTtsButtonVisibility`, driven from the `updatePageStatus` funnel, which runs on the UI thread via the post-load `openPdfFile`). It is added to the theme-tint button array so its icon/label follow the reader theme. Across all three viewers the read-aloud button's default position is now immediately right of the bookmark button: this is set in `ButtonOrderManager.defaultItems` (the runtime source of truth for toolbar order, not the raw layout XML), where `tts` was moved up in the TXT group and added after `bookmark` in the document and PDF groups (both previously left the TTS button unmanaged/XML-positioned). The layout XML orderings were aligned to match. Because `ButtonOrderManager` is customizable, existing saved custom orders remain intact (the newly-managed `tts` item appends for them); fresh installations and reset configurations get bookmark -> read-aloud. The button also now appears as a reorderable/hideable item in the document and PDF button-order settings, which it wasn't before.
 
 ### Read-aloud (TTS) - phrase length and pause reduction (issue #7)
 
@@ -839,7 +951,7 @@
 ### Implementation notes
 
 - The compressed (8-bit windows-1252) `.doc` piece path was subsequently validated against a genuine old-Word file (Apache Tika's `testWORD.doc`) by mirroring the full pipeline in Python; the bundled LibreOffice-generated fixtures still exercise only the UTF-16 path in unit tests.
-- The HWP ParaShape change cannot be empirically validated in the development sandbox (hwplib is a Java library); it was written against the hwplib reader/object source on GitHub and cross-checked against hwp2hwpx and pyhwp as above. Final verification is the local build plus on-device testing with real `.hwp` files.
+- The HWP ParaShape change was not empirically validated; it was written against the hwplib reader/object source on GitHub and cross-checked against hwp2hwpx and pyhwp as above. Final verification requires a local build plus on-device testing with real `.hwp` files.
 
 ## Readwide 1.0.10 - 2026-06-29
 
@@ -913,7 +1025,7 @@
 
 ### Fixes — blank document while reading
 
-- Fixed a regression where a large text or PDF document could suddenly become a blank document while you were reading it, at random: sometimes right after opening, sometimes after reading for a while, and again after reopening, which made it hard to get back to your place. The cause was the reader's memory-trim handler. Under system memory-pressure signals it released the on-screen text whenever the level reached `TRIM_MEMORY_RUNNING_LOW`, but those `RUNNING_*` levels are delivered while the app is still in the foreground. Clearing the text there blanked the page the user was reading, and nothing restored it because the restore only runs when you return to the app. The trim now happens only when the app is actually in the background (`TRIM_MEMORY_BACKGROUND` and above); foreground memory pressure no longer clears the page. This applies to both the text reader and the PDF reader.
+- Fixed a regression where a large text or PDF document could suddenly become a blank document while you were reading it, at random: sometimes right after opening, sometimes after reading for a while, and again after reopening, which made it hard to get back to your place. The cause was the reader's memory-trim handler. Under system memory-pressure signals it released the on-screen text whenever the level reached `TRIM_MEMORY_RUNNING_LOW`, but those `RUNNING_*` levels are delivered while the app is still in the foreground. Clearing the text there blanked the visible reading page, and nothing restored it because the restore only runs when you return to the app. The trim now happens only when the app is actually in the background (`TRIM_MEMORY_BACKGROUND` and above); foreground memory pressure no longer clears the page. This applies to both the text reader and the PDF reader.
 - Hardened reading-position autosave so it no longer writes a position while the reader content is temporarily released for a background memory trim. In that released window the derived char position is 0, and a later pause could otherwise persist it over the real saved position (which is why, before this, closing the app from the reset state lost the place while merely backgrounding and returning recovered it). The autosave now skips that state, so the correct position survives even if the app is closed from it.
 
 ## Readwide 1.0.7 - 2026-06-20
@@ -1090,7 +1202,7 @@
 
 **Performance**
 
-- Text display rules compile their regular expressions once per file load instead of once per line. When a large text file is read line by line with active regex rules, each rule's pattern was recompiled for every line; rules are now pre-compiled and reused, so compilation scales with the rule count rather than the line count. Invalid user regexes are skipped at compile time, matching the previous fail-safe behavior, and files with no rules or only literal rules are unaffected.
+- Text display rules compile their regular expressions once per file load instead of once per line. When a large text file is read line by line with active regex rules, each rule's pattern was recompiled for every line; rules are now pre-compiled and reused, so compilation scales with the rule count rather than the line count. Invalid custom regexes are skipped at compile time, matching the previous fail-safe behavior, and files with no rules or only literal rules are unaffected.
 
 **Internal**
 
@@ -1113,7 +1225,7 @@
 **Package identity**
 
 - Renamed the Android applicationId and source package from `com.textview.reader` to `com.readwide.manager`, including all package declarations, the FileProvider authority (derived from `${applicationId}`), layout custom-view references, ProGuard keep rules, fixture report scripts, F-Droid metadata, and release materials.
-- Existing users are not auto-updated to 1.0.4 because the package identity differs; bookmarks, reading positions, themes, and settings transfer through the in-app JSON backup export/import, which is independent of package name and signing key.
+- Existing installations are not auto-updated to 1.0.4 because the package identity differs; bookmarks, reading positions, themes, and settings transfer through the in-app JSON backup export/import, which is independent of package name and signing key.
 
 **PDF viewer**
 
@@ -1303,7 +1415,7 @@
 - Android Auto Backup is disabled.
 - New PIN storage uses salted PBKDF2 verifier strings with legacy migration.
 - Default builds have no `INTERNET` permission, no app-network update check, no telemetry, no ads, and no account system.
-- Developer contact uses the user's mail app or copies the address when no mail app is available.
+- Developer contact uses the installed mail app or copies the address when no mail app is available.
 - Junrar/UnRAR-license fallback code is removed from the default build.
 - Common compressed RAR3/RAR4 attempts route through bundled libarchive-android, with first-party Java kept for metadata, stored entries, safe paths, diagnostics, and selected stored RAR5 paths.
 - Archive password prompts use compact buttons and include a password visibility toggle.

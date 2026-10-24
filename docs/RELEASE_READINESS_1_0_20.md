@@ -1,8 +1,8 @@
 # Readwide 1.0.20 release readiness
 
-Release date: **2026-10-11**; version `1.0.20 / 10020`.
+Version: `1.0.20 / 10020`.
 Release APK assembly, local-test compilation and Android-test APK assembly
-completed successfully on that date. A subsequent signed release build passed after
+completed successfully. A subsequent signed release build passed after
 build-setting/native warning cleanup, including v2 signature verification.
 Subsequent system-bar/WebView edits have static review only. Tests were not executed.
 

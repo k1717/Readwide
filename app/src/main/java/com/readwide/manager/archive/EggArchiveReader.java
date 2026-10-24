@@ -3,7 +3,6 @@ package com.readwide.manager.archive;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
 import org.tukaani.xz.LZMAInputStream;
 
 import java.io.File;
@@ -45,8 +44,10 @@ import com.readwide.manager.util.FileOperationProgress;
  * a final archive-level END.</p>
  *
  * <p>Split archives ({@code name.vol1.egg}, {@code name.vol2.egg}, ...) are a
- * plain byte-level cut of one logical archive: the first volume is read whole
- * and each later volume contributes the bytes after its own header prefix. The
+ * joined into one logical archive: the first volume is read whole and each
+ * later volume contributes the bytes after its own header prefix. The format
+ * allows cuts in compressed data, not headers; the reader's byte stream is
+ * more tolerant without requiring nonstandard header cuts. The
  * Split extra field links volumes by program id ({@code prev} of a volume must
  * equal the header id of the volume before it), which this reader validates
  * while assembling the chain. ZipCrypto-encrypted entries decrypt with the
@@ -87,6 +88,7 @@ final class EggArchiveReader {
     private static final int MAGIC_SPLIT = 0x24f5a262;
     private static final int MAGIC_SOLID = 0x24e5a060;
     private static final int MAGIC_DUMMY = 0x07463307;
+    private static final int MAGIC_SKIP = 0xffff0000;
     private static final int MAGIC_END = 0x08e28222;
 
     // CompressionMethod enum (Store=0, Deflate=1, bzip=2, azo=3, lzma=4).
@@ -367,11 +369,13 @@ final class EggArchiveReader {
         boolean any = false;
         try (SplitVolumeInput in = openVolumes(archive)) {
             List<EggEntry> entries = readEntries(archive, in);
+            in.requireUnchanged();
             any = entries.isEmpty();
             // Validate every destination before creating directories or replacing a file.
             ArchiveOutputPreflight preflight = new ArchiveOutputPreflight(targetDir);
             for (EggEntry entry : entries) preflight.add(entry.path, entry.directory);
             if (progress != null) progress.setTotalBytes(sumUncompressedBytes(entries));
+            ArchiveCancellation.checkpoint(progress);
             if (isSolid(entries)) {
                 return extractSolidArchive(in, entries, targetDir, password, progress, entryProgress);
             }
@@ -380,6 +384,8 @@ final class EggArchiveReader {
                 if (progress != null && !progress.checkpoint()) throw new java.io.InterruptedIOException("EGG extraction cancelled");
                 if (entry.directory) {
                     if (entryProgress != null) entryProgress.onDirectory(entry.path);
+                    ArchiveCancellation.checkpoint(progress);
+                    in.requireUnchanged();
                     File directory = resolveOutput(targetDir, entry.path);
                     if (directory != null) {
                         if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory()) {
@@ -399,6 +405,7 @@ final class EggArchiveReader {
                 }
                 any = true;
             }
+            in.requireUnchanged();
         }
         return any;
     }
@@ -437,6 +444,7 @@ final class EggArchiveReader {
         SplitVolumeInput input = openVolumes(archive);
         try {
             List<EggEntry> entries = readEntries(archive, input);
+            input.requireUnchanged();
             if (!isSolid(entries)) { input.close(); return null; }
             List<EggBlock> blocks = preflightSolidLayout(entries);
             return new SolidForwardReader(input, entries, blocks, spoolDirectory, password);
@@ -453,12 +461,12 @@ final class EggArchiveReader {
         private final List<EggBlock> blocks;
         private final File spoolDirectory;
         private final SolidBlockSession blockSession;
-        private final CRC32 runningCrc = new CRC32();
         private int entryIndex = -1;
         private int blockIndex;
         private long remaining;
         private File spoolFile;
         private RandomAccessFile spool;
+        private SplitVolumeInput.SourceState verifiedBlockSource;
         private long verifiedBlockSize;
         private boolean closed;
 
@@ -508,7 +516,11 @@ final class EggArchiveReader {
         private int readCurrent(byte[] buffer) throws IOException {
             requireOpen();
             if (buffer.length == 0) return 0;
-            if (remaining == 0) return -1;
+            if (remaining == 0) {
+                requireVerifiedBlockUnchanged();
+                input.requireUnchanged();
+                return -1;
+            }
             if (!ensureBlock()) throw new IOException("Solid EGG stream ended before entry data");
             int count = (int) Math.min(buffer.length, Math.min(remaining,
                     spool.length() - spool.getFilePointer()));
@@ -535,6 +547,8 @@ final class EggArchiveReader {
                 spool.seek(spool.getFilePointer() + count);
                 remaining -= count;
             }
+            requireVerifiedBlockUnchanged();
+            input.requireUnchanged();
             return true;
         }
 
@@ -542,10 +556,8 @@ final class EggArchiveReader {
             while (true) {
                 requireOpen();
                 if (spool != null) {
+                    requireVerifiedBlockUnchanged();
                     long position = spool.getFilePointer();
-                    if (spool.length() != verifiedBlockSize || position > verifiedBlockSize) {
-                        throw new IOException("Truncated or changed solid EGG spool");
-                    }
                     if (position < verifiedBlockSize) return true;
                 }
                 closeBlock();
@@ -554,10 +566,11 @@ final class EggArchiveReader {
                 spoolFile = File.createTempFile("egg_verified_block_", ".spool", spoolDirectory);
                 try {
                     try (OutputStream out = ArchiveSupport.openExtractionOutputStream(spoolFile)) {
-                        blockSession.write(block, out, runningCrc, null);
+                        blockSession.write(block, out, null);
                     }
-                    if (spoolFile.length() != block.uncompSize) throw new IOException("Invalid EGG spool length");
-                    spool = new RandomAccessFile(spoolFile, "r");
+                    verifiedBlockSource = SplitVolumeInput.SourceState.capture(spoolFile);
+                    if (verifiedBlockSource.length != block.uncompSize) throw new IOException("Invalid EGG spool length");
+                    spool = new RandomAccessFile(verifiedBlockSource.file, "r");
                     verifiedBlockSize = block.uncompSize;
                     blockIndex++;
                 } catch (IOException | RuntimeException | Error e) {
@@ -565,6 +578,16 @@ final class EggArchiveReader {
                     catch (IOException | RuntimeException cleanup) { e.addSuppressed(cleanup); }
                     throw e;
                 }
+            }
+        }
+
+        private void requireVerifiedBlockUnchanged() throws IOException {
+            if (spool == null) return;
+            // Reusing decoded bytes must not bypass the block's verification.
+            // Metadata checks detect observable edits, not same-metadata replacements.
+            verifiedBlockSource.requireUnchanged(spool.length());
+            if (spool.getFilePointer() > verifiedBlockSize) {
+                throw new IOException("Truncated or changed solid EGG spool");
             }
         }
 
@@ -589,6 +612,7 @@ final class EggArchiveReader {
                 throw closeFailure;
             } finally {
                 spool = null;
+                verifiedBlockSource = null;
                 verifiedBlockSize = 0;
                 try {
                     if (spoolFile != null && spoolFile.exists() && !spoolFile.delete()) {
@@ -675,6 +699,8 @@ final class EggArchiveReader {
         for (EggEntry entry : entries) {
             if (entry.directory) {
                 if (entryProgress != null) entryProgress.onDirectory(entry.path);
+                ArchiveCancellation.checkpoint(progress);
+                in.requireUnchanged();
                 File dir = resolveOutput(targetDir, entry.path);
                 if (dir != null && !dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory()) {
                     throw new IOException("Cannot create output directory");
@@ -689,16 +715,16 @@ final class EggArchiveReader {
         }
         try (SolidBlockSession session = new SolidBlockSession(in, targetDir, password);
              SolidEntryWriter writer = new SolidEntryWriter(targets, progress, entryProgress)) {
-            CRC32 runningCrc = new CRC32();
             for (EggBlock block : blocks) {
                 if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");
-                session.write(block, writer, runningCrc, progress);
+                session.write(block, writer, progress);
                 // An entry boundary is NOT an integrity boundary. A block may
                 // end well after several files have been written and closed.
-                writer.commitVerifiedFiles();
+                writer.commitVerifiedFiles(in);
             }
             writer.finish();
-            writer.commitVerifiedFiles();
+            ArchiveCancellation.checkpoint(progress);
+            writer.commitVerifiedFiles(in);
             return writer.wroteAnything() || createdDirectory;
         }
     }
@@ -734,9 +760,8 @@ final class EggArchiveReader {
         try (SolidBlockSession session = new SolidBlockSession(in, parent, password);
              OutputStream fileOut = ArchiveSupport.openExtractionOutputStream(outFile)) {
             SolidRangeWriter writer = new SolidRangeWriter(fileOut, offset, length);
-            CRC32 runningCrc = new CRC32();
             for (EggBlock block : blocks) {
-                session.write(block, writer, runningCrc, null);
+                session.write(block, writer, null);
                 if (writer.done()) break;
             }
             if (!writer.done()) throw new IOException("Solid EGG stream ended before entry data");
@@ -775,15 +800,18 @@ final class EggArchiveReader {
             this.password = password == null ? null : password.clone();
         }
 
-        void write(EggBlock block, OutputStream output, CRC32 crc,
-                   FileOperationProgress progress) throws IOException {
+        void write(EggBlock block, OutputStream output, FileOperationProgress progress) throws IOException {
             if (closed) throw new IOException("Solid EGG block session is closed");
             checkpoint(progress);
+            source.requireUnchanged();
             if (block.owner == null) throw new IOException("Missing solid EGG block owner");
             if (owner != block.owner) prepare(block.owner, progress);
             EggBlock slice = owner.encrypted ? slices.get(block) : block;
             if (slice == null) throw new IOException("Missing authenticated EGG block");
-            writeBlock(owner.encrypted ? packedInput : source, slice, output, crc, progress, null);
+            if (owner.encrypted) packedInput.requireUnchanged();
+            writeBlock(owner.encrypted ? packedInput : source, slice, output, progress, null);
+            if (owner.encrypted) packedInput.requireUnchanged();
+            source.requireUnchanged();
         }
 
         private void prepare(EggEntry entry, FileOperationProgress progress) throws IOException {
@@ -825,6 +853,7 @@ final class EggArchiveReader {
                     java.util.Arrays.fill(buffer, (byte) 0);
                 }
                 checkpoint(progress);
+                source.requireUnchanged();
                 if (packedFile.length() != offset) throw new IOException("Invalid authenticated EGG spool length");
                 packedInput = new SplitVolumeInput(Collections.singletonList(
                         new SplitVolumeInput.Segment(packedFile, 0, offset)));
@@ -928,6 +957,7 @@ final class EggArchiveReader {
             SolidTarget target = targets.get(index);
             if (entryProgress != null) entryProgress.onFile(target.path);
             else if (progress != null) progress.setDetail(target.path);
+            ArchiveCancellation.checkpoint(progress);
             if (target.outFile != null) {
                 File parent = target.outFile.getParentFile();
                 if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
@@ -974,8 +1004,11 @@ final class EggArchiveReader {
         }
 
         /** Commit only closed, complete files after every contributing block passed. */
-        void commitVerifiedFiles() throws IOException {
+        void commitVerifiedFiles(SplitVolumeInput source) throws IOException {
             if (remaining == 0L) closeCurrent();
+            ArchiveCancellation.checkpoint(progress);
+            source.requireUnchanged();
+            ArchiveCancellation.checkCancelled(progress);
             for (RarOutputFileGuard guard : awaitingVerification) {
                 guard.commit();
                 guard.close();
@@ -987,10 +1020,16 @@ final class EggArchiveReader {
             Throwable failure = null;
             try { closeCurrent(); }
             catch (IOException | RuntimeException | Error e) { failure = e; }
-            // The current guard can remain here if closing its stream failed.
+            // Close/adoption failure leaves the newest guard here. Roll it back
+            // directly: retrying a failed list allocation can skip ALL cleanup.
             if (currentGuard != null) {
-                awaitingVerification.add(currentGuard);
+                RarOutputFileGuard guard = currentGuard;
                 currentGuard = null;
+                try { guard.close(); }
+                catch (IOException | RuntimeException | Error e) {
+                    if (failure == null) failure = e;
+                    else if (failure != e) failure.addSuppressed(e);
+                }
             }
             // Reverse order also restores duplicate output paths correctly:
             // each guard may have backed up the previous entry's tentative file.
@@ -1118,7 +1157,9 @@ final class EggArchiveReader {
                 archiveEnded = true;
                 break;
             }
-            if (sig == MAGIC_COMMENT || sig == MAGIC_DUMMY) {
+            if (isSkippableExtra(sig)) {
+                // The public EGG split specification permits SKIP records.
+                // Consume only the declared extra-field range, not its contents.
                 skipExtraField(in, len);
                 continue;
             }
@@ -1244,6 +1285,10 @@ final class EggArchiveReader {
         in.seek(checkedPayloadEnd(in.getFilePointer(), size, len));
     }
 
+    private static boolean isSkippableExtra(int sig) {
+        return sig == MAGIC_COMMENT || sig == MAGIC_DUMMY || sig == MAGIC_SKIP;
+    }
+
     @Nullable
     private static EggEntry readFileEntry(@NonNull SplitVolumeInput in, long len) throws IOException {
         EggEntry entry = new EggEntry();
@@ -1292,20 +1337,52 @@ final class EggArchiveReader {
             block.uncompSize = readUInt32LE(in) & 0xffffffffL;
             block.compSize = readUInt32LE(in) & 0xffffffffL;
             block.crc = readUInt32LE(in) & 0xffffffffL;
-            long afterHeader = in.getFilePointer();
-            if (afterHeader + 4 <= len && readUInt32LE(in) == MAGIC_END) {
-                block.dataOffset = in.getFilePointer();
-            } else {
-                // Tolerated legacy layout without the block END: data begins
-                // right after the CRC.
-                in.seek(afterHeader);
-                block.dataOffset = afterHeader;
-            }
+            block.dataOffset = readBlockDataOffset(in, len, block.compSize);
             long skipTo = checkedPayloadEnd(block.dataOffset, block.compSize, len);
             entry.blocks.add(block);
             in.seek(skipTo);
         }
 
+    }
+
+    private static long readBlockDataOffset(SplitVolumeInput in, long len, long packedSize)
+            throws IOException {
+        long afterHeader = in.getFilePointer();
+        if (len - afterHeader < 4) return afterHeader;
+        int sig = readUInt32LE(in);
+        if (sig == MAGIC_END) return in.getFilePointer();
+        if (!isSkippableExtra(sig)) return afterHeader;
+
+        // The public layout permits block extras, but legacy no-END payload can
+        // start with identical bytes. Never displace a possible legacy parse:
+        // its packed endpoint must be EOF or an existing outer-loop signature.
+        long legacyEnd = checkedPayloadEnd(afterHeader, packedSize, len);
+        if (isBlockSuccessor(in, legacyEnd, len)) return afterHeader;
+
+        // Only the structurally impossible legacy branch reaches this path.
+        // Read bounded metadata, not a byte scan for END inside packed data.
+        in.seek(afterHeader + 4);
+        do {
+            indexCheckpoint();
+            skipExtraField(in, len);
+            if (len - in.getFilePointer() < 4) throw new IOException("Truncated EGG block extras");
+            sig = readUInt32LE(in);
+        } while (isSkippableExtra(sig));
+        if (sig != MAGIC_END) throw new IOException("Unrecognized EGG block extra field");
+        long dataOffset = in.getFilePointer();
+        long dataEnd = checkedPayloadEnd(dataOffset, packedSize, len);
+        if (!isBlockSuccessor(in, dataEnd, len)) throw new IOException("Invalid EGG block boundary");
+        return dataOffset;
+    }
+
+    /** Leaves the cursor at the lookahead; the block caller seeks to its checked end. */
+    private static boolean isBlockSuccessor(SplitVolumeInput in, long offset, long len)
+            throws IOException {
+        if (offset == len) return true;
+        if (len - offset < 4) return false;
+        in.seek(offset);
+        int sig = readUInt32LE(in);
+        return sig == MAGIC_FILE || sig == MAGIC_BLOCK || sig == MAGIC_END || isSkippableExtra(sig);
     }
 
     private static void readExtraField(@NonNull SplitVolumeInput in,
@@ -1424,6 +1501,7 @@ final class EggArchiveReader {
                                    @Nullable char[] password,
                                    @Nullable FileOperationProgress progress) throws IOException {
         if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");
+        in.requireUnchanged();
         if (entry.solid) {
             throw new ArchiveSupport.UnsupportedArchiveFeatureException("Solid EGG requires the solid reader");
         }
@@ -1444,10 +1522,9 @@ final class EggArchiveReader {
 
             boolean ok = false;
             try (OutputStream out = ArchiveSupport.openExtractionOutputStream(outFile)) {
-                CRC32 runningCrc = new CRC32();
                 for (EggBlock block : entry.blocks) {
                     if (progress != null && !progress.checkpoint()) throw new IOException("EGG extraction cancelled");
-                    writeBlock(in, block, out, runningCrc, progress, encryption.decryptor);
+                    writeBlock(in, block, out, progress, encryption.decryptor);
                 }
                 encryption.verify(entry);
                 out.flush();
@@ -1458,6 +1535,9 @@ final class EggArchiveReader {
                 }
             }
         }
+        ArchiveCancellation.checkpoint(progress);
+        in.requireUnchanged();
+        ArchiveCancellation.checkCancelled(progress);
     }
 
     private static final class EntryDecryption implements AutoCloseable {
@@ -1503,7 +1583,7 @@ final class EggArchiveReader {
                     }
                 };
             } else if (isAuthenticatedEncryption(entry.encryptMethod)) {
-                authenticated = openAuthenticatedDecryptor(entry, password);
+                authenticated = openAuthenticatedDecryptor(in, entry, password, progress);
                 final EggAuthenticatedCrypto authenticatedRef = authenticated;
                 decryptor = new BlockDecryptor() {
                     @Override
@@ -1521,14 +1601,24 @@ final class EggArchiveReader {
 
     private static boolean passwordMatches(SplitVolumeInput in, EggEntry entry,
                                             AlzipZipCrypto crypto, FileOperationProgress progress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
+        in.requireUnchanged();
+        boolean matches = true;
         // Cipher state continues through all packed blocks owned by this header,
         // including bytes beyond the selected output file in a solid archive.
         for (EggBlock block : entry.blocks) {
             ArchiveCancellation.checkpoint(progress);
             if (!verifyPasswordBlock(in.boundedStream(block.dataOffset, block.compSize),
-                    block.method, block.compSize, block.uncompSize, block.crc, crypto, progress)) return false;
+                    block.method, block.compSize, block.uncompSize, block.crc, crypto, progress)) {
+                matches = false;
+                break;
+            }
         }
-        return true;
+        // Neither a match nor a decoder/CRC rejection is valid for changed input.
+        ArchiveCancellation.checkpoint(progress);
+        in.requireUnchanged();
+        ArchiveCancellation.checkCancelled(progress);
+        return matches;
     }
 
     /** Owns raw, not crypto. No output or extraction progress is published. */
@@ -1553,8 +1643,8 @@ final class EggArchiveReader {
                 }
             };
             try {
-                decoded.stream = openDecodedBlock(nonClosing(source), block);
-                copyDecodedBlock(decoded.stream, discard, new CRC32(), block, null);
+                decoded.stream = openDecodedBlock(nonClosing(source), block, progress);
+                copyDecodedBlock(decoded.stream, discard, block, null);
             } catch (IOException candidateFailure) {
                 source.rethrowFailure();
                 ArchiveCancellation.rethrowIfCancelled(candidateFailure, progress);
@@ -1582,39 +1672,84 @@ final class EggArchiveReader {
 
     /**
      * Builds the per-file AES/LEA context. The password bytes are tried as UTF-8
-     * first; if the 2-byte PBKDF2 verifier rejects them and the password has
-     * non-ASCII characters, the legacy Windows-949 bytes ALZip would have
-     * hashed are tried before failing.
+     * first, with legacy Windows-949 as the existing non-ASCII alternative.
+     * If both distinct encodings pass the short verifier, the owner's complete
+     * ciphertext MAC selects the candidate before decoding or writing output.
      */
     @NonNull
-    private static EggAuthenticatedCrypto openAuthenticatedDecryptor(@NonNull EggEntry entry,
-                                                       @NonNull char[] password) throws IOException {
+    private static EggAuthenticatedCrypto openAuthenticatedDecryptor(@NonNull SplitVolumeInput in,
+            @NonNull EggEntry entry, @NonNull char[] password, FileOperationProgress progress) throws IOException {
         if (entry.aesSalt == null || entry.aesVerifier == null || entry.aesFooter == null) {
             throw new IOException("Missing EGG authenticated encryption header");
         }
         int keyBits = authenticatedKeyBits(entry.encryptMethod);
         boolean lea = entry.encryptMethod == ENC_LEA128 || entry.encryptMethod == ENC_LEA256;
-        EggAuthenticatedCrypto authenticated = new EggAuthenticatedCrypto(
-                EggAuthenticatedCrypto.passwordBytesUtf8(password), entry.aesSalt, entry.aesVerifier, keyBits, lea);
-        if (authenticated.isPasswordVerified()) return authenticated;
-        boolean ascii = true;
-        for (char c : password) {
-            if (c > 0x7f) {
-                ascii = false;
-                break;
+        byte[] utf8 = EggAuthenticatedCrypto.passwordBytesUtf8(password);
+        byte[] legacy = null;
+        try {
+            ArchiveCancellation.checkpoint(progress);
+            EggAuthenticatedCrypto first = new EggAuthenticatedCrypto(
+                    utf8, entry.aesSalt, entry.aesVerifier, keyBits, lea);
+            if (!first.isPasswordVerified()) first = null;
+            EggAuthenticatedCrypto second = null;
+            boolean ascii = true;
+            for (char c : password) if (c > 0x7f) { ascii = false; break; }
+            if (!ascii) {
+                try {
+                    legacy = EggAuthenticatedCrypto.passwordBytes(password, Charset.forName("MS949"));
+                    if (!java.util.Arrays.equals(utf8, legacy)) {
+                        ArchiveCancellation.checkpoint(progress);
+                        second = new EggAuthenticatedCrypto(
+                                legacy, entry.aesSalt, entry.aesVerifier, keyBits, lea);
+                        if (!second.isPasswordVerified()) second = null;
+                    }
+                } catch (UnsupportedCharsetException ignored) {
+                    // MS949 unavailable on this runtime: UTF-8 result stands.
+                }
+            }
+            ArchiveCancellation.checkpoint(progress);
+            if (first != null && second != null) {
+                return selectAuthenticatedDecryptor(in, entry, first, second, progress);
+            }
+            if (first != null) return first;
+            if (second != null) return second;
+            throw new IOException("Invalid password for EGG entry");
+        } finally {
+            java.util.Arrays.fill(utf8, (byte) 0);
+            if (legacy != null) java.util.Arrays.fill(legacy, (byte) 0);
+        }
+    }
+
+    /** Both contexts already passed the short verifier; I/O/cancellation failures stay terminal. */
+    private static EggAuthenticatedCrypto selectAuthenticatedDecryptor(SplitVolumeInput in, EggEntry entry,
+            EggAuthenticatedCrypto first, EggAuthenticatedCrypto second, FileOperationProgress progress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
+        in.requireUnchanged();
+        byte[] buffer = new byte[64 * 1024];
+        for (EggBlock block : entry.blocks) {
+            ArchiveCancellation.checkpoint(progress);
+            try (InputStream raw = in.boundedStream(block.dataOffset, block.compSize)) {
+                long remaining = block.compSize;
+                while (remaining > 0) {
+                    ArchiveCancellation.checkpoint(progress);
+                    int count = raw.read(buffer, 0, (int) Math.min(remaining, buffer.length));
+                    ArchiveCancellation.checkpoint(progress);
+                    if (count <= 0) throw new IOException("Truncated EGG encrypted password probe");
+                    first.authenticateCiphertext(buffer, 0, count);
+                    second.authenticateCiphertext(buffer, 0, count);
+                    remaining -= count;
+                }
             }
         }
-        if (!ascii) {
-            try {
-                authenticated = new EggAuthenticatedCrypto(
-                        EggAuthenticatedCrypto.passwordBytes(password, Charset.forName("MS949")),
-                        entry.aesSalt, entry.aesVerifier, keyBits, lea);
-                if (authenticated.isPasswordVerified()) return authenticated;
-            } catch (UnsupportedCharsetException ignored) {
-                // MS949 unavailable on this runtime: UTF-8 result stands.
-            }
-        }
-        throw new IOException("Invalid password for EGG entry");
+        boolean firstMatches = first.verifyFooter(entry.aesFooter);
+        boolean secondMatches = second.verifyFooter(entry.aesFooter);
+        ArchiveCancellation.checkpoint(progress);
+        in.requireUnchanged();
+        ArchiveCancellation.checkCancelled(progress);
+        if (firstMatches == secondMatches) throw new IOException("EGG password authentication is invalid or ambiguous");
+        // Mac.doFinal resets the MAC, and the probe never advanced either CTR.
+        // Normal decoding starts from the same initial state and rechecks the footer.
+        return firstMatches ? first : second;
     }
 
     private static boolean isAuthenticatedEncryption(int method) {
@@ -1633,7 +1768,6 @@ final class EggArchiveReader {
     private static void writeBlock(@NonNull SplitVolumeInput in,
                                    @NonNull EggBlock block,
                                    @NonNull OutputStream out,
-                                   @NonNull CRC32 runningCrc,
                                    @Nullable FileOperationProgress progress,
                                    @Nullable BlockDecryptor crypto) throws IOException {
         validateBlockSizes(block.method, block.compSize, block.uncompSize);
@@ -1646,8 +1780,8 @@ final class EggArchiveReader {
             // block ends. Keep that stream open until all declared ciphertext
             // has passed through the per-file decryptor/MAC. Decoder prefetch
             // has already authenticated its bytes and must NOT be replayed.
-            try (InputStream decoded = openDecodedBlock(nonClosing(packed), block)) {
-                copyDecodedBlock(decoded, out, runningCrc, block, progress);
+            try (InputStream decoded = openDecodedBlock(nonClosing(packed), block, progress)) {
+                copyDecodedBlock(decoded, out, block, progress);
             }
             // Do not use skip(): it can bypass decryption and authentication.
             // Finish only after a successful decode/close; never hide a failure
@@ -1663,14 +1797,16 @@ final class EggArchiveReader {
         };
     }
 
-    private static InputStream openDecodedBlock(InputStream input, EggBlock block) throws IOException {
+    private static InputStream openDecodedBlock(InputStream input, EggBlock block,
+                                                @Nullable FileOperationProgress progress) throws IOException {
         switch (block.method) {
             case COMP_STORE: return input;
-            case COMP_DEFLATE: return new OwnedDeflateInputStream(input);
-            case COMP_BZIP: return new BZip2CompressorInputStream(input, true);
-            case COMP_LZMA: return openLzmaBlock(input, block);
+            case COMP_DEFLATE: return new OwnedDeflateInputStream(input, progress);
+            case COMP_BZIP: return new ArchiveBzip2InputStream(input, progress);
+            case COMP_LZMA: return openLzmaBlock(input, block, progress);
             case COMP_AZO:
-                return new java.io.ByteArrayInputStream(decodeAzoBlock(readCompressedBlock(input, block), block.uncompSize));
+                return new java.io.ByteArrayInputStream(decodeAzoBlock(
+                        readCompressedBlock(input, block, progress), block.uncompSize, progress));
             default: throw new ArchiveSupport.UnsupportedArchiveFeatureException(
                     "Unsupported EGG compression method " + block.method);
         }
@@ -1712,7 +1848,6 @@ final class EggArchiveReader {
 
     private static void copyDecodedBlock(@NonNull InputStream input,
                                          @NonNull OutputStream out,
-                                         @NonNull CRC32 runningCrc,
                                          @NonNull EggBlock block,
                                          @Nullable FileOperationProgress progress) throws IOException {
         CRC32 blockCrc = new CRC32();
@@ -1728,7 +1863,6 @@ final class EggArchiveReader {
             }
             total += read;
             blockCrc.update(chunk, 0, read);
-            runningCrc.update(chunk, 0, read);
             out.write(chunk, 0, read);
             if (progress != null) progress.addDoneBytes(read);
         }
@@ -1741,7 +1875,9 @@ final class EggArchiveReader {
     }
 
     private static InputStream openLzmaBlock(@NonNull InputStream input,
-                                             @NonNull EggBlock block) throws IOException {
+                                             @NonNull EggBlock block,
+                                             @Nullable FileOperationProgress progress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
         if (block.compSize < LZMA_DATA_HEADER_SIZE) {
             throw new ArchiveSupport.UnsupportedArchiveFeatureException("Truncated EGG LZMA header");
         }
@@ -1753,10 +1889,11 @@ final class EggArchiveReader {
         byte[] header = new byte[LZMA_DATA_HEADER_SIZE];
         int done = 0;
         while (done < header.length) {
+            ArchiveCancellation.checkpoint(progress);
             int n = input.read(header, done, header.length - done);
-            if (n < 0) throw new ArchiveSupport.UnsupportedArchiveFeatureException("Truncated EGG LZMA header");
-            if (n == 0) throw new IOException("EGG input made no progress");
-            indexCheckpoint();
+            if (n == -1) throw new ArchiveSupport.UnsupportedArchiveFeatureException("Truncated EGG LZMA header");
+            if (n <= 0 || n > header.length - done) throw new IOException("Invalid EGG LZMA header input progress");
+            ArchiveCancellation.checkpoint(progress);
             done += n;
         }
         EggLzmaProperties properties = EggLzmaProperties.parse(header, block.uncompSize, LZMAInputStream.DICT_SIZE_MAX);
@@ -1764,13 +1901,29 @@ final class EggArchiveReader {
         int dictSize = properties.dictionarySize;
         // XZ's raw LZMA decoder reads packed input one byte at a time. Buffer AFTER
         // decryption and INSIDE the bounded block so it cannot consume another block.
-        return new LZMAInputStream(new java.io.BufferedInputStream(input, 64 * 1024),
+        // The enclosing block/probe scope still owns input if construction fails.
+        // Check refills, not every scalar range-code byte; retain the existing buffer.
+        InputStream packed = new java.io.FilterInputStream(input) {
+            @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+                ArchiveCancellation.checkpoint(progress);
+                int count = in.read(bytes, offset, length);
+                if (count < -1 || count > length || (length > 0 && count == 0)) {
+                    throw new IOException("Invalid EGG LZMA packed input progress");
+                }
+                ArchiveCancellation.checkpoint(progress);
+                return count;
+            }
+        };
+        ArchiveCancellation.checkpoint(progress);
+        return new LZMAInputStream(new java.io.BufferedInputStream(packed, 64 * 1024),
                 block.uncompSize, propsByte, dictSize);
     }
 
     @NonNull
     private static byte[] readCompressedBlock(@NonNull InputStream input,
-                                              @NonNull EggBlock block) throws IOException {
+                                              @NonNull EggBlock block,
+                                              @Nullable FileOperationProgress progress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
         // This array-based helper is used only by AZO. Check both sizes before
         // allocating even the packed array, including on solid extraction paths.
         validateBlockSizes(COMP_AZO, block.compSize, block.uncompSize);
@@ -1782,10 +1935,11 @@ final class EggArchiveReader {
         }
         int done = 0;
         while (done < compressed.length) {
-            int n = input.read(compressed, done, compressed.length - done);
+            ArchiveCancellation.checkpoint(progress);
+            int n = input.read(compressed, done, Math.min(64 * 1024, compressed.length - done));
             if (n < 0) throw new IOException("Unexpected EOF in EGG block");
             if (n == 0) throw new IOException("EGG input made no progress");
-            indexCheckpoint();
+            ArchiveCancellation.checkpoint(progress);
             done += n;
         }
         return compressed;
@@ -1814,11 +1968,12 @@ final class EggArchiveReader {
     }
 
     @NonNull
-    private static byte[] decodeAzoBlock(@NonNull byte[] data, long uncompSize) throws IOException {
+    private static byte[] decodeAzoBlock(@NonNull byte[] data, long uncompSize,
+                                       @Nullable FileOperationProgress progress) throws IOException {
         try {
-            return AzoDecoder.decode(data, uncompSize);
+            return AzoDecoder.decode(data, uncompSize, progress);
         } catch (IOException e) {
-            ArchiveCancellation.rethrowIfCancelled(e, null);
+            ArchiveCancellation.rethrowIfCancelled(e, progress);
             if (e.getCause() instanceof Error) throw e;
             if (e instanceof ArchiveSupport.UnsupportedArchiveFeatureException) throw (ArchiveSupport.UnsupportedArchiveFeatureException) e;
             throw new ArchiveSupport.UnsupportedArchiveFeatureException(

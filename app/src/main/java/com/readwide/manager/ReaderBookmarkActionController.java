@@ -27,6 +27,10 @@ final class ReaderBookmarkActionController {
             return;
         }
 
+        // Do not attach coordinates from an old rendered window to a changed file.
+        // The shared admission gate reloads stale source/transform state first.
+        if (!activity.ensureLoadedTextCurrent()) return;
+
         int charPos = activity.getBookmarkSaveCharPosition();
         int lineNum = Math.max(1, activity.countLinesUntilChar(charPos));
         String excerpt = activity.getExcerpt(charPos);

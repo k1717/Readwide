@@ -9,7 +9,7 @@ Readwide 1.0.12 is a small patch release on top of 1.0.11, focused on read-aloud
 ## Improvements
 
 - **Quieter dialogue at Aggressive pause reduction.** The Aggressive pause-reduction level now also mutes quotation marks (straight and curly double quotes, guillemets, and CJK corner brackets), so dialogue-heavy text keeps moving on neural voices that pause at every quote. Off and Medium leave quotation marks untouched, since they carry meaning in fiction. Apostrophes and single quotes are never removed, so contractions read correctly.
-- **Read-aloud diagnostics.** Read-aloud now writes concise diagnostic lines to logcat under the `ReadwideTts` tag (engine initialization, language/voice selection results including fallbacks, queue sizes, and any engine failures). This has no user-visible effect; it exists so that "read-aloud is silent" or "read-aloud stopped" reports can be diagnosed with `adb logcat -s ReadwideTts` on any build.
+- **Read-aloud diagnostics.** Read-aloud now writes concise diagnostic lines to logcat under the `ReadwideTts` tag (engine initialization, language/voice selection results including fallbacks, queue sizes, and any engine failures). This has no visible effect; it exists so that "read-aloud is silent" or "read-aloud stopped" reports can be diagnosed with `adb logcat -s ReadwideTts` on any build.
 
 ## Version metadata
 

@@ -33,6 +33,11 @@ final class DocumentWebViewController {
         setupOneWebView(activity.rightWebView, false);
     }
 
+    void clearScaleObservations() {
+        primaryScale.view = null;
+        rightScale.view = null;
+    }
+
     /** Callback values belong to one live WebView and one document load. */
     boolean recordScaleChange(@NonNull WebView view, float scale) {
         if (activity.activityDestroyed || !validScale(scale)
@@ -74,6 +79,14 @@ final class DocumentWebViewController {
         return scale > 0f && !Float.isNaN(scale) && !Float.isInfinite(scale);
     }
 
+    @SuppressWarnings("deprecation")
+    static boolean canZoomOutForGesture(@NonNull WebView view) {
+        // Preserve one renderer observation at the existing gesture decision.
+        // Scale > 1 is not equivalent: fit-to-page can have a different minimum,
+        // and probing by zoomOut() would itself change the displayed position.
+        return view.canZoomOut();
+    }
+
     private void setupOneWebView(WebView view, boolean primary) {
         if (view == null) return;
         WebSettings settings = view.getSettings();
@@ -98,18 +111,22 @@ final class DocumentWebViewController {
         view.setHapticFeedbackEnabled(primary);
         view.setOverScrollMode(View.OVER_SCROLL_NEVER);
         view.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
+            if (activity.activityDestroyed
+                    || view != (primary ? activity.webView : activity.rightWebView)) return;
             if (primary && (scrollX != oldScrollX || scrollY != oldScrollY)) {
                 activity.notifyDocumentFastScrollActivity();
             }
             if (!primary) return;
+            if (scrollX != oldScrollX || scrollY != oldScrollY) {
+                activity.scheduleEpubSectionProgressUpdate();
+            }
             if (activity.isMarkdownDocument() && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
                 activity.updateMarkdownVisualPageModel(false);
                 activity.scheduleMarkdownSourceAnchorUpdate();
             }
             if (activity.isRenderedContentAnchorDocument()
-                    && (Math.abs(scrollX - oldScrollX) > activity.dpToPx(1)
-                    || Math.abs(scrollY - oldScrollY) > activity.dpToPx(1))) {
-                activity.scheduleDocumentContentAnchorUpdate();
+                    && (scrollX != oldScrollX || scrollY != oldScrollY)) {
+                activity.onDocumentContentNativeScroll(view);
             }
             if ("Word".equals(activity.docType)
                     && Math.abs(scrollY - oldScrollY) > activity.dpToPx(1)) {
@@ -118,6 +135,13 @@ final class DocumentWebViewController {
             }
         });
         if (primary) {
+            view.addOnLayoutChangeListener((v, left, top, right, bottom,
+                                            oldLeft, oldTop, oldRight, oldBottom) -> {
+                if (view == activity.webView && (right - left != oldRight - oldLeft
+                        || bottom - top != oldBottom - oldTop)) {
+                    activity.scheduleEpubSectionProgressUpdate();
+                }
+            });
             view.addJavascriptInterface(activity.new WordSelectionBridge(), "ReadwideSelectionBridge");
             if (view instanceof SelectionContrastWebView) {
                 ((SelectionContrastWebView) view).setAnnotationActionListener(
@@ -137,6 +161,13 @@ final class DocumentWebViewController {
         }
 
         view.setWebViewClient(new WebViewClient() {
+            @Override
+            @androidx.annotation.RequiresApi(26)
+            public boolean onRenderProcessGone(@NonNull WebView view,
+                                               @NonNull android.webkit.RenderProcessGoneDetail detail) {
+                return activity.onDocumentRendererGone(view);
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(@NonNull WebView view, @NonNull WebResourceRequest request) {
                 if (!request.isForMainFrame()) return false;
@@ -159,9 +190,18 @@ final class DocumentWebViewController {
             @Override
             public void onScaleChanged(@NonNull WebView view, float oldScale, float newScale) {
                 super.onScaleChanged(view, oldScale, newScale);
+                // A null loadData history URL can surface as about:blank. The
+                // display-only progress refresh has its own ready-load guard;
+                // do not require admission to the stricter scale/anchor cache.
+                if (primary && view == activity.webView && validScale(newScale)) {
+                    activity.scheduleEpubSectionProgressUpdate();
+                }
                 if (!recordScaleChange(view, newScale)) return;
                 if (primary) {
                     activity.scheduleDocumentFastScrollUpdate();
+                    if (activity.isRenderedContentAnchorDocument()) {
+                        activity.scheduleDocumentContentAnchorUpdate();
+                    }
                     // Do not enqueue the page-load retry sequence on every pinch
                     // frame, or persist progress before this load is ready.
                     if (activity.primaryDocumentPageReadyGeneration
@@ -179,10 +219,14 @@ final class DocumentWebViewController {
                 if (primary) {
                     activity.primaryDocumentPageReadyGeneration =
                             activity.primaryDocumentPageLoadGeneration;
+                } else {
+                    activity.rightDocumentPageReadyGeneration =
+                            activity.rightDocumentPageLoadGeneration;
                 }
                 activity.applyEpubBoundaryCssToLoadedWebView(view);
                 activity.scheduleDocumentFastScrollUpdate();
                 if (!primary) {
+                    activity.applyPendingEpubAnchorAfterPageLoad(view);
                     return;
                 }
                 if (activity.webView == null) return;
@@ -238,7 +282,7 @@ final class DocumentWebViewController {
                     && activity.epubPageUsesVerticalWriting(pageIndex))
                     ? WebSettings.LayoutAlgorithm.NORMAL
                     : WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING);
-            settings.setTextZoom(activity.documentTextZoomPercent());
+            settings.setTextZoom(activity.documentTextZoomPercent(pageIndex));
             view.setInitialScale(0);
         }
     }

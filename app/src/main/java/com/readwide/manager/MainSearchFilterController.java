@@ -77,8 +77,19 @@ final class MainSearchFilterController {
         if (activity.fileSearchInput != null) {
             activity.fileSearchInput.setSaveEnabled(false);
             activity.fileSearchInput.addTextChangedListener(new TextWatcher() {
+                private String previousQuery = activity.fileSearchInput.getText().toString()
+                        .trim().toLowerCase(java.util.Locale.ROOT);
                 @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
                 @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    String query = s.toString().trim().toLowerCase(java.util.Locale.ROOT);
+                    if (!query.equals(previousQuery)) {
+                        previousQuery = query;
+                        // Retire invisible selections before the debounced list
+                        // changes, including clears from buttons or navigation.
+                        if (activity.homeMode && !activity.searchMode) {
+                            activity.exitFileSelectionMode(true);
+                        }
+                    }
                     activity.navigationState.cancelScroll();
                     scheduleLiveFileSearch();
                 }
@@ -287,6 +298,17 @@ final class MainSearchFilterController {
             String query = activity.fileSearchInput != null
                     ? activity.fileSearchInput.getText().toString().trim()
                     : "";
+
+            if (activity.homeMode && !activity.searchMode) {
+                // An already-active chip is not a dataset change. In particular,
+                // do not replace the selection toolbar title on a redundant tap.
+                if (filter == activity.activeFileFilter) return;
+                activity.exitFileSelectionMode(true);
+            } else if (query.isEmpty() && activity.searchMode && activity.searchReturnToHome) {
+                // This chip leaves filesystem search for Recent, even if its
+                // type is unchanged; selections belong to the outgoing dataset.
+                activity.exitFileSelectionMode(true);
+            }
 
             // Recent search active (home screen, non-empty query): apply the new
             // file-type filter to the recent list first, then the live search

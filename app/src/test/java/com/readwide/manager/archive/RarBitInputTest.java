@@ -7,6 +7,57 @@ import java.io.EOFException;
 import org.junit.Test;
 
 public class RarBitInputTest {
+    @Test public void optionalLookaheadRetainsShortCleanTailWithoutConsumingOrPadding() throws Exception {
+        RarBitInput input = new RarBitInput(new java.io.ByteArrayInputStream(new byte[]{5}));
+        input.skipBits(5);
+        assertFalse(input.hasBits(8));
+        assertEquals(5, input.bitsRead()); assertEquals(3, input.remainingBits());
+        assertTrue(input.hasBits(3)); assertEquals(5, input.readBits(3));
+        assertFalse(input.hasBits(1)); assertTrue(input.hasBits(0));
+        assertThrows(EOFException.class, input::readBit);
+    }
+
+    @Test public void optionalLookaheadDoesNotHidePhysicalOrDeclaredTruncation() throws Exception {
+        RarBitInput declared = new RarBitInput(new java.io.ByteArrayInputStream(new byte[]{0}), 2);
+        declared.skipBits(7);
+        EOFException truncated = assertThrows(EOFException.class, () -> declared.hasBits(8));
+        assertSame(truncated, assertThrows(EOFException.class, () -> declared.hasBits(1)));
+        EOFException physical = new EOFException("volume truncated");
+        RarBitInput unknown = new RarBitInput(new java.io.InputStream() {
+            int calls;
+            @Override public int read() throws java.io.IOException {
+                if (calls++ == 0) return 0;
+                throw physical;
+            }
+        });
+        unknown.skipBits(7);
+        assertSame(physical, assertThrows(EOFException.class, () -> unknown.hasBits(8)));
+        assertSame(physical, assertThrows(EOFException.class, unknown::readBit));
+    }
+
+    @Test public void resumedBoundedStreamDiscoversEofWithoutOwningOrPaddingInput() throws Exception {
+        java.io.ByteArrayInputStream source = new java.io.ByteArrayInputStream(new byte[]{42,7}) {
+            @Override public void close() { fail("Caller owns payload"); }
+        };
+        RarBitInput input = new RarBitInput(source);
+        assertEquals(42,input.peekBits(8));
+        java.io.InputStream bytes = input.alignedBytes();
+        byte[] out = new byte[4]; assertEquals(2,bytes.read(out));
+        assertArrayEquals(new byte[]{42,7,0,0},out);
+        assertEquals(0,input.remainingBits()); assertEquals(16,input.bitsRead());
+        assertEquals(-1,bytes.read()); assertEquals(-1,bytes.read(out)); bytes.close();
+        assertThrows(EOFException.class,input::readBit);
+    }
+
+    @Test public void resumedStreamFailureIsNotOrdinaryEofAndCannotResume() throws Exception {
+        java.io.IOException failure = new java.io.IOException("physical read failed");
+        RarBitInput input = new RarBitInput(new java.io.InputStream() {
+            @Override public int read() throws java.io.IOException { throw failure; }
+        });
+        assertSame(failure,assertThrows(java.io.IOException.class,() -> input.alignedBytes().read()));
+        assertSame(failure,assertThrows(java.io.IOException.class,input::readBit));
+    }
+
     @Test
     public void readBits_crossesByteBoundary() throws Exception {
         RarBitInput input = new RarBitInput(new byte[] {(byte) 0b1010_1100, (byte) 0b0111_0000});

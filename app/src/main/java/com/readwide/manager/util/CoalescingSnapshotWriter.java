@@ -48,19 +48,36 @@ final class CoalescingSnapshotWriter<T> {
 
     /** Nonblocking: never acquires the file-write lock or serializes a snapshot. */
     void request(long revision) {
-        Ticket submit;
-        synchronized (requestLock) {
-            requestedRevision = Math.max(requestedRevision, revision);
-            if (active != null || requestedRevision <= writtenRevision) return;
-            active = submit = new Ticket();
-        }
+        Ticket submit = null;
+        boolean submitted = false;
+        Throwable failure = null;
         try {
-            executor.execute(submit);
-        } catch (RuntimeException rejected) {
             synchronized (requestLock) {
-                if (active == submit) active = null;
+                requestedRevision = Math.max(requestedRevision, revision);
+                if (active != null || requestedRevision <= writtenRevision) return;
+                active = submit = new Ticket();
             }
-            onFailure.accept(rejected);
+            executor.execute(submit);
+            submitted = true;
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError rejected) {
+            failure = rejected;
+        } finally {
+            if (!submitted && submit != null) {
+                synchronized (requestLock) {
+                    if (active == submit) active = null;
+                }
+            }
+        }
+        if (failure != null) reportFailure(failure);
+    }
+
+    /** Reporting is best-effort, including allocation while wrapping an Error. */
+    private void reportFailure(Throwable failure) {
+        try {
+            onFailure.accept(failure instanceof Exception ? (Exception) failure
+                    : new Exception("Snapshot write exhausted available resources", failure));
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError reportingFailure) {
+            // A logger/callback must not prevent ticket cleanup or later saves.
         }
     }
 
@@ -91,8 +108,8 @@ final class CoalescingSnapshotWriter<T> {
                     long observed = requestedRevision;
                     try {
                         if (observed > writtenRevision) encodeAndWrite(source.capture());
-                    } catch (Exception failure) {
-                        onFailure.accept(failure);
+                    } catch (Exception | OutOfMemoryError | StackOverflowError failure) {
+                        reportFailure(failure);
                     }
                     synchronized (requestLock) {
                         if (requestedRevision > observed && requestedRevision > writtenRevision) continue;

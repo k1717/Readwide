@@ -1,8 +1,12 @@
 # Archive support boundaries — Readwide 1.0.20
 
-Release date: 2026-10-11. The local release build completed successfully.
+The local release build completed successfully.
 This document distinguishes implemented decoding paths from unsupported combinations
 and from runtime evidence. It is not a compatibility percentage or a performance result.
+
+This is the 1.0.20 snapshot, not a live support list. For later RAR VM/mixed-mode,
+7z and PM0 changes, read the [1.0.21 archive notes](DEV_CHANGES_1_0_21.md#archive-compatibility)
+alongside this baseline; its historical exclusions are not all current exclusions.
 
 ## Support labels
 

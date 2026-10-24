@@ -228,9 +228,8 @@ final class MainFileActionDialogController {
         ref[0] = dialog;
         dialog.setOnShowListener(d -> {
             if (dialog.getWindow() != null) {
-                dialog.getWindow().setSoftInputMode(
-                        android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
-                                | android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+                AdaptiveDialogLayoutHelper.setResizeSoftInputMode(dialog.getWindow(),
+                        android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
             }
             input.requestFocus();
             input.postDelayed(() -> {
@@ -590,8 +589,8 @@ final class MainFileActionDialogController {
             input.requestFocus();
             android.view.Window window = dialog.getWindow();
             if (window != null) {
-                window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-                        | android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+                AdaptiveDialogLayoutHelper.setResizeSoftInputMode(window,
+                        android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
             }
         });
         dialog.show();

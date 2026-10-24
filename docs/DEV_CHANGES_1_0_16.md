@@ -3,9 +3,9 @@
 ## Unified built-in browser fallback
 
 - The raw-`File` browser retains its existing platform permission handling. The new compatibility route is an API-independent persisted SAF tree selected by actual directory-enumeration capability rather than by a hard-coded OS or OEM branch.
-- Storage diagnostics now report whether raw directory enumeration is actually usable instead of assuming that a granted permission guarantees it. Diagnostic lines contain no user path or filename.
+- Storage diagnostics now report whether raw directory enumeration is actually usable instead of assuming that a granted permission guarantees it. Diagnostic lines contain no personal path or filename.
 - A `null` directory listing is an access failure, not an empty directory. Initial loads and refreshes share the unavailable-location result and avoid caching a false empty-folder signature.
-- The second compatibility path is API-independent SAF rather than another OS-version branch. `SafStorageAccess` retains and validates a user-selected tree; `SafBrowserActivity` queries child documents by document ID, preserves its own navigation stack, and routes readable files through the same URI viewer policy as Open file.
+- The second compatibility path is API-independent SAF rather than another OS-version branch. `SafStorageAccess` retains and validates a selected tree; `SafBrowserActivity` queries child documents by document ID, preserves its own navigation stack, and routes readable files through the same URI viewer policy as Open file.
 - A persisted SAF tree suppresses repeat raw-storage permission prompts on later launches. The drawer exposes one `Internal Storage` entry: without a tree it uses the authorized raw browser, while a persisted tree makes the same entry provider-backed and suppresses duplicate raw Internal/SD/Downloads rows.
 - SAF mode is intentionally read-oriented in this stage. Folder navigation, sorting, filtering, PDF/EPUB/TXT/document/image opening, and cached archive opening are supported. Raw-path-only multi-select, copy/move/delete, folder-wide search, and cover-thumbnail generation are not falsely exposed for provider documents.
 - SAF directory queries and archive URI copies no longer share one executor. Provider browsing remains responsive while a large archive is copied into `opened_files`; navigation invalidates and cancels the copy Future, and the bounded shared URI-copy loop observes interruption before another provider read. An obsolete completion cannot retain the open latch or launch a viewer.
@@ -40,9 +40,9 @@
 
 ## Dedicated EPUB default font
 
-- `PrefsManager` owns a separate `epub_font_family`. One-time migration distinguishes a missing legacy preference from an explicitly selected `default`, so existing System Sans users are not reset to the book font.
+- `PrefsManager` owns a separate `epub_font_family`. One-time migration distinguishes a missing legacy preference from an explicitly selected `default`, so an existing System Sans selection is not reset to the book font.
 - Settings and `DocumentFontDialogController` write the same preference; the document theme signature includes it so returning from Settings refreshes the open page. New books read the persisted value rather than losing it with an activity-local override.
-- User font CSS is injected with strong selector specificity and `!important` for reflowable EPUB content. Fixed-layout and image-page EPUBs continue to bypass forced reader typography.
+- Selected-font CSS is injected with strong selector specificity and `!important` for reflowable EPUB content. Fixed-layout and image-page EPUBs continue to bypass forced reader typography.
 
 ## PDF app-chrome fullscreen
 
@@ -64,7 +64,7 @@
 
 ## EPUB chrome and image-page scroll correction
 
-- Vertical-writing EPUB bookmarks now capture the first meaningfully visible sentence in logical right-to-left column order rather than the first Y-axis paragraph. App-bar-covered DOM ranges are excluded. Stable sentence element IDs are the primary restore key, followed by sentence/context text and block/offset range fallbacks; X-only scrolling schedules a fresh capture, a user gesture cancels the delayed font-settle re-alignment, and v1 anchors remain readable.
+- Vertical-writing EPUB bookmarks now capture the first meaningfully visible sentence in logical right-to-left column order rather than the first Y-axis paragraph. App-bar-covered DOM ranges are excluded. Stable sentence element IDs are the primary restore key, followed by sentence/context text and block/offset range fallbacks; X-only scrolling schedules a fresh capture, a touch gesture cancels the delayed font-settle re-alignment, and v1 anchors remain readable.
 - Kusamakura exposed a second failure after that first fix: the candidate element and caret were selected by separate geometry passes, and Android WebView reported a 1536×2998 layout viewport for a 384×749.5 visual viewport. `DocumentContentAnchorJavascript` now probes a bounded right-to-left grid in the real visual viewport and derives the stable `span/p/li/blockquote` root from the caret at that same point. The v2 payload stores the caret's normalized X/Y focus and restores the text range to that screen position.
 - The grid's edge probes keep a 24-48 CSS-pixel safe inset, and restore aligns the caret rectangle center rather than its `left/top` corner. Verification requires the whole glyph rectangle inside the safe frame with only subpixel tolerance. Short ID-less Japanese utterances remain semantic anchors, and `focusText` begins at the captured glyph instead of 24 characters earlier, correcting the real geometry bias.
 - Overlay occlusion is converted from Android physical pixels to WebView CSS pixels before visible-sentence selection. This closes the density-dependent path where the top/bottom overlays consumed the entire DOM viewport and every Kusamakura save degraded to a page-start anchor.

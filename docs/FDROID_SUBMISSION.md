@@ -1,21 +1,21 @@
-# F-Droid submission notes for Readwide 1.0.20
+# F-Droid submission notes for Readwide 1.0.21
 
-Use these instructions to submit Readwide 1.0.20 to F-Droid. Build and signing commands are in [RELEASE_BUILD.md](../RELEASE_BUILD.md).
+Use these instructions to submit Readwide 1.0.21 to F-Droid. Build and signing commands are in [RELEASE_BUILD.md](../RELEASE_BUILD.md).
 
 ## Release identity
 
-Readwide 1.0.20 uses version code `10020` and release date `2026-10-11`.
-The local release build completed successfully on that date. This does not
-establish an F-Droid build or publication. For changes from 1.0.19, see the
-[development notes](DEV_CHANGES_1_0_20.md); the bundled metadata remains a historical
-mirror, not a completed 1.0.20 submission.
+Readwide 1.0.21 uses version code `10021`. Its GitHub source package and release
+documents are prepared with the date 2026-10-24. The final tag/commit and APK
+verification remain separate; an earlier successful release build predates later changes.
+For changes from 1.0.20, see the [development notes](DEV_CHANGES_1_0_21.md).
+The bundled metadata remains a historical mirror, not a completed submission.
 
 ## App identity
 
 - App name: Readwide
 - Android application ID: `com.readwide.manager`
-- Version name: `1.0.20`
-- Version code: `10020`
+- Version name: `1.0.21`
+- Version code: `10021`
 - First-party license: Apache-2.0
 - Source repository: `https://github.com/k1717/Readwide`
 
@@ -36,10 +36,10 @@ preserved and updated from upstream when a submission is actually prepared.
 Create and push the immutable release tag before opening the merge request:
 
 ```text
-v1.0.20
+v1.0.21
 ```
 
-The checked-in metadata file is only a historical mirror through `1.0.19`; do not copy it over current fdroiddata. After `v1.0.20` is pushed, start from current upstream metadata, add only the `1.0.20` block, set its `commit` to the full 40-character hash that the final tag points to, and then update `CurrentVersion: 1.0.20` / `CurrentVersionCode: 10020`. A commented template may be kept locally as guidance but must not be activated with a guessed or abbreviated hash. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the tag and propose the build entry automatically.
+The checked-in metadata file is only a historical mirror through `1.0.19`; do not copy it over current fdroiddata. After `v1.0.21` is pushed, start from current upstream metadata, add only the `1.0.21` block, set its `commit` to the full 40-character hash that the final tag points to, and then update `CurrentVersion: 1.0.21` / `CurrentVersionCode: 10021`. A commented template may be kept locally as guidance but must not be activated with a guessed or abbreviated hash. Because `UpdateCheckMode: Tags` and `AutoUpdateMode: Version` are set, F-Droid can also detect the tag and propose the build entry automatically.
 
 ## F-Droid-facing baseline
 
@@ -49,28 +49,24 @@ The default build is intended to be reviewed as a local-first FOSS app:
 - The default manifest does not request `INTERNET`.
 - No ads, analytics, telemetry SDK, Firebase, Google Play Services dependency, account system, cloud sync, developer-operated upload backend, or app-network update checker is included.
 - Android Auto Backup is disabled with `android:allowBackup="false"`.
-- Broad file access is requested because the app is a local reader and file browser that works with user-selected folders, documents, images, and archives.
-- `MANAGE_EXTERNAL_STORAGE` is requested for general local file browsing on Android versions where scoped-storage permissions alone cannot implement it. It is used only for local browse/open/copy/move/delete/extract/compress of user-selected files, and is not paired with `INTERNET` or any developer-operated upload path.
+- Broad file access is requested because the app is a local reader and file browser that works with selected folders, documents, images, and archives.
+- `MANAGE_EXTERNAL_STORAGE` is requested for general local file browsing on Android versions where scoped-storage permissions alone cannot implement it. It is used only for local browse/open/copy/move/delete/extract/compress of selected files, and is not paired with `INTERNET` or any developer-operated upload path.
 - The persisted `ACTION_OPEN_DOCUMENT_TREE` browser needs no additional permission and works without broad storage access. It is read-oriented; raw-path-only mutation and recursive-search operations remain visibly confined to the fully authorized raw browser.
 - The main activity exports an `ACTION_VIEW` intent filter (with the `BROWSABLE` category and document/image MIME types, no `http`/`https` scheme) so files can be opened in Readwide from a browser, messenger, file manager, or document provider. A file opened this way is copied into an app-private `opened_files` cache with display-name sanitization, a canonical-path containment check, a 2 GB per-file copy limit, and cache pruning before and after the copy; provider `query`/`getType` exceptions are caught. No network access is involved.
 - Default builds do not bundle Junrar or RARLAB UnRAR-license code.
 - HWP/HWPX support uses Apache-2.0 Java libraries (`hwplib`, `hwpxlib`) and is text-first/read-only.
 - Release signing is conditional; if private signing environment variables are absent, `assembleRelease` should produce an unsigned release artifact suitable for source-builder workflows.
 
-## Gradle wrapper verification
+## Gradle wrapper
 
-The source keeps the standard Gradle 9.4.1 wrapper files. This source tree aligns the wrapper JAR with the configured distribution and pins the distribution checksum:
-
-```text
-gradle-wrapper.jar SHA-256: 55243ef57851f12b070ad14f7f5bb8302daceeebc5bce5ece5fa6edb23e1145c
-gradle-9.4.1-bin.zip SHA-256: 2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb
-```
-
-Both values are the official Gradle 9.4.1 checksums. F-Droid also verifies wrapper JARs against known-good official hashes and builds with trusted tooling, so the metadata does not need an `rm` rule for the wrapper. Verify these values before tagging.
+Keep the standard Gradle 9.4.1 wrapper and the pinned distribution configuration
+in `gradle/wrapper/gradle-wrapper.properties`. The historical metadata does not
+remove the wrapper. Source packaging uses inventory/CRC/mode checks; it does not
+replace build-tool distribution verification or establish F-Droid acceptance.
 
 ## Build command
 
-The 1.0.20 build block should use the `app` module's normal Gradle release
+The 1.0.21 build block should use the `app` module's normal Gradle release
 build and explicitly select the native toolchain. These are build-block fields,
 not a complete submission file; add the final version and immutable commit:
 
@@ -89,7 +85,8 @@ Gradle-only block provisions everything. The
 [metadata reference](https://f-droid.org/en/docs/Build_Metadata_Reference/#Builds)
 documents NDK selection and leaving JNI compilation to Gradle with `buildjni: no`.
 
-Manual local check for the no-private-keystore path:
+Manual local check for the no-private-keystore path (signing values must also be
+absent from project/global Gradle properties):
 
 ```bash
 unset READWIDE_KEYSTORE_PATH READWIDE_KEYSTORE_PASSWORD READWIDE_KEY_ALIAS READWIDE_KEY_PASSWORD TEXTVIEW_KEYSTORE_PATH TEXTVIEW_KEYSTORE_PASSWORD TEXTVIEW_KEY_ALIAS TEXTVIEW_KEY_PASSWORD
@@ -109,14 +106,14 @@ Current locales:
 - `en-US`
 - `ko-KR`
 
-These provide title, short description, full description, and versionCode `10020` changelog text.
+These provide title, short description, full description, and versionCode `10021` changelog text.
 
 ## Conservative support wording for review
 
 Use conservative wording in the merge request:
 
 - RAR/CBR support is limited and not complete.
-- Describe encrypted, split, SFX and VM-filtered RAR by their specific implemented paths, not as universally supported or universally absent. The new mixed fallback is plain/single-volume only; custom VM and unsupported scheduling remain excluded. See `GITHUB_RELEASE_NOTES_READWIDE_1_0_20.md`.
+- Describe encrypted, split, SFX and VM-filtered RAR by their specific implemented paths, not as universally supported or universally absent. Unsupported VM ranges/order remain excluded. See [current archive support notes](ARCHIVE_BOUNDARY_SUPPORT_NOTES.md).
 - HWP/HWPX support is text-first reading only; no Hancom layout parity, editing, writing, cloud/server conversion, or password/encrypted HWP support is claimed.
 - Legacy `.doc` files have basic read-only rendering through a self-contained pure-Java parser; layout fidelity is limited compared with OOXML `.docx`.
 
@@ -126,11 +123,11 @@ Use conservative wording in the merge request:
 - `PRIVACY.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_20.md` (current source-declared report)
-- `docs/SBOM_READWIDE_1_0_20.spdx.json` (current source-declared report)
-- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`
-- `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md`
-- `fdroid/metadata/com.readwide.manager.yml`
+- `docs/LICENSE_REPORT_READWIDE_1_0_21.md` (current source-declared report)
+- `docs/SBOM_READWIDE_1_0_21.spdx.json` (current source-declared report)
+- `docs/ARCHIVE_BOUNDARY_SUPPORT_NOTES.md` and `docs/CURRENT_SOURCE_STATUS_1_0_21.md`
+- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` and `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md` (historical reference only)
+- `fdroid/metadata/com.readwide.manager.yml` (historical mirror only)
 
 ## Native dependency provenance (for the merge request)
 
@@ -140,15 +137,15 @@ The Android runtime native backend is built entirely from source checked into th
 
 Readwide packages `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt`, derived from those pinned source revisions, so the APK retains the applicable copyright, redistribution, and warranty-disclaimer terms. The corresponding source licenses also remain beside their components in `third_party/libarchive-android`.
 
-`com.github.luben:zstd-jni:1.5.7-17` remains only under `testImplementation` in the 1.0.20 source so plain-JVM archive fixtures can decode Zstandard. Its desktop native resources are not part of the Android release APK and are not required by the F-Droid release assembly path.
+`com.github.luben:zstd-jni:1.5.7-17` remains only under `testImplementation` in the 1.0.21 source so plain-JVM archive fixtures can decode Zstandard. Its desktop native resources are not part of the Android release APK and are not required by the F-Droid release assembly path.
 
 The APK also includes the source-built `project(':zipxCodecsAndroid')` module in `third_party/zipx-codecs-android`. Its `readwide-zipx-codecs` shared library includes the XADMaster WinZip JPEG decoder and is documented as LGPL-2.1-or-later; WavPack itself is BSD-3-Clause. Keep its corresponding source, build scripts, component licenses and packaged notices with the release, as described in `THIRD_PARTY_NOTICES.md` and the module's `UPSTREAM.md`. The native stack is therefore not exclusively permissively licensed. Zstandard's BSD option and Mbed TLS's Apache-2.0 option apply to those components, not to the ZIPX library as a whole.
 
-For the 1.0.20 fdroiddata build block, declare `ndk: 29.0.14206865` and `buildjni: no`; Gradle/CMake performs both JNI builds from the checked-in source. This provenance correction does not claim that the LGPL component is incompatible with F-Droid or certify the complete distribution's license compliance.
+For the 1.0.21 fdroiddata build block, declare `ndk: 29.0.14206865` and `buildjni: no`; Gradle/CMake performs both JNI builds from the checked-in source. This provenance correction does not claim that the LGPL component is incompatible with F-Droid or certify the complete distribution's license compliance.
 
-## Remaining submitter tasks
+## Remaining submission checks
 
 - Confirm a clean network-enabled Gradle build from the tagged source.
-- Confirm the submitted build's `commit` field is the full 40-character hash of the final `v1.0.20` release commit. Start from current upstream metadata and add only the version actually submitted.
+- Confirm the submitted build's `commit` field is the full 40-character hash of the final `v1.0.21` release commit. Start from current upstream metadata and add only the version actually submitted.
 - Confirm no optional local jars are present in `app/libs`.
-- Confirm the built APK contains `assets/open_source_licenses/libarchive_android_and_codecs.txt`, `xadmaster_winzip_jpeg_lgpl_2_1.txt`, and `wavpack_bsd_3_clause.txt`. Keep the `zstd-jni` notice with source/test materials; it is not shipped in the APK.
+- Compare the complete `app/src/main/assets/open_source_licenses/` inventory and text with the built APK, including CAB, LZHAM, PPMd-I, LEA, RAR VM, Brotli and RE2/J rather than only libarchive/ZIPX. Keep the `zstd-jni` notice with source/test materials; it is not shipped in the APK.

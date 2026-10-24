@@ -3,10 +3,73 @@ package com.readwide.manager.archive;
 import static org.junit.Assert.*;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import com.readwide.manager.util.FileOperationProgress;
 import org.junit.Test;
 
 /** Synthetic VM programs, not a claim of producer/custom-filter interoperability. */
 public class Rar3VirtualMachineTest {
+    @Test public void tokenCancellationDoesNotCommitPersistentVmState() throws Exception {
+        Code code = new Code();
+        code.op(0,true).memory(0).memory(0x3c040);
+        code.op(6,true).memory(0x3c040);
+        code.op(0,false).memory(1).memory(0x3c02c);
+        code.op(0,false).memory(0x3c030).immediate(1,false); code.op(22,false);
+        Rar3VirtualMachine.Program program = Rar3VirtualMachine.compile(code.finish());
+        FileOperationProgress cancelled = new FileOperationProgress("VM", null);
+        cancelled.cancel();
+        assertFalse(Thread.currentThread().isInterrupted());
+        assertThrows(java.io.InterruptedIOException.class, () -> Rar3VirtualMachine.apply(
+                program, new byte[5], 5, registers(5), new byte[]{7}, 0, cancelled));
+        FileOperationProgress active = new FileOperationProgress("VM", null);
+        assertArrayEquals(new byte[]{7,0,0,0,0}, Rar3VirtualMachine.apply(
+                program, new byte[5], 5, registers(5), new byte[]{7}, 0, active));
+        assertThrows(java.io.InterruptedIOException.class, () -> Rar3VirtualMachine.apply(
+                program, new byte[5], 5, registers(5), new byte[]{99}, 5, cancelled));
+        assertArrayEquals(new byte[]{8,1,0,0,0}, Rar3VirtualMachine.apply(
+                program, new byte[5], 5, registers(5), new byte[]{99}, 5, active));
+    }
+
+    @Test public void queuedVmCancellationRetiresOutputWithoutPublication() throws Exception {
+        Code code = new Code(); code.op(22,false);
+        Rar3VmFilter.ProgramState state = new Rar3VmFilter.ProgramState();
+        Rar3PpmdFilterOutput.DeferredFilters deferred = new Rar3PpmdFilterOutput.DeferredFilters();
+        FileOperationProgress progress = new FileOperationProgress("VM", null);
+        ByteArrayOutputStream target = new ByteArrayOutputStream();
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target, 2, state,
+                Rar3PpmdFilterOutput.MAX_FILTER_BYTES, deferred, false, progress)) {
+            output.acceptParsed(state.parse(0xa0, record(code.finish(),2), 0, 0x40000));
+            output.write(1); // Hold an incomplete raw block, with no target bytes yet.
+            progress.cancel();
+            IOException failure = assertThrows(java.io.InterruptedIOException.class, () -> output.write(2));
+            assertSame(failure, assertThrows(IOException.class, () -> output.write(3)));
+            assertSame(failure, assertThrows(IOException.class, output::finish));
+            assertEquals(0, target.size());
+            assertFalse(output.hasPendingFilters());
+        }
+        deferred.requireEmpty();
+    }
+
+    @Test public void activeTokenKeepsCustomAndStandardChainOutputIdentical() throws Exception {
+        byte[][] actual = new byte[2][];
+        for (int index = 0; index < actual.length; index++) {
+            Code code = new Code(); code.op(0,true).memory(0).immediate(9,true); code.op(22,false);
+            Rar3VmFilter.ProgramState state = new Rar3VmFilter.ProgramState();
+            ByteArrayOutputStream target = new ByteArrayOutputStream();
+            FileOperationProgress progress = index == 0 ? null : new FileOperationProgress("VM", null);
+            try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target, 2, state,
+                    Rar3PpmdFilterOutput.MAX_FILTER_BYTES, null, false, progress)) {
+                output.acceptParsed(state.parse(0xa0, record(code.finish(),2), 0, 0x40000));
+                Rar3VmFilter.PendingFilter standard = new Rar3VmFilter.PendingFilter();
+                standard.type = Rar3VmFilter.StandardFilter.E8;
+                standard.blockLength = 2;
+                output.queue(standard); output.write(new byte[]{1,2}); output.finish();
+            }
+            actual[index] = target.toByteArray();
+        }
+        assertArrayEquals(new byte[]{9,2}, actual[0]);
+        assertArrayEquals(actual[0], actual[1]);
+    }
+
     @Test public void customByteWritePreservesOtherBytes() throws Exception {
         Code code = new Code(); code.op(0,true).memory(0).immediate(0xa5,true); code.op(22,false);
         assertArrayEquals(new byte[]{(byte)0xa5,2}, apply(code,new byte[]{1,2},new byte[0],0));
@@ -283,6 +346,118 @@ public class Rar3VirtualMachineTest {
         assertArrayEquals(new byte[]{42}, target.toByteArray());
     }
 
+    @Test public void zeroIntermediateCanChainToGeneratedOutputWithoutConsumingExtraRawBytes() throws Exception {
+        for (boolean bulk : new boolean[]{false, true}) {
+            ByteArrayOutputStream target = new ByteArrayOutputStream();
+            try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target, 2, new Rar3VmFilter.ProgramState())) {
+                queueResize(output, 0, 4, 0, 0);
+                queueResize(output, 0, 0, 0, 0);
+                queueGeneratedByte(output, 0, 42);
+                if (bulk) output.write(new byte[]{1,2,3,4,43});
+                else for (int value : new int[]{1,2,3,4,43}) output.write(value);
+                output.finish();
+                assertEquals(5, output.rawBytes()); assertEquals(2, output.outputBytes());
+                assertTrue(output.changedLength());
+            }
+            assertArrayEquals(new byte[]{42,43}, target.toByteArray());
+        }
+    }
+
+    @Test public void standardFiltersCanConsumeZeroIntermediateWithValidParameters() throws Exception {
+        for (Rar3VmFilter.StandardFilter type : Rar3VmFilter.StandardFilter.values()) {
+            if (type == Rar3VmFilter.StandardFilter.NONE) continue;
+            ByteArrayOutputStream target = new ByteArrayOutputStream();
+            try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target, 1, new Rar3VmFilter.ProgramState())) {
+                queueResize(output, 0, 2, 0, 0);
+                Rar3VmFilter.PendingFilter next = new Rar3VmFilter.PendingFilter();
+                next.type = type; next.blockLength = 0;
+                next.initR[0] = type == Rar3VmFilter.StandardFilter.RGB ? 3 : 1;
+                next.initR[4] = 99; // Standard filters use the actual intermediate length.
+                output.queue(next);
+                queueGeneratedByte(output, 0, 42);
+                output.write(new byte[]{1,2}); output.finish();
+            }
+            assertArrayEquals(type.name(), new byte[]{42}, target.toByteArray());
+        }
+    }
+
+    @Test public void zeroIntermediateRetainsUnfilteredDictionaryHistory() throws Exception {
+        ByteArrayOutputStream target = new ByteArrayOutputStream();
+        Rar3PpmdSolidStreamDecoder.HistoryWindow history = new Rar3PpmdSolidStreamDecoder.HistoryWindow(8);
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target, 5, new Rar3VmFilter.ProgramState())) {
+            queueResize(output, 0, 4, 0, 0); queueGeneratedByte(output, 0, 42);
+            for (int value = 1; value <= 4; value++) history.literal(value, output);
+            history.match(4,4,output); output.finish();
+        }
+        assertArrayEquals(new byte[]{42,1,2,3,4}, target.toByteArray());
+    }
+
+    @Test public void zeroIntermediateStillReservesTheOriginalRawExtent() throws Exception {
+        ByteArrayOutputStream target = new ByteArrayOutputStream();
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target, 1, new Rar3VmFilter.ProgramState())) {
+            queueResize(output, 0, 4, 0, 0); queueResize(output, 0, 0, 0, 0);
+            IOException failure = assertThrows(IOException.class, () -> queueResize(output, 3, 1, 1, 0));
+            assertTrue(failure.getMessage().contains("Overlapping"));
+            assertSame(failure, assertThrows(IOException.class, output::finish));
+        }
+        assertEquals(0, target.size());
+    }
+
+    @Test public void zeroInputMismatchFailsBeforeAnyChainOutputIsPublished() throws Exception {
+        ByteArrayOutputStream target = new ByteArrayOutputStream();
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target, 1, new Rar3VmFilter.ProgramState())) {
+            queueResize(output, 0, 4, 2, 0); queueGeneratedByte(output, 0, 42);
+            IOException failure = assertThrows(IOException.class, () -> output.write(new byte[4]));
+            assertTrue(failure.getMessage().contains("chain input length"));
+            assertSame(failure, assertThrows(IOException.class, output::finish));
+        }
+        assertEquals(0, target.size());
+    }
+
+    @Test public void zeroInputCannotStartAnIndependentOrAlreadyConsumedRegion() throws Exception {
+        for (int mode = 0; mode < 3; mode++) {
+            ByteArrayOutputStream target = new ByteArrayOutputStream();
+            try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target, 2, new Rar3VmFilter.ProgramState())) {
+                if (mode != 0) queueResize(output, 0, 2, 0, 0);
+                if (mode == 2) output.write(new byte[]{1,2});
+                long start = mode == 0 ? 0 : 2;
+                IOException failure = assertThrows(IOException.class, () -> queueGeneratedByte(output, start, 42));
+                assertTrue(failure.getMessage().contains("preceding filter"));
+                assertSame(failure, assertThrows(IOException.class, () -> output.write(1)));
+            }
+            assertEquals(0, target.size());
+        }
+    }
+
+    @Test public void zeroIntermediateChainStillChecksFinalSizeBeforePublication() throws Exception {
+        ByteArrayOutputStream target = new ByteArrayOutputStream();
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target, 0, new Rar3VmFilter.ProgramState())) {
+            queueResize(output, 0, 2, 0, 0); queueGeneratedByte(output, 0, 42);
+            IOException failure = assertThrows(IOException.class, () -> output.write(new byte[]{1,2}));
+            assertTrue(failure.getMessage().contains("final entry size"));
+            assertSame(failure, assertThrows(IOException.class, output::finish));
+        }
+        assertEquals(0, target.size());
+    }
+
+    @Test public void symbolCodedZeroIntermediateChainKeepsThePlainSuffix() throws Exception {
+        ByteArrayOutputStream target = new ByteArrayOutputStream();
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target, 1, new Rar3VmFilter.ProgramState())) {
+            readResizeRecord(output, 2, 0, 0); readResizeRecord(output, 0, 0, 0);
+            output.write(new byte[]{1,2,42}); output.finish();
+            assertEquals(3, output.rawBytes()); assertEquals(1, output.outputBytes());
+        }
+        assertArrayEquals(new byte[]{42}, target.toByteArray());
+    }
+
+    private static void queueGeneratedByte(Rar3PpmdFilterOutput output, long start, int value) throws Exception {
+        Code code = new Code();
+        code.op(0, true).memory(0).immediate(value, true);
+        code.op(0, false).memory(0x3c01c).immediate(1, false);
+        code.op(22, false);
+        output.acceptParsed(new Rar3VmFilter.ProgramState().parse(0xa0, record(code.finish(),0), start, 0x40000));
+    }
+
     static byte[] resizingRecord(int inputLength, int resultLength) {
         return record(resize(resultLength, 0).finish(), inputLength);
     }
@@ -293,6 +468,10 @@ public class Rar3VirtualMachineTest {
         b.number(0); b.number(relativeStart); b.number(inputLength); b.number(inner.length);
         for (byte value : inner) b.bits(value & 255, 8);
         return b.raw();
+    }
+
+    static byte[] slicingRecord(int inputLength, int resultLength, int resultStart) {
+        return record(resize(resultLength, resultStart).finish(), inputLength);
     }
 
     @Test public void customVmFileOffsetUsesPublishedBytesAfterShrinking() throws Exception {

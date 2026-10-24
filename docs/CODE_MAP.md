@@ -1,9 +1,10 @@
 # Readwide Code Map
 
 A maintenance map of screens, controllers, shared helpers and archive readers.
-Use the subsystem sections to find ownership; the [development notes](DEV_CHANGES_1_0_20.md)
-record release changes and [current status](CURRENT_SOURCE_STATUS_1_0_20.md) records
-support and verification boundaries. This map is not a line-by-line code audit.
+Use the subsystem sections to find ownership; the [development notes](DEV_CHANGES_1_0_21.md)
+record release changes and [current status](CURRENT_SOURCE_STATUS_1_0_21.md) records
+support and verification boundaries. The [documentation index](README.md) separates
+current references from historical reports. This map is not a line-by-line code audit.
 
 ## How the app is wired (conventions)
 
@@ -147,6 +148,13 @@ menu, including the persisted list/tile display choice;
 available localized actions and lets rows wrap at the screen edge rather than
 clipping them.
 
+Confirmed Recent-history clearing exits multi-selection before reloading. Canceling
+the confirmation preserves both history and selection; document files are untouched.
+`MainSearchFilterController` retires selection for changed Recent query/type events.
+`MainRecentFilesController` also compares adopted query/corpus-type criteria to cover
+re-selection during pending filtering. Ordinary identical-criteria refresh and
+unrelated filesystem selection are retained; pending chips do not own old corpus data.
+
 `MainActivityStartupController` applies the display preference to both browser
 and Recent lists, swaps `LinearLayoutManager`/`GridLayoutManager`, preserves the
 visible adapter position, and keeps tile mode at two columns across
@@ -159,7 +167,7 @@ two-worker source queue is paired with a separate two-worker cache-lookup queue.
 Attached-holder demand removes unused pending work; generation changes invalidate
 requests and retry attached rows. Failure records and directory memory TTL remain.
 `FileThumbnailLoader` supplies loose/folder images, ZIP/CBZ, RAR/CBR,
-7z/CB7, ALZ, EGG, CAB, LHA/LZH, and TAR/CBT-family first-image covers, PDF page 1, and
+7z/CB7, ALZ, EGG, CAB, LHA/LZH/PMA, and TAR/CBT-family first-image covers, PDF page 1, and
 raster EPUB package covers. It checks a source-fingerprinted, bounded
 app-private PNG disk cache before decoding; source snapshots prevent a changing
 file from being committed under stale metadata, disk replacement is atomic,
@@ -180,13 +188,13 @@ same-binding archive cover remains visible during off-thread identity validation
 Rejected cache identities clear only their matching old cover; a different file,
 generation or replacement cache entry is not cleared by the stale callback.
 New/recycled holders still wait for archive identity validation. Home heading
-resources use 12sp text and 38dp minimum rows, keeping Clear all at 34dp.
+resources use 13sp text and 38dp minimum rows, keeping Clear all at 34dp.
 
 `MainArchiveImageOpenController` delegates whole-archive comic-page collection
 to `ArchiveEntryListController.collectImageSequence()`. Direct comic opening and
 whole-archive auto-opening therefore use full internal-path natural ordering:
-folder components are compared before repeated page basenames. If the user
-navigates into an archive folder and opens an image there, the sequence remains
+folder components are compared before repeated page basenames. Opening an image
+after navigating into an archive folder keeps the sequence
 scoped to that folder and follows its visible browser order.
 
 Provider URI copies are coordinated by `FileUtils` with an interruptible fair
@@ -229,6 +237,14 @@ without trapping a cancelled SAF worker behind another long provider copy.
 - **Thumbnail preparation:** `FileThumbnailLoader` keeps a stable eight-candidate prefix for covers and snapshots cache size/time before eviction sorting. Directory/archive listing remains required; disk persistence still runs synchronously within decoding.
 
 - **File operations/search:** `FileClipboardController` owns queue membership and single-item plans; `FileClipboardBatch` coordinates worker inventory, just-in-time naming and committed results; `MainClipboardController` owns UI claims/completion. `FileSystemOps` owns staging/commit/rollback, one operation-local copy buffer and progress-enabled direct moves. `FileTreeWalk` supplies cancellable no-follow traversal; `FileTreeProgressTracker` collects bytes/items/folders together. `MainFileOperationProgressController` uses `LatestValueDispatcher` for latest-only delayed redraws. `FileSortUtils` snapshots archive keys and uses iterator-based list access. `ReaderSearchController` uses `TextMatchIndex`/`MatchOffsetIndex` on a bounded worker with content/options/generation checks. `DocumentSearchController` shares non-overlapping count/highlight ranges; `DocumentSearchCounts` and `LargeTextMatchIndex` support cached navigation. `SearchMatcher` uses bounded KMP literal scans and retains whole-input regex match starts. Folder search remains recursive from the chosen starting folder.
+- **Move-source ownership:** fallback moves retain copied-entry identities/size/time and preflight direct-child counts before nonrecursive children-first removal. Added/replaced source data is not swept by a new traversal. Single-paste completion refreshes the list after partial failure without relocating metadata. These are path checks, not an atomic filesystem transaction.
+- **Provider-open ownership:** `MainActivity` and `SafBrowserActivity` resolve URI metadata on background workers; current-request generations reject replaced results. Navigation/pause/destruction cancel pending work and purge canceled queued tasks. UI launch/progress updates stay on the main thread; routing/grants are unchanged. Uncooperative providers may still delay their worker.
+- **Playback notification return:** `TtsPlaybackService` marks notification-body returns; `TtsPlaybackBridge.isNotificationReturnTo` requires the same live host/path and no additional navigation request. TXT/document/PDF startup preserves that session and its existing intent, while ordinary file opens and bookmarks still reload.
+- **Playback API compatibility:** `TtsPlaybackService.playbackAction` creates Icon-based actions with the existing command identities/order; orphan cleanup uses `STOP_FOREGROUND_REMOVE`. `EpubMediaOverlayController` pairs a reused API 26+ speech-focus request with matching release, retaining pause-on-duck, main-thread callbacks and the API 24–25 fallback. `BookmarkAdapter` resolves action positions relative to its binding adapter and keeps invalid-position guards.
+- **Window/input compatibility:** `EdgeToEdgeUtil.setSystemBarColors` and `setReaderBarContrast` isolate required platform color/divider/contrast calls without owning inset geometry or visibility. `AdaptiveDialogLayoutHelper.setResizeSoftInputMode` preserves existing dialog resize and keyboard-state flags. `MainDrawerController.drawerCompatInsets` retains the platform's combined top/bottom insets rather than substituting a different type mask. Small legacy audio-focus, notification-builder and media-flag helpers retain API 24–25 behavior; method-only annotations do not disable compiler-wide reporting.
+- **Back dispatch:** `ArchiveBrowserActivity`, `DocumentPageActivity` and `LockActivity` own lifecycle-registered `backCallback` instances. They retain folder ascent/sort state, search-first closure and locked-task exit/PIN cancellation. Default dispatch disables only its own callback and restores it in `finally`; Archive toolbar Up uses that route, while Document toolbar Up still closes directly. `BackNavigationCallbackInstrumentedTest` covers callback logic with an isolated lifecycle, not real system gestures.
+- **Image launch transitions:** `MainImageOpenController`, `MainArchiveImageOpenController` and the archive browser's two image-opening routes pass the existing enter/hold resources through `ActivityOptions`. Non-image launches retain their ordinary path; sequence handoff cleanup and launch-before-finish order remain unchanged. `ImageReaderActivity` retains its entry/exit compatibility calls, including the SAF entry fallback. `ImageViewerLaunchOptionsInstrumentedTest` captures intent/options data without rendering transitions.
+- **Portable bookmark ownership:** `BookmarkManager` preserves matching live local source bindings while permitting canonical aliases and missing/replaced originals. A stored fingerprint cannot downgrade to size-only matching when the target cannot be read; legacy records and URI behavior remain compatible.
 
 ## ReaderActivity (TXT reader)
 
@@ -268,7 +284,10 @@ compares a private transient Intent signature to the current presentation too.
 Selection hit testing distinguishes insertion endpoints from word-hit characters.
 
 - **Contents:** `ReaderContentsController` owns on-demand scanning, a searchable
-  recycled list, manual entries and hide/restore actions. `util/TxtContentsScanner`
+  recycled list, manual entries and hide/restore actions. Its scan/edit/options
+  submission boundary cancels rejected queued tasks and restores current-dialog
+  actions after startup or worker resource failure; accepted edits can finish
+  after orderly closure. `util/TxtContentsScanner`
   recognizes conservative repeated heading families (including `345===` / `345---`
   decorated numbers) in displayed UTF-16 coordinates. A bare decorated marker may
   take one next-line title, bounded by blank lines/EOF; presentation labels are kept
@@ -327,6 +346,9 @@ The most finely decomposed screen: 41 `Reader*` controllers. Groups:
   `ReaderActivityStartupController`, `ReaderShellController`,
   `ReaderChromeController`, `ReaderMemoryController`,
   `ReaderPreferencesController`.
+  Startup establishes Android 9+ short-edge cutout layout before content so hiding
+  the status bar does not leave the default cutout letterbox. Existing body padding
+  and TXT paging remain owned by their current controllers.
 - **Text loading:** `ReaderFileLoadController`, `ReaderFileApplyController`,
   `ReaderReloadController`, `ReaderEncodingController`,
   `ReaderLoadedTextSnapshotController`, `ReaderLoadingWindowController`.
@@ -388,6 +410,8 @@ The most finely decomposed screen: 41 `Reader*` controllers. Groups:
   Content/window/anchor/signature checks prevent reuse on another layout. Markdown or
   unmeasurable ranges omit the suffix. `ReaderLargeTextPartitionNavigator` owns request
   generations, loader cleanup and cancellation for local jumps or fresh manual drags.
+  Executor startup/rejection uses the same current-request failure cleanup as reads,
+  releasing pending/loading state without replacing the visible text.
   Its `ViewportHandoff` carries the visible character/baseline plus content, window
   and layout identity for automatic window replacement. It rejects adoption after
   a new contact/scroll/reflow or when the destination cannot represent the same text.
@@ -506,6 +530,12 @@ configured overlap remain unchanged. New regression sources have not been execut
 
 ## DocumentPageActivity (EPUB / Word / HWP / Markdown)
 
+`isCurrentDocumentPageLoad` requires the active primary/spread WebView, a valid
+page index and the matching generation. Retired views cannot complete a load.
+`markdownContentHeightPx` accepts positive measurements even at one viewport;
+the previous height is used only when measurement is unavailable. EPUB reading-system
+version comes from the app's generated `BuildConfig.VERSION_NAME`.
+
 `DocumentWebViewController.scaleFor` prefers a finite positive `onScaleChanged`
 observation owned by the same WebView and page-load generation. Initial/unmatched
 loads retain an uncached compatibility query; invalid/stale callbacks cannot
@@ -529,6 +559,86 @@ with cycle-safe traversal and bounded summary caching. `DocumentPageActivity` st
 the resulting page flag, and `DocumentWebViewController` uses that same flag for
 autosizing. The archive-wide vertical diagnostic no longer controls viewer layout.
 `DocumentTextDecoder` also honors leading CSS charset declarations with BOM precedence.
+
+EPUB paragraph alignment: `DocumentPageActivity` exposes the rounded More-menu
+selector and includes the preference in its reload signature.
+`SettingsReaderControlsController` binds a value field and the existing rounded
+Settings selection dialog rather than a platform dropdown.
+`EpubTextAlignment` normalizes the independent preference; `PrefsManager` and
+`PreferenceBackupSchema` cover storage/reset and typed import. `EpubCssCompatibility`
+wraps literal prose alignment declarations with original-value fallbacks in both
+embedded and local/imported stylesheets. Only reflowable horizontal pages enable
+the override. The existing reload captures/restores position; scripting policy and
+TXT paging remain unchanged. See [implementation boundaries](DEV_CHANGES_1_0_21.md#epub-typography-and-controls).
+
+EPUB typography: `EpubTypography` defines independent size/spacing policy;
+`PrefsManager` freezes the legacy shared size before TXT changes and migrates old
+backups inside import planning. The Settings slider and More size actions use
+`epub_font_size`; More/Settings spacing uses `epub_line_height`. Both are backed up,
+validated and reset. `prepareLineHeight` wraps literal CSS with original fallbacks;
+only horizontal reflow pages activate the spacing override. Complex expressions
+and font shorthands remain intact. `documentTextZoomPercent(pageIndex)` allows each
+spread pane to use its own layout. See [typography boundaries](DEV_CHANGES_1_0_21.md#epub-typography-and-controls).
+
+EPUB option presentation: `makeDocumentSelectionRow` is shared by reader font,
+alignment and spacing choices. Settings choices reuse `makeSettingsSelectionRow`
+and own/dismiss their dialog through `SettingsReaderControlsController`.
+`documentMoveTitleResource`, `formatPageMoveLabel` and `documentPageStatusLabel`
+describe EPUB progress as sections. `documentTopPageStatusLabel` supplies numeric
+ranges; `updateDocumentCounterText` uses them for the visible EPUB control-panel
+counter and hidden compact counter with descriptive accessibility text. Native
+within-section percentages come from `util/EpubSectionProgressMath` only for ready,
+restored horizontal reflowable single-pane content. The activity coalesces scroll,
+layout, scale/load, restore and chrome updates, cancels old-view/teardown work and
+leaves previews plain. No new JS, polling, anchor capture or viewport row is added.
+An exact `about:blank` visible history URL is accepted only after the tagged load
+callback established current-page readiness; other stale/missing URLs are rejected.
+Scale-only events can refresh this display without changing scale/anchor cache guards.
+Fixed/image/vertical/spread and invalid/fitting ranges have no percentage; late
+content-only size changes refresh on the next observed interaction. Count/indices
+and storage are unchanged. `DocumentBookmarkDialogController` uses the section unit for the current
+summary without migrating old excerpts. See [UI and label boundaries](DEV_CHANGES_1_0_21.md#epub-counters-and-progress).
+
+EPUB contents/notes: `EpubNavigationParser` resolves EPUB 3 nav/EPUB 2 NCX targets
+and extracts semantically marked note text with secure XML parsing.
+`EpubNavigationXml` normalizes standard HTML4 named characters without loading a
+DTD; XML escaping/CDATA/comments remain intact. A marked reference can use a
+directly adjacent legacy note block without crossing another named destination.
+The optional parser boundaries contain stack exhaustion from recursive platform
+DOM construction and retain existing navigation/link fallbacks without a new cap.
+
+`SearchOptionsDisclosure` folds detailed TXT/document search controls without
+changing their listeners, options or saved query. `ViewerErrorPanel` provides the
+shared PDF/image failure card; each activity owns retry admission and clears it
+on a new load. It reserves the measured action row before bounding the scrollable
+message to the parent height, and restores the preferred message height on expansion.
+`PdfReaderActivity.renderPdfPageBitmapLocked` transfers a spread-page bitmap only
+after native-page closure; every non-returning path recycles the temporary buffer.
+Image counter taps open sequence-checked numeric page entry through
+the existing navigation path. That popup alone uses bottom-center placement (12 dp
+offset), a 48 dp-high input, matched input/action edges and a 10 dp gap between their surfaces.
+Configuration changes reapply its width/placement without resetting input;
+destruction dismisses it and rejects queued image configuration work.
+Empty TXT bookmark messages share the fixed-height
+list area. These UI helpers do not calculate pages or rewrite saved coordinates.
+
+TXT Contents scrolls once near its active heading; EPUB Contents uses the current
+source section, without claiming fragment-level position. Typing cancels the
+initial positioning. EPUB More keeps its size controls open and invokes the
+existing preference and position-preserving reload methods.
+
+`EpubNavigationController` owns the searchable recycled contents list and rounded
+note dialog, using the shared reader UI builders. ZIP leases and publication,
+view/load/interaction checks reject obsolete asynchronous results. Notes do not
+modify reading coordinates or add auxiliary files to the section list. See
+[navigation scope and limitations](DEV_CHANGES_1_0_21.md#epub-contents-and-note-navigation).
+
+`DocumentPageActivity.navigateEpubDestination` retires old restore ownership and
+queues primary/right destinations until the current load is ready. Explicit jumps
+bypass swipe debounce. Delayed snap/fixed-layout retries require their original
+page/interaction owner. `NativeDocumentViewport` rejects captures after native
+scroll/frame changes; save/bookmark retries do not publish rejected moving captures
+as section-start progress. Existing formulas and stored anchor formats are unchanged.
 
 Word formatting: `DocumentDocxLayoutExtractor` preserves explicit alignment/baseline
 resets and exclusive line-height overrides. `TextStyle` separates highlighting from
@@ -573,7 +683,7 @@ DocumentPageActivity  (implements TtsHost)
 │                                   selection bridge or primary scroll handling;
 │                                   after generation/boundary setup it skips
 │                                   primary-only post-load work)
-├── DocumentPageLoadController      document parsing/pagination entry
+├── DocumentPageLoadController      document entry; shared MIME-derived URI cache suffix
 ├── DocumentPageDisplayController   showPage: left load + spread visibility +
 │                                   right page load
 ├── DocumentPageTurnController      turn orchestration/animation
@@ -586,7 +696,7 @@ DocumentPageActivity  (implements TtsHost)
 ├── controller/ReaderToolbarController
 └── TTS cluster
     ├── ReaderTtsController             shared playback core
-    ├── DocumentTtsIntegrationController dialog entry, resume, MD follow
+    ├── DocumentTtsIntegrationController load-owned resume/build recovery, dialog, MD follow
     ├── DocumentTtsTextSource           page text, anchors (one-shot paged
     │                                   anchor; MD caret/anchor-text search via
     │                                   indexOfCollapsed + snapToNaturalStart)
@@ -625,10 +735,29 @@ Ordinary text/reflowable EPUB remains one responsive-width `document_webview`.
 Image-page EPUB adds `document_webview_right` inside
 `document_spread_container`; index math is in `util/SpreadMath`, both halves
 route through the shared gesture pipeline, and `destroyDocumentWebView` tears
-both down. EPUB chrome is a stable overlay: the compact normal-flow top counter
+both down. Both clients handle Android 8+ renderer exit through
+`onDocumentRendererGone`: terminal load/script/save ownership is revoked, both
+panes are detached/destroyed, ZIP sessions retire and the reader closes once.
+The last durable position is retained for explicit reopening; there is no
+automatic renderer restart. Teardown keeps clients until destruction and avoids
+loading/querying a dead renderer. `DocumentRendererFailureInstrumentedTest`
+contains five callback-based method sources, not real process-death results.
+EPUB chrome is a stable overlay: the compact normal-flow top counter
 is `GONE`, `document_content_column` owns stable Android system/cutout safe
-insets, Android bars remain visible over body-colored stable-inset scrims, and
-toolbar toggles do not reapply boundary CSS or resize the WebView. Vertical
+insets, and Android bars remain visible. Top/side scrims keep the body color;
+`documentNavigationBarColor()` makes the bottom scrim and Window navigation
+color/divider/icon contrast follow the visible menu's `readerPanel`, returning
+to `readerBg` when hidden. A side navigation rail retains `readerBg`; the startup
+inset listener refreshes this color policy only when the navigation edge changes.
+Side-scrim gravity uses physical LEFT/RIGHT, matching the inset coordinates rather
+than mirroring under an RTL interface. Widths exclude the cutout already reserved
+by the root, matching only the content column's remaining side-bar padding.
+`DocumentSideInsetsInstrumentedTest` contains four listener/layout regression
+methods for asymmetric sides, both UI directions, root cutout padding, bottom
+return and non-EPUB isolation; these methods have not been run.
+Toolbar toggles do not reapply boundary CSS or resize
+the WebView. `DocumentNavigationBarColorInstrumentedTest` records color/geometry
+regressions, not executed device evidence. Vertical
 reflowable EPUB uses `DocumentContentAnchorJavascript` to derive a stable sentence
 element and caret from the same logical block-start viewport probe (with portable
 text and same-viewport native-scroll fallbacks) and remains backward-compatible
@@ -655,7 +784,17 @@ the WebView's inline axis without discarding their right-to-left columns.
   preserves surrounding run styles with `RunCursor`; link/anchor/ID runs are barriers.
   Unknown formulas remain literal. This is a limited HTML preview, not a math engine.
 
+- **Double-tap zoom:** `DocumentPageActivity.handleDocumentDoubleTap` samples zoom eligibility once, retaining EPUB reset priority and other document side-page priority. It targets the touched pane and preserves zoom steps/reset cleanup. `DocumentDoubleTapZoomInstrumentedTest` supplies conflicting hypothetical second observations to catch repeated-probe regressions; it does not simulate renderer timing or pagination. EPUB section counts are unchanged; compact top text is handled separately by the label formatter above.
+- **Zoom compatibility:** `DocumentWebViewController.canZoomOutForGesture` retains the existing renderer probe in one documented helper. It does not infer a minimum from scale, issue a zoom command or change scrolling. The fast-tap and double-tap decision order is unchanged.
+
 ## PdfReaderActivity (PDF)
+
+Menu zoom/reset dispatches to `PdfPageView` while its Matrix is visible. Control
+steps use the actual scale, existing fit/maximum bounds and delayed sharpening;
+continuous mode retains legacy zoom. The page slider commits non-touch changes
+immediately through the same navigation path used at touch release, while ordinary
+progress refreshes remain non-navigating. `ViewerControlActionsInstrumentedTest`
+contains source-only menu/slider regressions, not device validation.
 
 Viewport persistence uses Matrix-based `PDF_PAGE_COORD_v3` center anchors for
 single/spread views and legacy-compatible continuous anchors. `PdfPageView`
@@ -707,6 +846,9 @@ Non-continuous turns call `BookmarkManager.saveReadingStateDeferred`, which publ
 memory state immediately and uses `util/CoalescingSnapshotWriter` for 100 ms batched,
 revision-ordered disk saves. `ReaderState.copy` gives the writer owned snapshots.
 Pause/close, deletes, moves and imports retain synchronous atomic checkpoints.
+Recoverable allocation/stack failures retire asynchronous request ownership without
+spinning on the same failed revision. Best-effort lifecycle/bookmark saves contain
+resource failures; checked imports retain failure propagation and revision ordering.
 `PdfContinuousRenderQueue` similarly keeps one outstanding continuous render, but
 prioritizes all visible rows before one neighbor per side. Viewport changes retire
 obsolete queued tokens; capped allocation shares the continuous cache across three
@@ -738,7 +880,7 @@ on render workers, never by waiting for render locks on the UI thread.
 
 - **PDF search/read-aloud:** `PdfSearchController` and `PdfTextSearchEngine` own query lifecycle and original glyph maps. `PdfSearchText` supplies original-offset matching and null separator geometry; `PdfGlyphText` checks spoken-text alignment. `ReaderTtsController` persists `TtsHost.ttsTextFormatVersion` via `PrefsManager`, and `PdfTtsTextSource` resolves legacy/new checkpoints.
 
-See the [1.0.19 release notes](GITHUB_RELEASE_NOTES_READWIDE_1_0_19.md) for inherited format boundaries and the [development changes](DEV_CHANGES_1_0_19.md) for their implementation history. The [1.0.20 status](CURRENT_SOURCE_STATUS_1_0_20.md) records the current baseline.
+See the [1.0.19 release notes](GITHUB_RELEASE_NOTES_READWIDE_1_0_19.md) and [development changes](DEV_CHANGES_1_0_19.md) for implementation history. The [1.0.20 status](CURRENT_SOURCE_STATUS_1_0_20.md) is the inherited baseline; [1.0.21 status](CURRENT_SOURCE_STATUS_1_0_21.md) records current changes and validation boundaries.
 
 ZIP integrity: the Commons bulk/single-entry fallbacks call
 `ZipxAesArchiveReader.extractPlainEntry` for explicit size/CRC verification and
@@ -749,6 +891,11 @@ guards bulk writes; its indexed single-entry caller retains source-change rollba
 interruption, and closes input/spool ownership. These do not change codec coverage.
 
 ## ImageReaderActivity (images)
+
+`ImageReaderSliderController` defers touch-drag navigation until release, but
+commits explicit accessibility/keyboard changes without requiring touch callbacks.
+Programmatic updates remain display-only; the existing sequence bounds and slider
+direction mapping are retained.
 
 ```
 ImageReaderActivity
@@ -762,7 +909,7 @@ ImageReaderActivity
 ├── util/ImageExportName              safe original-byte export names
 ├── util/ImageSequenceState        sequence bookkeeping (applyRename matches
 │                                  the exact pre-rename path)
-├── SequentialArchiveImageReader      handed-off RAR/7z/TAR/solid-EGG forward reader
+├── SequentialArchiveImageReader      forward reader; session scratch reuse and EOF/failure cleanup
 └── lifecycle: 5 executors + LruCache (min(128MB, heap/5), recycle-on-evict),
     with two-worker lightweight neighbor decode. Archive pages upgrade to a
     denser preview profile when current, and a visible spread companion uses
@@ -778,8 +925,16 @@ ImageReaderActivity
 ### Lifecycle and shared ownership
 
 - **Recreation and load ownership:** `ImageReaderActivity` persists the accepted displayed path/entry (falling back to the launch/current target before any display) and rebuilds archive sequences through `ArchiveEntryListController.restoreImageSequence` and `ArchiveImageSequenceLoader`; launch intents carry small browser scope/order recipes. `DocumentPageLoadController` parses into static `DocumentPageActivity.ParsedDocument`, then generation-checks UI adoption. `canSaveDocumentReadingState` rejects incomplete loads/restores; passwords remain memory-only.
+- **Document failure ownership:** `acceptParsedDocument` guards UI adoption/render preparation, revokes saves, invalidates primary/right callbacks and retires partial resources only for the failed current load. `DocumentSearchController` releases failed snapshot/count owners; `PdfTextSearchEngine` guards query compilation/extraction and leaves newer generations untouched. Document/PDF read-aloud waiters do not automatically repeat failed text preparation.
+- **Document script cleanup:** `DocumentJavascriptExecutor` owns independent load-scoped pending counts for the two panes across all ten temporary-script helpers. It releases each request after its continuation, including callback/submission failures, and ignores duplicate release or retired ownership. Reload/invalidation/destruction retire old groups; stale cleanup cannot disable a replacement EPUB's scripts. Required-script and pre-enabled policies are retained. Accepted requests with no callback remain owned until the load retires. `resetDocumentZoom` also resolves its own pane before choosing text zoom.
+- **Document position cache:** `DocumentPageActivity.CachedDocumentAnchor` records accepted runtime view/load/page/interaction/position-revision and viewport ownership separately from durable anchor JSON. Captures and reuse require the mapped ready page. Native scroll and app-controlled DOM movement invalidate older captures; outer save/bookmark/reload retries respect that revision. `DocumentSearchController.SearchRevealRequest` also scopes delayed reveals to the selected result and interaction; `DocumentTtsHighlightController` invalidates only scroll-enabled highlights. Explicit restores retain priority, and compatible transient native recreation state joins the existing reload position without altering in-place fallback or TXT calculations.
+- **EPUB navigation failures:** `EpubNavigationController` settles still-owned submission/worker failures through section-list or ordinary-link fallback on the UI thread. Stale dialogs, sessions and pane/interaction/scroll owners cannot navigate. Reopening fallback Contents retries optional parsing; ongoing resource failure can still prevent recovery UI.
+- **TXT durable actions:** `ReaderBookmarkActionController` and annotation creation check `ensureLoadedTextCurrent` before saving; annotation offset/highlight arithmetic uses long intermediates within the existing stored coordinate model. `ReaderTextDisplayRuleDialogController` serializes physical edits, reports unencodable output, cleans write/close failures and checks `FileMutationGuard` source/output ownership before replacement. Adaptive detection is retained; decoding uses the verified open descriptor through `FileUtils.readTextFromStream`. Changed/new copy targets are not replaced.
+- **Manual annotation persistence:** `DocumentAnnotation.copy` isolates editor/storage rows. `DocumentAnnotationManager` writes candidate manual edits before reference publication and raises checked persistence failure to TXT/Markdown highlight and note/delete UI. Existing note edits preserve live source metadata; import locking/rollback is unchanged. Path-relocation persistence remains a separate best-effort operation.
 
 - **Viewer identity:** `ArchiveImageSequenceLoader` captures `ArchiveSourceSnapshot` and passes it through `ImageSequenceHandoffStore.Sequence`. `ImageReaderActivity` retains it for off-thread cached-page, extraction and decode checks; resume re-resolves membership. Source mismatch retires display/result/progress ownership until reopen. `SequentialArchiveImageReader` validates known volumes before reuse/publication and rejects fallback on a changed session. Metadata checks cannot detect same-size/same-mtime edits or provide an external-write transaction.
+- **Exhausted image streams:** `SequentialArchiveImageReader.advanceUntilLocked` marks actual EOF before `closeReaderLocked`, so unused decoder history/temporary resources are released without closing the viewer session. Cache/behind-frontier paths remain before the exhausted gate; failed cleanup remains owned for a later close retry. `SequentialArchiveImageReaderLifecycleTest` adds five uncompiled/unrun cases; no extra scan is performed after a successfully requested last image.
+- **Image extraction scratch:** `readBuffer` is lazy and session-local under the existing lock. Sensitive forward requests wipe its contents on return; EOF/failure/close wipes and releases it before decoder cleanup. Cache, yield and behind-frontier paths do not allocate it. Four additional lifecycle method sources cover reuse, sensitive clearing and failed read/close retirement; they are uncompiled/unrun.
 
 - **Cached-page latency:** a dedicated single metadata worker keeps source validation out of the foreground decode/solid-extraction queues. Requests check the page generation before delivery; Activity teardown shuts down this worker with the existing pools.
 
@@ -847,7 +1002,8 @@ finish-sentence mode, while immediate mode schedules a cancellable handler deadl
 
 ## Document/PDF pure helpers at the root package
 
-`DocumentZipSession` retires publication ZIPs through reference-counted request leases.
+`DocumentZipSession` retires publication ZIPs through reference-counted request leases;
+lease allocation completes before increasing the reader count.
 `DocumentPageActivity` publishes ZIP/host/metadata snapshots, saves current viewport
 state for recreation and uses fresh Markdown anchors with native-scroll fallback.
 `PdfTextSearchEngine` matches pages as a whole-document traversal completes them;
@@ -924,7 +1080,7 @@ Java regex cancellation remains cooperative.
 |---|---|
 | `EpubImagePageClassifier` | distributed-spine book classification plus a stricter page-local near-image-only decision for fixed-layout scroll policy; excludes cover-only, mixed/text-heavy, and false CSS/object signals |
 | `EpubViewportParser` | order-independent fixed-layout viewport metadata parsing |
-| `EpubCssCompatibility` | safe standard/WebKit aliases for legacy EPUB vertical-writing, text-combine, and text-emphasis declarations |
+| `EpubCssCompatibility` | safe standard/WebKit aliases for legacy EPUB declarations; lexical paragraph-alignment substitutions with original-value fallbacks and protected-subtree rules |
 | `EpubCfi` / `EpubCfiJavascript` | bounded point-CFI parsing plus injection-safe DOM target resolution; range/temporal/spatial forms are rejected |
 | `EpubSmilParser` / `EpubMediaOverlayJavascript` | bounded parsing of explicitly linked local SMIL cues plus safe DOM active-fragment markup |
 | `EpubPlaybackGate` | foreground, granted-focus and transient-loss resume policy used by `EpubMediaOverlayController` |
@@ -954,6 +1110,7 @@ Java regex cancellation remains cooperative.
 | `LargeTextScrollPrefetchState` | bounded per-window forward-speed sampling, two/four-viewport lookahead selection and 500 ms speculative-request cooldown; owns no text, layout, I/O or page model |
 | `EpubSpreadSlotMath` | maps logical image-spread pages to physical left/right slots for LTR/RTL inward gutter alignment; standalone pages remain centered |
 | `EpubFontPreferenceMath` | dedicated EPUB font default and one-time legacy preference migration rules |
+| `EpubTextAlignment` | independent EPUB Book default / logical start / justified values and normalization; Settings and More controls, backup schema and reset use this preference |
 | `LargeTextPartitionReader.ForwardCursor` | shared forward-read cursor for large-TXT start-line reads, with pre-read source stamps checked before publication; regression sources cover full-scan field equivalence, body tiling and mutation cleanup/recovery |
 | `PdfGlyphBoxMath` | single source of the PDF glyph highlight box (search + TTS) |
 | `PdfSpreadHighlightMath` | maps source-page rectangles/anchor points into post-cap composite geometry and inversely resolves viewport points to the nearest source-page rectangle |
@@ -962,19 +1119,21 @@ Java regex cancellation remains cooperative.
 | `EpubBindingRewriter` | converts validated OPF custom objects to `allow-scripts`-only local handler frames, sanitizes active content from a binding-only non-scripted parent, and resolves only the actual binding-payload XML URI attributes without exposing filesystem paths |
 | `ReaderRestoreTargetMath` | pure target matching for TXT restore intents; prevents stale background restore from reopening a previous file after an in-place file switch |
 | `DocumentAnnotationManager` | crash-safe app-private `annotations.json` CRUD, exact-highlight deduplication, file/folder move rebinding, and backup array import/export; it never writes the annotated TXT/Markdown source |
-| `CoalescingSnapshotWriter` | one-task background snapshot persistence with revision-ordered synchronous checkpoints; request and file-I/O locks stay separate |
+| `CoalescingSnapshotWriter` | one-task background snapshot persistence with revision-ordered synchronous checkpoints; independent request/I/O locks, identity-owned resource-failure cleanup and later-request retry without failure spinning |
 | `BackupImportData` | preflight for supplied backup sections/preferences; exact int/long narrowing (including nested pending edits/identity), owned numeric-string normalization and finite 0–1 theme opacity before live mutations; absent legacy fields retain defaults |
 | `BackupTextContext` | owned prospective import preferences; exact small/large TXT display transforms and one-book reuse for edited bookmark coordinates, without early preference mutation |
 | `TxtContentsBackup` | optional durable Contents section; hash-only private storage, shared record validation, merge/replacement planning, AtomicFile recovery inventory and per-record undo inside the shared edit lock; no caches or path rebinding |
 | `IndexedBackupMerge` | stable first-ID replacement and reference-counted duplicate-location indexes; shared by bookmark, theme and annotation imports |
 | `BackupImportTransaction` | checked commit steps and reverse rollback, including the failing step; not a multi-file crash journal |
-| `BookmarkManager` / `PrefsManager` | owned import candidates, checked persistence, single preference commit, excluded security/cache keys and local-folder fallback |
+| `BookmarkManager` / `PrefsManager` | owned import candidates, checked persistence, single preference commit, excluded security/cache keys and local-folder fallback; checked settings reset rolls back only resettable keys and reports failure |
+| `SettingsBackupViewModel` / `BackupImportTransaction` / `AtomicUtf8File` | backup work ownership and failure reporting, reverse undo and atomic-file cleanup include allocation/stack failures; original and suppressed recovery errors are retained without catching unrelated fatal errors |
 | `AtomicUtf8File` | strict UTF-8 reads, AtomicFile I/O, backup-only recovery and reported sync/incomplete-commit errors; malformed saved text is not treated as absent |
 | `TextDisplayRuleManager` | raw-value-keyed rules, bounded per-path exact hashes, owned rule copies, versioned compiled snapshots and invalid replacement handling; reused by large-TXT statistics/partitions/search |
 | `TtsAnchorTextMath` | whitespace-insensitive anchor search + natural-start snapping for read-aloud |
 | `FileClipboardBatch` | worker-only paste inventory, just-in-time collision resolution and immutable completion snapshots; no queue/UI mutation |
 | `FileClipboardController` | pending-item identity, queue membership, single-item plans and linear batch success cleanup |
 | `FileSystemOps` | staged copy/rollback with one operation-local buffer, no-follow deletion, progress-enabled direct moves; rename name/alias/commit/rollback helpers protect occupied links and retain blocked recovery entries |
+| `FileMutationGuard` | shared regular-file identity, canonical-parent, size and available modification/change-time checks for copy/move and physical TXT edits; Android opened-descriptor validation and API-gated nanoseconds, without atomic external-writer exclusion |
 | `FileTreeWalk` / `FileTreeProgressTracker` | iterative no-follow traversal with cancellation/identity checks and shared byte/file/folder inventory |
 | `NaturalSort` | case-insensitive natural ordering across Unicode decimal scripts |
 | `FileSortUtils` | per-entry archive sort keys and iterator-based main/archive list access; preserves natural chapter paths and stable ties |
@@ -1000,6 +1159,12 @@ listing when hunting.
 ## Archive readers and shared I/O
 
 ### Shared ownership and output
+
+`ArchiveSupport.openExtractionOutputStream` retains ownership of the raw budgeted
+output until its default buffering wrapper is constructed. Failed construction
+closes the raw output and suppresses cleanup errors onto the original failure.
+`ArchiveExtractionByteBudgetTest` contains cleanup-helper and public-accounting
+regression sources; injected helper failures are not actual exhausted-heap tests.
 
 - **Bulk replacement source boundary:** `ArchiveSourceSnapshot.requireOutsideReplacementTree`
   rejects a destination equal to or above any resolved source volume, and rejects
@@ -1075,11 +1240,18 @@ listing when hunting.
 
 - **Decode boundaries and failed state:** AzoDecoder preflights framed sizes and
   owns one exact output array; EggArchiveReader preserves its cancellation signal.
+  Both extraction and password probes now pass the operation token into AZO's
+  existing preflight/copy/raw-output/filter checkpoints and fallback handling.
+  Packed reads are 64 KiB; tokenless calls, arithmetic and progress accounting
+  remain unchanged. AzoDecoderSafetyTest/EggPasswordProbeTest add seven
+  uncompiled/unrun methods for token, output, closure and cipher continuity.
   ZipxAesArchiveReader's bounded method-95 stream consumes concatenated XZ streams
   under the existing output integrity guard. Rar3PpmdFilterOutput and the solid
   decoder retire unchecked failures; SevenZBrotliInputStream owns decoder cleanup
   and retryable physical-source close. Eighteen new host methods are unrun; see
   [scope](ARCHIVE_DECODE_BOUNDARIES_1_0_20.md).
+
+- **Compression API compatibility:** `ArchiveSupport` and `ZipxAesArchiveReader` use GZIP/XZ builders with concatenated input enabled and existing input ownership. `ArchiveSupport.openSevenZFile` retains the four 1.28.0 constructors because their failure-close contract differs from that builder. Regression sources cover empty/multiple members, XZ padding, close propagation and failed construction without caller-stream closure.
 
 - **Shared path and search fast paths:** Java RAR/EGG/ALZ/lightweight ZIP and
   extraction progress reuse `ArchiveSupport.sanitizeEntryPathForList`; prefix
@@ -1122,13 +1294,52 @@ listing when hunting.
 - **Cancellation and decoder ownership:** `ArchiveCancellation` makes cancellation
   terminal at RAR fallback boundaries and 7z forward probes. Supplemental ZIP Deflate
   uses `OwnedDeflateInputStream` for deterministic inflater release and buffered input.
+  EGG/ALZ final acceptance uses its nonblocking `checkCancelled` after source
+  validation; blocking pause checkpoints run before validation. Candidate probes
+  recheck the captured volume set before returning either match or rejection.
+  Authenticated EGG AES/LEA selection applies the same boundary around both full
+  MACs without advancing candidate CTR state. Physical I/O failures stay primary.
+  Decoded EGG chunks update only the block CRC used for validation; the unread
+  cumulative accumulator is removed without altering MAC or packed-tail handling.
+  Solid EGG rollback closes an unadopted current guard directly before reversing
+  the pending list, avoiding another allocation after failed list adoption.
+  EGG/ALZ factories pass an optional operation token into the same 64 KiB raw
+  Deflate stream. Positive reads and validated packed refills checkpoint it;
+  sticky failures prevent resumed decoding after consumed ciphertext. Zero-length
+  and invalid-argument ordering, tokenless ZIP/7z calls, native inflater cleanup
+  and outer CRC/progress/rollback ownership remain unchanged.
+  `ArchiveBzip2InputStream` supplies standard EGG/ALZ and 7z/ZIPX BZip2 paths with a
+  64 KiB packed buffer after decryption, inside the declared payload. Commons
+  keeps codec math and concatenation; token checks bracket packed refills and
+  decoded reads. Failed construction leaves source cleanup to the container,
+  and headerless ALZ retains SequenceInputStream's close-at-EOF semantics.
+  7z/ZIPX reuse the tokenless adapter after bounded integrity/decryption wrappers;
+  existing terminal payload classification, size/CRC/MAC and close acceptance remain.
+  EGG LZMA retains its existing 64 KiB packed buffer and XZ decoder; preamble,
+  pre-construction and refill checkpoints carry the operation token without
+  altering properties, dictionary sizing or block-owned input cleanup.
+  Special 7z bulk extraction checks cancellation after source validation before
+  intermediate-folder commit, retaining current-folder rollback and prior commits.
+  Successful and unsupported-header probes share final validation. Probe/final
+  folder pause waits run before source checks; no-stream empty-file guards also
+  span source/cancellation validation, with a check before touching the target.
 
 - **Archive output types:** classic `Rar3FirstPartyArchiveExtractor` and special-7z bulk extraction require directory entries to resolve to actual directories. `RarOutputFileGuard.ensureDirectory` also supplies this check to stored, special-case, PPMd and RAR5 bulk routes, accepting a concurrent directory-creation race but not a regular file. Special 7z `writeEmptyEntry` guards no-stream output through close; zero-byte stream-backed folders still pass `FolderStream.drain()` before committing.
 
-- **Volume input and discovery:** `SplitVolumeInput` owns checked physical/logical ranges, binary-search lookup, bounded-view cursors and failure retirement. `EggArchiveReader.VolumeFiles` resolves numeric siblings and `checkedPayloadEnd` validates metadata ranges. `TarEntryIndex` provides direct ordinary plain-TAR offsets; sparse/split/compressed cases retain their established paths. Java TAR paths share terminal member-header checksum rejection and skip links/special members; streaming and indexed writes use destination guards.
+- **Volume input and discovery:** `SplitVolumeInput` owns checked physical/logical ranges, binary-search lookup, bounded-view cursors and failure retirement, including unchecked failures after a partial volume read. `EggVolumeResolver` resolves linked numeric siblings, `AlzVolumeResolver` resolves ALZ framing/names, and `EggArchiveReader.checkedPayloadEnd` validates EGG metadata ranges. `TarEntryIndex` provides direct ordinary plain-TAR offsets; sparse/split/compressed cases retain their established paths. Java TAR paths share terminal member-header checksum rejection and skip links/special members; streaming and indexed writes use destination guards.
 
 ### RAR and CBR
 
+- `RarCanonicalHuffman` builds from a complete array or a checked subrange without
+  retaining caller storage. `Rar3ClassicLzEngine.buildTables` uses ranges for its
+  four tables, keeping local symbol numbers and avoiding temporary slice arrays.
+  Canonical codes, lookup/short-tail decoding and table/VM history are unchanged.
+`Rar3PpmdFilterOutput.queue` owns a defensive descriptor/register copy. Filter
+dispatch reuses that snapshot; standard filters read it and custom execution
+copies it into VM state. Caller isolation is retained without a second queue-side
+register allocation. `Rar3PpmdFilterOutputTest` covers chained snapshot ownership.
+
+- **Legacy decoder generation:** `RarEntry.unpackVersion` retains UNP_VER separately from container version; `Rar3DecodePlan.snapshot` preserves it. `RarFeatureClassifier.hasRar3DecoderVersion` gates first-party compressed admission/probes, and `Rar3PackedPayload` checks split-generation consistency. Stored entries and original-header native rewrites retain their routes.
 - **RAR packed input:** `Rar5CompressedDecoder` validates scalar/bulk source
   results and checks interruption around reads and final output. Its existing
   failure close/reset path prevents continued use of partially advanced solid
@@ -1143,21 +1354,55 @@ listing when hunting.
 - **RAR3/4 VM chains:** `Rar3PpmdFilterOutput` groups same-start stages and verifies
   each input length against the prior result. `tailSourceEnd` retains the original
   raw extent for following overlap checks, regardless of intermediate resizing.
+  Explicit/reused zero lengths are permitted for chained successors only; the
+  first raw region stays nonempty. Standard/custom zero-result stages retain
+  the same raw history, final-size and failure checks.
   `written` counts raw bytes and `published` counts final file bytes. `rawBytesUntilBoundary`
   lets the unpacker clip only legacy final-match surplus without clipping raw filter
   input at final file size. `finishStreamingEntry` handles trailing VM/table controls
   and resumes `run` without re-reading an active PPMd header. Zero-final-size streams
-  can therefore consume raw filter input. PPMd-only decoding continues to its marker.
+  can therefore consume raw filter input. Pure PPMd decoding continues to its marker.
   Length changes and trailing controls require explicit EOF; ordinary excess data
   is not silently consumed. Filter offsets use `published`; CRC/progress observe
-  final output. `DeferredFilters` belongs to `Rar3SolidState` or the PPMd-only
+  final output. `DeferredFilters` belongs to `Rar3SolidState` or the PPMd-starting
   decoder; independent contexts pass no state. `finish(explicitFileBoundary)`
   rebases wholly future descriptors by raw bytes only after complete output and
-  flush. A lease prevents simultaneous sinks; close preserves successful carry,
-  while abort/reset/failure clears it. Partially consumed/late ranges still fail.
-  Sixteen new carry methods are uncompiled/unrun. Nine earlier accounting and
-  six control-tail methods, three revised expectations and two expanded cases are
-  uncompiled/unrun, in addition to the earlier ten chain methods.
+  flush. A checked plan with a solid successor may also transfer one partially
+  buffered raw prefix, whose complete filtered result belongs to the receiving file.
+  Its negative rebased start tracks already consumed input; no prefix bytes are
+  replayed into dictionary history. `lengthChanged` also covers prefix accounting,
+  requiring explicit EOF. `Rar3DecodePlan` and logical plans mark successors while
+  planning; PPMd-starting bulk/forward paths compute membership once. Selected plans
+  end at the target, and stored/directory/split-tail entries do not consume history.
+  A lease prevents simultaneous sinks; close preserves successful carry, while
+  abort/reset/failure clears descriptors and buffered bytes. Incomplete preceding
+  output, late schedules and unplanned partial carry fail. `requireEmpty` checks
+  complete archive/forward run ends before output commit, including the last
+  compressed member before an independent reset. Plain plans distinguish complete
+  archives from selected prefixes with `completeArchivePlan`; logical and PPMd-starting
+  selected paths also keep their prefix scope. Failure retires pending state.
+  Completed-result splitting between files is not an established producer profile;
+  oversized results fail before publishing any part of that result.
+  Regression sources cover carry, accounting, zero-result chains, standard/custom
+  combinations, plain/AES/split rollback, dangling queues, failed spools and control
+  tails; they are uncompiled/unrun. The PPMd completion check is state-seeded, not
+  a range-coded producer fixture.
+  `Rar3PpmdForwardReader` owns copied volume/encryption metadata, with duplicate
+  identities retained for rejection, and derives all plans from those copies.
+  The PPMd output wrappers propagate flush without closing the destination.
+  Decode, payload/CRC, output/guard and forward-close failures retire its model
+  and VM state; a fresh decoder is required afterward. Range-coded body tests
+  with seeded VM state do not establish real-encoder cross-file filter semantics.
+  Verified run completion releases the PPMd forward decoder when no compressed
+  solid successor needs it; readable spools and dependent-run history are retained.
+  EOF clears the owned password. Logical RAR snapshots likewise preserve aliases
+  so copying cannot disguise repeated payload entries before topology validation.
+  Plain/logical mixed executors release terminal state after payload/output closure;
+  `Rar3SolidState.invalidate` clears VM program references too. Selected prefixes
+  keep their existing scope and dependent runs retain state through stored files.
+  Official UnRAR 7.3.1 clears pending filters per file and writes a complete
+  result to the current destination. The local prefix policy is conservative
+  and scoped, not a claim to reproduce that implementation's boundary behavior.
 
 - **RAR5/RAR7 planned history:** `Rar5CompressedArchiveExtractor.planDictionaryStarts`
   walks metadata backward once and maps each eligible compressed reset to its run's
@@ -1273,9 +1518,16 @@ listing when hunting.
   queue-order checks remain. Seventeen new host methods are unrun; see
   [scope](ARCHIVE_DECODE_BOUNDARIES_1_0_20.md).
 
+  Live standard filters are dispatched through `Rar3PpmdFilterOutput` to
+  `Rar3VmFilter`; `RarStandardFilterApplier`/`RarStandardFilters` describe a separate
+  legacy diagnostic scaffold, not live coverage. `Rar3VmFilterSafetyTest` and
+  `Rar3PpmdFilterOutputTest` add three independent fixed-oracle methods for Audio
+  adaptation/channel history, chunked publication and active Itanium bundle/tail
+  boundaries. These sources are uncompiled/unrun; filter arithmetic is unchanged.
+
 - **Verified RAR output:** RAR5, PPMd and checked RAR4 forward readers record spool length and bound reads, rejecting size changes/early EOF. RAR5/PPMd failure retirement retains failed-deletion paths for repeated close. `Rar5CompressedArchiveExtractor.ChecksumException` is classified by type before filename-bearing message heuristics.
 
-- **RAR entry planning:** `Rar3DecodePlan` snapshots entries/source references, classifies once, probes independent starts and promotes actual solid primers to checked mode. `Rar3FirstPartyArchiveExtractor.PlannedDecoder` executes the same plan for bulk, selected-entry and forward paths, retiring on failure. Standalone classic-LZ uses size/CRC termination; checked starts/continuations require boundaries. Stored files clear history, directories preserve it, and stored solid members remain excluded. `Rar3PpmdBlockProbe` validates the full declared packed range before reading mode bytes.
+- **RAR entry planning:** `Rar3DecodePlan` snapshots entries/source references, classifies once, probes independent starts and promotes actual solid primers to checked mode. `Rar3FirstPartyArchiveExtractor.PlannedDecoder` executes the same plan for bulk, selected-entry and forward paths, retiring on failure. Standalone classic-LZ uses size/CRC termination; checked starts/continuations require boundaries. Eligible plain stored members, including solid-flagged members, and directories preserve required compressed history without adding dictionary bytes. Selected reads can skip unrelated stored payloads; retained stored output still requires integrity checks. State retires after the last planned compressed member is verified. `Rar3PpmdBlockProbe` validates the full declared packed range before reading mode bytes.
 
 - **Selected PPMd/RAR5 history:** `RarSolidReadPlan` uses one iterator pass to select the latest compressed reset through the exact requested head, then `RarVolumeChain.indexSelected` resolves only required chains in another pass. The PPMd/RAR5 extractors retain mode/codec admission and decode each step with its prepared parts, eliminating per-primer full-list scans. Unrelated malformed chains are ignored; required incomplete/ambiguous parts fail before primer decoding. Stored files retain the previous skip policy, not new stored-as-history support. Plan membership/order is fixed, not source bytes or mutable payload metadata.
 
@@ -1297,15 +1549,38 @@ listing when hunting.
 
 - **RAR chain index:** `RarVolumeChain.index` prepares exact-path split membership in one iterator pass for stored, independent, PPMd and RAR5 bulk fallbacks plus PPMd/RAR5 forward adapters. Heads are identity-keyed and chain lists are unmodifiable. A new same-path head cannot cross an incomplete chain; completed duplicate names remain separate. Selected-entry `build` keeps unrelated malformed paths out of its scope. Forward adapters copy entry order; existing payload/crypto/CRC validators still own byte integrity and solid decoders retain their ordered history.
 
-- **Checked RAR forward fallback:** `Rar3CheckedForwardReader` owns a `Rar3DecodePlan` and `PlannedDecoder` when native RAR is unavailable or stream opening fails, after existing RAR5/PPMd adapters. It verifies requested pages into owned spools and uses `Rar3Unpacker.unpackToDiscard` for skipped compressed entries, retaining history only for checked runs. Independent stored files reset history; directories do not. It does not replace working native streams or add mid-stream failover.
+- **Stored solid-flagged splits:** `RarSplitStoredPlan` accepts stored RAR3/RAR4
+  members with the solid flag, as the stored method has no dictionary dependency.
+  Plain/AES packed input, topology and final integrity checks remain shared;
+  compressed methods cannot use this path. `RarSplitStoredFailure` and
+  `RarSplitStoredMatrixReport` preserve the underlying stored-entry failure cause.
+
+- **RAR name/type consistency:** Java `RarArchiveReader` rejects a regular header
+  whose normalized name ends in `/`, before history/planning. RAR4 directory
+  classification uses header flags. Complete scans fail on this contradiction;
+  an earlier safe prefix can still support selected-entry recovery. Real
+  directories and deliberately excluded redirections retain their existing rules.
+
+- **Checked RAR forward fallback:** `Rar3CheckedForwardReader` owns a `Rar3DecodePlan` and `PlannedDecoder` when native RAR is unavailable or stream opening fails, after existing RAR5/PPMd adapters. It verifies requested pages into owned spools and uses `Rar3Unpacker.unpackToDiscard` for skipped compressed entries, retaining history only for checked runs. Stored files and directories do not consume or reset required compressed history. It does not replace working native streams or add mid-stream failover.
 
 - **Logical RAR3/RAR4 input:** `Rar3PackedPayload` supplies bounded plain/AES/split input and drains remaining packed segments before acceptance. `Rar3IndependentPayloadExtractor` probes the same stream and supplies a single-use `Rar3UnpackContext` for independent AES/split LZ/PPMd entries, retaining decoded CRC/size checks and destination rollback. This route does not retain solid history or add a forward-reader adapter; runtime validation is pending.
 
-- **Separate PPMd route:** `Rar3PpmdSolidArchiveExtractor` shares `Rar3PackedPayload` for scoped single/bulk/forward extraction. Its `ForwardReader` retains the decoder and verified entry spools. This route does not dispatch mixed LZ; the plain mixed-solid fallback above is separate.
+- **PPMd-starting route:** `Rar3PpmdSolidArchiveExtractor` shares `Rar3PackedPayload` for scoped single/bulk/forward extraction. `Rar3PpmdForwardReader` retains the decoder and verified entry spools. `isPpmdBlockStart` classifies initial bytes, while `Rar3PpmdSolidStreamDecoder.continueMixed` handles an internal LZ transition with the existing PPMd model, raw ring and VM queue. Non-PPMd starting plans keep their broader logical routes. No output is replayed; producer interoperability remains unverified.
 
 - **RAR5/RAR7:** `Rar5CompressedDecoder` uses `Rar5HistoryStore` for bounded RAM and encrypted disk-backed history. `Rar5ForwardReader` owns the viewer session's decoder/spool cleanup and retained solid state; `Rar5CompressedArchiveExtractor` owns selected/bulk decoding and shared payload checks. `RarBlake2sp`, `RarStoredPayloadIO.DataCheck`, `Rar5Crypto` and `RarPackedInputStream` separate final output integrity from packed-part checks.
 
 - **RAR scan completeness:** `RarArchiveReader.EntryScan` separates a complete archive scan from selected-prefix recovery. Listing/bulk/forward callers require completion; selected readers retain checked split/solid dependency validation. `RarLibarchiveFallback` keeps first-file duplicate metadata to match native selected extraction.
+
+- **RAR4/RAR5 omitted names:** the RAR4 physical header scan reads packed sizes independently
+  of sanitized names and checks the payload range before seeking. LARGE sizes are
+  checked before conversion to a usable offset. Omitted compressed members mark
+  history unavailable across volumes, separately for RAR4/RAR5. A visible independent
+  compressed head resets its state; dependent solid/split entries instead record a
+  scan failure and stop traversal. Earlier parsed entries retain selected-prefix
+  recovery, while complete-list/bulk/forward callers still reject the incomplete
+  scan. Stored/directory omissions and existing redirection exclusions do not
+  consume compressed history. Unsafe paths remain excluded; optional RAR5 payload
+  checksums are not relied upon to detect missing history.
 
 ### ZIP and ZIPX
 
@@ -1328,7 +1603,9 @@ listing when hunting.
   the independent `readwide-ppmd` JNI target contains pinned public-domain Ppmd8.
   The native stream checks end/range/count/packed exhaustion; the app retains
   CRC/MAC/source identity and guarded output. The old container fallback remains
-  eligible when unavailable. Freeze stays excluded. [Validation remains pending](ZIP_PPMDI_INTEGRATION_1_0_20.md).
+  eligible when unavailable. `ZipPpmdEntryExtractor` selects explicit freeze revisions,
+  verifies both candidates and rejects different valid outputs; the low-level default
+  `open` does not guess a freeze revision. [Validation remains pending](ZIP_PPMDI_INTEGRATION_1_0_20.md).
 
 - **ZIP output preflight:** `LightweightZipArchiveReader` combines shared
   `ArchiveOutputPreflight` type checks with its stricter duplicate-target rejection,
@@ -1338,7 +1615,7 @@ listing when hunting.
   behind `ZipxAesArchiveReader`'s existing plain/ZipCrypto/AES integrity layer.
   `SevenZBrotliInputStream` handles standard/large-window raw and Brotli-MT framing
   with the pinned MIT Google Brotli v1.2.0 Java source module, registered as 04F71102
-  in `SevenZCoderRegistry` (25 entries).
+  in `SevenZCoderRegistry` (26 entries).
   `AlzipZipCrypto.checked` owns legacy/strict UTF-8/MS949 candidate preparation;
   ALZ/EGG enable extra candidates only with payload CRC checks.
   ALZ supplies a decoded-length/CRC verifier for multiple distinct header matches. It reads
@@ -1361,6 +1638,36 @@ listing when hunting.
 - **ZIP/ZIPX, ALZ and EGG:** `ArchiveSupport` reuses routing metadata; `ZipxAesArchiveReader` owns leased indexes, interruptible per-key construction gates and reusable bounded local-header readers. Global LRU locking excludes parsing and close I/O. Recorded-volume checks surround payloads; full membership discovery remains at acquisition/commit. Bulk ZIP paths preflight explicit and implied file/directory collisions. Nested ALZ and non-solid EGG indexes retain metadata, not decrypted payloads or decoder sessions. `ArchiveSupport.releaseViewerArchiveIndex` retires them. EGG's separate `SolidForwardReader` owns verified block spools.
 
 ### 7z and codec adapters
+
+- **Verified-folder cursor:** `SevenZBcj2ArchiveReader.ForwardReader.prepareCurrent`
+  retains per-read length/range validation but only seeks on a member's first read.
+  Later chunks use the already-advanced private cursor; member changes still seek
+  after skipped or drained predecessors. `SevenZForwardPositionTest` adds seven
+  uncompiled/unrun regression methods; no decoder math or shared cursor is added.
+
+`SevenZBcj2ArchiveReader.Source.check` validates source metadata and the input's
+terminal state through `SplitVolumeInput.requireUsable`. The latter performs no
+file scan or cursor movement. Failed physical inputs cannot become unsupported-
+header fallback; stable unhandled headers retain existing routing.
+
+- **Encoded-header folders:** `SevenZBcj2ArchiveReader.decodeEncodedHeader` requires
+  exactly one folder before creating the temporary header archive or opening a
+  decoder. Valid single-folder Copy and AES/filter chains retain their existing
+  path; extra folders are not silently ignored. Integrity failures are terminal
+  through capability probes, and `ArchiveSupport` checks before Commons listing.
+  The matching native libarchive guard is recorded in its retained patch.
+  Ordinary multi-folder data remains supported; regression sources are unrun.
+
+- **Prefixed 7z input:** `SevenZStartHeader` locates a CRC-checked origin with a
+  cancellable bounded buffer over the existing `SplitVolumeInput`. Checked offsets
+  flow through encoded/additional/main streams; selected malformed origins do not
+  restart discovery. `SevenZBcj2ArchiveReader.tryListSpecialEntries` reuses its
+  parsed header, and prefixed content selects the dedicated extraction/forward
+  path. Source snapshots still cover every original segment. Bulk extraction
+  checks zero-substream folders before visible output even with a nonempty list.
+  `FolderStream.drain` observes token cancellation before packed-padding reads and
+  final verification; pending outputs retain rollback. No executable filename recognition
+  or execution is added, and real producer interoperability remains unverified.
 
 - **7z LZHAM:** registry method `04F71001` prepares five-byte `0x10`/`0x11`
   default profiles and selects the dedicated forward route. `LzhamInputStream`
@@ -1396,9 +1703,46 @@ listing when hunting.
   fallback. Transfer the same checked input to an eligible forward reader, otherwise
   close it. `SevenZFallbackBoundaryTest` covers dispatch and restoration (unrun).
 
+- **PPMd error routing:** confirmed initializer, symbol/frequency, terminal-range and packed-EOF
+  failures use `SevenZBcj2ArchiveReader.IntegrityException`, so encoded-header
+  probes stop rather than declaring the header unsupported. Property/representation
+  admission, cancellation and unrelated I/O routing are unchanged. A prepared
+  coder plan opens a fresh model per stream; independent-folder state is not shared.
+  `ArchiveFailureClassifier` recognizes this typed integrity failure through
+  wrapper causes before checking messages.
+
 - **PPMd completion:** `SevenZPpmd7Decoder.DecodedStream.finish` validates the range
   code before releasing the model/last bytes. Empty streams share initializer parsing
   without constructing the model; failures retire input and remain sticky.
+
+- **7z output-length errors:** `ExactStream` and `IntegrityStream` distinguish a
+  returned EOF before the declared size from an exception thrown by their input.
+  Only the former becomes a typed integrity failure that cannot escape metadata
+  probing as unsupported syntax. Existing overrun/padding and no-progress handling
+  remain. Wrapper and Copy/LZMA2 header regression sources are uncompiled/unrun.
+
+  Encoded/additional metadata propagates the operation token through `decodeFolder`
+  and `readExact` into graph completion. Decoded array reads use 64-KiB requests
+  with pre/post checkpoints; raw next-header allocation/read has boundary checks.
+  `SevenZCoderRegistry.closeUnadopted` closes opened decoders after wrapper
+  construction failure, preserving primary/suppressed exceptions. Bulk extraction
+  clears the pending folder's verified flag before the final cancellation false
+  return, so `finally` rolls it back; earlier closed folders remain unchanged.
+  Four metadata, three cleanup-helper and two late-cancellation regressions are
+  uncompiled/unrun, not allocation-failure, JNI or blocking-codec timing validation.
+
+- **7z graph completion:** `SevenZBcj2ArchiveReader.FolderStream.drain` finishes
+  intermediate decoded outputs in reverse topological order before packed padding.
+  `openFolder` tracks bound decoded BCJ2 inputs by identity: at that completion point
+  extra bytes cause `IntegrityException` instead of being discarded. Raw packed
+  padding and other coder drains remain unchanged. Matching-CRC tail fixtures cover
+  all four input slots, partial CALL consumption, downstream Copy, split spools and
+  encoded headers; these regression sources are uncompiled/unrun.
+  Unused BCJ2 CALL/JUMP inputs still validate their decoder termination; cancellation
+  and failed-output rollback remain in the same folder boundary. `SevenZBcj2ArchiveReaderTest`
+  adds empty PPMd/LZMA2 branches, nested Copy inputs, valid padding and cleanup cases
+  (uncompiled/unrun). RAR keep-old-table transition sources in `Rar3UnpackerTest`
+  check retained lengths/matches and low-distance reset without a decoder change.
 
 - **Supplemental 7z LZMA lifecycle:** `SevenZCoderRegistry.Prepared.open` accepts an
   explicit XZ cache without retaining it in the metadata-only decode plan. LZMA
@@ -1407,6 +1751,20 @@ listing when hunting.
   not a payload cap. `SevenZBcj2ArchiveReader.openFolder` wraps it in XZ's
   `ResettableArrayCache` for constructor-failure/close cleanup; reader EOF/failure/close
   and bulk completion discard idle arrays. Selected/header-only decoding remains uncached.
+
+- **7z adoption failure ownership:** `SevenZBcj2ArchiveReader.adoptPackedStream`
+  closes the latest wrapper until the folder owns it; closing a split view does
+  not close its shared source. `adoptOutputGuard` restores a protected target if
+  pending-output registration fails. `RarOutputFileGuard.forTarget` allocates the
+  guard before renaming an original and cleans failed empty reservations.
+  Primary errors retain suppressed cleanup failures. Eight added cleanup/guard
+  methods are uncompiled/unrun; real exhausted-heap recovery remains best effort.
+
+- **7z XZ payload errors:** `SevenZCoderRegistry.openXzPayload` distinguishes
+  decoder corruption/truncation from an exception thrown by its input. Only the
+  former becomes sticky `IntegrityException`; property preparation, cancellation,
+  unsupported options and input-error identity retain their contracts. Header
+  probes do not downgrade these confirmed decoder failures to unsupported syntax.
 
 - **Modern/legacy LZ4:** `Lz4ArchiveInputStream` owns frame sequencing, descriptors,
   block preflight, optional sizes/checksums and circular linked history for
@@ -1446,8 +1804,13 @@ listing when hunting.
   password derivation/authentication across AES and `EggLeaCipher`; EGG methods
   5/6 select LEA-128/256 for non-solid entries. `Rar3VmFilter.ProgramState` retains
   standard-filter fast paths and compiles custom bytecode with `Rar3VirtualMachine`.
-  `Rar3PpmdFilterOutput`, shared by LZ/PPMd paths, accepts intermediate resizing only
-  when the final chain preserves the original within-entry length.
+  `Rar3PpmdFilterOutput`, shared by LZ/PPMd paths, separates raw input extent from
+  final output size. Intermediate resizing, including zero-length successors,
+  retains per-stage input matching and declared final-size/CRC checks.
+  Classic and PPMd-starting extraction pass `FileOperationProgress` through the
+  shared output and VM calls. The existing instruction checkpoints and chain
+  boundaries honor Cancel/Pause; persistent globals commit only after a final
+  checkpoint. Filter math, instruction budget and null-token routes remain.
   The `zipx-codecs-android` module's `LzFamilyInputStream`
   and JNI bridge own framed LZ5/Lizard decoding, registered as 04F71105/04F71106.
   Java/native transfer buffers are bounded; the codecs own additional frame/history
@@ -1470,6 +1833,22 @@ listing when hunting.
 
 ### ALZ and EGG
 
+`AlzObfuscatedDeflateInputStream` owns lazy immutable fixed trees; dynamic
+trees consume checked array ranges without retaining them and keep local symbol
+indices. Bulk stored/match runs stop at output checkpoints. Overlap copying
+seeds from old ring history, expands the initialized output prefix, then updates
+the ring. Scalar symbol/bit parsing and checked refills remain shared.
+`AlzObfuscatedDeflateInputStreamTest` and `AlzipArchiveReaderTest` contain
+uncompiled/unrun regressions; this is not measured performance evidence.
+
+`AlzipArchiveReader.AlzDecryptingInputStream` owns a reusable one-byte scratch
+buffer for scalar reads and clears it together with cipher state on close.
+Scalar and bulk reads retain the same decryption path; `AlzipZipCryptoTest`
+covers interleaving, separate instances, EOF and failed read/close cleanup.
+
+- **Authenticated password selection:** `EggArchiveReader.openAuthenticatedDecryptor` resolves two distinct verifier-matching encodings with complete owner-block ciphertext MACs. `EggAuthenticatedCrypto.authenticateCiphertext` leaves CTR untouched; footer completion resets MAC for real extraction. Single matches do not scan payloads. Source/cancel failure is terminal.
+- **Source acceptance:** `SplitVolumeInput.SourceState` carries pre-framing physical length/mtime from EGG/ALZ resolvers through segment adoption. Both parsing completion and reader construction validate that baseline, including stripped continuation framing; plain split-7z segments still capture metadata on adoption. `SplitVolumeInput.requireUnchanged` validates all captured volume metadata and the active descriptor length without cursor changes or extra handles. EGG/ALZ parsing/file/block boundaries call it explicitly; per-byte reads and 7z callers are unchanged. `SolidBlockSession` checks original sources around decode/authenticated staging, `SolidEntryWriter` after closing pending outputs, and forward EOF/drain before entry acceptance. Failures retire input/spools; earlier verified output is not globally rolled back. Same-metadata edits and final-check races remain possible. `AlzEggSourceHandoffTest` covers resolve-to-adopt mutations and stable logical windows; its methods are uncompiled/unrun.
+- **Final cancellation:** ALZ and ordinary EGG check after decoder/output closure before target commit. EGG solid target advancement checks after progress notification, before output creation; bulk completion checks again before final commit. Earlier verified output is not globally rolled back.
 - **Encrypted-solid EGG:** `EggBlock.owner` links encryption to the physical block
   owner. `EntryDecryption` centralizes cipher selection; `SolidBlockSession` stages
   one owner's decrypted packed bytes and verifies authentication before bulk,
@@ -1507,9 +1886,23 @@ listing when hunting.
   `SevenZBcj2ArchiveReader` delays EmptyFile/Anti decoding until the final empty-stream
   count is available. All new regression sources are unrun.
 
-- **Solid EGG boundaries:** `EggArchiveReader.SolidForwardReader` retains verified block size, checks it before accepting block EOF and retires changed-spool reads/drains. `closeBlock` preserves primary/suppressed cleanup errors and `close` retries a retained failed-deletion path without reopening the session.
+- **Solid EGG boundaries:** `EggArchiveReader.SolidForwardReader` retains verified block size and `SplitVolumeInput.SourceState`, checks the decoded spool's opened length/path metadata before chunk reuse, drain/entry completion and replacement, and retires changed-spool reads/drains. `SolidBlockSession` checks both original volumes and the authenticated packed input around encrypted block decoding. `closeBlock` clears captured state, preserves primary/suppressed cleanup errors and `close` retries a retained failed-deletion path without reopening the session. Empty bulk EGG extraction checks its token after total reporting. Same-metadata edits/final races remain possible; codecs and per-byte input routines are unchanged.
+- **ALZ trimmed-BZip2 cancellation:** `AlzipArchiveReader.openAlzBzipStream` retains its tokenless overload and passes extraction/probe tokens to `AlzBzip2InputStream`. Buffered bit/output checkpoints, post-refill checks and inverse-BWT table checkpoints honor Cancel/Pause without changing codec arithmetic, CRC or cipher ownership. `AlzBzipCancellationTest` and `AlzPasswordProbeTest` add seven uncompiled/unrun methods. Standard third-party BZip2 inner loops and individual allocations retain their cancellation limitations.
+- **ALZ method boundary:** `AlzipArchiveReader.decodePayload` retains Store/Deflate/BZip2 and routes method 3 to `AlzObfuscatedDeflateInputStream`, including ambiguous-password probes. The independent RFC-1951 reader changes only the dynamic code-length order, keeps 32 KiB cross-block history and latches failures. Size/token propagation, empty-block cancellation, malformed trees, encrypted splits and rollback have uncompiled/unrun regression sources in `AlzObfuscatedDeflateInputStreamTest`, `AlzipArchiveReaderTest` and `AlzPasswordProbeTest`; method 4 remains rejected.
+- **ALZ encrypted/split regression boundary:** `AlzipArchiveReaderTest` additionally describes large UTF-8/MS949 candidate probes, check-header cuts with descriptor flags, refill boundaries, wrong-password/data rollback, final mutation of either physical volume and fresh state per entry. `AlzObfuscatedDeflateInputStreamTest.storedFixedDynamic` independently emits a mixed-block fixture with a 32 KiB distance and unaligned dynamic header. These are uncompiled/unrun test sources, not new production paths.
+
+- **EGG metadata boundaries:** The reader recognizes bounded SKIP records (`0xFFFF0000`) between entries/blocks without changing block ownership or cipher input. `EggContainerCoverageTest` and `EggArchiveReaderTest` add eleven uncompiled/unrun methods for metadata bounds, solid/split/encrypted continuity, flagged filename rejection and output/spool/index preservation. Opaque global prefix metadata is skipped, not decrypted; no encrypted-filename decoder is provided.
+- **EGG block extras:** `readBlockDataOffset` / `isBlockSuccessor` retain the missing-END path whenever its packed endpoint is EOF or an existing outer signature. Only otherwise can a bounded COMMENT/DUMMY/SKIP chain plus END select a new payload offset. No signature scan or codec/cipher replay is used. Eight further uncompiled/unrun methods cover literal/legacy framing, encrypted split/solid ownership, malformed metadata, CRC rollback and continuation opening. Ambiguous and unknown block extras remain excluded from the extension.
 
 ### TAR, CAB and LHA
+
+- **PMarc stored members:** `.pma` routes through the native LHA backend and is
+  eligible for first-image covers. `archive_read_support_format_lha.c` admits only
+  exact `-pm0-` level-0 headers with matching packed/original sizes and a CRC field;
+  PMarc comments are not parsed as Unix mode/ownership metadata. `LhaSplitFraming`
+  accepts the same method within existing LHA byte splits, without treating `.pma`
+  as an Amiga `.l01` family. PM1/PM2 remain excluded. The retained native patch and
+  [development notes](DEV_CHANGES_1_0_21.md#archive-compatibility) record the scope.
 
 - **Amiga LHA byte splits:** `LhaVolumeResolver` supplies ordered part membership
   to preparation, source snapshots and queue grouping. `LhaSplitFraming` checks the
@@ -1531,11 +1924,13 @@ listing when hunting.
   `CabNativeDecoder` and its JNI adapter own the separate `readwide-cab` target with
   strict libmspack continuation matching. No build/native validation yet; see
   [remaining validation](CAB_MULTIVOLUME_INTEGRATION_1_0_20.md).
-  Current inventory is 528 main / 526 manager / 185 archive / 91 util Java files.
+  Current inventory is 539 main / 537 manager / 186 archive / 95 util Java files.
   The native-codec module has five main API classes, separate from this app count.
 
 - **Compressed TAR completion:** `ArchiveSupport.checkedTarPayload` maps opened-codec
   read/skip/close failures to terminal `TarIntegrityException`, preserving cancellation.
+  Payload reads and at most 64 KiB skip requests check interruption before and after
+  decoder work; listing/selected extraction checks header advancement as well.
   `finishTarPayload` drains with bounded memory and progress/interruption checks after
   TAR EOF in streaming listing, bulk extraction and `TarForwardReader`. The viewer
   owns the payload reference and retains failures; selected reads and early close do
@@ -1578,7 +1973,10 @@ as orientation, and read the package before changing it:
   LZMA/LZMA2 dictionary memory is bounded by known stream output; PPMd and
   metadata retain array/format bounds, not fixed RAM quotas.
   `SevenZAdditionalCoders` is a registry facade.
-  `SevenZBcj2Decoder` retains probability state and a pending address,
+  `SevenZBcj2Decoder` retains probability state and a pending address. Before
+  returning the last declared byte it requires a zero final range code; failure
+  is a sticky `IntegrityException`. Its array wrapper also validates empty
+  output. Partial close does not drain input or force completion,
   while `SevenZAesDecoder` finalizes CBC streams without whole-file arrays.
   `ArchiveSupport` derives shared
   output budgets from available space; the fixed 128 GiB ceiling is removed.
@@ -1618,7 +2016,15 @@ key-dependent CRC transforms to `Rar5Crypto`, reusing decryption secrets.
 `Rar3PpmdSolidArchiveExtractor` feeds bounded streams to
 `Rar3PpmdSolidStreamDecoder`; its rolling history replaces cumulative output
 arrays, and `RarPpmdVarHDecoder` accepts streamed range-coded input.
-See `CURRENT_SOURCE_STATUS_1_0_20.md` for current boundaries and validation status;
+The PPMd-starting session promotes at an internal LZ table through `continueMixed`:
+the same model, raw history and VM queue continue in `Rar3ClassicLzEngine.decodeMixed`.
+Only the consumed mode byte is replayed. `MixedState` retains LZ tables/matches for
+solid successors; `RarLzWindow` preserves the current raw-file offset. The remaining
+bounded payload uses a non-owning `RarBitInput` view with ordinary EOF discovery.
+`hasBits` distinguishes optional lookahead at that clean tail from physical
+truncation, preserving short canonical codes without adding synthetic padding.
+Pure PPMd keeps its original loop; all output checks stay with the existing guards.
+See `CURRENT_SOURCE_STATUS_1_0_21.md` for current boundaries and validation status;
 `DEV_CHANGES_1_0_18.md` retains the earlier implementation history.
 
 - **Paging/spread behavior:** `util/SpreadMath` for index math; the mode gates

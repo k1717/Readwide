@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">Avsnitt</string>
+    <string name="epub_section_progress">Avsnitt %1$s / %2$d</string>
+    <string name="epub_section_move">Gå till avsnitt</string>
+    <string name="epub_section_hint">Räknar bokens avsnitt, inte skärmsidor eller tryckta sidnummer.</string>
+    <string name="epub_section_range_error">Ange ett avsnittsnummer från 1 till %1$d.</string>
+    <string name="epub_bookmarks_status">Alla bokmärken: %1$d filer / %2$d bokmärken\nAktuellt: Avsnitt %3$d / %4$d</string>
+</resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">Paragraph alignment</string>
+    <string name="epub_alignment_book">Book default</string>
+    <string name="epub_alignment_start">Left / start-aligned</string>
+    <string name="epub_alignment_justify">Justified</string>
+    <string name="epub_text_alignment_hint">For reflowable EPUB text. Start alignment is left for LTR and right for RTL. Explicit centered and right-aligned styles are kept.</string>
+</resources>

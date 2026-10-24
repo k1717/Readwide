@@ -10,6 +10,17 @@ import java.nio.charset.StandardCharsets;
 import org.junit.Test;
 
 public class RarLzWindowTest {
+    @Test public void sameFileHandoffPreservesRawOffsetAcrossRingGrowth() throws Exception {
+        byte[] raw = {'A','B',0,0}; ByteArrayOutputStream out = new ByteArrayOutputStream();
+        RarLzWindow window = new RarLzWindow(raw,2,2,19,
+                RarOutputStreamDecodedOutput.wrapOrMemory(out));
+        window.retainUpTo(8); window.copyMatch(2,5);
+        assertArrayEquals(new byte[]{'A','B','A','B','A'},out.toByteArray());
+        assertEquals(24,window.written()); assertEquals(7,window.retained());
+        org.junit.Assert.assertThrows(IllegalArgumentException.class, () ->
+                new RarLzWindow(raw,2,2,-1,RarOutputStreamDecodedOutput.wrapOrMemory(out)));
+    }
+
     @Test
     public void copyMatch_repeatsPreviousBytes() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();

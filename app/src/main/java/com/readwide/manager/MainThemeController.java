@@ -167,8 +167,7 @@ final class MainThemeController {
             activity.updateMainOverflowButtonVisibility();
         }
 
-        activity.getWindow().setStatusBarColor(bar);
-        activity.getWindow().setNavigationBarColor(bg);
+        com.readwide.manager.util.EdgeToEdgeUtil.setSystemBarColors(activity.getWindow(), bar, bg);
         androidx.core.view.WindowInsetsControllerCompat controller =
                 androidx.core.view.WindowCompat.getInsetsController(activity.getWindow(), activity.getWindow().getDecorView());
         controller.setAppearanceLightStatusBars(false);

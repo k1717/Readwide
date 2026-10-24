@@ -1,6 +1,6 @@
 # RAR status for Readwide 1.0.2
 
-> Historical 1.0.2 snapshot. For current scope and verification boundaries, see [1.0.20 decode boundaries](ARCHIVE_DECODE_BOUNDARIES_1_0_20.md) and [release readiness](RELEASE_READINESS_1_0_20.md). The original findings below are retained as history, not current exclusions or validation results.
+> Historical 1.0.2 snapshot. For current scope and verification boundaries, see [current archive support notes](ARCHIVE_BOUNDARY_SUPPORT_NOTES.md) and [release readiness](RELEASE_READINESS_1_0_21.md). The original findings below are retained as history, not current exclusions or validation results.
 
 This is the consolidated RAR status note for Readwide 1.0.2. It replaces internal RAR decoder development notes with a release-facing compatibility boundary.
 

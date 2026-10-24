@@ -2,6 +2,7 @@ package com.readwide.manager.archive;
 
 import static org.junit.Assert.*;
 
+import com.readwide.manager.util.FileOperationProgress;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
@@ -154,6 +155,126 @@ public class SevenZFallbackBoundaryTest {
         assertNull(SevenZBcj2ArchiveReader.openSpecialForwardReader(archive, null, spool));
         assertNull(SevenZBcj2ArchiveReader.openNativeUnsupportedForwardReader(archive, null, spool));
         assertEquals(0, spool.list().length);
+    }
+
+    @Test public void retiredPhysicalInputCannotRequestFallbackWithStableMetadata() throws Exception {
+        for (boolean split : new boolean[]{false, true}) {
+            File archive = valid(4, false, false);
+            if (split) archive = split(archive);
+            long size = archive.length(), modified = archive.lastModified();
+            try (java.io.Closeable source = openSource(archive)) {
+                SplitVolumeInput input = sourceInput(source);
+                assertTrue(input.read() >= 0);
+                java.lang.reflect.Field active = SplitVolumeInput.class.getDeclaredField("activeFile");
+                active.setAccessible(true);
+                ((java.io.RandomAccessFile) active.get(input)).close();
+                IOException physical = assertThrows(IOException.class, () -> input.read());
+                assertEquals(size, archive.length());
+                assertEquals(modified, archive.lastModified());
+                IOException failure = assertThrows(IOException.class, () -> probeSource(source));
+                assertSame(physical, failure.getCause());
+                assertSame(physical, assertThrows(IOException.class, () -> probeSource(source)).getCause());
+            }
+        }
+    }
+
+    @Test public void closedProbeSourceCannotBecomeUnsupportedHeader() throws Exception {
+        java.io.Closeable source = openSource(unhandledHeader());
+        source.close();
+        assertThrows(IOException.class, () -> probeSource(source));
+    }
+
+    @Test public void sourceUsabilityCheckPreservesCursorAndOpenHandle() throws Exception {
+        try (java.io.Closeable source = openSource(valid(4, false, false))) {
+            SplitVolumeInput input = sourceInput(source);
+            assertTrue(input.read() >= 0);
+            long position = input.getFilePointer();
+            java.lang.reflect.Field active = SplitVolumeInput.class.getDeclaredField("activeFile");
+            active.setAccessible(true);
+            Object handle = active.get(input);
+            input.requireUsable();
+            assertEquals(position, input.getFilePointer());
+            assertSame(handle, active.get(input));
+            assertNotNull(probeSource(source));
+        }
+    }
+
+    @Test(timeout = 5000) public void successfulAndUnhandledProbesDoNotWaitAfterSourceValidation() throws Exception {
+        for (boolean supported : new boolean[]{false, true}) {
+            File archive = supported ? valid(4, false, false) : unhandledHeader();
+            FileOperationProgress progress = new FileOperationProgress("7z", null);
+            boolean[] armed = {false}, checked = {false};
+            File observed = new File(archive.getPath()) {
+                @Override public boolean canRead() {
+                    boolean readable = super.canRead();
+                    if (armed[0]) { checked[0] = true; progress.setPaused(true); }
+                    return readable;
+                }
+            };
+            try (java.io.Closeable source = openSource(observed)) {
+                armed[0] = true;
+                Method method = SevenZBcj2ArchiveReader.class.getDeclaredMethod(
+                        "parseForProbe", source.getClass(), char[].class, FileOperationProgress.class);
+                method.setAccessible(true);
+                Object parsed = invoke(method, null, source, null, progress);
+                assertEquals(supported, parsed != null);
+                assertTrue(checked[0]);
+                assertTrue(progress.isPaused());
+            } finally { progress.setPaused(false); }
+        }
+    }
+
+    @Test public void successfulAndUnhandledProbesRejectCancellationDuringSourceValidation() throws Exception {
+        for (boolean supported : new boolean[]{false, true}) {
+            File archive = supported ? valid(4, false, false) : unhandledHeader();
+            FileOperationProgress progress = new FileOperationProgress("7z", null);
+            boolean[] armed = {false};
+            File observed = new File(archive.getPath()) {
+                @Override public boolean canRead() {
+                    boolean readable = super.canRead();
+                    if (armed[0]) progress.cancel();
+                    return readable;
+                }
+            };
+            try (java.io.Closeable source = openSource(observed)) {
+                armed[0] = true;
+                Method method = SevenZBcj2ArchiveReader.class.getDeclaredMethod(
+                        "parseForProbe", source.getClass(), char[].class, FileOperationProgress.class);
+                method.setAccessible(true);
+                assertThrows(java.io.InterruptedIOException.class,
+                        () -> invoke(method, null, source, null, progress));
+                assertTrue(progress.isCancelled());
+            }
+        }
+    }
+
+    private static java.io.Closeable openSource(File archive) throws Exception {
+        Class<?> type = Class.forName(SevenZBcj2ArchiveReader.class.getName() + "$Source");
+        Method method = type.getDeclaredMethod("open", File.class);
+        method.setAccessible(true);
+        return (java.io.Closeable) invoke(method, null, archive);
+    }
+
+    private static SplitVolumeInput sourceInput(java.io.Closeable source) throws Exception {
+        java.lang.reflect.Field input = source.getClass().getDeclaredField("input");
+        input.setAccessible(true);
+        return (SplitVolumeInput) input.get(source);
+    }
+
+    private static Object probeSource(java.io.Closeable source) throws Exception {
+        Method method = SevenZBcj2ArchiveReader.class.getDeclaredMethod(
+                "parseForProbe", source.getClass(), char[].class);
+        method.setAccessible(true);
+        return invoke(method, null, source, null);
+    }
+
+    private static Object invoke(Method method, Object receiver, Object... arguments) throws Exception {
+        try { return method.invoke(receiver, arguments); }
+        catch (InvocationTargetException failure) {
+            if (failure.getCause() instanceof Exception) throw (Exception) failure.getCause();
+            if (failure.getCause() instanceof Error) throw (Error) failure.getCause();
+            throw failure;
+        }
     }
 
     @Test public void sharedForwardFactoryReadsSingleAndSplitEncryptedSources() throws Exception {

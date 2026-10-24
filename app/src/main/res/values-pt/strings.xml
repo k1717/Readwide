@@ -828,4 +828,6 @@
     <string name="txt_contents_error">Não foi possível carregar o sumário. Reabra o arquivo e tente novamente.</string>
     <string name="txt_contents_save_error">Não foi possível salvar as alterações do sumário.</string>
     <string name="txt_contents_page">%1$s · pág. %2$d</string>
+    <string name="viewer_retry">Tentar novamente</string>
+    <string name="document_renderer_stopped">O visualizador de documentos parou. Abra o arquivo novamente para continuar da última posição salva.</string>
 </resources>

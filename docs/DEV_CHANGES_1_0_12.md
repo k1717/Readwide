@@ -3,14 +3,14 @@
 A small read-aloud patch release. Three changes, all in the TTS path; the
 dependency set is identical to 1.0.11 (no new dependency, no version bumps), so
 the license report and SBOM carry the same packages with only the version stamp
-changed. minSdk 24, compileSdk/targetSdk 35 unchanged. The user-facing summary
+changed. minSdk 24, compileSdk/targetSdk 35 unchanged. The public summary
 lives in `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_12.md`; the full technical
 detail is in `PATCHNOTES.md` under the 1.0.12 heading.
 
 ## PDF read-aloud start crash (missing PdfBox init)
 
 - Root cause: `PDFBoxResourceLoader.init` was called only in
-  `PdfSearchController`'s constructor, so read-aloud as the first PdfBox user in
+  `PdfSearchController`'s constructor, so read-aloud as the first PdfBox caller in
   the process ran `PDFTextStripper` against an uninitialized resource loader.
   PdfBox's font/glyph machinery then fails partly with `Error`s
   (`ExceptionInInitializerError`, then `NoClassDefFoundError` on retry), which

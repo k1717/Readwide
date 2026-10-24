@@ -60,7 +60,9 @@ public final class SafBrowserActivity extends AppCompatActivity {
     private final ArrayList<String> uriStack = new ArrayList<>();
     private final ArrayList<String> nameStack = new ArrayList<>();
     private final ExecutorService queryExecutor = Executors.newSingleThreadExecutor();
-    private final ExecutorService documentOpenExecutor = Executors.newSingleThreadExecutor();
+    private final java.util.concurrent.ThreadPoolExecutor documentOpenExecutor = new java.util.concurrent.ThreadPoolExecutor(
+            1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+            new java.util.concurrent.LinkedBlockingQueue<>());
     private final AtomicInteger queryGeneration = new AtomicInteger();
     private final AtomicInteger documentOpenGeneration = new AtomicInteger();
 
@@ -214,8 +216,42 @@ public final class SafBrowserActivity extends AppCompatActivity {
             openArchiveDocument(entry);
             return;
         }
+        openDocument(entry);
+    }
+
+    private void openDocument(@NonNull SafDocumentEntry entry) {
+        openingDocument = true;
+        updateProgressVisibility();
+        final int browseGeneration = queryGeneration.get();
+        final int openGeneration = documentOpenGeneration.incrementAndGet();
+        final android.content.Context context = getApplicationContext();
         try {
-            UriOpenRequest request = UriOpenRequest.create(this, entry.getUri());
+            pendingDocumentOpen = documentOpenExecutor.submit(() -> {
+                UriOpenRequest request = null;
+                try {
+                    request = UriOpenRequest.create(context, entry.getUri());
+                } catch (RuntimeException | OutOfMemoryError | StackOverflowError unavailable) {
+                }
+                final UriOpenRequest result = request;
+                runOnUiThread(() -> completeDocumentOpen(openGeneration, browseGeneration, result));
+            });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError rejected) {
+            completeDocumentOpen(openGeneration, browseGeneration, null);
+        }
+    }
+
+    void completeDocumentOpen(int openGeneration, int browseGeneration, @Nullable UriOpenRequest request) {
+        if (isFinishing() || isDestroyed() || openGeneration != documentOpenGeneration.get()) return;
+        pendingDocumentOpen = null;
+        openingDocument = false;
+        updateProgressVisibility();
+        if (browseGeneration != queryGeneration.get()) return;
+        if (request == null) {
+            lastFileOpenElapsedRealtime = Long.MIN_VALUE;
+            ShortToast.show(this, R.string.containing_folder_unavailable);
+            return;
+        }
+        try {
             startActivity(request.intent);
         } catch (RuntimeException unavailable) {
             lastFileOpenElapsedRealtime = Long.MIN_VALUE;
@@ -342,6 +378,7 @@ public final class SafBrowserActivity extends AppCompatActivity {
         Future<?> pending = pendingDocumentOpen;
         pendingDocumentOpen = null;
         if (pending != null) pending.cancel(true);
+        documentOpenExecutor.purge();
         openingDocument = false;
         lastFileOpenElapsedRealtime = Long.MIN_VALUE;
         updateProgressVisibility();
@@ -509,6 +546,14 @@ public final class SafBrowserActivity extends AppCompatActivity {
         if (currentName != null) outState.putString(STATE_CURRENT_NAME, currentName);
         outState.putStringArrayList(STATE_URI_STACK, new ArrayList<>(uriStack));
         outState.putStringArrayList(STATE_NAME_STACK, new ArrayList<>(nameStack));
+    }
+
+    @Override
+    protected void onPause() {
+        // Leaving the browser abandons its pending selection, including a slow
+        // provider that completes after Settings, the picker, or Home is shown.
+        cancelPendingDocumentOpenForNavigation();
+        super.onPause();
     }
 
     @Override

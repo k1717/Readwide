@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">Cỡ chữ EPUB: %1$d%%</string>
+    <string name="epub_line_height">Giãn dòng</string>
+    <string name="epub_typography_hint">Chỉ áp dụng cho EPUB. Mặc định của sách giữ nguyên giãn dòng gốc. Trang có bố cục cố định, chủ yếu là hình ảnh hoặc chữ dọc sẽ giữ nguyên bố cục đoạn văn.</string>
+    <string name="epub_paragraph_layout_kept">Không thể thay đổi định dạng đoạn văn trên trang này. Bố cục của sách được giữ nguyên.</string>
+</resources>

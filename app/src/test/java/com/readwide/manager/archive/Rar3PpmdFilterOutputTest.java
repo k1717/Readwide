@@ -174,6 +174,27 @@ public class Rar3PpmdFilterOutputTest {
         }
     }
 
+    @Test public void audioAdaptationSurvivesChunkedWritesWithoutPublishingAnIncompleteBlock() throws Exception {
+        byte[] raw = new byte[80]; Arrays.fill(raw, (byte) 1);
+        byte[] expected = new byte[82]; expected[0] = 42; expected[1] = 43;
+        // Independent constant-residual expectation: both channels adapt after sample 32.
+        for (int sample = 0; sample < 40; sample++) {
+            byte value = (byte) (sample <= 32 ? -(sample + 1) : 223 - 2 * (sample - 32));
+            expected[2 + sample * 2] = value;
+            expected[3 + sample * 2] = value;
+        }
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (Rar3PpmdFilterOutput out = output(bytes, expected.length)) {
+            out.queue(filter(Rar3VmFilter.StandardFilter.AUDIO, 2, raw.length, 2));
+            out.write(new byte[]{42, 43});
+            out.write(raw, 0, 33);
+            out.write(raw, 33, 46);
+            assertArrayEquals(new byte[]{42, 43}, bytes.toByteArray());
+            out.write(raw, 79, 1); out.finish();
+        }
+        assertArrayEquals(expected, bytes.toByteArray());
+    }
+
     @Test public void symbolRecordsReuseProgramsAcrossEntriesAndAllLengthEncodings() throws Exception {
         Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
         // First record defines E8; later records reuse its saved block length.
@@ -254,6 +275,22 @@ public class Rar3PpmdFilterOutputTest {
             out.write(new byte[]{24,(byte)132,100,0,0,0}); out.finish();
         }
         assertArrayEquals(new byte[]{(byte)0xe8,99,0,0,0,0}, bytes.toByteArray());
+    }
+
+    @Test public void chainedFiltersKeepIndependentQueuedRegisterSnapshots() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        Rar3VmFilter.PendingFilter descriptor = filter(Rar3VmFilter.StandardFilter.DELTA, 0, 3, 1);
+        descriptor.initR[4] = 91;
+        try (Rar3PpmdFilterOutput out = output(bytes, 3)) {
+            out.queue(descriptor);
+            out.queue(descriptor);
+            descriptor.initR[0] = 3;
+            out.write(new byte[]{1, 2, 3});
+            out.finish();
+        }
+        assertArrayEquals(new byte[]{1, 4, 10}, bytes.toByteArray());
+        assertEquals(3, descriptor.initR[0]);
+        assertEquals(91, descriptor.initR[4]);
     }
 
     @Test public void outputFailureCannotResumeOrCloseTheCallerDestination() throws Exception {

@@ -119,6 +119,7 @@ def zip_info(relative: PurePosixPath, source: Path) -> zipfile.ZipInfo:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path, help="destination .zip path")
+    parser.add_argument("--no-digest", action="store_true", help="omit the optional ZIP SHA-256 digest")
     args = parser.parse_args()
 
     output = args.output.expanduser().resolve()
@@ -188,11 +189,12 @@ def main() -> None:
         if owns_temporary and temporary.exists():
             temporary.unlink()
 
-    digest = hashlib.sha256(output.read_bytes()).hexdigest().upper()
     print(f"ZIP={output}")
     print(f"FILES={len(files)}")
     print(f"BYTES={output.stat().st_size}")
-    print(f"SHA256={digest}")
+    if not args.no_digest:
+        digest = hashlib.sha256(output.read_bytes()).hexdigest().upper()
+        print(f"SHA256={digest}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">小節</string>
+    <string name="epub_section_progress">小節 %1$s / %2$d</string>
+    <string name="epub_section_move">跳至小節</string>
+    <string name="epub_section_hint">依書籍的內容小節計數，並非畫面頁數或印刷頁碼。</string>
+    <string name="epub_section_range_error">請輸入 1 到 %1$d 之間的小節編號。</string>
+    <string name="epub_bookmarks_status">全部書籤：%1$d 個檔案 / %2$d 個書籤\n目前位置：小節 %3$d / %4$d</string>
+</resources>

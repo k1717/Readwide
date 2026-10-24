@@ -1,7 +1,7 @@
 # Archive extraction and stream ownership — Readwide 1.0.20
 
 This note groups decoder routing, cleanup and failure behavior by subsystem.
-The local release build completed successfully on 2026-10-11;
+The local release build completed successfully;
 focused host records and unexecuted regression sources remain separate from
 native/device interoperability validation.
 

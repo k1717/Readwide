@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">Ενότητα</string>
+    <string name="epub_section_progress">Ενότητα %1$s / %2$d</string>
+    <string name="epub_section_move">Μετάβαση σε ενότητα</string>
+    <string name="epub_section_hint">Μετρά τις ενότητες του βιβλίου, όχι τις σελίδες οθόνης ή την έντυπη αρίθμηση.</string>
+    <string name="epub_section_range_error">Εισαγάγετε αριθμό ενότητας από 1 έως %1$d.</string>
+    <string name="epub_bookmarks_status">Όλοι οι σελιδοδείκτες: %1$d αρχεία / %2$d σελιδοδείκτες\nΤρέχουσα: Ενότητα %3$d / %4$d</string>
+</resources>

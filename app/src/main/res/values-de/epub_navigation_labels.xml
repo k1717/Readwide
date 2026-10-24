@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">Abschnitt</string>
+    <string name="epub_section_progress">Abschnitt %1$s / %2$d</string>
+    <string name="epub_section_move">Zu Abschnitt</string>
+    <string name="epub_section_hint">Gezählt werden Buchabschnitte, nicht Bildschirmseiten oder gedruckte Seitenzahlen.</string>
+    <string name="epub_section_range_error">Eine Abschnittsnummer von 1 bis %1$d eingeben.</string>
+    <string name="epub_bookmarks_status">Alle Lesezeichen: %1$d Dateien / %2$d Lesezeichen\nAktuell: Abschnitt %3$d / %4$d</string>
+</resources>

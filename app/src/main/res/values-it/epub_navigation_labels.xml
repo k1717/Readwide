@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">Sezione</string>
+    <string name="epub_section_progress">Sezione %1$s / %2$d</string>
+    <string name="epub_section_move">Vai alla sezione</string>
+    <string name="epub_section_hint">Conta le sezioni del libro, non le pagine sullo schermo o i numeri di pagina stampati.</string>
+    <string name="epub_section_range_error">Inserisci un numero di sezione da 1 a %1$d.</string>
+    <string name="epub_bookmarks_status">Tutti i segnalibri: %1$d file / %2$d segnalibri\nPosizione: Sezione %3$d / %4$d</string>
+</resources>

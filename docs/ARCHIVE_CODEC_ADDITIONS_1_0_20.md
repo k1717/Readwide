@@ -1,6 +1,5 @@
 # Archive codec additions — Readwide 1.0.20
 
-Source additions: 2026-10-04; coverage wording reconciled: 2026-10-10.
 These additions have been reviewed as source only;
 no compilation, test execution, Android decoding or performance measurement was run.
 They are implemented paths, not a claim of complete format compatibility.

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Note de bas de page</string>
+    <string name="epub_return_to_text">Revenir au texte</string>
+    <string name="epub_contents_fallback">Aucune table des matières lisible ; les sections sont affichées dans l’ordre de lecture.</string>
+    <string name="epub_contents_empty">Aucune entrée correspondante.</string>
+</resources>

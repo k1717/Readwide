@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">Section</string>
+    <string name="epub_section_progress">Section %1$s / %2$d</string>
+    <string name="epub_section_move">Go to section</string>
+    <string name="epub_section_hint">Counts book sections, not screen pages or printed page numbers.</string>
+    <string name="epub_section_range_error">Enter a section number from 1 to %1$d.</string>
+    <string name="epub_bookmarks_status">All bookmarks: %1$d files / %2$d bookmarks\nCurrent: Section %3$d / %4$d</string>
+</resources>

@@ -61,7 +61,7 @@ so the text/Markdown path is unchanged by construction.
   toolbar (`pdf_tts`, gated visible once the PDF is loaded), and the read-aloud
   button's default position is standardized immediately right of the bookmark
   button in the document and PDF viewers via `ButtonOrderManager.defaultItems`
-  (the runtime order source, user-customizable). The text reader's order is
+  (the runtime order source, customizable). The text reader's order is
   unchanged.
 - Markdown read-aloud in the document viewer: `documentSupportsTts()` now allows
   Markdown. Text extraction reuses `DocumentTtsTextSource` (Markdown fills
@@ -126,8 +126,8 @@ Encryption/boundary detail: `docs/RAR_7Z_SPLIT_ENCRYPTION_REVALIDATION_READWIDE_
 
 ## Verification note
 
-The sandbox used for authoring has no Android SDK/Gradle, so verification is by
-per-file brace/paren gate, full `javalang` parse, minimal-stub compilation of
+The recorded verification did not include a full Android/Gradle build. It used
+per-file brace/paren checks, full `javalang` parsing, minimal-stub compilation of
 Android-dependent code, and Python/JVM real-file mirrors for archive decode,
 crypto key derivation, and offset math (RAR5 AES against real WinRAR archives,
 7z PPMd/BCJ2 boundaries against real p7zip archives). Run the full

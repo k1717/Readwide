@@ -144,9 +144,16 @@ final class DocumentAnnotationDialogController {
                         input.setError(activity.getString(R.string.annotation_note_required));
                         return;
                     }
-                    annotation.setNote(note);
-                    boolean stored = !isNew || manager.add(annotation);
-                    if (!isNew) manager.update(annotation);
+                    DocumentAnnotation edited = annotation.copy();
+                    edited.setNote(note);
+                    boolean stored;
+                    try {
+                        stored = !isNew || manager.add(edited);
+                        if (!isNew) manager.update(edited);
+                    } catch (DocumentAnnotationManager.PersistenceException failure) {
+                        ShortToast.show(activity, R.string.file_operation_failed);
+                        return; // Keep the edit text/dialog available for retry.
+                    }
                     navigator.annotationsChanged();
                     ShortToast.show(activity, stored
                             ? R.string.annotation_saved : R.string.annotation_already_saved);
@@ -198,7 +205,12 @@ final class DocumentAnnotationDialogController {
         addBottomActions(box,
                 activity.getString(R.string.cancel), () -> ref[0].dismiss(),
                 activity.getString(R.string.delete), () -> {
-                    manager.delete(annotation.getId());
+                    try {
+                        manager.delete(annotation.getId());
+                    } catch (DocumentAnnotationManager.PersistenceException failure) {
+                        ShortToast.show(activity, R.string.file_operation_failed);
+                        return;
+                    }
                     navigator.annotationsChanged();
                     ShortToast.show(activity, R.string.annotation_deleted);
                     ref[0].dismiss();

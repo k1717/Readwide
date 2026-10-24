@@ -37,8 +37,8 @@ android {
         applicationId = "com.readwide.manager"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10020
-        versionName = "1.0.20"
+        versionCode = 10021
+        versionName = "1.0.21"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Release APKs keep Android ARM ABIs only.
@@ -47,6 +47,10 @@ android {
         ndk {
             abiFilters "armeabi-v7a", "arm64-v8a"
         }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     signingConfigs {

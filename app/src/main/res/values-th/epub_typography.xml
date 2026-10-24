@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">ขนาดข้อความ EPUB: %1$d%%</string>
+    <string name="epub_line_height">ระยะห่างบรรทัด</string>
+    <string name="epub_typography_hint">ใช้กับ EPUB เท่านั้น ค่าเริ่มต้นของหนังสือจะคงระยะห่างบรรทัดเดิม หน้าที่มีรูปแบบตายตัว เน้นรูปภาพ หรือใช้ข้อความแนวตั้งจะคงการจัดย่อหน้าเดิมไว้</string>
+    <string name="epub_paragraph_layout_kept">ไม่สามารถเปลี่ยนรูปแบบย่อหน้าบนหน้านี้ได้ ระบบจะคงรูปแบบเดิมของหนังสือไว้</string>
+</resources>

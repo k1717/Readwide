@@ -1,0 +1,658 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "Readwide 1.0.21 source and direct-dependency SBOM",
+  "documentNamespace": "https://github.com/k1717/Readwide/spdx/readwide-1.0.21-source-direct",
+  "documentDescribes": [
+    "SPDXRef-Package-Readwide"
+  ],
+  "creationInfo": {
+    "created": "2026-10-11T00:00:00Z",
+    "creators": [
+      "Tool: source-metadata-roll-forward"
+    ],
+    "comment": "Source and declared-dependency SBOM for Readwide 1.0.21. All dependency and bundled-source pins are retained from 1.0.20. filesAnalyzed is false; no resolved transitive build or new license audit was performed."
+  },
+  "hasExtractedLicensingInfos": [
+    {
+      "licenseId": "LicenseRef-Public-Domain-Ppmd8",
+      "name": "Public-domain declarations in the pinned 7-Zip Ppmd8 subset",
+      "extractedText": "Igor Pavlov: Public domain. PPMd var.I (2002): Dmitry Shkarin: Public domain. Common PPMd code based on PPMd var.H (2001): Dmitry Shkarin: Public domain. Carryless rangecoder (1999): Dmitry Subbotin: Public domain. Original per-file declarations are retained in third_party/ppmd8.",
+      "seeAlsos": ["https://github.com/ip7z/7zip/tree/9128b80e3a471108678e2b3ec3c985861c8d7b0f/C"]
+    }
+  ],
+  "packages": [
+    {
+      "name": "com.google.re2j:re2j",
+      "SPDXID": "SPDXRef-Package-RE2J",
+      "versionInfo": "1.8",
+      "downloadLocation": "https://github.com/google/re2j/tree/re2j-1.8",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright (c) 2009 The Go Authors. All rights reserved.",
+      "comment": "Declared Maven runtime dependency for custom TXT contents rules; no modified upstream source. Full license retained in open_source_licenses/re2j_bsd_3_clause.txt. Dependency resolution and APK validation pending."
+    },
+    {
+      "name": "LZHAM decoder/common source subset",
+      "SPDXID": "SPDXRef-Package-LZHAM",
+      "versionInfo": "d09fc6676a0313c3814457fbc76351a68f653092-readwide",
+      "downloadLocation": "https://github.com/richgel999/lzham_codec_devel/tree/d09fc6676a0313c3814457fbc76351a68f653092",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2009-2015 Richard Geldreich, Jr.",
+      "comment": "31 selected source/license files; four marked local changes. Original/local hashes in third_party/lzham. Separate Apache-2.0 JNI adapter; no compressor translation units, plugin or CLI. Build and producer/device validation pending."
+    },
+    {
+      "name": "NDK static C++ runtime for the LZHAM JNI target",
+      "SPDXID": "SPDXRef-Package-LZHAM-CxxRuntime",
+      "versionInfo": "NDK 29.0.14206865; clang-r563880c; LLVM base 386af4a5c64ab75eaee2448dc38f2e34a40bfed0",
+      "downloadLocation": "https://github.com/llvm/llvm-project/tree/386af4a5c64ab75eaee2448dc38f2e34a40bfed0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0 WITH LLVM-exception AND MIT",
+      "copyrightText": "LLVM contributors and retained legacy libc++/libc++abi/libunwind copyright notices",
+      "comment": "Declared c++_static build dependency, not a resolved binary audit. Full three upstream license files retained in open_source_licenses/llvm_cxx_runtime.txt. No toolchain binary is vendored. Exact linked sections and ABI validation remain pending."
+    },
+    {
+      "name": "Readwide first-party source",
+      "SPDXID": "SPDXRef-Package-Readwide",
+      "downloadLocation": "https://github.com/k1717/Readwide",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "APPLICATION",
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "Copyright 2026 k1717",
+      "versionInfo": "1.0.21"
+    },
+    {
+      "name": "androidx.appcompat:appcompat",
+      "SPDXID": "SPDXRef-Package-AndroidX-AppCompat",
+      "versionInfo": "1.8.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "com.google.android.material:material",
+      "SPDXID": "SPDXRef-Package-MaterialComponents",
+      "versionInfo": "1.14.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "androidx.recyclerview:recyclerview",
+      "SPDXID": "SPDXRef-Package-AndroidX-Recyclerview",
+      "versionInfo": "1.4.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "androidx.constraintlayout:constraintlayout",
+      "SPDXID": "SPDXRef-Package-AndroidX-ConstraintLayout",
+      "versionInfo": "2.2.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "androidx.activity:activity",
+      "SPDXID": "SPDXRef-Package-AndroidX-Activity",
+      "versionInfo": "1.10.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "androidx.drawerlayout:drawerlayout",
+      "SPDXID": "SPDXRef-Package-AndroidX-DrawerLayout",
+      "versionInfo": "1.2.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "androidx.swiperefreshlayout:swiperefreshlayout",
+      "SPDXID": "SPDXRef-Package-AndroidX-SwipeRefreshLayout",
+      "versionInfo": "1.2.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "com.github.albfernandez:juniversalchardet",
+      "SPDXID": "SPDXRef-Package-JUniversalChardet",
+      "versionInfo": "2.5.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MPL-1.1",
+      "licenseDeclared": "MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "org.apache.commons:commons-compress",
+      "SPDXID": "SPDXRef-Package-CommonsCompress",
+      "versionInfo": "1.28.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "sourceInfo": "The dependency is also the upstream source of the modified, vendored AlzBzip2InputStream.java. Its Apache-2.0 header and modification notice are retained in that file."
+    },
+    {
+      "name": "libarchive-android source module",
+      "SPDXID": "SPDXRef-Package-LibarchiveAndroid",
+      "versionInfo": "wrapper 3a592be028c7be41847f667570bd343c0010bd9d / libarchive 3.8.9",
+      "downloadLocation": "https://github.com/zhanghai/libarchive-android/tree/3a592be028c7be41847f667570bd343c0010bd9d",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND BSD-4-Clause-UC AND 0BSD AND bzip2-1.0.6 AND Zlib",
+      "licenseDeclared": "Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND BSD-4-Clause-UC AND 0BSD AND bzip2-1.0.6 AND Zlib",
+      "copyrightText": "NOASSERTION",
+      "comment": "Vendored source module under third_party/libarchive-android, including official libarchive commit 27cbc7827172698143e440801fc0ba39ccb4f1f5 (3.8.9), BLAKE2, bzip2, liblzma, LZ4, Zstandard, Android NDK zlib, and Mbed TLS inputs. Exact pins are recorded in UPSTREAM.md; no prebuilt native binary is checked in. The selected permissive license paths and full binary notices are reproduced in app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt."
+    },
+    {
+      "name": "XADMaster WinZip JPEG source subset",
+      "SPDXID": "SPDXRef-Package-XADMaster-WinZipJPEG",
+      "versionInfo": "v1.10.8 / 881e0ec25e249c9ad5bbc1b6782ae8dcdf48a6ed",
+      "downloadLocation": "https://github.com/MacPaw/XADMaster/tree/881e0ec25e249c9ad5bbc1b6782ae8dcdf48a6ed",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LGPL-2.1-or-later",
+      "licenseDeclared": "LGPL-2.1-or-later",
+      "copyrightText": "Copyright (c) 2017-present MacPaw Inc.",
+      "comment": "Vendored C WinZip JPEG decoder plus its public-domain LZMA SDK decoder subset under third_party/zipx-codecs-android. Readwide hardening modifications and the separate-shared-library relinking boundary are recorded in UPSTREAM.md; the complete LGPL-2.1 text is packaged in the APK."
+    },
+    {
+      "name": "WavPack source library",
+      "SPDXID": "SPDXRef-Package-WavPack",
+      "versionInfo": "5.9.0 / 5803634a030e2a11dba602ba057b89cc34486c67",
+      "downloadLocation": "https://github.com/dbry/WavPack/tree/5803634a030e2a11dba602ba057b89cc34486c67",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright (c) 1998-2025 David Bryant",
+      "comment": "Vendored source library under third_party/zipx-codecs-android for WinZip ZIPX WavPack method 97. No prebuilt native binary is checked in; the BSD notice is packaged in the APK."
+    },
+    {
+      "name": "org.tukaani:xz",
+      "SPDXID": "SPDXRef-Package-XZJava",
+      "versionInfo": "1.12",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "0BSD",
+      "licenseDeclared": "0BSD",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "Google Brotli Java decoder (source module)",
+      "SPDXID": "SPDXRef-Package-BrotliJava",
+      "versionInfo": "1.2.0",
+      "downloadLocation": "git+https://github.com/google/brotli.git@028fb5a23661f123017c060daa546b55cf4bde29",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.",
+      "comment": "Local :brotliJava module, 12 unchanged runtime Java files and reflection keep rules from the pinned upstream java/org/brotli/dec subset. Standard/large-window decoding; no external custom dictionary is supplied. Provenance/blob hashes and LICENSE are in third_party/brotli-java. MIT notice included in APK assets. No module runtime dependencies. Build, regression and minified Android validation remain pending."
+    },
+    {
+      "name": "com.github.luben:zstd-jni",
+      "SPDXID": "SPDXRef-Package-ZstdJni",
+      "versionInfo": "1.5.7-17",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-2-Clause AND BSD-3-Clause",
+      "licenseDeclared": "BSD-2-Clause AND BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "comment": "JVM testImplementation only; not packaged in the Android APK. JNI binding plus native Zstandard under the permissive BSD licensing path for test execution."
+    },
+    {
+      "name": "net.lingala.zip4j:zip4j",
+      "SPDXID": "SPDXRef-Package-Zip4j",
+      "versionInfo": "2.11.6",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "junit:junit",
+      "SPDXID": "SPDXRef-Package-JUnit",
+      "versionInfo": "4.13.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "EPL-1.0",
+      "licenseDeclared": "EPL-1.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "androidx.test:runner",
+      "SPDXID": "SPDXRef-Package-AndroidX-Test-Runner",
+      "versionInfo": "1.7.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "androidx.test.ext:junit",
+      "SPDXID": "SPDXRef-Package-AndroidX-Test-Ext-JUnit",
+      "versionInfo": "1.3.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "kr.dogfoot:hwplib",
+      "SPDXID": "SPDXRef-Package-kr-dogfoot-hwplib",
+      "versionInfo": "1.1.11",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "supplier": "NOASSERTION"
+    },
+    {
+      "name": "kr.dogfoot:hwpxlib",
+      "SPDXID": "SPDXRef-Package-kr-dogfoot-hwpxlib",
+      "versionInfo": "1.0.9",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "supplier": "NOASSERTION"
+    },
+    {
+      "name": "com.tom-roush:pdfbox-android",
+      "SPDXID": "SPDXRef-Package-PdfBox-Android",
+      "versionInfo": "2.0.27.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "supplier": "NOASSERTION"
+    },
+    {
+      "name": "xunazo-derived AZO Java port",
+      "SPDXID": "SPDXRef-Package-Xunazo-Azo-Port",
+      "downloadLocation": "https://github.com/kippler/xunazo",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "LIBRARY",
+      "licenseConcluded": "Zlib",
+      "licenseDeclared": "Zlib",
+      "copyrightText": "Copyright (C) 2018 kippler@gmail.com",
+      "sourceInfo": "Modified extraction-only Java port included as app/src/main/java/com/readwide/manager/archive/AzoDecoder.java. The upstream zlib notice and modification statement are retained in source."
+    },
+    {
+      "name": "Gradle Wrapper JAR",
+      "SPDXID": "SPDXRef-Package-Gradle-Wrapper",
+      "versionInfo": "9.4.1",
+      "downloadLocation": "https://github.com/gradle/gradle",
+      "packageFileName": "gradle-wrapper.jar",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "APPLICATION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "55243ef57851f12b070ad14f7f5bb8302daceeebc5bce5ece5fa6edb23e1145c"
+        }
+      ],
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "comment": "Checked-in official wrapper JAR. gradle-wrapper.properties pins Gradle 9.4.1 and its distribution SHA-256."
+    },
+    {
+      "name": "androidx.annotation:annotation",
+      "SPDXID": "SPDXRef-Package-AndroidX-Annotation",
+      "versionInfo": "1.9.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "comment": "Declared by third_party/libarchive-android/library/build.gradle. License verified from official Google Maven POM: https://dl.google.com/dl/android/maven2/androidx/annotation/annotation/1.9.1/annotation-1.9.1.pom"
+    },
+    {
+      "name": "alkegi/unegg LEA Java adaptation",
+      "SPDXID": "SPDXRef-Package-Unegg-LEA",
+      "versionInfo": "9929009ca4d010e8cd88bb796f7a1868162026d4",
+      "downloadLocation": "https://github.com/alkegi/unegg/tree/9929009ca4d010e8cd88bb796f7a1868162026d4",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "LIBRARY",
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright 2026 Sungjoon Moon",
+      "comment": "LEA primitive adapted into EggLeaCipher.java; original MIT notice retained in APK assets."
+    },
+    {
+      "name": "nwaples/rardecode RAR3 VM Java adaptation",
+      "SPDXID": "SPDXRef-Package-Rardecode-VM",
+      "versionInfo": "76ac572a52e7550ccbbc75395d2e08e39c069e36",
+      "downloadLocation": "https://github.com/nwaples/rardecode/tree/76ac572a52e7550ccbbc75395d2e08e39c069e36",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "LIBRARY",
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "Copyright 2015 Nicholas Waples",
+      "comment": "VM and filter logic adapted into Rar3VirtualMachine.java; no Go runtime or upstream archive reader bundled."
+    },
+    {
+      "name": "LZ5 decoder source subset",
+      "SPDXID": "SPDXRef-Package-LZ5",
+      "versionInfo": "1.5.0 (7-Zip-zstd b5ac55ff587ec9c9315ffd624c5c93a2899340d2)",
+      "downloadLocation": "https://github.com/mcmilk/7-Zip-zstd/tree/b5ac55ff587ec9c9315ffd624c5c93a2899340d2/C/lz5",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "LIBRARY",
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "comment": "Decoder/frame sources built into the existing replaceable LGPL codec library. Upstream hashes and local changes in LZ_SOURCES.json / LZ_UPSTREAM.md; no 7-Zip archive engine. Local corrections retain full frame history, validate malformed offsets/literal lengths, verify optional block checksums and enforce explicit frame sizes; sources are uncompiled/unrun."
+    },
+    {
+      "name": "Lizard decoder and entropy source subset",
+      "SPDXID": "SPDXRef-Package-Lizard",
+      "versionInfo": "2.1.0 (7-Zip-zstd b5ac55ff587ec9c9315ffd624c5c93a2899340d2)",
+      "downloadLocation": "https://github.com/mcmilk/7-Zip-zstd/tree/b5ac55ff587ec9c9315ffd624c5c93a2899340d2/C/lizard",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "LIBRARY",
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION",
+      "comment": "BSD option selected for dual-licensed entropy files. Copyright headers retained, including Yann Collet/Facebook. Original notices in source and APK assets; local changes in LZ_UPSTREAM.md."
+    },
+    {
+      "name": "alkegi/unegg EGG LEA producer test fixtures",
+      "SPDXID": "SPDXRef-Package-Unegg-LEA-Fixtures",
+      "versionInfo": "9929009ca4d010e8cd88bb796f7a1868162026d4",
+      "downloadLocation": "https://github.com/alkegi/unegg/tree/9929009ca4d010e8cd88bb796f7a1868162026d4/tests/data",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "DATA",
+      "licenseConcluded": "CC0-1.0",
+      "licenseDeclared": "CC0-1.0",
+      "copyrightText": "NOASSERTION",
+      "comment": "Three base64-encoded EGG archives for host regression tests only; not APK assets. Provenance and SHA-256 values in app/src/test/resources/archives/egg-lea/README.md."
+    },
+    {
+      "name": "libmspack CAB decoder source subset with Readwide strict continuation checks",
+      "SPDXID": "SPDXRef-Package-Libmspack-CAB-Source",
+      "versionInfo": "0.11alpha source plus commit 55d501976171397ccd5d5a7a1ca7da065b1d9a06",
+      "downloadLocation": "https://github.com/kyz/libmspack/tree/55d501976171397ccd5d5a7a1ca7da065b1d9a06/libmspack",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "LIBRARY",
+      "licenseConcluded": "LGPL-2.1-only",
+      "licenseDeclared": "LGPL-2.1-only",
+      "copyrightText": "NOASSERTION",
+      "comment": "Pinned 14-file libmscabd subset: cabd.c has a marked LGPL-2.1 strict continuation-table patch; thirteen C/header files remain unchanged. Original/local hashes, copyrights, COPYING.LIB and incorporation terms are retained. CMake links a separate libreadwide-cab.so using the public API. The APK includes the full license/relinking notice. Linked-set app extraction/viewer routing is connected in source; native build/validation remains pending."
+    },
+    {
+      "name": "libmspack stored multipart and MSZIP/LZX/Quantum CAB regression resources",
+      "SPDXID": "SPDXRef-Package-Libmspack-CAB-Fixtures",
+      "versionInfo": "55d501976171397ccd5d5a7a1ca7da065b1d9a06",
+      "downloadLocation": "https://github.com/kyz/libmspack/tree/55d501976171397ccd5d5a7a1ca7da065b1d9a06/libmspack/test/test_files/cabd",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "DATA",
+      "licenseConcluded": "LGPL-2.1-only",
+      "licenseDeclared": "LGPL-2.1-only",
+      "copyrightText": "NOASSERTION",
+      "comment": "Six byte-exact Base64 resources from the libmspack distribution, test-only (host resources and Android-test assets, never production APK assets). Decoded hashes and internal cabd_ filename mapping are recorded in app/src/test/resources/archives/cab-multipart/README.md. Upstream regression data, not a new producer/runtime validation claim."
+    },
+    {
+      "name": "7-Zip public-domain PPMd-I decoder subset",
+      "SPDXID": "SPDXRef-Package-Ppmd8-Source",
+      "versionInfo": "9128b80e3a471108678e2b3ec3c985861c8d7b0f-readwide",
+      "downloadLocation": "https://github.com/ip7z/7zip/tree/9128b80e3a471108678e2b3ec3c985861c8d7b0f/C",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "LIBRARY",
+      "licenseConcluded": "LicenseRef-Public-Domain-Ppmd8 AND Apache-2.0",
+      "licenseDeclared": "LicenseRef-Public-Domain-Ppmd8 AND Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "comment": "Eight public-domain files: six unchanged, two with marked Readwide Apache-2.0 freeze-profile additions. Per-file declarations and upstream/current SHA256SUMS retained. Only Ppmd8.c/Ppmd8Dec.c compile into independent libreadwide-ppmd.so with Apache-2.0 adapters. No encoder, archive parser or UnRAR code. App selection checks both freeze profiles; raw decoding alone cannot identify a container revision. Binary attribution retained; build/native tests pending."
+    },
+    {
+      "name": "libarchive PPMd-I ZIP regression fixtures",
+      "SPDXID": "SPDXRef-Package-Ppmd8-Zip-Fixtures",
+      "versionInfo": "27cbc7827172698143e440801fc0ba39ccb4f1f5",
+      "downloadLocation": "https://github.com/libarchive/libarchive/tree/27cbc7827172698143e440801fc0ba39ccb4f1f5/libarchive/test",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "FILE",
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "Copyright (c) 2003-2007 Tim Kientzle; Copyright (c) 2011 Michihiro NAKAJIMA",
+      "comment": "Two decoded upstream .uu ZIPs retained as exact Base64 resources, test-only. Original/decoded hashes, payload metadata, CRC oracles and full test license are in app/src/test/resources/archives/zip-ppmdi/PPMD_FIXTURES.md. No payload decoding or Android execution was performed during integration."
+    },
+    {
+      "name": "Readwide CAB JNI adapter",
+      "SPDXID": "SPDXRef-Package-Readwide-CAB-JNI",
+      "versionInfo": "1.0.21",
+      "downloadLocation": "https://github.com/k1717/Readwide",
+      "filesAnalyzed": false,
+      "primaryPackagePurpose": "LIBRARY",
+      "licenseConcluded": "LGPL-2.1-only",
+      "licenseDeclared": "LGPL-2.1-only",
+      "copyrightText": "Copyright 2026 Readwide contributors",
+      "comment": "cab_decoder_jni.c in the native codec module; callback-only public libmspack API adapter in separate libreadwide-cab.so. The Java API is first-party Apache-2.0. App extraction/viewer routes are connected in source; build/Android validation remains pending."
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-Package-Readwide",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-RE2J"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-LZHAM",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-LZHAM-CxxRuntime",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-LZHAM"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Ppmd8-Source",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Ppmd8-Zip-Fixtures",
+      "relationshipType": "TEST_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Libmspack-CAB-Source",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide-CAB-JNI"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Readwide-CAB-JNI",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Libmspack-CAB-Fixtures",
+      "relationshipType": "TEST_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-BrotliJava",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-AndroidX-AppCompat",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-MaterialComponents",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-AndroidX-Recyclerview",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-AndroidX-ConstraintLayout",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-AndroidX-Activity",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-AndroidX-DrawerLayout",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-AndroidX-SwipeRefreshLayout",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-JUniversalChardet",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CommonsCompress",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-LibarchiveAndroid",
+      "relationshipType": "CONTAINED_BY",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-XADMaster-WinZipJPEG",
+      "relationshipType": "CONTAINED_BY",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-WavPack",
+      "relationshipType": "CONTAINED_BY",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-XZJava",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Zip4j",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-kr-dogfoot-hwplib",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-kr-dogfoot-hwpxlib",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-PdfBox-Android",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ZstdJni",
+      "relationshipType": "TEST_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-JUnit",
+      "relationshipType": "TEST_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-AndroidX-Test-Runner",
+      "relationshipType": "TEST_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-AndroidX-Test-Ext-JUnit",
+      "relationshipType": "TEST_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Xunazo-Azo-Port",
+      "relationshipType": "CONTAINED_BY",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Gradle-Wrapper",
+      "relationshipType": "BUILD_TOOL_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-AndroidX-Annotation",
+      "relationshipType": "DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-LibarchiveAndroid"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Unegg-LEA",
+      "relationshipType": "CONTAINED_BY",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Rardecode-VM",
+      "relationshipType": "CONTAINED_BY",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-LZ5",
+      "relationshipType": "CONTAINED_BY",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Lizard",
+      "relationshipType": "CONTAINED_BY",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Unegg-LEA-Fixtures",
+      "relationshipType": "TEST_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-Readwide"
+    }
+  ]
+}

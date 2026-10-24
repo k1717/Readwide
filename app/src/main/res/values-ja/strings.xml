@@ -832,4 +832,6 @@
     <string name="txt_contents_error">目次を読み込めませんでした。ファイルを開き直してお試しください。</string>
     <string name="txt_contents_save_error">目次の変更を保存できませんでした。</string>
     <string name="txt_contents_page">%1$s · %2$dページ</string>
+    <string name="viewer_retry">再試行</string>
+    <string name="document_renderer_stopped">文書ビューアが停止しました。ファイルを開き直すと、最後に保存された位置から読み続けられます。</string>
 </resources>

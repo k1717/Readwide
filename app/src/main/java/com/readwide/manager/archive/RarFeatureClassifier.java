@@ -36,6 +36,11 @@ final class RarFeatureClassifier {
         return method == 0 || method == 0x30;
     }
 
+    /** The legacy container also carries older, incompatible compressed generations. */
+    static boolean hasRar3DecoderVersion(@NonNull RarArchiveReader.RarEntry entry) {
+        return entry.rarVersion == 4 && (entry.unpackVersion == -1 || entry.unpackVersion == 29);
+    }
+
     static boolean hasUnsupportedRar3Or4Payload(@NonNull List<RarArchiveReader.RarEntry> entries) {
         for (RarArchiveReader.RarEntry entry : entries) {
             if (isUnsupportedRar3Or4Payload(entry)) return true;

@@ -116,20 +116,40 @@ final class Rar3FirstPartyArchiveExtractor {
                     default:
                         throw new IOException("Unknown RAR plan action");
                 }
-                if (out == null) Rar3Unpacker.unpackToDiscard(context, progress);
+                if (step.continuesSolid) context.allowPartialFilterCarry();
+                if (out == null) {
+                    Rar3Unpacker.unpackToDiscard(context, progress);
+                    checkRunEnd(step);
+                }
                 else {
                     try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(out)) {
                         Rar3Unpacker.unpack(context, out, progress);
+                        checkRunEnd(step);
                         guard.commit();
                     }
                 }
+                // Selected prefixes may leave future descriptors, but have no
+                // further consumer in this plan. Complete plans checked them above.
+                if (!step.continuesSolid) releaseState();
                 position++;
             } catch (IOException | RuntimeException | Error failure) {
                 retire();
                 throw failure;
             }
         }
-        void retire() { retired = true; state = null; }
+        private void checkRunEnd(Rar3DecodePlan.Step step) throws IOException {
+            if (plan.completeArchivePlan && !step.continuesSolid && state != null) {
+                state.deferredFilters().requireEmpty();
+            }
+        }
+        private void releaseState() {
+            if (state != null) state.invalidate();
+            state = null;
+        }
+        void retire() {
+            retired = true;
+            releaseState();
+        }
     }
 
     /** Legacy diagnostic/test harness; production fallback uses the planned entry points above. */
@@ -221,7 +241,7 @@ final class Rar3FirstPartyArchiveExtractor {
     }
 
     static boolean isFirstPartyCompressedCandidate(@NonNull RarArchiveReader.RarEntry entry) {
-        return entry.rarVersion < 5
+        return RarFeatureClassifier.hasRar3DecoderVersion(entry)
                 && !entry.directory
                 && !entry.encrypted()
                 && !entry.splitBefore

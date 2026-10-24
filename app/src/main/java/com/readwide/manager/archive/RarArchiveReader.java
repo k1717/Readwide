@@ -441,6 +441,8 @@ final class RarArchiveReader {
     static final class EntryScan {
         final List<RarEntry> entries = new ArrayList<>();
         boolean hasRedirections;
+        boolean rar4HistoryOmitted;
+        boolean rar5HistoryOmitted;
         IOException failure;
 
         List<RarEntry> requireComplete() throws IOException {
@@ -451,7 +453,7 @@ final class RarArchiveReader {
         List<RarEntry> forSelectedEntry(String path) throws IOException {
             if (failure != null) {
                 // Required split parts and solid predecessors are validated by the selected
-                // extraction plan. An unrelated later volume need not prevent recovery.
+                // extraction plan. An unrelated later member or volume need not prevent recovery.
                 for (RarEntry entry : entries) {
                     if (!entry.directory && !entry.splitBefore && path.equals(entry.path)) return entries;
                 }
@@ -470,6 +472,7 @@ final class RarArchiveReader {
             }
             try (RandomAccessFile raf = new RandomAccessFile(volume, "r")) {
                 result.entries.addAll(readSingleVolumeEntries(volume, raf, password, result));
+                if (result.failure != null) break;
             } catch (java.io.InterruptedIOException cancelled) {
                 throw cancelled;
             } catch (IOException e) {
@@ -497,7 +500,7 @@ final class RarArchiveReader {
             List<RarEntry> entries;
             if (signature.version != 5) {
                 raf.seek(signature.offset + RarArchiveLocator.signatureLength(signature.version));
-                entries = readRar4Entries(raf, password);
+                entries = readRar4Entries(raf, password, scan);
             } else {
                 raf.seek(signature.offset + RarArchiveLocator.signatureLength(signature.version));
                 entries = readRar5Entries(raf, password, scan);
@@ -508,7 +511,8 @@ final class RarArchiveReader {
 
     @NonNull
     private static List<RarEntry> readRar4Entries(@NonNull RandomAccessFile raf,
-                                                  @Nullable char[] password) throws IOException {
+                                                  @Nullable char[] password,
+                                                  @NonNull EntryScan scan) throws IOException {
         List<RarEntry> result = new ArrayList<>();
         List<Rar4FileBlock> fileBlocks = new ArrayList<>();
         while (raf.getFilePointer() < raf.length()) {
@@ -526,13 +530,9 @@ final class RarArchiveReader {
             raf.readFully(headerData);
             long dataSize = 0L;
             if (type == RAR4_HEADER_FILE) {
-                // Pass 1 keeps the historical walk semantics (dataSize comes
-                // from the same parse as before); names are re-decoded below
-                // with the archive-wide corpus once every raw name is known.
-                RarEntry entry = parseRar4FileBlock(headerStart + headerSize, flags, headerData, null);
-                if (entry != null) {
-                    dataSize = entry.packedSize;
-                }
+                // Physical framing is independent of whether the name is safe to
+                // expose. Never mistake an omitted member's payload for a header.
+                dataSize = readRar4PackedSize(flags, headerData);
                 fileBlocks.add(new Rar4FileBlock(headerStart + headerSize, flags, headerData));
             } else if (type == RAR4_HEADER_MAIN && (flags & RAR4_MAIN_PASSWORD) != 0) {
                 if (password != null && password.length > 0) {
@@ -543,8 +543,11 @@ final class RarArchiveReader {
                 dataSize = uint32FromBytes(headerData, 0);
             }
 
-            long next = headerStart + headerSize + dataSize;
-            if (next < headerStart || next > raf.length()) throw new IOException("Invalid RAR4 data size");
+            long dataOffset = headerStart + headerSize;
+            if (dataSize < 0L || dataSize > raf.length() - dataOffset) {
+                throw new IOException("Invalid RAR4 data size");
+            }
+            long next = dataOffset + dataSize;
             raf.seek(next);
             if (type == RAR4_HEADER_END) break;
         }
@@ -561,9 +564,41 @@ final class RarArchiveReader {
         }
         for (Rar4FileBlock block : fileBlocks) {
             RarEntry entry = parseRar4FileBlock(block.dataOffset, block.flags, block.headerData, corpus);
-            if (entry != null) result.add(entry);
+            if (entry != null && !entry.directory && entry.path.endsWith("/")) {
+                // Do not skip a regular payload as a directory: later solid members
+                // can depend on it. Keep the already admitted prefix recoverable.
+                scan.failure = new IOException("RAR4 regular file has a directory-shaped name");
+                break;
+            }
+            if (entry == null) {
+                int method = block.headerData[18] & 0xff;
+                boolean directory = (block.flags & RAR4_FILE_DIRECTORY_MASK) == RAR4_FILE_DIRECTORY;
+                if (!directory && !RarFeatureClassifier.isRar3Or4StoredMethod(method)) {
+                    scan.rar4HistoryOmitted = true;
+                }
+            } else {
+                if (!entry.directory && !RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) {
+                    if (!entry.solid && !entry.splitBefore) {
+                        scan.rar4HistoryOmitted = false;
+                    } else if (scan.rar4HistoryOmitted) {
+                        scan.failure = new UnsupportedRarFeatureException(
+                                "RAR4 solid payload depends on an omitted unsafe-name member");
+                        break; // Earlier independent members remain selected-entry recovery data.
+                    }
+                }
+                result.add(entry);
+            }
         }
         return result;
+    }
+
+    private static long readRar4PackedSize(int flags, @NonNull byte[] headerData) throws IOException {
+        int minimumSize = (flags & RAR4_FILE_LARGE) != 0 ? 33 : 25;
+        if (headerData.length < minimumSize) throw new IOException("Truncated RAR4 file header");
+        long packed = uint32FromBytes(headerData, 0);
+        if ((flags & RAR4_FILE_LARGE) != 0) packed |= uint32FromBytes(headerData, 25) << 32;
+        if (packed < 0L) throw new IOException("RAR4 packed size exceeds the supported numeric range");
+        return packed;
     }
 
     /** RAR4 FILE header captured during the walk for corpus-aware name decoding. */
@@ -606,7 +641,7 @@ final class RarArchiveReader {
         cursor.readUnsignedByte(); // Host OS.
         long dataCrc = readUInt32LE(cursor);
         long dosTime = readUInt32LE(cursor);
-        cursor.readUnsignedByte(); // Minimum RAR version needed to extract.
+        int unpackVersion = cursor.readUnsignedByte(); // Decoder generation, not container version.
         int method = cursor.readUnsignedByte();
         int nameSize = readUInt16LE(cursor);
         cursor.readUnsignedInt(); // File attributes.
@@ -627,7 +662,7 @@ final class RarArchiveReader {
         String sanitized = sanitizeEntryPath(path);
         if (sanitized == null) return null;
 
-        boolean directory = (flags & RAR4_FILE_DIRECTORY_MASK) == RAR4_FILE_DIRECTORY || sanitized.endsWith("/");
+        boolean directory = (flags & RAR4_FILE_DIRECTORY_MASK) == RAR4_FILE_DIRECTORY;
         boolean encrypted = (flags & RAR4_FILE_PASSWORD) != 0;
         boolean splitBefore = (flags & RAR4_FILE_SPLIT_BEFORE) != 0;
         boolean splitAfter = (flags & RAR4_FILE_SPLIT_AFTER) != 0;
@@ -635,7 +670,8 @@ final class RarArchiveReader {
         int normalizedMethod = method == RAR4_METHOD_STORE ? 0 : method;
         long timeMillis = dosTimeToMillis(dosTime);
         return new RarEntry(sanitized, directory, unpackedSize, packSize, dataOffset, 4,
-                normalizedMethod, solid, splitBefore, splitAfter, encrypted ? EncryptionInfo.rar4Unsupported(rar4Salt) : null, dataCrc, timeMillis);
+                normalizedMethod, solid, splitBefore, splitAfter, encrypted ? EncryptionInfo.rar4Unsupported(rar4Salt) : null,
+                dataCrc, timeMillis, -1L, null, false, unpackVersion);
     }
 
     @NonNull
@@ -667,6 +703,7 @@ final class RarArchiveReader {
                 archiveSolid = (archiveFlags & 0x0004L) != 0;
             } else if (block.type == HEADER_FILE) {
                 RarEntry entry = parseRar5FileBlock(block, archiveSolid, scan);
+                if (scan.failure != null) break;
                 if (entry != null) result.add(entry);
             }
             long next = block.dataOffset + block.dataSize;
@@ -892,13 +929,32 @@ final class RarArchiveReader {
             scan.hasRedirections = true;
             return null;
         }
-        if (sanitized == null) return null;
-        if (extra.timeMillis > 0L) timeMillis = extra.timeMillis;
-
+        if (!directory && sanitized != null && sanitized.endsWith("/")) {
+            // Bulk output treats a trailing slash as a directory. Reject the
+            // conflicting file header before it can silently bypass solid history.
+            scan.failure = new IOException("RAR5 regular file has a directory-shaped name");
+            return null; // Retain only earlier entries as selected recovery data.
+        }
         int method = (int) ((compressionInfo & 0x0380L) >> 7);
         boolean solid = (compressionInfo & 0x0040L) != 0;
         boolean splitBefore = (block.flags & HEADER_FLAG_DATA_CONTINUES_PREVIOUS) != 0;
         boolean splitAfter = (block.flags & HEADER_FLAG_DATA_CONTINUES_NEXT) != 0;
+        if (!directory && method != 0) {
+            if (sanitized == null) {
+                scan.rar5HistoryOmitted = true;
+            } else if (!solid && !splitBefore) {
+                scan.rar5HistoryOmitted = false;
+            } else if (scan.rar5HistoryOmitted) {
+                // CRC/hash are optional in RAR5: incomplete history must never
+                // become apparently successful output just because checks are absent.
+                scan.failure = new UnsupportedRarFeatureException(
+                        "RAR5 solid payload depends on an omitted unsafe-name member");
+                return null;
+            }
+        }
+        if (sanitized == null) return null;
+        if (extra.timeMillis > 0L) timeMillis = extra.timeMillis;
+
         // Preserve unknown sizes in metadata. The stored extractor requires a
         // unique checksum-resolved AES tail before committing; rejecting it here
         // would also hide the archive's unrelated readable members.
@@ -1782,6 +1838,8 @@ final class RarArchiveReader {
         final long packedSize;
         final long dataOffset;
         final int rarVersion;
+        /** Legacy file header's UNP_VER; -1 for synthetic/unknown metadata and RAR5. */
+        final int unpackVersion;
         final int method;
         final boolean solid;
         /** RAR5 main-header flag; distinct from this file's solid continuation flag. */
@@ -1846,12 +1904,23 @@ final class RarArchiveReader {
                  boolean splitAfter, @Nullable EncryptionInfo encryption, long dataCrc,
                  long timeMillis, long rar5CompressionInfo, @Nullable byte[] blake2sp,
                  boolean archiveSolid) {
+            this(path, directory, unpackedSize, packedSize, dataOffset, rarVersion, method,
+                    solid, splitBefore, splitAfter, encryption, dataCrc, timeMillis,
+                    rar5CompressionInfo, blake2sp, archiveSolid, -1);
+        }
+
+        RarEntry(@NonNull String path, boolean directory, long unpackedSize, long packedSize,
+                 long dataOffset, int rarVersion, int method, boolean solid, boolean splitBefore,
+                 boolean splitAfter, @Nullable EncryptionInfo encryption, long dataCrc,
+                 long timeMillis, long rar5CompressionInfo, @Nullable byte[] blake2sp,
+                 boolean archiveSolid, int unpackVersion) {
             this.path = directory && !path.endsWith("/") ? path + "/" : path;
             this.directory = directory;
             this.unpackedSize = unpackedSize;
             this.packedSize = packedSize;
             this.dataOffset = dataOffset;
             this.rarVersion = rarVersion;
+            this.unpackVersion = unpackVersion;
             this.method = method;
             this.solid = solid;
             this.archiveSolid = archiveSolid;

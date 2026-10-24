@@ -1,5 +1,68 @@
 # Changelog
 
+## Readwide 1.0.21 - 2026-10-24
+
+### EPUB typography and progress
+
+- Add independent EPUB text size, Book default or 120–200% line spacing, and Book default / start-aligned / justified paragraphs. Settings, More, backup/import and reset share the options; migration retains the previous text size.
+- Use rounded style pickers and repeated size controls. Fixed/image/vertical restrictions and protected book formatting remain; mixed-layout spreads apply zoom separately to each pane.
+- Show within-section scroll progress, such as `3 (42%) / 20`, for ready, scrollable horizontal single-pane text. These are section counts, not screen-page totals; unsupported layouts and slider previews omit the percentage.
+- Match the bottom system-bar background to the open EPUB menu. Correct physical side backgrounds in RTL and landscape cutout layouts without resizing the text.
+- Report the current app version in EPUB reading-system information.
+
+### Contents, search and document navigation
+
+- Add searchable EPUB 3/NCX Contents with section-list fallback and rounded marked-footnote/endnote text popups. Closing a note leaves the reading position unchanged.
+- Support legacy XHTML character references and adjacent marked-note paragraphs without loading external XML resources.
+- Open TXT/EPUB Contents near the current heading or section. Fold detailed search options without resetting active conditions and explain empty TXT bookmark lists.
+- Reject stale document loads, navigation, script callbacks and position captures. Failed optional work releases its resources and keeps the previous saved position available.
+- Close the affected document reader safely after Android 8+ renderer termination, retaining the last saved position. Reopening remains explicit.
+
+### TXT, saved data and settings
+
+- Correct the TXT cutout policy for the reported Galaxy S20 black strip when hiding the status bar.
+- Release failed TXT Contents, partition and background match-count tasks so a later attempt can proceed without replacing visible text.
+- Reject stale bookmark/annotation saves and prevent coordinate wraparound. Publish manual note/highlight edits only after storage succeeds; failed editors remain available for retry.
+- Check settings-reset persistence and backup rollback, release failed operation state, and avoid false success feedback.
+- Preserve matching original bookmark bindings when opening duplicate copies.
+
+### PDF and image viewing
+
+- Connect PDF menu zoom/reset to the displayed single-page/spread view. Apply keyboard/accessibility slider changes immediately while retaining touch preview/release behavior.
+- Add validated image page-number entry and consistent spread counters. The compact rounded popup keeps its input through rotation and uses a 10 dp input/action gap.
+- Keep failure-card actions visible in short windows, provide guarded retry, and release temporary PDF spread images after failed page operations.
+- Resume unfinished local-image loads after rename. Retire failed/exhausted archive-image decoders while retaining verified caches and existing fallback.
+- Reuse forward-reader scratch and avoid redundant seeks in verified 7z folders, clearing sensitive scratch between requests.
+
+### Archive compatibility
+
+- Add streaming ALZ method-3 (Obfuscated Deflate) decoding with existing split, ZipCrypto, decoded-length/CRC and rollback checks. Methods 0/1/2 retain their decoders.
+- Continue RAR entries that start with PPMd and switch internally to LZ, retaining dictionary, model, VM and solid state. Support stored RAR3/RAR4 solid-flagged splits and reject incompatible legacy decoder generations.
+- Extend checked RAR VM chains and scoped raw-prefix carry across planned solid successors. Complete filtered results are not split between files; producer compatibility for the prefix-carry profile remains unverified.
+- Preserve safe RAR recovery after excluded names, reject omitted-history dependencies and file/directory-name conflicts, and retire failed shared state.
+- Read checked prefixed 7z content without executing stubs. Reject malformed encoded headers, confirmed payload corruption, short output and incomplete BCJ2/intermediate-decoder termination.
+- Verify unused 7z folders before bulk extraction and check cancellation before committing output, including empty files.
+- Recognize bounded EGG SKIP records and scoped block-header extras while preserving legacy interpretation of ambiguous layouts. Encrypted EGG filenames remain unsupported.
+- Recheck EGG/ALZ source volumes across framing, reader creation, password probes and output acceptance. Revalidate EGG solid spools and restore pending output after failures while retaining earlier verified files.
+- Resolve ambiguous EGG AES/LEA password encodings through full ciphertext authentication. Extend Cancel/Pause handling through supported EGG/ALZ decoding, RAR VM work and 7z metadata reads.
+- Reduce ALZ/RAR scratch and table allocations, batch ALZ output, share bounded BZip2 input buffering across EGG/ALZ/7z/ZIPX, and remove unused EGG checksum work without removing integrity checks.
+- Recognize `.pma` and CRC-bearing level-0 stored PM0. Compressed PM1/PM2 remain unsupported.
+
+### File browser, documents and platform compatibility
+
+- Reject lossy or changed-source physical TXT edits. Fallback moves retain changed/new source entries and refresh partial results.
+- Resolve storage-provider metadata off the main thread and reject late opens. Accept supported MIME-only documents and Word/HWP aliases; correct stale Markdown totals after content shrinks.
+- Return from read-aloud notifications to the same live session. Replacement documents receive separate preparation state; failed preparation does not restart automatically.
+- Use 13sp Pinned folders/Recently read headings with unchanged boxes. Clear Recent selection on search/type changes or confirmed history clearing, not ordinary refreshes.
+- Update equivalent platform/compression APIs and remove duplicate EPUB double-tap checks while retaining older-Android behavior and narrowly documented compatibility paths.
+- Observe cancellation during compressed TAR scanning and skipping.
+
+### Release boundary
+
+- Version metadata is `1.0.21` / `10021`. No permission or runtime dependency changed.
+- Exact TXT paging, partition sizes/overlap, half-visible-row selection, existing bookmark coordinates, free-space protection and signing are unchanged.
+- Implementation and support limits are in the [development notes](docs/DEV_CHANGES_1_0_21.md); verification status and remaining checks are in [release readiness](docs/RELEASE_READINESS_1_0_21.md).
+
 ## Readwide 1.0.20 - 2026-10-11
 
 ### TXT page counting and navigation
@@ -19,7 +82,7 @@
 - Add searchable TXT Contents with detected headings, current-position titles, hide/delete actions, rescan, and hidden-title restoration.
 - Recognize English chapter/part/book headings, Korean episode/chapter headings, Chinese/Japanese numbered headings, `345===`, `345---`, and `<--Title-->`. Supported number markers can include the following title line.
 - Add per-file format and detection options, plus optional RE2/J regular expressions. There is no fixed chapter-number or heading-count cutoff; detection still depends on the chosen rules and available resources.
-- Reduce author-note false positives while allowing users to relax the detection conditions. Automatic heading detection remains heuristic.
+- Reduce author-note false positives with configurable detection conditions. Automatic heading detection remains heuristic.
 - Use rounded Contents actions and editors, clearer help spacing, compact font cards without list dividers, and adjusted bookmark-button spacing. Match the EPUB font picker to the language-picker layout.
 
 ### Settings and backup recovery
@@ -83,13 +146,16 @@
 - Separate clipboard planning, UI ownership, queue state, and filesystem commit/rollback. Reject stale callbacks and unsafe destinations; preserve failed items for retry.
 - Harden case-only rename, cancellation, staged output, and cleanup without overwriting unrelated files. File operations are not durable transactions across process death.
 
-### Release boundary
+### Build and resources
 
 - Make archive test-fixture text I/O compatible with the Android local-test compilation API surface, retaining strict UTF-8 and existing assertions.
 - Add supported-launcher themed icons, localized reader/Contents text, and notices for the added source-built archive decoders and RE2/J.
-- version `1.0.20 / 10020`. No ads, analytics, account, cloud sync, or `INTERNET` permission; documents remain locally processed.
-- Latest changes have static review and regression test sources, not a current full build/device-validation result. Earlier checkpoint results do not establish current device behavior, complete format coverage, or measured speedups.
-- Detailed implementation and remaining boundaries: [development changes](docs/DEV_CHANGES_1_0_20.md), [archive support notes](docs/ARCHIVE_BOUNDARY_SUPPORT_NOTES.md), and [license report](docs/LICENSE_REPORT_READWIDE_1_0_20.md).
+
+### Release boundary
+
+- Version metadata is `1.0.20` / `10020`.
+- No ads, analytics, account, cloud sync, or `INTERNET` permission; documents remain locally processed.
+- Implementation and support limits are in the [development notes](docs/DEV_CHANGES_1_0_20.md); verification status and remaining checks are in [release readiness](docs/RELEASE_READINESS_1_0_20.md).
 
 ## Readwide 1.0.19 - 2026-09-19
 
@@ -143,6 +209,9 @@
 ### Maintenance
 
 - Updated AppCompat, ConstraintLayout, SwipeRefreshLayout, the HWP library, and the test-only Zstandard library.
+
+### Release boundary
+
 - Version metadata: `1.0.19` / `10019`.
 
 ## Readwide 1.0.18 - 2026-09-11
@@ -235,7 +304,7 @@
 - Switching to another app no longer closes an active archive/image reader when Android reports background memory pressure. Decoded image memory is released when requested, then the same archive page is decoded again on return.
 - ZIPX support is now explicit and tested: WinZip-AES entries using Deflate64, BZip2, LZMA, or XZ extract through the authenticated Java supplement. The Android backend is upgraded from the Maven AAR carrying libarchive 3.8.1 to source-built libarchive 3.8.9, adding encrypted ZIPX PPMd and Zstandard fallback plus upstream ZIPX streaming and archive-parser hardening. AES ZIPX using JPEG or WavPack now extracts through a separate source-built FOSS native module (XADMaster WinZip JPEG under LGPL-2.1-or-later and WavPack 5.9.0 under BSD-3-Clause), with bounded streaming, authentication-before-commit, and in-APK license texts.
 - CAB and LHA/LZH are now exposed as read-only archive types using the already-bundled libarchive decoders, including listing, image browsing, and extraction. Creation, password handling, and broad multi-volume compatibility are not claimed. libarchive 3.8.9 also tightens RAR/RAR5 seek and declared-size handling without changing Readwide's conservative RAR support boundary.
-- The independent RAR3/RAR4 classic-LZ fallback now implements standard VM-program slot selection/reset, program reuse, prior block-length reuse, usage registers, user-global-data consumption, and correct per-file filter offsets. This improves common standard E8/E8E9/Itanium/Delta/RGB/Audio filtered archives without adding Junrar or RARLAB UnRAR-license code; custom VM bytecode remains unsupported.
+- The independent RAR3/RAR4 classic-LZ fallback now implements standard VM-program slot selection/reset, program reuse, prior block-length reuse, usage registers, application-supplied global-data consumption, and correct per-file filter offsets. This improves common standard E8/E8E9/Itanium/Delta/RGB/Audio filtered archives without adding Junrar or RARLAB UnRAR-license code; custom VM bytecode remains unsupported.
 - The first-party RAR5-container decoder now keeps the existing algorithm-v0 path used by RAR 5/6 and adds bounded RAR 7 algorithm-v1 handling: 80 distance codes, the extended fractional dictionary field, non-power-of-two wrapping, long distance values, and the v0-solid compatibility marker. Declared dictionaries up to the 1 TB format limit are parsed, but Android retains at most 64 MB of history and rejects a stream only when it actually needs older data. Synthetic public-grammar tests exercise the extended distance table and a slot-64 long-distance match; complete RAR 7 compatibility is not claimed.
 - Archive extraction now enforces one operation-wide runtime byte budget across dedicated Java decoders, fallback engines, and libarchive. Unknown-size entries can no longer reset the counter per file, and native libarchive output is copied in bounded blocks instead of writing unchecked directly to a file descriptor. The decoded-output ceiling is raised from 32 GB to 128 GB; the effective runtime budget is the smaller of that ceiling and the starting usable space minus the existing 64 MB reserve.
 - Refined annotation wording across translations and standardized Korean reader/theme terminology and several Indonesian file-browser labels.
@@ -250,7 +319,7 @@
 
 ### Archive and image reading
 
-- Archive pages can be saved to Downloads or a user-selected folder without recompression.
+- Archive pages can be saved to Downloads or a selected folder without recompression.
 - Added optional two-page archive viewing in landscape when both adjacent pages are portrait-shaped. RTL placement, mixed single/spread navigation, cache ownership, and companion-page quality follow the visible spread.
 - Raised loose-image and archive-preview limits to 24MP. Neighbor-cache previews are upgraded in place, and a long-backgrounded image viewer saves its position and closes instead of reviving stale decoder state.
 
@@ -485,7 +554,7 @@
 
 ### Image preview - smoother continuous paging through sequential archives
 
-- Continuous paging through RAR/7z/compressed-TAR previews is decode-bound: the shared forward stream can only produce entries so fast, and the fixed symmetric three-page prefetch window left it idle exactly when a reader flipping steadily forward was about to need eight more pages. Prefetch planning is now direction-aware (`ImagePrefetchMath`): after two page turns in the same direction the file-extraction window deepens to eight pages ahead (keeping one behind for a quick step back), while the decoded-bitmap warm-up stays at the nearest neighbors so memory use is unchanged. Stale prefetch plans - windows centered on pages the user already left - now exit as soon as a newer page turn re-plans, and the existing rule that read-ahead always yields the shared stream to the page the user actually requested is unchanged. Jumps and direction changes fall back to the historical symmetric window.
+- Continuous paging through RAR/7z/compressed-TAR previews is decode-bound: the shared forward stream can only produce entries so fast, and the fixed symmetric three-page prefetch window left it idle exactly when a reader flipping steadily forward was about to need eight more pages. Prefetch planning is now direction-aware (`ImagePrefetchMath`): after two page turns in the same direction the file-extraction window deepens to eight pages ahead (keeping one behind for a quick step back), while the decoded-bitmap warm-up stays at the nearest neighbors so memory use is unchanged. Stale prefetch plans - windows centered on pages already left - now exit as soon as a newer page turn re-plans, and the existing rule that read-ahead always yields the shared stream to the current requested page is unchanged. Jumps and direction changes fall back to the historical symmetric window.
 
 ### Documents - read-aloud button on the bottom toolbar
 
@@ -757,7 +826,7 @@
 **Package identity**
 
 - Renamed the Android applicationId and source package from `com.textview.reader` to `com.readwide.manager`, including all package declarations, the FileProvider authority, layout custom-view references, ProGuard keep rules, fixture report scripts, F-Droid metadata, and release materials.
-- Existing users are not auto-updated to 1.0.4 because the package identity differs; bookmarks, reading positions, themes, and settings transfer through the in-app JSON backup export/import, which is independent of package name and signing key.
+- Existing installations are not auto-updated to 1.0.4 because the package identity differs; bookmarks, reading positions, themes, and settings transfer through the in-app JSON backup export/import, which is independent of package name and signing key.
 
 **PDF viewer**
 
@@ -929,7 +998,7 @@
 - Removed the default `app/libs/*.jar` dependency hook so the public FOSS/F-Droid-oriented source tree has no local optional jar path in the Gradle dependency graph.
 - Made release signing conditional so F-Droid-style source builds can run `assembleRelease` without a private developer keystore and produce an unsigned release artifact.
 - Removed the unused Foojay toolchain resolver plugin from `settings.gradle` to keep the build script leaner for reproducible source-build review.
-- Added Readwide backup filename patterns to `.gitignore` so exported user backups are not accidentally committed.
+- Added Readwide backup filename patterns to `.gitignore` so exported backups are not accidentally committed.
 - Kept the TextView 2.2.6 privacy/license hardening base: Auto Backup disabled, no default `INTERNET` permission, no analytics, no ads, no account system, and no Junrar/UnRAR-license fallback in the default build.
 - Preserved archive preview/image-sequence fixes from the late TextView 2.2.6 line, including direct comic-open ordering, preview-to-viewer ordering, archive folder sort-state restoration, and macOS resource-fork image filtering.
 
@@ -956,7 +1025,7 @@
 - Replaced new PIN storage with salted PBKDF2 verifier strings and kept migration for legacy plain-PIN data after successful verification.
 - Removed the default `INTERNET` and `REQUEST_INSTALL_PACKAGES` permission paths.
 - Replaced in-app update checking with a static, copyable release link in Settings.
-- Added developer contact through the user's mail app, with copy fallback if no mail app is available.
+- Added developer contact through the installed mail app, with copy fallback if no mail app is available.
 - Removed Junrar/UnRAR-license fallback code from the default dependency path.
 - Documented the default source/APK as the FOSS-friendly line with Apache-2.0 first-party source and third-party notices.
 - Added bundled libarchive-android routing for common compressed RAR3/RAR4 attempts while keeping first-party RAR stored-entry and metadata paths.

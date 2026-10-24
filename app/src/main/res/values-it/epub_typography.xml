@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">Dimensione testo EPUB: %1$d%%</string>
+    <string name="epub_line_height">Interlinea</string>
+    <string name="epub_typography_hint">Solo per EPUB. L’impostazione del libro mantiene l’interlinea originale. Le pagine a impaginazione fissa, basate su immagini o con scrittura verticale mantengono la disposizione dei paragrafi.</string>
+    <string name="epub_paragraph_layout_kept">Non è possibile modificare il formato dei paragrafi in questa pagina. L’impaginazione del libro viene mantenuta.</string>
+</resources>

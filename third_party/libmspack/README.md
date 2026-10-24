@@ -21,7 +21,8 @@ The native module now declares a separate `libreadwide-cab.so` target and JNI
 adapter using only the public API. Default filesystem I/O is compiled out; input
 tokens and Java output callbacks are mandatory. Nothing downloads at build/runtime.
 The source build target and guarded app extraction/viewer routes are connected;
-they have not been compiled/executed and APK size has not been measured.
+their recorded integration checks do not establish native execution or current
+post-change verification, and a module-specific APK-size measurement is not recorded.
 
 The library/adapter retain LGPL-2.1-only; the app packages the full license and
 binary/relinking notice in `assets/open_source_licenses/libmspack_cab_lgpl_2_1.txt`.

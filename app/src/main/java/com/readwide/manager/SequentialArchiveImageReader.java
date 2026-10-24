@@ -14,6 +14,7 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -63,6 +64,8 @@ final class SequentialArchiveImageReader implements Closeable {
     private final HashSet<String> passedEntries = new HashSet<>();
 
     @Nullable private ArchiveSupport.ForwardArchiveReader reader;
+    // Accessed only under lock; retained between forward requests, not sessions.
+    @Nullable private byte[] readBuffer;
     private boolean openAttempted;
     private boolean exhausted;
     private boolean broken;
@@ -288,7 +291,8 @@ final class SequentialArchiveImageReader implements Closeable {
                                        @Nullable BooleanSupplier keepAdvancing) {
         ArchiveSupport.ForwardArchiveReader activeReader = reader;
         if (activeReader == null) return false;
-        byte[] buffer = new byte[BUFFER_SIZE];
+        byte[] buffer = readBuffer;
+        if (buffer == null) readBuffer = buffer = new byte[BUFFER_SIZE];
         try {
             while (true) {
                 ArchiveImageEntryCache.checkInterrupted();
@@ -298,6 +302,10 @@ final class SequentialArchiveImageReader implements Closeable {
                 ArchiveImageEntryCache.checkInterrupted();
                 if (entry == null) {
                     exhausted = true;
+                    // No later request can advance this stream. Release decoder
+                    // history/native handles now; cached/behind-frontier pages
+                    // still use the session's existing independent paths.
+                    closeReaderLocked();
                     return false;
                 }
                 String path = entry.path;
@@ -334,6 +342,25 @@ final class SequentialArchiveImageReader implements Closeable {
             Log.w(TAG, "Forward image reader failed mid-archive, falling back to whole-archive: "
                     + archiveFile.getName(), e);
             return false;
+        } catch (OutOfMemoryError | StackOverflowError failure) {
+            // A codec can already have advanced its solid/entry state before a
+            // resource failure. Never reuse that session or start an immediate
+            // fallback decode under the same pressure.
+            broken = true;
+            try { closeReaderLocked(); }
+            catch (RuntimeException | OutOfMemoryError | StackOverflowError cleanup) {
+                if (cleanup != failure) {
+                    try { failure.addSuppressed(cleanup); }
+                    catch (OutOfMemoryError | StackOverflowError unavailable) {
+                        // Diagnostic allocation must not replace the original failure.
+                    }
+                }
+            }
+            throw failure;
+        } finally {
+            // Do not retain decrypted image bytes while the viewer is idle.
+            // Keep the allocation for the next request in this live session.
+            if (sensitiveCache) Arrays.fill(buffer, (byte) 0);
         }
     }
 
@@ -477,13 +504,18 @@ final class SequentialArchiveImageReader implements Closeable {
     }
 
     private void closeReaderLocked() {
+        // Release scratch even if decoder cleanup fails and must be retried.
+        if (readBuffer != null) {
+            Arrays.fill(readBuffer, (byte) 0);
+            readBuffer = null;
+        }
         if (reader != null) {
             try {
                 reader.close();
             } catch (IOException | RuntimeException failure) {
                 ArchiveImageEntryCache.preserveCancellation(failure);
-                // Keep failed cleanup owned for a later close retry. The broken/
-                // closed flags already prevent this decoder from being reused.
+                // Keep failed cleanup owned for a later close retry. The broken,
+                // exhausted or closed state prevents this decoder from advancing.
                 return;
             }
             reader = null;

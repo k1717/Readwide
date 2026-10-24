@@ -828,4 +828,6 @@
     <string name="txt_contents_error">Không thể tải mục lục. Hãy mở lại tệp và thử lại.</string>
     <string name="txt_contents_save_error">Không thể lưu thay đổi của mục lục.</string>
     <string name="txt_contents_page">%1$s · tr. %2$d</string>
+    <string name="viewer_retry">Thử lại</string>
+    <string name="document_renderer_stopped">Trình xem tài liệu đã dừng. Mở lại tệp để tiếp tục từ vị trí được lưu gần nhất.</string>
 </resources>

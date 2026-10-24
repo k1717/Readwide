@@ -16,9 +16,9 @@ import java.util.Set;
  * Small diagnostic report for the first-party stored split RAR path.
  *
  * <p>The report is intentionally limited to stored split candidates. It does not route
- * compressed split archives away from libarchive, and it does not make compressed split or
- * solid split first-party support claims. Its job is to make the existing first-party stored
- * split boundary testable and documentable before any compressed-solid work starts.</p>
+ * compressed split archives away from their decoders, and it does not make compressed or
+ * solid-compressed support claims. Stored split payloads can carry the solid flag without
+ * using compressed history.</p>
  */
 final class RarSplitStoredMatrixReport {
     enum Status {
@@ -290,7 +290,10 @@ final class RarSplitStoredMatrixReport {
                                             @NonNull RarArchiveReader.RarEntry first) {
         String lower = message.toLowerCase(Locale.ROOT);
         if (lower.contains("compressed split")) return Category.COMPRESSED_SPLIT;
-        if (lower.contains("solid rar split") || first.solid) return Category.SOLID_SPLIT;
+        if (lower.contains("solid rar split") || (first.solid
+                && (first.rarVersion < 5
+                        ? !RarFeatureClassifier.isRar3Or4StoredMethod(first.method)
+                        : first.method != 0))) return Category.SOLID_SPLIT;
         if (lower.contains("mixed encrypted")) return Category.MIXED_ENCRYPTION;
         if (lower.contains("parameters changed")) return Category.ENCRYPTION_PARAMETERS_CHANGED;
         if (lower.contains("missing rar split continuation") || lower.contains("incomplete rar split")) {

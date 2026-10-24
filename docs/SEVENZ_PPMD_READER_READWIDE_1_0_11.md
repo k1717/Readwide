@@ -1,11 +1,11 @@
 # 7z PPMd first-party decoder notes
 
 Historical 1.0.11 implementation/validation notes. The later streaming reader
-replaced whole-payload arrays. Current 1.0.20 has no blanket model-memory quota;
+replaced whole-payload arrays. The 1.0.20 implementation removed the blanket model-memory quota;
 format/representation constraints and actual memory availability still apply.
 The results below do not validate the latest source. See the
-[current decode boundaries](ARCHIVE_DECODE_BOUNDARIES_1_0_20.md) and
-[pending checks](RELEASE_READINESS_1_0_20.md). This 7z PPMd-H implementation is
+[current archive support notes](ARCHIVE_BOUNDARY_SUPPORT_NOTES.md) and
+[pending checks](RELEASE_READINESS_1_0_21.md). This 7z PPMd-H implementation is
 distinct from the newer ZIP PPMd-I native adapter.
 
 Reference notes for `SevenZPpmd7Decoder`, the first-party decoder for the 7z

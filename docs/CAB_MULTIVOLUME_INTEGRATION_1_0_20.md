@@ -1,6 +1,6 @@
 # CAB multi-volume integration — Readwide 1.0.20
 
-App routing source: 2026-10-10. No compilation, tests or native execution.
+App routing has source review only; no compilation, tests or native execution.
 **Linked CAB listing, selected/bulk extraction and forward viewing are connected
 in source, not runtime-validated.** Normal single-CAB/LHA paths still prefer the
 existing libarchive backend. A linked set requires the supplemental CAB decoder;

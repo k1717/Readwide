@@ -28,7 +28,7 @@ applicationId com.readwide.manager
 
 1.0.6 keeps the `com.readwide.manager` application ID introduced in 1.0.4 but is signed with a new release key (the `readwide` alias), so it does not install over an existing 1.0.4/1.0.5 — see Migration.
 
-## Migration for existing users
+## Migration from earlier versions
 
 - Updating from 1.0.4/1.0.5: 1.0.6 uses a new signing key, so Android will not install it over an existing 1.0.4/1.0.5 (signature mismatch). Uninstall the previous version, install 1.0.6, then import a JSON backup to restore bookmarks, reading positions, themes, and settings.
 - Coming from TextView Reader or an older Readwide build with the `com.textview.reader` application ID: export a backup (`readwide_backup_<timestamp>.json`) from the old app, install 1.0.6, then import the backup to restore bookmarks, reading positions, themes, and settings.

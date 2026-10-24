@@ -77,7 +77,10 @@ final class RarSplitStoredFailure {
         if (lower.contains("compressed split")) {
             return new RarSplitStoredFailure(Code.COMPRESSED_SPLIT_UNSUPPORTED, Kind.UNSUPPORTED_FEATURE, path, raw);
         }
-        if (lower.contains("solid rar split") || (first != null && first.solid)) {
+        if (lower.contains("solid rar split") || (first != null && first.solid
+                && (first.rarVersion < 5
+                        ? !RarFeatureClassifier.isRar3Or4StoredMethod(first.method)
+                        : first.method != 0))) {
             return new RarSplitStoredFailure(Code.SOLID_SPLIT_UNSUPPORTED, Kind.UNSUPPORTED_FEATURE, path, raw);
         }
         if (lower.contains("mixed encrypted")) {

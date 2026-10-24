@@ -9,7 +9,10 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -149,14 +152,17 @@ public final class FileSystemOps {
         } catch (IOException | SecurityException ignored) {
         }
 
-        boolean copied = copy(source, destination, overwrite, progress, false, tracker);
+        // Only the entries actually copied belong to the removal phase. A fresh
+        // recursive delete would also erase files added while copying a folder.
+        List<CopiedSourceEntry> copiedSources = new ArrayList<>();
+        boolean copied = stageAndCommit(source, destination, overwrite, progress, tracker, copiedSources);
         if (!copied) return false;
 
         // The replacement is committed. A late cancellation keeps the source
         // too; never remove it after a cancelled or incomplete staging copy.
         if (progress != null && !progress.checkpoint()) return false;
 
-        boolean deleted = delete(source);
+        boolean deleted = deleteCopiedSources(copiedSources, progress);
         return deleted && finishCommittedMove(source, null, progress, assignTotalBytes);
     }
 
@@ -208,7 +214,7 @@ public final class FileSystemOps {
             if (assignTotalBytes) progress.setTotalBytes(tracker.totalBytes());
             if (!progress.checkpoint()) return false;
         }
-        return stageAndCommit(source, destination, overwrite, progress, tracker);
+        return stageAndCommit(source, destination, overwrite, progress, tracker, null);
     }
 
     /** Reject either containment direction before creating or replacing anything. */
@@ -230,7 +236,8 @@ public final class FileSystemOps {
     }
 
     private static boolean stageAndCommit(File source, File destination, boolean overwrite,
-                                          FileOperationProgress progress, FileTreeProgressTracker tracker) {
+                                          FileOperationProgress progress, FileTreeProgressTracker tracker,
+                                          List<CopiedSourceEntry> copiedSources) {
         File parent = destination.getAbsoluteFile().getParentFile();
         File transaction = new File(parent, ".rwtransfer_" + UUID.randomUUID());
         File staged = new File(transaction, "replacement");
@@ -242,7 +249,7 @@ public final class FileSystemOps {
             if (progress != null && !progress.checkpoint()) return false;
             if (!transaction.mkdir()) return false;
             ownsTransaction = true;
-            boolean copied = copyTree(source, staged, progress, tracker);
+            boolean copied = copyTree(source, staged, progress, tracker, copiedSources);
             if (!copied || (progress != null && !progress.checkpoint())) return false;
             if (!canTransfer(source, destination, overwrite)) return false;
 
@@ -382,20 +389,29 @@ public final class FileSystemOps {
     private static boolean copyTree(@NonNull File source,
                                     @NonNull File destination,
                                     @Nullable FileOperationProgress progress,
-                                    @Nullable FileTreeProgressTracker tracker) {
+                                    @Nullable FileTreeProgressTracker tracker,
+                                    @Nullable List<CopiedSourceEntry> copiedSources) {
         // One scratch buffer per operation, shared sequentially by all its files.
         // Independent copy operations never share mutable buffers.
         byte[] buffer = new byte[COPY_BUFFER_BYTES];
         try {
             return FileTreeWalk.walk(source, () -> progress == null || progress.checkpoint(), entry -> {
                 entry.recheck();
+                CopiedSourceEntry copiedEntry = new CopiedSourceEntry(entry);
                 File output = entry.relative.isEmpty() ? destination : new File(destination, entry.relative);
                 if (entry.kind == FileTreeWalk.Kind.DIRECTORY) {
                     if (tracker != null) tracker.onDirectory(entry.file);
-                    return output.mkdir(); // Every output belongs to the new staging tree.
+                    if (!output.mkdir()) return false; // Every output belongs to the new staging tree.
+                    if (copiedSources != null) copiedSources.add(copiedEntry);
+                    return true;
                 }
                 if (entry.kind == FileTreeWalk.Kind.FILE) {
-                    return copyRegularFile(entry, output, progress, tracker, buffer);
+                    if (!copyRegularFile(copiedEntry, output, progress, tracker, buffer)) return false;
+                    if (copiedSources != null) {
+                        copiedEntry.recheck();
+                        copiedSources.add(copiedEntry);
+                    }
+                    return true;
                 }
                 // Do not dereference links or treat devices/FIFOs as regular files.
                 // Failure rolls back the staged copy, leaving the destination intact.
@@ -406,11 +422,66 @@ public final class FileSystemOps {
         }
     }
 
-    private static boolean copyRegularFile(@NonNull FileTreeWalk.Entry entry,
+    private static boolean deleteCopiedSources(List<CopiedSourceEntry> copiedSources,
+                                                FileOperationProgress progress) {
+        try {
+            Map<File, Integer> copiedChildCounts = new HashMap<>();
+            for (CopiedSourceEntry copied : copiedSources) {
+                File parent = copied.entry.file.getAbsoluteFile().getParentFile();
+                copiedChildCounts.put(parent, copiedChildCounts.getOrDefault(parent, 0) + 1);
+            }
+            // Detect an already changed source before removing any copied leaf.
+            for (CopiedSourceEntry copied : copiedSources) {
+                if (progress != null && !progress.checkpoint()) return false;
+                copied.recheck();
+                if (copied.entry.kind == FileTreeWalk.Kind.DIRECTORY) {
+                    String[] children = copied.entry.file.list();
+                    int expected = copiedChildCounts.getOrDefault(copied.entry.file.getAbsoluteFile(), 0);
+                    if (children == null || children.length != expected) return false;
+                    copied.recheck();
+                }
+            }
+            // Reverse preorder is children-first. Nonrecursive directory delete
+            // fails if a new, uncopied child appeared; that child is never visited.
+            for (int i = copiedSources.size() - 1; i >= 0; i--) {
+                if (progress != null && !progress.checkpoint()) return false;
+                CopiedSourceEntry copied = copiedSources.get(i);
+                copied.recheck();
+                if (!copied.entry.file.delete()) return false;
+            }
+            return true;
+        } catch (IOException | SecurityException changed) {
+            // The destination is committed. Retain any remaining source entries
+            // and report a partial move instead of deleting uncertain content.
+            return false;
+        }
+    }
+
+    private static final class CopiedSourceEntry {
+        final FileTreeWalk.Entry entry;
+        final FileMutationGuard mutationGuard;
+
+        CopiedSourceEntry(FileTreeWalk.Entry entry) throws IOException {
+            this.entry = entry;
+            mutationGuard = entry.kind == FileTreeWalk.Kind.FILE ? FileMutationGuard.capture(entry.file) : null;
+            recheck();
+        }
+
+        void recheck() throws IOException {
+            entry.recheck();
+            if (mutationGuard != null) mutationGuard.recheck();
+            if (entry.kind == FileTreeWalk.Kind.FILE && entry.file.length() != entry.bytes) {
+                throw new IOException("Copied source changed: " + entry.file);
+            }
+        }
+    }
+
+    private static boolean copyRegularFile(@NonNull CopiedSourceEntry copiedEntry,
                                            @NonNull File destination,
                                            @Nullable FileOperationProgress progress,
                                            @Nullable FileTreeProgressTracker tracker,
                                            @NonNull byte[] buffer) throws IOException {
+        FileTreeWalk.Entry entry = copiedEntry.entry;
         File source = entry.file;
         File parent = destination.getParentFile();
         if (parent == null || !parent.exists() || !parent.isDirectory()) return false;
@@ -424,11 +495,12 @@ public final class FileSystemOps {
         }
         boolean copied = false;
         boolean cancelled = false;
-        entry.recheck();
+        copiedEntry.recheck();
         long expectedBytes = entry.bytes;
         long writtenBytes = 0L;
         try (FileInputStream in = new FileInputStream(source);
              FileOutputStream out = new FileOutputStream(destination)) {
+            copiedEntry.mutationGuard.verifyOpened(in);
             int read;
             while ((read = in.read(buffer)) != -1) {
                 if (progress != null && !progress.checkpoint()) {
@@ -440,8 +512,12 @@ public final class FileSystemOps {
                 if (progress != null) progress.addDoneBytes(read);
             }
             out.flush();
-            entry.recheck();
-            copied = !cancelled && (progress == null || progress.checkpoint())
+            if (progress != null && !progress.checkpoint()) cancelled = true;
+            // Check after progress callbacks and after the final read: both the
+            // opened descriptor and its name must still refer to the captured version.
+            copiedEntry.mutationGuard.verifyOpened(in);
+            copiedEntry.recheck();
+            copied = !cancelled
                     && writtenBytes == expectedBytes && destination.length() == expectedBytes
                     && source.length() == expectedBytes;
         } catch (IOException | SecurityException ignored) {

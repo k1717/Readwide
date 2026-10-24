@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import com.readwide.manager.util.FileOperationProgress;
 
 /** Fixed-address-space RAR3 filter VM; never executes native/host instructions. */
 final class Rar3VirtualMachine {
@@ -121,13 +122,23 @@ final class Rar3VirtualMachine {
 
     static byte[] apply(Program program, byte[] input, int length, int[] registers,
                         byte[] global, long offset) throws IOException {
-        return apply(program, input, length, registers, global, offset, INSTRUCTION_BUDGET);
+        return apply(program, input, length, registers, global, offset, INSTRUCTION_BUDGET, null);
+    }
+
+    static byte[] apply(Program program, byte[] input, int length, int[] registers,
+                        byte[] global, long offset, FileOperationProgress progress) throws IOException {
+        return apply(program, input, length, registers, global, offset, INSTRUCTION_BUDGET, progress);
     }
 
     // Package-private budget override exists solely for deterministic regression sources.
     static byte[] apply(Program program, byte[] input, int length, int[] registers,
                         byte[] global, long offset, int budget) throws IOException {
-        checkpoint();
+        return apply(program, input, length, registers, global, offset, budget, null);
+    }
+
+    static byte[] apply(Program program, byte[] input, int length, int[] registers,
+                        byte[] global, long offset, int budget, FileOperationProgress progress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
         if (program == null || input == null || registers == null || registers.length != 7
                 || global == null || length < 0 || length > input.length || length > GLOBAL_ADDRESS
                 || global.length > GLOBAL_SIZE - FIXED_GLOBAL_SIZE || offset < 0 || budget < 1) {
@@ -149,7 +160,7 @@ final class Rar3VirtualMachine {
         System.arraycopy(user, 0, vm.memory, GLOBAL_ADDRESS + FIXED_GLOBAL_SIZE, user.length);
         System.arraycopy(program.staticData, 0, vm.memory, GLOBAL_ADDRESS + FIXED_GLOBAL_SIZE + user.length,
                 Math.min(room - user.length, program.staticData.length));
-        vm.execute(program.instructions, budget);
+        vm.execute(program.instructions, budget, progress);
         int start = vm.get32(GLOBAL_ADDRESS + 0x20) & MASK;
         int size = vm.get32(GLOBAL_ADDRESS + 0x1c) & MASK;
         if (size > MEMORY_SIZE - start) throw invalid("output range");
@@ -157,8 +168,10 @@ final class Rar3VirtualMachine {
         if (globalSize > room) throw invalid("persistent global size");
         // Commit persistent globals only after successful execution and validation.
         byte[] output = Arrays.copyOfRange(vm.memory, start, start + size);
-        program.savedGlobal = Arrays.copyOfRange(vm.memory, GLOBAL_ADDRESS + FIXED_GLOBAL_SIZE,
+        byte[] savedGlobal = Arrays.copyOfRange(vm.memory, GLOBAL_ADDRESS + FIXED_GLOBAL_SIZE,
                 GLOBAL_ADDRESS + FIXED_GLOBAL_SIZE + (int) globalSize);
+        ArchiveCancellation.checkpoint(progress);
+        program.savedGlobal = savedGlobal;
         program.executionCount++;
         return output;
     }
@@ -168,10 +181,10 @@ final class Rar3VirtualMachine {
     private final byte[] memory = new byte[MEMORY_SIZE + 4];
     private int flags;
 
-    private void execute(Instruction[] commands, int budget) throws IOException {
+    private void execute(Instruction[] commands, int budget, FileOperationProgress progress) throws IOException {
         int ip = 0;
         for (int steps = 0; steps < budget; steps++) {
-            if ((steps & 1023) == 0) checkpoint();
+            if ((steps & 1023) == 0) ArchiveCancellation.checkpoint(progress);
             if (ip < 0 || ip >= commands.length) return;
             Instruction ins = commands[ip];
             int next = ip + 1;

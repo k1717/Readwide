@@ -3,8 +3,6 @@ package com.readwide.manager.archive;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
-
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -62,6 +60,7 @@ final class AlzipArchiveReader {
     private static final int COMP_STORED = 0;
     private static final int COMP_BZIP2 = 1;
     private static final int COMP_DEFLATE = 2;
+    private static final int COMP_OBFUSCATED_DEFLATE = 3;
     private static final int BUFFER_SIZE = 64 * 1024;
     // Admission limits for metadata retention, never archive or extracted-file size limits.
     private static final int MAX_INDEX_ARCHIVES = 3;
@@ -117,6 +116,7 @@ final class AlzipArchiveReader {
         AlzVolumeResolver.VolumeSet volumes = AlzVolumeResolver.resolve(archive);
         try (SplitVolumeInput in = new SplitVolumeInput(volumes.segments)) {
             List<AlzEntry> entries = readAlzEntries(archive, in, volumes.retainedFinalTrailer);
+            in.requireUnchanged();
             ArchiveOutputPreflight preflight = new ArchiveOutputPreflight(targetDir);
             for (AlzEntry entry : entries) preflight.add(entry.path, entry.directory);
             if (progress != null) progress.setTotalBytes(sumUncompressedBytes(entries));
@@ -129,6 +129,8 @@ final class AlzipArchiveReader {
                     if (entry.directory || entry.path.endsWith("/")) entryProgress.onDirectory(entry.path);
                     else entryProgress.onFile(entry.path);
                 } else if (progress != null) progress.setDetail(entry.path);
+                ArchiveCancellation.checkpoint(progress);
+                in.requireUnchanged();
                 File out = resolveOutput(targetDir, entry.path);
                 if (out == null) return false;
                 if (entry.directory || entry.path.endsWith("/")) {
@@ -137,6 +139,7 @@ final class AlzipArchiveReader {
                 }
                 extractEntryPayload(in, entry, out, password, progress);
             }
+            in.requireUnchanged();
             return true;
         }
     }
@@ -494,6 +497,7 @@ final class AlzipArchiveReader {
                                             @Nullable FileOperationProgress progress) throws IOException {
         if (Thread.currentThread().isInterrupted()
                 || (progress != null && !progress.checkpoint())) throw new IOException("ALZ extraction cancelled");
+        in.requireUnchanged();
         if (entry.directory) return;
         if (entry.compressedSize < 0L || entry.uncompressedSize < 0L) {
             throw new ArchiveSupport.UnsupportedArchiveFeatureException("ALZ entry has an invalid size");
@@ -511,6 +515,9 @@ final class AlzipArchiveReader {
                 out.flush();
             }
             // Stream close failures must also roll back the current destination.
+            ArchiveCancellation.checkpoint(progress);
+            in.requireUnchanged();
+            ArchiveCancellation.checkCancelled(progress);
             guard.commit();
         }
     }
@@ -520,17 +527,21 @@ final class AlzipArchiveReader {
                                                         @NonNull AlzEntry entry,
                                                         @Nullable char[] password,
                                                         @Nullable FileOperationProgress progress) throws IOException {
-        return decodePayload(openPayloadStream(in, entry, password, progress), entry.method);
+        return decodePayload(openPayloadStream(in, entry, password, progress), entry.method, entry.uncompressedSize, progress);
     }
 
-    private static InputStream decodePayload(InputStream payload, int method) throws IOException {
+    private static InputStream decodePayload(InputStream payload, int method, long unpackedSize,
+                                            FileOperationProgress progress) throws IOException {
         try {
             if (method == COMP_STORED) return payload;
             if (method == COMP_DEFLATE) {
-                return new OwnedDeflateInputStream(payload);
+                return new OwnedDeflateInputStream(payload, progress);
             }
             if (method == COMP_BZIP2) {
-                return openAlzBzipStream(payload);
+                return openAlzBzipStream(payload, progress);
+            }
+            if (method == COMP_OBFUSCATED_DEFLATE) {
+                return new AlzObfuscatedDeflateInputStream(payload, unpackedSize, progress);
             }
             throw new ArchiveSupport.UnsupportedArchiveFeatureException("Unsupported ALZ compression method");
         } catch (IOException | RuntimeException | Error e) {
@@ -555,7 +566,8 @@ final class AlzipArchiveReader {
         if (entry.encryptedHeader == null) {
             throw new IOException("Missing ALZ encryption header");
         }
-        boolean knownMethod = entry.method == COMP_STORED || entry.method == COMP_DEFLATE || entry.method == COMP_BZIP2;
+        boolean knownMethod = entry.method == COMP_STORED || entry.method == COMP_DEFLATE
+                || entry.method == COMP_BZIP2 || entry.method == COMP_OBFUSCATED_DEFLATE;
         AlzipZipCrypto.PayloadVerifier verifier = knownMethod && entry.crc >= 0
                 ? candidate -> passwordMatches(in, entry, candidate, progress) : null;
         AlzipZipCrypto crypto = AlzipZipCrypto.checked(password, entry.encryptedHeader,
@@ -579,11 +591,18 @@ final class AlzipArchiveReader {
     private static boolean passwordMatches(SplitVolumeInput in, AlzEntry entry,
                                            AlzipZipCrypto crypto,
                                            FileOperationProgress progress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
+        in.requireUnchanged();
         if (entry.method == COMP_STORED && entry.compressedSize != entry.uncompressedSize) {
             throw new IOException("ALZ stored size mismatch");
         }
-        return verifyPasswordPayload(in.boundedStream(entry.dataOffset, entry.compressedSize),
+        boolean matches = verifyPasswordPayload(in.boundedStream(entry.dataOffset, entry.compressedSize),
                 entry.method, crypto, entry.uncompressedSize, entry.crc, progress);
+        // A changed volume must not select/reject another password encoding.
+        ArchiveCancellation.checkpoint(progress);
+        in.requireUnchanged();
+        ArchiveCancellation.checkCancelled(progress);
+        return matches;
     }
 
     /** Owns raw. Decoder rejection can reject an encoding; source/close errors cannot. */
@@ -595,7 +614,7 @@ final class AlzipArchiveReader {
             byte[] buffer = new byte[BUFFER_SIZE];
             try {
                 ArchiveCancellation.checkpoint(progress);
-                decoded.stream = decodePayload(source, method);
+                decoded.stream = decodePayload(source, method, expectedSize, progress);
                 CRC32 crc = new CRC32();
                 long total = 0;
                 while (true) {
@@ -639,32 +658,38 @@ final class AlzipArchiveReader {
      */
     @NonNull
     private static InputStream openAlzBzipStream(@NonNull InputStream payload) throws IOException {
+        return openAlzBzipStream(payload, null);
+    }
+
+    @NonNull
+    private static InputStream openAlzBzipStream(@NonNull InputStream payload,
+                                                @Nullable FileOperationProgress progress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
         PushbackInputStream in = new PushbackInputStream(payload, 3);
         byte[] probe = new byte[3];
         int count = 0;
         while (count < probe.length) {
-            if (Thread.currentThread().isInterrupted()) {
-                throw new java.io.InterruptedIOException("ALZ BZip2 probing cancelled");
-            }
+            ArchiveCancellation.checkpoint(progress);
             int requested = probe.length - count;
             int read = in.read(probe, count, requested);
             if (read == -1) break;
             if (read <= 0 || read > requested) throw new IOException("Invalid or zero-progress ALZ BZip2 source read");
+            ArchiveCancellation.checkpoint(progress);
             count += read;
         }
         if (count > 0) in.unread(probe, 0, count);
         if (count >= 3 && probe[0] == 'D' && probe[1] == 'L' && probe[2] == 'Z') {
-            return new AlzBzip2InputStream(in);
+            return new AlzBzip2InputStream(in, progress);
         }
         if (count >= 3 && probe[0] == 'B' && probe[1] == 'Z' && probe[2] == 'h') {
-            return new BZip2CompressorInputStream(in, true);
+            return new ArchiveBzip2InputStream(in, progress);
         }
         if (count >= 1 && probe[0] == 'h') {
             // Standard bzip2 with the leading "BZ" stripped.
-            return new BZip2CompressorInputStream(
-                    new SequenceInputStream(new ByteArrayInputStream(new byte[] {'B', 'Z'}), in), true);
+            return new ArchiveBzip2InputStream(
+                    new SequenceInputStream(new ByteArrayInputStream(new byte[] {'B', 'Z'}), in), progress);
         }
-        return new BZip2CompressorInputStream(in, true);
+        return new ArchiveBzip2InputStream(in, progress);
     }
 
     private static void copyDecodedPayload(@NonNull InputStream decoded,
@@ -698,6 +723,7 @@ final class AlzipArchiveReader {
     private static final class AlzDecryptingInputStream extends InputStream {
         @NonNull private final InputStream source;
         @NonNull private final AlzipZipCrypto crypto;
+        private final byte[] one = new byte[1];
 
         AlzDecryptingInputStream(@NonNull InputStream source, @NonNull AlzipZipCrypto crypto) {
             this.source = source;
@@ -706,7 +732,6 @@ final class AlzipArchiveReader {
 
         @Override
         public int read() throws IOException {
-            byte[] one = new byte[1];
             int read = read(one, 0, 1);
             return read <= 0 ? -1 : (one[0] & 0xff);
         }
@@ -721,7 +746,10 @@ final class AlzipArchiveReader {
         @Override
         public void close() throws IOException {
             try { source.close(); }
-            finally { crypto.destroy(); }
+            finally {
+                one[0] = 0;
+                crypto.destroy();
+            }
         }
     }
 

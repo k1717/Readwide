@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">अनुच्छेद संरेखण</string>
+    <string name="epub_alignment_book">पुस्तक का डिफ़ॉल्ट</string>
+    <string name="epub_alignment_start">पंक्ति के आरंभ में</string>
+    <string name="epub_alignment_justify">दोनों किनारों पर</string>
+    <string name="epub_text_alignment_hint">स्क्रीन के अनुसार ढलने वाले EPUB पाठ के लिए। LTR पाठ में आरंभ बाईं ओर और RTL में दाईं ओर होता है। स्पष्ट रूप से केंद्र या दाईं ओर संरेखित शैलियाँ बनी रहती हैं।</string>
+</resources>

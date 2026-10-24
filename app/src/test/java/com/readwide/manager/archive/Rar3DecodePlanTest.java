@@ -19,6 +19,29 @@ import org.junit.rules.TemporaryFolder;
 public class Rar3DecodePlanTest {
     @Rule public TemporaryFolder temp = new TemporaryFolder();
 
+    @Test public void partialCarryPermissionStopsAtResetOrPlanEndButSkipsStoredAndDirectories() throws Exception {
+        RarArchiveReader.RarEntry stored = entry(0x30, true, 2, 2, 0, 0, false, false, null);
+        List<RarArchiveReader.RarEntry> entries = Arrays.asList(compressed(false), stored, directory(),
+                compressed(true), compressed(true), compressed(false), compressed(true));
+        Rar3DecodePlan plan = Rar3DecodePlan.compile(entries, e -> classic());
+        assertTrue(plan.completeArchivePlan);
+        boolean[] expected = {true, false, false, true, false, true, false};
+        java.util.Set<RarArchiveReader.RarEntry> ppmd = Rar3PpmdSolidArchiveExtractor.solidContinuations(entries);
+        for (int i = 0; i < expected.length; i++) {
+            assertEquals(expected[i], plan.step(i).continuesSolid);
+            assertEquals(expected[i], ppmd.contains(entries.get(i)));
+        }
+    }
+
+    @Test public void selectedTargetCannotDeferPartialBlockToUnselectedLaterFile() throws Exception {
+        File source = temp.newFile(); Files.write(source.toPath(), new byte[]{0, 0});
+        RarArchiveReader.RarEntry first = compressed(false), target = compressed(true), later = compressed(true);
+        first.sourceArchive = target.sourceArchive = later.sourceArchive = source;
+        Rar3DecodePlan plan = Rar3DecodePlan.forTarget(Arrays.asList(first, target, later), target);
+        assertFalse(plan.completeArchivePlan);
+        assertTrue(plan.step(0).continuesSolid); assertFalse(plan.step(1).continuesSolid);
+    }
+
     @Test public void probesOnlyIndependentStartsAndKeepsDirectoryHistory() throws Exception {
         List<RarArchiveReader.RarEntry> entries = Arrays.asList(compressed(false), directory(), compressed(true), compressed(true));
         int[] probes = {0};

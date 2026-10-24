@@ -111,7 +111,7 @@
                     android:layout_weight="1"
                     android:text="@string/recently_read"
                     android:textColor="?attr/colorOnSurface"
-                    android:textSize="12sp"
+                    android:textSize="13sp"
                     android:textStyle="bold" />
 
                 <TextView

@@ -38,6 +38,7 @@ final class SettingsReaderControlsController {
     private java.util.concurrent.ExecutorService fontWorker;
     private java.util.concurrent.Future<?> fontLoad;
     private android.app.Dialog fontDialog;
+    private android.app.Dialog epubChoiceDialog;
     private boolean closed;
 
     SettingsReaderControlsController(@NonNull SettingsActivity activity) {
@@ -385,6 +386,7 @@ final class SettingsReaderControlsController {
     void close() {
         closed = true;
         if (fontDialog != null) fontDialog.dismiss();
+        if (epubChoiceDialog != null) epubChoiceDialog.dismiss();
         if (fontLoad != null) fontLoad.cancel(true);
         if (fontWorker != null) fontWorker.shutdownNow();
     }
@@ -484,6 +486,39 @@ final class SettingsReaderControlsController {
     }
 
     private void setupEpubPageBehavior() {
+        TextView sizeLabel = activity.findViewById(R.id.epub_text_size_label);
+        SeekBar sizeBar = activity.findViewById(R.id.epub_text_size_seekbar);
+        if (sizeLabel != null && sizeBar != null) {
+            sizeBar.setMax(40);
+            sizeBar.setProgress(Math.round(prefs.getEpubFontSize()) - 8);
+            sizeLabel.setText(activity.getString(R.string.epub_text_size,
+                    com.readwide.manager.util.EpubTypography.textZoomPercent(prefs.getEpubFontSize())));
+            sizeBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                    if (!fromUser) return;
+                    prefs.setEpubFontSize(progress + 8f);
+                    sizeLabel.setText(activity.getString(R.string.epub_text_size,
+                            com.readwide.manager.util.EpubTypography.textZoomPercent(prefs.getEpubFontSize())));
+                }
+                @Override public void onStartTrackingTouch(SeekBar bar) {}
+                @Override public void onStopTrackingTouch(SeekBar bar) {}
+            });
+        }
+        String[] spacingChoices = new String[com.readwide.manager.util.EpubTypography.LINE_HEIGHT_CHOICE_COUNT];
+        spacingChoices[0] = activity.getString(R.string.epub_alignment_book);
+        java.text.NumberFormat percent = java.text.NumberFormat.getPercentInstance(
+                activity.getResources().getConfiguration().getLocales().get(0));
+        for (int i = 1; i < spacingChoices.length; i++)
+            spacingChoices[i] = percent.format(com.readwide.manager.util.EpubTypography.lineHeightPercent(i) / 100.0);
+        bindEpubChoice(R.id.epub_line_height_value, R.string.epub_line_height, spacingChoices,
+                prefs::getEpubLineHeight, prefs::setEpubLineHeight);
+        String[] alignmentChoices = {
+                activity.getString(R.string.epub_alignment_book),
+                activity.getString(R.string.epub_alignment_start),
+                activity.getString(R.string.epub_alignment_justify)
+        };
+        bindEpubChoice(R.id.epub_text_alignment_value, R.string.epub_text_alignment, alignmentChoices,
+                prefs::getEpubTextAlignment, prefs::setEpubTextAlignment);
         Spinner directionSpinner = activity.findViewById(R.id.spinner_epub_page_direction);
 
         if (directionSpinner != null) {
@@ -498,6 +533,45 @@ final class SettingsReaderControlsController {
                             ? PrefsManager.EPUB_PAGE_DIRECTION_RTL
                             : PrefsManager.EPUB_PAGE_DIRECTION_LTR));
         }
+    }
+
+    private void bindEpubChoice(int viewId, int titleId, String[] choices,
+                                IntSupplier getter, IntSetter setter) {
+        TextView value = activity.findViewById(viewId);
+        if (value == null) return;
+        Runnable refresh = () -> {
+            int selected = Math.max(0, Math.min(choices.length - 1, getter.getAsInt()));
+            value.setText(choices[selected]);
+            value.setContentDescription(activity.getString(titleId) + ": " + choices[selected]);
+        };
+        refresh.run();
+        value.setOnClickListener(v -> {
+            if (closed) return;
+            if (epubChoiceDialog != null) epubChoiceDialog.dismiss();
+            android.app.Dialog dialog = activity.createRoundedSettingsDialog();
+            epubChoiceDialog = dialog;
+            dialog.setOnDismissListener(d -> {
+                if (epubChoiceDialog == dialog) epubChoiceDialog = null;
+            });
+            LinearLayout panel = activity.createRoundedSettingsDialogPanel();
+            int text = activity.dialogTextColor();
+            panel.addView(activity.makeSettingsDialogTitle(activity.getString(titleId), text));
+            int selected = getter.getAsInt();
+            for (int i = 0; i < choices.length; i++) {
+                final int choice = i;
+                TextView row = activity.makeSettingsSelectionRow(choices[i], i == selected,
+                        text, activity.dialogSubTextColor(), activity.dialogOutlineColor());
+                row.setOnClickListener(button -> {
+                    if (!closed && epubChoiceDialog == dialog) {
+                        setter.set(choice);
+                        refresh.run();
+                    }
+                    dialog.dismiss();
+                });
+                panel.addView(row);
+            }
+            activity.showRoundedSettingsDialog(dialog, panel, true, 0.76f, 280);
+        });
     }
 
     private void setupSwitches() {

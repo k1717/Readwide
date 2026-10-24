@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.drawable.Icon;
 import android.media.session.PlaybackState;
 import android.media.session.MediaSession;
 import android.os.Build;
@@ -29,6 +30,7 @@ public class TtsPlaybackService extends Service {
     static final String EXTRA_PLAYING = "playing";
     static final String EXTRA_CONTINUOUS = "continuous";
     static final String EXTRA_HOST_KIND = "host_kind";
+    static final String EXTRA_RETURN_TO_PLAYBACK = "return_to_tts_playback";
 
     /** Notification tap opens {@link ReaderActivity} (plain text / Markdown reader). */
     static final String HOST_READER = "reader";
@@ -53,8 +55,9 @@ public class TtsPlaybackService extends Service {
         super.onCreate();
         createChannel();
         mediaSession = new MediaSession(this, "Readwide TTS");
-        mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
-                | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            configureLegacyMediaSessionControls(mediaSession);
+        }
         mediaSession.setCallback(new MediaSession.Callback() {
             @Override public void onPlay() { dispatch(ACTION_PLAY); }
             @Override public void onPause() { dispatch(ACTION_PAUSE); }
@@ -66,6 +69,13 @@ public class TtsPlaybackService extends Service {
         });
         mediaSession.setActive(true);
         updateMediaSessionState();
+    }
+
+    @SuppressWarnings("deprecation")
+    private static void configureLegacyMediaSessionControls(MediaSession session) {
+        // API 24–25 requires these flags. API 26+ handles both controls without them.
+        session.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
+                | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
     }
 
     @Override
@@ -119,7 +129,7 @@ public class TtsPlaybackService extends Service {
     private void stopOrphanedPlayback() {
         playing = false;
         if (mediaSession != null) mediaSession.setActive(false);
-        stopForeground(true);
+        stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
     }
 
@@ -150,6 +160,7 @@ public class TtsPlaybackService extends Service {
             filePathExtra = ReaderActivity.EXTRA_FILE_PATH;
         }
         Intent openIntent = new Intent(this, target);
+        openIntent.putExtra(EXTRA_RETURN_TO_PLAYBACK, true);
         if (filePath != null && !filePath.isEmpty()) {
             openIntent.putExtra(filePathExtra, filePath);
         }
@@ -159,7 +170,7 @@ public class TtsPlaybackService extends Service {
 
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? new Notification.Builder(this, CHANNEL_ID)
-                : new Notification.Builder(this);
+                : createLegacyNotificationBuilder();
 
         builder.setSmallIcon(R.drawable.ic_bottom_tts)
                 .setContentTitle(title == null || title.isEmpty() ? getString(R.string.tts_title) : title)
@@ -168,10 +179,10 @@ public class TtsPlaybackService extends Service {
                 .setOngoing(playing)
                 .setOnlyAlertOnce(true)
                 .setShowWhen(false)
-                .addAction(actionIcon("previous"), getString(R.string.tts_action_previous), commandIntent(ACTION_PREVIOUS))
-                .addAction(actionIcon("play"), playing ? getString(R.string.tts_action_pause) : getString(R.string.tts_action_resume), commandIntent(ACTION_PLAY_PAUSE))
-                .addAction(actionIcon("next"), getString(R.string.tts_action_next), commandIntent(ACTION_NEXT))
-                .addAction(actionIcon("stop"), getString(R.string.tts_stop), commandIntent(ACTION_STOP));
+                .addAction(playbackAction("previous", getString(R.string.tts_action_previous), ACTION_PREVIOUS))
+                .addAction(playbackAction("play", playing ? getString(R.string.tts_action_pause) : getString(R.string.tts_action_resume), ACTION_PLAY_PAUSE))
+                .addAction(playbackAction("next", getString(R.string.tts_action_next), ACTION_NEXT))
+                .addAction(playbackAction("stop", getString(R.string.tts_stop), ACTION_STOP));
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && mediaSession != null) {
             builder.setStyle(new Notification.MediaStyle()
@@ -179,6 +190,12 @@ public class TtsPlaybackService extends Service {
                     .setShowActionsInCompactView(1, 3));
         }
         return builder.build();
+    }
+
+    @SuppressWarnings("deprecation")
+    private Notification.Builder createLegacyNotificationBuilder() {
+        // The channel-aware constructor is unavailable on supported API 24–25 devices.
+        return new Notification.Builder(this);
     }
 
     private void updateMediaSessionState() {
@@ -201,6 +218,12 @@ public class TtsPlaybackService extends Service {
         intent.setAction(action);
         return PendingIntent.getService(this, action.hashCode(), intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    private Notification.Action playbackAction(String iconType, String label, String action) {
+        return new Notification.Action.Builder(
+                Icon.createWithResource(this, actionIcon(iconType)), label, commandIntent(action))
+                .build();
     }
 
     private int actionIcon(String type) {

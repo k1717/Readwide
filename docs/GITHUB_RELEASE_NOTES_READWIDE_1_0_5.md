@@ -26,7 +26,7 @@ applicationId com.readwide.manager
 
 1.0.5 keeps the `com.readwide.manager` application ID introduced in 1.0.4, so it installs as an in-place update over 1.0.4 when signed with the same key.
 
-## Migration for existing users
+## Migration from earlier versions
 
 - Updating from 1.0.4 (same signing key): install 1.0.5 over it; no data migration step is needed.
 - Coming from TextView Reader or an older Readwide build with the `com.textview.reader` application ID: export a backup (`readwide_backup_<timestamp>.json`) from the old app, install 1.0.5, then import the backup to restore bookmarks, reading positions, themes, and settings.

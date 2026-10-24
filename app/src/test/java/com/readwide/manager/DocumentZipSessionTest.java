@@ -51,4 +51,36 @@ public class DocumentZipSessionTest {
             }
         }
     }
+
+    @Test public void workerResourceFailureStillReleasesRetiredLease() throws Exception {
+        for (Error failure : new Error[] {
+                new OutOfMemoryError("injected"), new StackOverflowError("injected")}) {
+            ZipFile zip = openZip();
+            try (DocumentZipSession session = new DocumentZipSession(zip)) {
+                try (DocumentZipSession.Lease lease = session.acquire()) {
+                    assertSame(zip, lease.zip());
+                    session.close();
+                    throw failure;
+                } catch (OutOfMemoryError | StackOverflowError caught) {
+                    assertSame(failure, caught);
+                }
+                assertNull(session.acquire());
+                try { zip.getEntry("chapter"); fail("Failure must not retain the retired ZIP"); }
+                catch (IllegalStateException expected) { }
+            }
+        }
+    }
+
+    @Test public void failedWorkDoesNotRetireTheCurrentSession() throws Exception {
+        try (DocumentZipSession session = new DocumentZipSession(openZip())) {
+            try (DocumentZipSession.Lease lease = session.acquire()) {
+                assertNotNull(lease.zip().getEntry("chapter"));
+                throw new IllegalStateException("injected worker failure");
+            } catch (IllegalStateException expected) { }
+            try (DocumentZipSession.Lease retry = session.acquire()) {
+                assertNotNull(retry);
+                assertNotNull(retry.zip().getEntry("chapter"));
+            }
+        }
+    }
 }

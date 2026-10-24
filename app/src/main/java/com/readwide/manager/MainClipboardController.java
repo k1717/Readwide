@@ -276,12 +276,14 @@ final class MainClipboardController {
         }
         if (activity.activityDestroyed) return;
         activity.updateMainOverflowButtonVisibility();
+        // A failed move can still leave a committed copy or partially retained
+        // source, so the visible listing must reflect both completion outcomes.
+        activity.refreshVisibleFileListAfterFileSystemChange();
         if (!completed) {
             ShortToast.show(activity, progress.isCancelled() ? R.string.file_operation_cancelled
                     : transfer.item.isCopy() ? R.string.file_copy_failed : R.string.file_move_failed);
             return;
         }
-        activity.refreshVisibleFileListAfterFileSystemChange();
         ShortToast.show(activity, transfer.item.isCopy() ? R.string.file_copied : R.string.file_moved);
     }
 

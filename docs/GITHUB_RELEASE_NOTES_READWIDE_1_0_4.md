@@ -5,7 +5,7 @@ Readwide 1.0.4 completes the public package rename by moving to the new Android 
 ## Highlights
 
 - **New application ID (`com.readwide.manager`)**: Readwide finishes the move away from the original TextView Reader package identity. Because the application ID changed, 1.0.4 installs as a **separate app** rather than an in-place update over older TextView Reader/Readwide builds.
-- **Data carries over via backup**: bookmarks, reading positions, themes, and settings transfer through the in-app JSON backup export/import, which is independent of the package name and signing key. Existing users export a backup from the old app, install 1.0.4, then import it.
+- **Data carries over via backup**: bookmarks, reading positions, themes, and settings transfer through the in-app JSON backup export/import, which is independent of the package name and signing key. Export a backup from the old app, install 1.0.4, then import it.
 - **Unified reader search options**: TXT, Markdown, EPUB, HWP/HWPX, and Word-family document search now share case-sensitive, whole-word, and regular-expression options, with Unicode normalization always applied.
 - **TXT search performance and end-of-file reveal**: common-word searches in large TXT files no longer repeatedly normalize the full text, and final-line search results can be pulled above the search dialog through a search-only virtual bottom allowance without changing normal paging/bookmark behavior.
 - **Document viewer search polish**: Markdown/EPUB/HWP/Word search no longer depends on WebView native find. The document search dialog now provides previous/next movement, nth-match jumps, current/total status, visible highlight spans, and popup-safe result reveal for matches near the top or bottom of a rendered document.
@@ -24,9 +24,9 @@ versionCode 10004
 applicationId com.readwide.manager
 ```
 
-Earlier TextView Reader/Readwide builds used the `com.textview.reader` application ID. The change to `com.readwide.manager` means Android treats 1.0.4 as a distinct app, so it does not auto-update older installs and the two can coexist until the user removes the old one.
+Earlier TextView Reader/Readwide builds used the `com.textview.reader` application ID. The change to `com.readwide.manager` means Android treats 1.0.4 as a distinct app, so it does not auto-update older installs and the two can coexist until the old one is removed.
 
-## Migration for existing users
+## Migration from earlier versions
 
 1. Open the previous app (TextView Reader / older Readwide) and export a backup (`readwide_backup_<timestamp>.json`) from Settings.
 2. Install Readwide 1.0.4.

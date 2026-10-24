@@ -27,9 +27,25 @@ public class PdfIncrementalSearchInstrumentedTest {
     }
 
     @Test public void extractionSetupFailureNotifiesFailureInsteadOfCompletion() throws Exception {
+        checkExtractionFailure(0);
+    }
+
+    @Test public void extractionMemoryFailureNotifiesFailureInsteadOfEscapingWorker() throws Exception {
+        checkExtractionFailure(1);
+    }
+
+    @Test public void extractionNestingFailureNotifiesFailureInsteadOfEscapingWorker() throws Exception {
+        checkExtractionFailure(2);
+    }
+
+    private void checkExtractionFailure(int failureKind) throws Exception {
         PDFBoxResourceLoader.init(InstrumentationRegistry.getInstrumentation().getTargetContext());
         PDDocument broken = new PDDocument() {
-            @Override public int getNumberOfPages() { throw new IllegalStateException("broken page tree"); }
+            @Override public int getNumberOfPages() {
+                if (failureKind == 1) throw new OutOfMemoryError("injected page tree allocation");
+                if (failureKind == 2) throw new StackOverflowError("injected page tree depth");
+                throw new IllegalStateException("broken page tree");
+            }
         };
         PdfTextSearchEngine engine = new PdfTextSearchEngine(broken, 1);
         CountDownLatch done = new CountDownLatch(1);
@@ -49,6 +65,72 @@ public class PdfIncrementalSearchInstrumentedTest {
             assertEquals(0, engine.total());
             assertNull(engine.current());
         } finally { engine.close(); }
+    }
+
+    @Test public void incompleteRegexStillCompletesWithoutReadingTheDocument() throws Exception {
+        PDFBoxResourceLoader.init(InstrumentationRegistry.getInstrumentation().getTargetContext());
+        PDDocument unread = new PDDocument() {
+            @Override public int getNumberOfPages() { throw new AssertionError("Invalid query must not scan"); }
+        };
+        PdfTextSearchEngine engine = new PdfTextSearchEngine(unread, 1);
+        PdfTextSearchEngine.Options options = new PdfTextSearchEngine.Options();
+        options.regex = true;
+        CountDownLatch done = new CountDownLatch(1);
+        AtomicInteger failures = new AtomicInteger();
+        AtomicInteger completions = new AtomicInteger();
+        try {
+            engine.startSearch("[", options, new PdfTextSearchEngine.Listener() {
+                @Override public void onSearchProgress(int count, int scanned, int total, PdfTextSearchEngine.Match hit) { }
+                @Override public void onSearchFinished(int count, boolean cancelled) {
+                    if (!cancelled && count == 0) completions.incrementAndGet();
+                    done.countDown();
+                }
+                @Override public void onSearchFailed() { failures.incrementAndGet(); done.countDown(); }
+            });
+            assertTrue(done.await(30, TimeUnit.SECONDS));
+            assertEquals(1, completions.get());
+            assertEquals(0, failures.get());
+        } finally { engine.close(); }
+    }
+
+    @Test public void oldWorkerFailureCannotClearReplacementSearch() throws Exception {
+        PDFBoxResourceLoader.init(InstrumentationRegistry.getInstrumentation().getTargetContext());
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        PDDocument broken = new PDDocument() {
+            @Override public int getNumberOfPages() {
+                entered.countDown();
+                try { assertTrue(release.await(30, TimeUnit.SECONDS)); }
+                catch (InterruptedException interrupted) { throw new AssertionError(interrupted); }
+                throw new OutOfMemoryError("injected superseded scan failure");
+            }
+        };
+        PdfTextSearchEngine engine = new PdfTextSearchEngine(broken, 1);
+        AtomicInteger oldEvents = new AtomicInteger();
+        CountDownLatch done = new CountDownLatch(1);
+        AtomicInteger newCompletions = new AtomicInteger();
+        try {
+            engine.startSearch("old", new PdfTextSearchEngine.Options(), new PdfTextSearchEngine.Listener() {
+                @Override public void onSearchProgress(int count, int scanned, int total, PdfTextSearchEngine.Match hit) { oldEvents.incrementAndGet(); }
+                @Override public void onSearchFinished(int count, boolean cancelled) { oldEvents.incrementAndGet(); }
+                @Override public void onSearchFailed() { oldEvents.incrementAndGet(); }
+            });
+            assertTrue(entered.await(30, TimeUnit.SECONDS));
+            PdfTextSearchEngine.Options options = new PdfTextSearchEngine.Options();
+            options.regex = true;
+            engine.startSearch("[", options, new PdfTextSearchEngine.Listener() {
+                @Override public void onSearchProgress(int count, int scanned, int total, PdfTextSearchEngine.Match hit) { }
+                @Override public void onSearchFinished(int count, boolean cancelled) {
+                    if (!cancelled && count == 0) newCompletions.incrementAndGet();
+                    done.countDown();
+                }
+                @Override public void onSearchFailed() { done.countDown(); }
+            });
+            release.countDown();
+            assertTrue(done.await(30, TimeUnit.SECONDS));
+            assertEquals(0, oldEvents.get());
+            assertEquals(1, newCompletions.get());
+        } finally { release.countDown(); engine.close(); }
     }
 
     @Test public void unclaimedPdfDocumentClosesOffMainThread() throws Exception {

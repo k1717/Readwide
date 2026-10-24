@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Dipnot</string>
+    <string name="epub_return_to_text">Metne dön</string>
+    <string name="epub_contents_fallback">Okunabilir içindekiler bulunamadı; bölümler okuma sırasına göre gösteriliyor.</string>
+    <string name="epub_contents_empty">Eşleşen öğe yok.</string>
+</resources>

@@ -828,4 +828,6 @@
     <string name="txt_contents_error">Inhoud kon niet worden geladen. Open het bestand opnieuw en probeer het nogmaals.</string>
     <string name="txt_contents_save_error">Wijzigingen aan de inhoud konden niet worden opgeslagen.</string>
     <string name="txt_contents_page">%1$s · p. %2$d</string>
+    <string name="viewer_retry">Opnieuw proberen</string>
+    <string name="document_renderer_stopped">De documentviewer is gestopt. Open het bestand opnieuw om verder te lezen vanaf de laatst opgeslagen positie.</string>
 </resources>

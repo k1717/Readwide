@@ -174,7 +174,7 @@ public class SevenZPpmdStreamingTest {
         assertArrayEquals(new byte[0], SevenZPpmd7Decoder.decode(new byte[5], PROPERTIES, 0));
         for (int size = 0; size < 5; size++) {
             final byte[] truncated = new byte[size];
-            assertThrows(java.io.EOFException.class,
+            assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,
                     () -> SevenZPpmd7Decoder.decode(truncated, PROPERTIES, 0));
         }
         assertThrows(IOException.class, () -> SevenZPpmd7Decoder.decode(

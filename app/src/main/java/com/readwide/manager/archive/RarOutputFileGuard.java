@@ -43,19 +43,33 @@ final class RarOutputFileGuard implements AutoCloseable {
             // unreserved random filename can overwrite another caller's file.
             // A fixed short name also works for nearly NAME_MAX-sized targets.
             directory = reserveBackupDirectory(outFile);
-            backup = new File(directory, "original");
             try {
+                backup = new File(directory, "original");
+                // Allocate ownership before moving the original. An allocation
+                // failure must not leave it hidden without a returned guard.
+                RarOutputFileGuard guard = new RarOutputFileGuard(outFile, backup, directory);
                 if (!outFile.renameTo(backup)) {
                     throw new IOException("Failed to protect existing extraction output: " + outFile.getName());
                 }
+                return guard;
             } catch (IOException | SecurityException error) {
                 IOException failure = error instanceof IOException ? (IOException) error
                         : new IOException("Cannot protect extraction output", error);
-                try { deletePartial(directory); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+                cleanupReservation(directory, failure);
+                throw failure;
+            } catch (RuntimeException | Error failure) {
+                cleanupReservation(directory, failure);
                 throw failure;
             }
         }
         return new RarOutputFileGuard(outFile, backup, directory);
+    }
+
+    private static void cleanupReservation(File directory, Throwable failure) {
+        try { deletePartial(directory); }
+        catch (IOException | RuntimeException | Error cleanup) {
+            if (cleanup != failure) failure.addSuppressed(cleanup);
+        }
     }
 
     void commit() {

@@ -828,4 +828,6 @@
     <string name="txt_contents_error">Impossible de charger le sommaire. Rouvrez le fichier et réessayez.</string>
     <string name="txt_contents_save_error">Impossible d’enregistrer les modifications du sommaire.</string>
     <string name="txt_contents_page">%1$s · p. %2$d</string>
+    <string name="viewer_retry">Réessayer</string>
+    <string name="document_renderer_stopped">La visionneuse de documents s\'est arrêtée. Rouvrez le fichier pour reprendre à la dernière position enregistrée.</string>
 </resources>

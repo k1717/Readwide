@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Catatan kaki</string>
+    <string name="epub_return_to_text">Kembali ke teks</string>
+    <string name="epub_contents_fallback">Daftar isi tidak dapat dibaca; bagian ditampilkan sesuai urutan baca.</string>
+    <string name="epub_contents_empty">Tidak ada entri yang cocok.</string>
+</resources>

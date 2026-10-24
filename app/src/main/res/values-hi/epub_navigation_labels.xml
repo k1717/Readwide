@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">खंड</string>
+    <string name="epub_section_progress">खंड %1$s / %2$d</string>
+    <string name="epub_section_move">खंड पर जाएँ</string>
+    <string name="epub_section_hint">यह पुस्तक के खंडों की गिनती है, स्क्रीन पर दिखने वाले पृष्ठों या छपे पृष्ठ क्रमांकों की नहीं।</string>
+    <string name="epub_section_range_error">1 से %1$d के बीच खंड क्रमांक डालें।</string>
+    <string name="epub_bookmarks_status">सभी बुकमार्क: %1$d फ़ाइलें / %2$d बुकमार्क\nवर्तमान: खंड %3$d / %4$d</string>
+</resources>

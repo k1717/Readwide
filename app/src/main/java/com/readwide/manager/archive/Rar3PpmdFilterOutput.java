@@ -3,6 +3,7 @@ package com.readwide.manager.archive;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.ArrayDeque;
+import com.readwide.manager.util.FileOperationProgress;
 
 /** Delays only queued filter regions; never stores a whole decoded entry. */
 final class Rar3PpmdFilterOutput extends OutputStream {
@@ -13,6 +14,8 @@ final class Rar3PpmdFilterOutput extends OutputStream {
     private final Rar3VmFilter.ProgramState programs;
     private final int maximumFilterBytes;
     private final DeferredFilters deferred;
+    private final boolean allowPartialCarry;
+    private final FileOperationProgress progress;
     private final ArrayDeque<Rar3VmFilter.PendingFilter> pending;
     private final Rar3VmFilter.ProgramRetention retainedPrograms;
     private long written; // Raw dictionary bytes consumed in this entry.
@@ -28,17 +31,28 @@ final class Rar3PpmdFilterOutput extends OutputStream {
 
     interface Symbols { int read() throws IOException; }
 
-    /** Only descriptors, never partially consumed raw blocks, survive a solid entry. */
+    /** A bounded raw prefix can survive only after the preceding file's output is complete. */
     static final class DeferredFilters {
         private final ArrayDeque<Rar3VmFilter.PendingFilter> pending = new ArrayDeque<>();
         private final Rar3VmFilter.ProgramRetention retained = new Rar3VmFilter.ProgramRetention();
         private long tailSourceEnd;
+        private byte[] block;
+        private int buffered;
         private boolean inUse;
+
+        /** Whole-run completion must not silently drop a scheduled future transformation. */
+        void requireEmpty() throws IOException {
+            if (inUse || !pending.isEmpty() || block != null || buffered != 0) {
+                throw new IOException("RAR3 solid run ended with an unfinished VM filter");
+            }
+        }
 
         void reset() {
             pending.clear();
             retained.clear();
             tailSourceEnd = 0;
+            block = null;
+            buffered = 0;
         }
     }
 
@@ -55,8 +69,21 @@ final class Rar3PpmdFilterOutput extends OutputStream {
     Rar3PpmdFilterOutput(OutputStream destination, long expectedSize,
                         Rar3VmFilter.ProgramState programs, int maximumFilterBytes,
                         DeferredFilters deferred) {
+        this(destination, expectedSize, programs, maximumFilterBytes, deferred, false);
+    }
+
+    Rar3PpmdFilterOutput(OutputStream destination, long expectedSize,
+                        Rar3VmFilter.ProgramState programs, int maximumFilterBytes,
+                        DeferredFilters deferred, boolean allowPartialCarry) {
+        this(destination, expectedSize, programs, maximumFilterBytes, deferred, allowPartialCarry, null);
+    }
+
+    Rar3PpmdFilterOutput(OutputStream destination, long expectedSize,
+                        Rar3VmFilter.ProgramState programs, int maximumFilterBytes,
+                        DeferredFilters deferred, boolean allowPartialCarry, FileOperationProgress progress) {
         if (destination == null || programs == null || expectedSize < 0
-                || maximumFilterBytes < 1 || maximumFilterBytes > 4 * 1024 * 1024) {
+                || maximumFilterBytes < 1 || maximumFilterBytes > 4 * 1024 * 1024
+                || (allowPartialCarry && deferred == null)) {
             throw new IllegalArgumentException("Invalid PPMd filter output");
         }
         this.destination = destination;
@@ -64,6 +91,8 @@ final class Rar3PpmdFilterOutput extends OutputStream {
         this.programs = programs;
         this.maximumFilterBytes = maximumFilterBytes;
         this.deferred = deferred;
+        this.allowPartialCarry = allowPartialCarry;
+        this.progress = progress;
         if (deferred == null) {
             pending = new ArrayDeque<>();
             retainedPrograms = new Rar3VmFilter.ProgramRetention();
@@ -73,6 +102,13 @@ final class Rar3PpmdFilterOutput extends OutputStream {
             pending = deferred.pending;
             retainedPrograms = deferred.retained;
             tailSourceEnd = deferred.tailSourceEnd;
+            block = deferred.block;
+            buffered = deferred.buffered;
+            deferred.block = null;
+            deferred.buffered = 0;
+            // The prefix is already in solid dictionary history. Do not count or
+            // decode it again; final output now differs from this entry's raw input.
+            lengthChanged = buffered != 0;
         }
     }
 
@@ -115,12 +151,18 @@ final class Rar3PpmdFilterOutput extends OutputStream {
         try {
             if (filter == null || filter.type == null
                     || (filter.type == Rar3VmFilter.StandardFilter.NONE && filter.customProgram == null)
-                    || filter.blockLength <= 0 || filter.blockLength > maximumFilterBytes
+                    || filter.blockLength < 0 || filter.blockLength > maximumFilterBytes
                     || filter.blockStartAbs < written) {
                 throw unsupported("Invalid or late RAR3 PPMd VM range");
             }
             Rar3VmFilter.PendingFilter previous = pending.peekLast();
             boolean chained = previous != null && previous.blockStartAbs == filter.blockStartAbs;
+            // A zero-byte intermediate result consumes no new dictionary bytes.
+            // Keep the first raw region nonempty; emitFilteredBlock also checks
+            // that every successor's length matches the actual preceding result.
+            if (filter.blockLength == 0 && !chained) {
+                throw unsupported("RAR3 zero-length VM input requires a preceding filter");
+            }
             if (!chained && filter.blockStartAbs > Long.MAX_VALUE - filter.blockLength) {
                 throw unsupported("RAR3 PPMd raw filter range overflow");
             }
@@ -217,20 +259,23 @@ final class Rar3PpmdFilterOutput extends OutputStream {
             if (first.blockLength != result.length) {
                 throw unsupported("RAR3 VM chain input length mismatch");
             }
-            int[] registers = first.initR.clone();
+            // queue() already owns a private register snapshot. Standard filters
+            // only read it; custom execution copies it into its own VM state.
+            int[] registers = first.initR;
             // Custom bytecode can intentionally override R4 in its record. The
             // actual input length still initializes fixed global block metadata.
             if (first.customProgram == null) registers[4] = result.length;
             // VM offsets and branch filters refer to final file position, not
             // the raw dictionary offset after earlier size-changing regions.
             first.fileOffset = published;
-            result = Rar3VmFilter.apply(first, result, result.length, registers);
+            result = Rar3VmFilter.apply(first, result, result.length, registers, progress);
             pending.removeFirst();
             retainedPrograms.release(first.customProgram);
         }
         if (result.length > expectedSize - published) {
             throw unsupported("RAR3 VM chain exceeds final entry size");
         }
+        ArchiveCancellation.checkpoint(progress);
         destination.write(result, 0, result.length);
         published += result.length;
         lengthChanged |= result.length != length;
@@ -253,11 +298,16 @@ final class Rar3PpmdFilterOutput extends OutputStream {
     long rawBytes() { return written; }
     long outputBytes() { return published; }
 
-    /** A file marker can defer a wholly future region, not an incomplete current one. */
+    /** Never defer output owed to this file; a prefix may belong wholly to the next one. */
     boolean canFinishEntry() {
         Rar3VmFilter.PendingFilter first = pending.peekFirst();
-        return published == expectedSize && buffered == 0
-                && (first == null || (deferred != null && first.blockStartAbs >= written));
+        if (published != expectedSize) return false;
+        if (buffered == 0) {
+            return first == null || (deferred != null && first.blockStartAbs >= written);
+        }
+        return allowPartialCarry && first != null && block != null
+                && buffered < first.blockLength && block.length == first.blockLength
+                && first.blockStartAbs == written - buffered;
     }
 
     void finish() throws IOException {
@@ -277,6 +327,10 @@ final class Rar3PpmdFilterOutput extends OutputStream {
                 // Keep original program objects even if their parser slots were reset.
                 for (Rar3VmFilter.PendingFilter filter : pending) filter.blockStartAbs -= written;
                 deferred.tailSourceEnd = pending.isEmpty() ? 0 : tailSourceEnd - written;
+                // A negative rebased start names the prefix consumed by earlier
+                // entries, not permission to accept new late filter records.
+                deferred.block = block;
+                deferred.buffered = buffered;
             }
             finished = true;
         } catch (IOException | RuntimeException | Error error) { fail(error); throw error; }
@@ -290,7 +344,7 @@ final class Rar3PpmdFilterOutput extends OutputStream {
         if (!finished || failure != null || deferred == null) {
             pending.clear();
             retainedPrograms.clear();
-            if (deferred != null) deferred.tailSourceEnd = 0;
+            if (deferred != null) deferred.reset();
         }
         if (deferred != null) deferred.inUse = false;
         block = null;
@@ -313,7 +367,7 @@ final class Rar3PpmdFilterOutput extends OutputStream {
         failure = error;
         pending.clear();
         retainedPrograms.clear();
-        if (deferred != null) deferred.tailSourceEnd = 0;
+        if (deferred != null) deferred.reset();
         block = null;
     }
 

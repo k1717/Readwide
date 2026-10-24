@@ -474,6 +474,51 @@ public class PdfPageView extends View {
         return true;
     }
 
+    /** Menu steps use the displayed matrix, not the host's legacy render zoom. */
+    void changeZoomFromControls(float relativeStep) {
+        if (Float.isNaN(relativeStep) || Float.isInfinite(relativeStep)
+                || !canZoomFromControls()) return;
+        float scale = currentScale();
+        float target = Math.max(minScale, Math.min(Math.max(minScale, maxScale),
+                scale + fitScale * relativeStep));
+        if (target == scale) return;
+        boolean resizePending = viewportResizePrepared;
+        prepareControlZoom();
+        float factor = target / scale;
+        matrix.postScale(factor, factor, getWidth() * 0.5f, getHeight() * 0.5f);
+        clampMatrix();
+        invalidate();
+        scheduleSharpen();
+        if (resizePending) {
+            // Do not let an already queued chrome resize restore the old zoom.
+            prepareForViewportResize();
+            finishPreparedViewportResizeOnNextPreDraw();
+        }
+    }
+
+    void resetZoomFromControls() {
+        if (!canZoomFromControls()) return;
+        prepareControlZoom();
+        viewportResizePrepared = false;
+        resetToFit();
+        scheduleSharpen();
+    }
+
+    private boolean canZoomFromControls() {
+        return fitBitmap != null && !fitBitmap.isRecycled()
+                && getWidth() > 0 && getHeight() > 0
+                && fitScale > 0f && currentScale() > 0f;
+    }
+
+    private void prepareControlZoom() {
+        removeCallbacks(resetFitRunnable);
+        handler.removeCallbacks(sharpenRunnable);
+        scroller.forceFinished(true);
+        swipeTracking = false;
+        releaseRevealLift();
+        clearSharpPatch();
+    }
+
     /** Zoom gestures take priority over tap paging anywhere on an enlarged page. */
     public boolean isZoomedIn() {
         return fitBitmap != null && PdfPageGestureMath.isZoomed(currentScale(), minScale);

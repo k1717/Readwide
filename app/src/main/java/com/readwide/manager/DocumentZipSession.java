@@ -14,8 +14,11 @@ final class DocumentZipSession implements Closeable {
 
     synchronized Lease acquire() {
         if (retired) return null;
+        // Publish ownership only after its release handle exists. A failed
+        // allocation must not leave a reader that can never close the ZIP.
+        Lease lease = new Lease();
         readers++;
-        return new Lease();
+        return lease;
     }
 
     @Override public void close() {

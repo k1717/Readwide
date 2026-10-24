@@ -11,6 +11,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -193,9 +194,13 @@ public class BookmarkManager {
     }
 
     public synchronized void saveReadingState(ReaderState state) {
-        state.setLastReadAt(System.currentTimeMillis());
-        readingStates.put(state.getFilePath(), state);
-        saveReadingStates();
+        try {
+            state.setLastReadAt(System.currentTimeMillis());
+            readingStates.put(state.getFilePath(), state);
+            saveReadingStates();
+        } catch (OutOfMemoryError | StackOverflowError failure) {
+            reportSaveFailure("Failed to publish reading state", failure);
+        }
     }
 
     /**
@@ -204,10 +209,18 @@ public class BookmarkManager {
      * operations still use synchronous, revision-ordered checkpoints below.
      */
     public synchronized void saveReadingStateDeferred(ReaderState state) {
-        state.setLastReadAt(System.currentTimeMillis());
-        ReaderState owned = state.copy();
-        readingStates.put(owned.getFilePath(), owned);
-        readingStateWriter.request(++readingStateRevision);
+        try {
+            // Copy before mutating the supplied state: it may already be the
+            // current in-memory state returned by getReadingState().
+            ReaderState owned = state.copy();
+            long now = System.currentTimeMillis();
+            state.setLastReadAt(now);
+            owned.setLastReadAt(now);
+            readingStates.put(owned.getFilePath(), owned);
+            readingStateWriter.request(++readingStateRevision);
+        } catch (OutOfMemoryError | StackOverflowError failure) {
+            reportSaveFailure("Failed to publish deferred reading state", failure);
+        }
     }
 
     public synchronized void deleteReadingState(String filePath) {
@@ -1433,7 +1446,8 @@ public class BookmarkManager {
      * Rebind imported/moved bookmarks to the currently opened file only when the
      * exact path lookup failed.  No phone-wide scan is performed: the user opens
      * or selects a file, then we compare that single file against stored portable
-     * identity fields.
+     * identity fields. Existing local bindings are checked only for matching
+     * candidates, so opening a duplicate does not take the original's bookmarks.
      */
     private int bindPortableBookmarksToFile(String filePath) {
         if (filePath == null || bookmarks.isEmpty()) return 0;
@@ -1455,11 +1469,13 @@ public class BookmarkManager {
         PortableFileIdentity target = buildPortableFileIdentity(file);
         if (target == null || target.displayName == null || target.displayName.isEmpty()) return 0;
 
+        Map<String, PortableSourceBinding> sourceBindings = new HashMap<>();
         int bound = 0;
         for (Bookmark bookmark : bookmarks) {
             String existingPath = bookmark.getFilePath();
             if (filePath.equals(existingPath)) continue;
             if (!portableIdentityMatches(bookmark, target)) continue;
+            if (hasLivePortableSourceBinding(bookmark, file, sourceBindings)) continue;
 
             bookmark.setFilePath(filePath);
             bookmark.setFileName(target.displayName);
@@ -1486,15 +1502,58 @@ public class BookmarkManager {
         long bookmarkSize = bookmark.getFileSizeBytes();
         String bookmarkFp = bookmark.getQuickFingerprint();
 
-        if (bookmarkFp != null && !bookmarkFp.trim().isEmpty()
-                && target.quickFingerprint != null && !target.quickFingerprint.trim().isEmpty()) {
-            return bookmarkFp.equals(target.quickFingerprint)
+        if (bookmarkFp != null && !bookmarkFp.trim().isEmpty()) {
+            // An unreadable target is not evidence of identity. The size-only
+            // fallback below is exclusively for bookmarks from older backups.
+            return target.quickFingerprint != null && !target.quickFingerprint.trim().isEmpty()
+                    && bookmarkFp.equals(target.quickFingerprint)
                     && (bookmarkSize <= 0L || bookmarkSize == target.sizeBytes);
         }
 
         // Conservative fallback for older backups made before quickFingerprint
         // existed: same display name + same byte length.  Do not bind by name only.
         return bookmarkSize > 0L && bookmarkSize == target.sizeBytes;
+    }
+
+    private boolean hasLivePortableSourceBinding(Bookmark bookmark, File target,
+                                                 Map<String, PortableSourceBinding> checked) {
+        String sourcePath = bookmark.getFilePath();
+        File source = fileFromPath(sourcePath);
+        // Provider URI bindings retain their existing portable matching behavior;
+        // this lookup must not probe providers or request access to another file.
+        if (source == null) return false;
+        PortableSourceBinding binding = checked.get(sourcePath);
+        if (binding == null) {
+            binding = new PortableSourceBinding();
+            try {
+                // Storage aliases can name the same book without being copies.
+                // The target's portable identity match was already checked.
+                binding.sameFile = source.getCanonicalFile().equals(target.getCanonicalFile());
+                if (!binding.sameFile) {
+                    FileTreeWalk.Kind kind = FileTreeWalk.kind(source);
+                    binding.missing = kind == FileTreeWalk.Kind.MISSING;
+                    if (kind == FileTreeWalk.Kind.FILE) {
+                        binding.identity = buildPortableFileIdentity(source);
+                    }
+                }
+            } catch (IOException | SecurityException inaccessible) {
+                // Access failure is not proof that the original file is gone.
+            }
+            checked.put(sourcePath, binding);
+        }
+        if (binding.missing || binding.sameFile) return false;
+        PortableFileIdentity identity = binding.identity;
+        if (identity == null) return true;
+        long savedSize = bookmark.getFileSizeBytes();
+        if (savedSize > 0L && savedSize != identity.sizeBytes) return false;
+        String savedFingerprint = bookmark.getQuickFingerprint();
+        if (savedFingerprint != null && !savedFingerprint.trim().isEmpty()
+                && identity.quickFingerprint != null && !identity.quickFingerprint.trim().isEmpty()) {
+            // A replacement at the old path must not prevent relocating the
+            // actual original. Keep the binding if identity could not be read.
+            return savedFingerprint.equals(identity.quickFingerprint);
+        }
+        return true;
     }
 
     private PortableFileIdentity buildPortableFileIdentity(File file) {
@@ -1586,6 +1645,12 @@ public class BookmarkManager {
         String displayName;
         long sizeBytes;
         String quickFingerprint;
+    }
+
+    private static final class PortableSourceBinding {
+        boolean missing;
+        boolean sameFile;
+        PortableFileIdentity identity;
     }
 
     /**
@@ -1684,8 +1749,8 @@ public class BookmarkManager {
             }
             root.put("bookmarks", arr);
             writeFile(BOOKMARKS_FILE, root.toString(2));
-        } catch (JSONException e) {
-            Log.e(TAG, "Failed to save bookmarks", e);
+        } catch (JSONException | OutOfMemoryError | StackOverflowError e) {
+            reportSaveFailure("Failed to save bookmarks", e);
         }
     }
 
@@ -1713,8 +1778,8 @@ public class BookmarkManager {
         ++readingStateRevision;
         try {
             readingStateWriter.writeNow(snapshotReadingStates());
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to save reading states", e);
+        } catch (Exception | OutOfMemoryError | StackOverflowError e) {
+            reportSaveFailure("Failed to save reading states", e);
         }
     }
 
@@ -1751,8 +1816,16 @@ public class BookmarkManager {
         File file = new File(context.getFilesDir(), fileName);
         try {
             AtomicUtf8File.write(file, content);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to write " + fileName, e);
+        } catch (Exception | OutOfMemoryError | StackOverflowError e) {
+            reportSaveFailure("Failed to write bookmark file", e);
+        }
+    }
+
+    private static void reportSaveFailure(String message, Throwable failure) {
+        try {
+            Log.e(TAG, message, failure);
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError reportingFailure) {
+            // Best-effort saves must remain recoverable if logging also exhausts resources.
         }
     }
 }

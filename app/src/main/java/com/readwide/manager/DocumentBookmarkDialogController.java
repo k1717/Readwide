@@ -160,7 +160,8 @@ final class DocumentBookmarkDialogController {
                 rvLp.height = dpToPx(430);
                 rv.setLayoutParams(rvLp);
             }
-            currentInfo.setText(getString(R.string.all_bookmarks_status,
+            currentInfo.setText(getString("EPUB".equals(activity.docType)
+                            ? R.string.epub_bookmarks_status : R.string.all_bookmarks_status,
                     adapter.getFolderCount(), all.size(), activity.currentDisplayDocumentPageNumber(), activity.documentPageCount()));
         };
 

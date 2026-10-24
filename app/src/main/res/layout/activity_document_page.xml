@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/document_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -338,8 +339,10 @@
     <!--
       Android 15+ can keep system bars transparent even when a Window color is
       requested. These EPUB-only, non-interactive scrims are sized to the stable
-      system insets so the bars always continue the reader body color rather
-      than the overlay toolbar color.
+      system insets; side widths exclude cutout space already owned by the root.
+      The top/side safe areas retain the reader body color; the
+      bottom edge matches the panel while controls are visible and the body when
+      hidden. Color updates do not resize the document viewport.
     -->
     <View
         android:id="@+id/document_system_bar_scrim_top"
@@ -365,28 +368,31 @@
         android:importantForAccessibility="no"
         android:visibility="gone" />
 
+    <!-- Physical inset edges must not mirror with the interface direction. -->
     <View
         android:id="@+id/document_system_bar_scrim_start"
         android:layout_width="0dp"
         android:layout_height="match_parent"
-        android:layout_gravity="start"
+        android:layout_gravity="left"
         android:background="#121212"
         android:clickable="false"
         android:elevation="40dp"
         android:focusable="false"
         android:importantForAccessibility="no"
-        android:visibility="gone" />
+        android:visibility="gone"
+        tools:ignore="RtlHardcoded" />
 
     <View
         android:id="@+id/document_system_bar_scrim_end"
         android:layout_width="0dp"
         android:layout_height="match_parent"
-        android:layout_gravity="end"
+        android:layout_gravity="right"
         android:background="#121212"
         android:clickable="false"
         android:elevation="40dp"
         android:focusable="false"
         android:importantForAccessibility="no"
-        android:visibility="gone" />
+        android:visibility="gone"
+        tools:ignore="RtlHardcoded" />
 
 </FrameLayout>

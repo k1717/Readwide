@@ -1,5 +1,6 @@
 package com.readwide.manager;
 
+import android.app.ActivityOptions;
 import android.app.Dialog;
 import android.content.Intent;
 import android.content.res.ColorStateList;
@@ -31,6 +32,7 @@ import android.widget.RadioGroup;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
@@ -114,10 +116,26 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
     private static final int FILTER_IMAGE = ArchiveEntryListController.FILTER_IMAGE;
     private volatile boolean destroyed = false;
     private Dialog archivePreviewLoadingDialog;
+    private final OnBackPressedCallback backCallback = new OnBackPressedCallback(true) {
+        @Override public void handleOnBackPressed() {
+            if (currentPrefix != null && currentPrefix.length() > 0) {
+                goUpOneArchiveFolder();
+                return;
+            }
+            // Delegate to the existing default route without re-entering this callback.
+            setEnabled(false);
+            try {
+                getOnBackPressedDispatcher().onBackPressed();
+            } finally {
+                setEnabled(true);
+            }
+        }
+    };
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        getOnBackPressedDispatcher().addCallback(this, backCallback);
         prefs = PrefsManager.getInstance(this);
         bookmarkManager = BookmarkManager.getInstance(this);
         archiveSortMode = rootArchiveSortMode();
@@ -162,15 +180,6 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         clearPendingAcceptedArchivePassword();
         executor.shutdownNow();
         super.onDestroy();
-    }
-
-    @Override
-    public void onBackPressed() {
-        if (currentPrefix != null && currentPrefix.length() > 0) {
-            goUpOneArchiveFolder();
-            return;
-        }
-        super.onBackPressed();
     }
 
     private void setArchivePassword(@Nullable char[] password) {
@@ -240,8 +249,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(bg);
         setContentView(root);
-        getWindow().setStatusBarColor(Color.TRANSPARENT);
-        getWindow().setNavigationBarColor(bg);
+        com.readwide.manager.util.EdgeToEdgeUtil.setSystemBarColors(getWindow(), Color.TRANSPARENT, bg);
         WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(getWindow(), root);
         controller.setAppearanceLightStatusBars(false);
         controller.setAppearanceLightNavigationBars(!dark);
@@ -258,7 +266,7 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
             DrawableCompat.setTint(wrapped, Color.WHITE);
             toolbar.setNavigationIcon(wrapped);
         }
-        toolbar.setNavigationOnClickListener(v -> onBackPressed());
+        toolbar.setNavigationOnClickListener(v -> getOnBackPressedDispatcher().onBackPressed());
         root.addView(toolbar, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dpToPx(56)));
@@ -1098,8 +1106,8 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
         intent.putExtra(ImageReaderActivity.EXTRA_SOURCE_ARCHIVE_PATH, archiveFile.getAbsolutePath());
         intent.putExtra(ImageReaderActivity.EXTRA_ALLOW_FILE_OPS, false);
         try {
-            startActivity(intent);
-            overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
+            startActivity(intent, ActivityOptions.makeCustomAnimation(this,
+                    R.anim.image_viewer_enter, R.anim.image_viewer_hold).toBundle());
             if (finishAfterOpen) finish();
         } catch (RuntimeException e) {
             ImageSequenceHandoffStore.discard(token);
@@ -1136,10 +1144,12 @@ public class ArchiveBrowserActivity extends AppCompatActivity {
             ShortToast.show(this, R.string.archive_entry_unsupported);
             return;
         }
-        startActivity(intent);
         if (intent.getComponent() != null
                 && ImageReaderActivity.class.getName().equals(intent.getComponent().getClassName())) {
-            overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
+            startActivity(intent, ActivityOptions.makeCustomAnimation(this,
+                    R.anim.image_viewer_enter, R.anim.image_viewer_hold).toBundle());
+        } else {
+            startActivity(intent);
         }
     }
 

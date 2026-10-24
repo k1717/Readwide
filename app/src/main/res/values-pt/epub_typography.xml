@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">Tamanho do texto EPUB: %1$d%%</string>
+    <string name="epub_line_height">Espaçamento entre linhas</string>
+    <string name="epub_typography_hint">Apenas para EPUB. A opção padrão do livro mantém o espaçamento original entre linhas. Páginas com layout fixo, baseadas em imagens ou com texto vertical mantêm a disposição dos parágrafos.</string>
+    <string name="epub_paragraph_layout_kept">Não é possível alterar a formatação dos parágrafos nesta página. O layout do livro será mantido.</string>
+</resources>

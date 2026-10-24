@@ -96,7 +96,7 @@ void showBookmarksForFile() {
     saveLp.setMargins(0, activity.dpToPx(8), 0, activity.dpToPx(2));
 
     TextView emptyText = new TextView(activity);
-    emptyText.setText(activity.getString(R.string.no_bookmarks_hint));
+    emptyText.setText(activity.getString(R.string.no_bookmarks_yet));
     emptyText.setTextColor(sub);
     emptyText.setGravity(Gravity.CENTER);
     emptyText.setTextSize(14f);
@@ -116,14 +116,13 @@ void showBookmarksForFile() {
 
     rv.setAdapter(adapter);
 
-    box.addView(emptyText, new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT));
-
+    android.widget.FrameLayout bookmarkListBox = new android.widget.FrameLayout(activity);
+    bookmarkListBox.addView(rv, new android.widget.FrameLayout.LayoutParams(-1, -1));
+    bookmarkListBox.addView(emptyText, new android.widget.FrameLayout.LayoutParams(-1, -1));
     LinearLayout.LayoutParams bookmarkListLp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             activity.dpToPx(430));
-    box.addView(rv, bookmarkListLp);
+    box.addView(bookmarkListBox, bookmarkListLp);
     box.addView(saveButton, saveLp);
 
     final android.app.Dialog[] dialogRef = new android.app.Dialog[1];
@@ -135,13 +134,8 @@ void showBookmarksForFile() {
         adapter.setBookmarks(allBookmarks, expandedFolders, activity.filePath);
         // Keep the bookmark dialog height stable even when the list is empty.
         // This prevents the window from bouncing when the first bookmark is added.
-        emptyText.setVisibility(View.GONE);
-        rv.setVisibility(View.VISIBLE);
-        LinearLayout.LayoutParams rvLp = (LinearLayout.LayoutParams) rv.getLayoutParams();
-        if (rvLp != null && rvLp.height != activity.dpToPx(430)) {
-            rvLp.height = activity.dpToPx(430);
-            rv.setLayoutParams(rvLp);
-        }
+        emptyText.setVisibility(allBookmarks.isEmpty() ? View.VISIBLE : View.GONE);
+        rv.setVisibility(allBookmarks.isEmpty() ? View.INVISIBLE : View.VISIBLE);
         currentInfo.setText(activity.getString(R.string.all_bookmarks_status,
                 adapter.getFolderCount(),
                 allBookmarks.size(),

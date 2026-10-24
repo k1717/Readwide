@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">Bagian</string>
+    <string name="epub_section_progress">Bagian %1$s / %2$d</string>
+    <string name="epub_section_move">Ke bagian</string>
+    <string name="epub_section_hint">Menghitung bagian buku, bukan halaman layar atau nomor halaman cetak.</string>
+    <string name="epub_section_range_error">Masukkan nomor bagian dari 1 hingga %1$d.</string>
+    <string name="epub_bookmarks_status">Semua penanda: %1$d berkas / %2$d penanda\nSaat ini: Bagian %3$d / %4$d</string>
+</resources>

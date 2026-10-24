@@ -828,4 +828,6 @@
     <string name="txt_contents_error">Не удалось загрузить оглавление. Откройте файл заново и повторите попытку.</string>
     <string name="txt_contents_save_error">Не удалось сохранить изменения оглавления.</string>
     <string name="txt_contents_page">%1$s · стр. %2$d</string>
+    <string name="viewer_retry">Повторить</string>
+    <string name="document_renderer_stopped">Просмотр документа остановлен. Откройте файл заново, чтобы продолжить с последней сохранённой позиции.</string>
 </resources>

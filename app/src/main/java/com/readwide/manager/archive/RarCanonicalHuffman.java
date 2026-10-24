@@ -60,10 +60,20 @@ final class RarCanonicalHuffman {
         if (codeLengths == null || codeLengths.length == 0) {
             throw new IOException("RAR Huffman table is empty");
         }
+        return fromCodeLengths(codeLengths, 0, codeLengths.length);
+    }
+
+    /** Reads a table slice without retaining it; decoded symbols remain relative to that slice. */
+    static RarCanonicalHuffman fromCodeLengths(int[] codeLengths, int offset, int lengthCount) throws IOException {
+        if (codeLengths == null || lengthCount == 0) throw new IOException("RAR Huffman table is empty");
+        if (offset < 0 || lengthCount < 0 || offset > codeLengths.length || lengthCount > codeLengths.length - offset) {
+            throw new IOException("Invalid RAR Huffman table range");
+        }
 
         int[] counts = new int[MAX_BITS + 1];
         int maxLength = 0;
-        for (int length : codeLengths) {
+        for (int index = 0; index < lengthCount; index++) {
+            int length = codeLengths[offset + index];
             if (length < 0 || length > MAX_BITS) {
                 throw new IOException("Invalid RAR Huffman code length");
             }
@@ -104,8 +114,8 @@ final class RarCanonicalHuffman {
 
         int[] offsetByLength = Arrays.copyOf(firstSymbolIndexByLength, firstSymbolIndexByLength.length);
         int[] symbolsByCode = new int[symbolCount];
-        for (int symbol = 0; symbol < codeLengths.length; symbol++) {
-            int length = codeLengths[symbol];
+        for (int symbol = 0; symbol < lengthCount; symbol++) {
+            int length = codeLengths[offset + symbol];
             if (length == 0) continue;
             symbolsByCode[offsetByLength[length]++] = symbol;
             nextCode[length]++;
@@ -118,7 +128,7 @@ final class RarCanonicalHuffman {
         if (maxLength == 0) throw new IOException("RAR Huffman decode from empty table");
         // Never require a full lookup prefix at a valid short-code stream tail.
         // RarBitInput retains prefetched bytes across aligned PPMd transitions.
-        if (input.remainingBits() >= lookupBits) {
+        if (input.hasBits(lookupBits)) {
             int prefix = input.peekBits(lookupBits);
             int length = lookupLengths[prefix];
             if (length != 0) {

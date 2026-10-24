@@ -74,14 +74,19 @@ This note records the implementation delta from 1.0.18.
 - Corrected unreachable cleanup catches in `EggArchiveReader` and `SevenZBcj2ArchiveReader`.
 - Existing exclusions remain: encrypted/split mixed RAR runs, stored members inside solid runs, custom RAR VM code and unsupported filters; unsupported 7z graphs; EGG LEA/encrypted-solid input. Broader sparse/compressed-TAR indexing and complete all-volume preview-cache identity remain unfinished.
 
-## Resources and dependencies
+## Resource and release changes
 
 - Version metadata is `1.0.19` / `10019`; application ID, permissions, SDK levels, build tooling and signing configuration are unchanged.
 - Updated AppCompat to 1.8.0, ConstraintLayout to 2.2.2, SwipeRefreshLayout to 1.2.0, hwplib to 1.1.11 and test-only zstd-jni to 1.5.7-17. PDFBox Android and runtime archive dependency pins are retained.
 - Source-built libarchive 3.8.9 and ZIPX JPEG/WavPack modules retain their provenance and notices. Dependency versions and notices are listed in [the license report](LICENSE_REPORT_READWIDE_1_0_19.md).
 
-## Release files
+### Release files
 
 - Updated the changelog, patch notes, GitHub release notes, Fastlane changelogs, license report and source dependency SBOM for `1.0.19` / `10019`.
 - The public package includes app and native source, Gradle build files, tests and license notices.
 - Build and publication commands are in [RELEASE_BUILD.md](../RELEASE_BUILD.md).
+
+## Validation boundary
+
+- These are historical 1.0.19 implementation notes. Their support limits and recorded changes do not describe later releases or establish current runtime verification.
+- See the [current source status](CURRENT_SOURCE_STATUS_1_0_21.md) and [release readiness](RELEASE_READINESS_1_0_21.md) for the later checkpoint; the implementation record above is retained.

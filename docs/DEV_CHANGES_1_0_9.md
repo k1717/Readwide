@@ -140,8 +140,8 @@ while the reader lives; closed in onDestroy.
      page bottom doesn't rise above the safe line.
    - Only fit-height pages are lifted (a zoomed page is already pannable). A
      manual pan / pinch / double-tap / fling clears the lift
-     (`releaseRevealLift`, with `revealSuppressedByUser`) so the user stays in
-     control; a new match (next/prev, or a new page) re-enables it.
+     (`releaseRevealLift`, with `revealSuppressedByUser`) so manual navigation
+     retains control; a new match (next/prev, or a new page) re-enables it.
    - Also added the missing `onPageShown(...)` call at the second `setFitBitmap`
      site (the render-callback path), so highlights and lift also apply on a
      cache-miss freshly-rendered page, not only on cache hits.

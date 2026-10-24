@@ -3,7 +3,7 @@
 > **Historical design record:** This document describes the 1.0.11 implementation stage. Document and PDF spoken-sentence highlights were added later, and 1.0.15 also maps search/TTS rectangles onto both halves of a true two-page PDF composite. Statements marked “deferred” below record the 1.0.11 state rather than the current release boundary; continuous-scroll PDF still follows the result page without a bitmap rectangle overlay.
 
 This note records what read-aloud covered in 1.0.11, the neural-engine fixes and
-controls added in 1.0.11 in response to user feedback, and the design by which
+controls added in 1.0.11 in response to reported playback issues, and the design by which
 read-aloud was extended from the text reader to the document viewer (EPUB, Word,
 HWP, Markdown) and PDF.
 
@@ -22,7 +22,7 @@ see the extension design below). It is offered in all of them:
   text layer).
 
 So read-aloud is available everywhere a document exposes selectable text. The
-original 1.0.11 user report - "EPUB and PDF have no TTS entry point" - is
+original 1.0.11 issue - "EPUB and PDF have no TTS entry point" - is
 resolved; the sections below record how.
 
 The engine is the Android `TextToSpeech` API, so any installed engine works,
@@ -41,7 +41,7 @@ size) and **pause reduction** (Off/Medium/Aggressive, softening punctuation in
 text reaches the engine - no audio is touched - which is why they fit the
 `TextToSpeech`-delegated architecture. A read-aloud button also sits immediately
 right of the bookmark button in the document and PDF viewers' toolbars (default
-order in `ButtonOrderManager`, user-customizable), matching the text reader.
+order in `ButtonOrderManager`, customizable), matching the text reader.
 
 ## Fixes in 1.0.11
 
@@ -51,7 +51,7 @@ Both target the neural-engine experience described in the feedback.
    used to refuse to start (leaving `active = false`, no audio) whenever the
    selected locale came back `LANG_NOT_SUPPORTED` / `LANG_MISSING_DATA`. Neural
    engines frequently report a specific locale as unsupported while still
-   speaking fine with their own default voice, which read to users as "TTS is
+   speaking fine with their own default voice, which appeared as "TTS is
    broken - even .txt produces no audio." It now falls back to the engine's
    default voice locale (`getDefaultVoice().getLocale()`), then the device
    default locale, and only surfaces the unavailable-language message if none
@@ -75,8 +75,8 @@ Both target the neural-engine experience described in the feedback.
 
 Both fixes originated in `ReaderActivity`'s text/Markdown path but live in the
 shared `ReaderTtsController`, so they apply to every viewer that now uses it.
-Device verification with a real neural engine is the remaining step, since the
-sandbox cannot run the engine.
+Device verification with a real neural engine was not performed in this check
+and remains separate from the recorded source-level results.
 
 ## EPUB / PDF extension design
 
@@ -191,7 +191,7 @@ buffer space it was recorded in.
 
 ## Note on the reported "synchronous speak-then-wait" diagnosis
 
-The intra-page queue was already `QUEUE_ADD`-buffered, so the stutter users hit
+The intra-page queue was already `QUEUE_ADD`-buffered, so the reported stutter
 was concentrated at page seams (fix 2) and, for .txt specifically, the silent
 locale-mismatch abort (fix 1) - not a per-sentence synchronous loop inside a
 page. The proposed `QUEUE_ADD` buffering in the feedback matches what the code
@@ -205,7 +205,7 @@ document stays the single design reference.
 
 - **PdfBox initialization is a hard precondition of the Stage 3 extractor.**
   `PDFBoxResourceLoader.init` was only called in `PdfSearchController`'s
-  constructor, so read-aloud as the first PdfBox user in the process crashed:
+  constructor, so read-aloud as the first PdfBox caller in the process crashed:
   the font/glyph machinery fails partly with `Error`s that
   `catch (RuntimeException)` cannot contain, and an uncaught throw on the bare
   extraction executor kills the process. `PdfPlainTextExtractor` now initializes

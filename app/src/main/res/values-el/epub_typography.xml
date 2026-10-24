@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">Μέγεθος κειμένου EPUB: %1$d%%</string>
+    <string name="epub_line_height">Διάστιχο</string>
+    <string name="epub_typography_hint">Μόνο για EPUB. Η προεπιλογή βιβλίου διατηρεί το αρχικό διάστιχο. Σελίδες με σταθερή διάταξη, κυρίως εικόνες ή κατακόρυφο κείμενο διατηρούν τη διάταξη των παραγράφων τους.</string>
+    <string name="epub_paragraph_layout_kept">Δεν μπορεί να αλλάξει η μορφοποίηση παραγράφων σε αυτή τη σελίδα. Διατηρείται η διάταξη του βιβλίου.</string>
+</resources>

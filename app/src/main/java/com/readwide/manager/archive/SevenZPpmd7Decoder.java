@@ -198,7 +198,7 @@ final class SevenZPpmd7Decoder {
                 for (int i = 0; i < count; i++) {
                     if ((i & 1023) == 0) checkCancelled();
                     int symbol = decoder.decodeSymbol();
-                    if (symbol < 0) throw new IOException("7z PPMd stream error at byte " + position);
+                    if (symbol < 0) throw new SevenZBcj2ArchiveReader.IntegrityException("7z PPMd stream error at byte " + position);
                     data[offset + i] = (byte) symbol;
                     position++;
                     remaining--;
@@ -228,7 +228,9 @@ final class SevenZPpmd7Decoder {
             // Empty output still has a range initializer, but needs no PPMd model.
             long finalCode = decoder == null ? readInitialCode(packed) : decoder.code;
             // Ppmd7z_RangeDec_IsFinishedOK in the public-domain reference.
-            if (finalCode != 0) throw new IOException("7z PPMd range coder did not finish");
+            // A recognized PPMd stream with an invalid terminator is corrupt, not
+            // an unsupported header that a capability probe may silently bypass.
+            if (finalCode != 0) throw new SevenZBcj2ArchiveReader.IntegrityException("7z PPMd range coder did not finish");
             decoder = null;
             finished = true;
         }
@@ -948,7 +950,9 @@ final class SevenZPpmd7Decoder {
     private static int readPackedByte(InputStream input) throws IOException {
         checkCancelled();
         int value = input.read();
-        if (value < 0) throw new EOFException("Truncated 7z PPMd range stream");
+        // This is a recognized coder running out of declared packed bytes, not
+        // an unknown header profile that a capability probe can skip.
+        if (value < 0) throw new SevenZBcj2ArchiveReader.IntegrityException("Truncated 7z PPMd range stream");
         return value;
     }
 
@@ -960,12 +964,12 @@ final class SevenZPpmd7Decoder {
     private static long readInitialCode(InputStream input) throws IOException {
         long code = 0;
         if (readPackedByte(input) != 0) {
-            throw new IOException("7z PPMd range coder header invalid");
+            throw new SevenZBcj2ArchiveReader.IntegrityException("7z PPMd range coder header invalid");
         }
         for (int i = 0; i < 4; i++) {
             code = ((code << 8) | readPackedByte(input)) & 0xFFFFFFFFL;
         }
-        if (code == 0xFFFFFFFFL) throw new IOException("7z PPMd range coder state invalid");
+        if (code == 0xFFFFFFFFL) throw new SevenZBcj2ArchiveReader.IntegrityException("7z PPMd range coder state invalid");
         return code;
     }
 
@@ -981,7 +985,7 @@ final class SevenZPpmd7Decoder {
     }
 
     private int rangeThreshold(int total) throws IOException {
-        if (total <= 0 || range < total) throw new IOException("Invalid 7z PPMd frequency range");
+        if (total <= 0 || range < total) throw new SevenZBcj2ArchiveReader.IntegrityException("Invalid 7z PPMd frequency range");
         range = range / total;
         return (int) (code / range);
     }

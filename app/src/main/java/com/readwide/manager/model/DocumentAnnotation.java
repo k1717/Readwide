@@ -76,6 +76,26 @@ public final class DocumentAnnotation {
     public void touch() { updatedAt = System.currentTimeMillis(); }
     public boolean isHighlight() { return TYPE_HIGHLIGHT.equals(type); }
 
+    /** Detached edit/storage value; preserves identity, timestamps and source coordinates. */
+    public DocumentAnnotation copy() {
+        DocumentAnnotation result = new DocumentAnnotation();
+        result.id = id;
+        result.filePath = filePath;
+        result.fileName = fileName;
+        result.documentType = documentType;
+        result.type = type;
+        result.startPosition = startPosition;
+        result.endPosition = endPosition;
+        result.lineNumber = lineNumber;
+        result.selectedText = selectedText;
+        result.note = note;
+        result.anchorTextBefore = anchorTextBefore;
+        result.anchorTextAfter = anchorTextAfter;
+        result.createdAt = createdAt;
+        result.updatedAt = updatedAt;
+        return result;
+    }
+
     public String getId() { return id; }
     public String getFilePath() { return filePath; }
     public void setFilePath(String filePath) { this.filePath = filePath != null ? filePath : ""; }

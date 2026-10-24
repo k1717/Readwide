@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">حجم نص EPUB: %1$d%%</string>
+    <string name="epub_line_height">تباعد الأسطر</string>
+    <string name="epub_typography_hint">ينطبق على EPUB فقط. يحافظ خيار إعداد الكتاب على تباعد الأسطر الأصلي. تحتفظ الصفحات ذات التخطيط الثابت أو المعتمدة على الصور أو ذات الكتابة العمودية بتخطيط فقراتها.</string>
+    <string name="epub_paragraph_layout_kept">لا يمكن تغيير تنسيق الفقرات في هذه الصفحة. سيُحافَظ على تخطيط الكتاب.</string>
+</resources>

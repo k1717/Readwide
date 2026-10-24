@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Fotnot</string>
+    <string name="epub_return_to_text">Tillbaka till texten</string>
+    <string name="epub_contents_fallback">Ingen läsbar innehållsförteckning hittades; avsnitten visas i läsordning.</string>
+    <string name="epub_contents_empty">Inga matchande poster.</string>
+</resources>

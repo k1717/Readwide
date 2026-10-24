@@ -27,7 +27,12 @@ public final class DocumentAnnotationManager {
 
     private static DocumentAnnotationManager instance;
     private final Context context;
-    private final List<DocumentAnnotation> annotations = new ArrayList<>();
+    private List<DocumentAnnotation> annotations = new ArrayList<>();
+
+    public static final class PersistenceException extends java.io.IOException {
+        private static final long serialVersionUID = 1L;
+        private PersistenceException(Exception cause) { super("Could not save annotations", cause); }
+    }
 
     private DocumentAnnotationManager(Context context) {
         this.context = context.getApplicationContext();
@@ -43,7 +48,7 @@ public final class DocumentAnnotationManager {
         List<DocumentAnnotation> result = new ArrayList<>();
         if (filePath == null) return result;
         for (DocumentAnnotation annotation : annotations) {
-            if (filePath.equals(annotation.getFilePath())) result.add(annotation);
+            if (filePath.equals(annotation.getFilePath())) result.add(annotation.copy());
         }
         result.sort(Comparator
                 .comparingInt(DocumentAnnotation::getStartPosition)
@@ -51,14 +56,16 @@ public final class DocumentAnnotationManager {
         return result;
     }
 
-    public synchronized boolean add(DocumentAnnotation annotation) {
+    public synchronized boolean add(DocumentAnnotation annotation) throws PersistenceException {
         if (annotation == null) return false;
         if (annotation.isHighlight() && containsEquivalentHighlight(annotation)) {
             return false;
         }
-        annotation.touch();
-        annotations.add(annotation);
-        save();
+        DocumentAnnotation stored = annotation.copy();
+        stored.touch();
+        List<DocumentAnnotation> planned = new ArrayList<>(annotations);
+        planned.add(stored);
+        commitEdit(planned);
         return true;
     }
 
@@ -74,30 +81,50 @@ public final class DocumentAnnotationManager {
         return false;
     }
 
-    public synchronized void update(DocumentAnnotation annotation) {
+    /** Edits an existing note without replacing its current source/path metadata. */
+    public synchronized void update(DocumentAnnotation annotation) throws PersistenceException {
         if (annotation == null) return;
-        annotation.touch();
-        for (int i = 0; i < annotations.size(); i++) {
-            if (annotation.getId().equals(annotations.get(i).getId())) {
-                annotations.set(i, annotation);
-                save();
+        List<DocumentAnnotation> planned = new ArrayList<>(annotations);
+        for (int i = 0; i < planned.size(); i++) {
+            if (annotation.getId().equals(planned.get(i).getId())) {
+                // The note editor owns a detached snapshot. Keep coordinates
+                // and any path relocation performed since that editor opened.
+                DocumentAnnotation stored = planned.get(i).copy();
+                stored.setNote(annotation.getNote());
+                stored.touch();
+                planned.set(i, stored);
+                commitEdit(planned);
                 return;
             }
         }
-        annotations.add(annotation);
-        save();
+        DocumentAnnotation stored = annotation.copy();
+        stored.touch();
+        planned.add(stored);
+        commitEdit(planned);
     }
 
-    public synchronized void delete(String id) {
+    public synchronized void delete(String id) throws PersistenceException {
         if (id == null) return;
-        Iterator<DocumentAnnotation> iterator = annotations.iterator();
+        List<DocumentAnnotation> planned = new ArrayList<>(annotations);
+        Iterator<DocumentAnnotation> iterator = planned.iterator();
         while (iterator.hasNext()) {
             if (id.equals(iterator.next().getId())) {
                 iterator.remove();
-                save();
+                commitEdit(planned);
                 return;
             }
         }
+    }
+
+    private void commitEdit(List<DocumentAnnotation> planned) throws PersistenceException {
+        try {
+            writeImportAnnotations(planned);
+        } catch (org.json.JSONException | java.io.IOException | RuntimeException failure) {
+            throw new PersistenceException(failure);
+        }
+        // Publish only after durable success. The reference swap cannot allocate
+        // or expose a partially copied list after the on-disk commit.
+        annotations = planned;
     }
 
     public synchronized void moveFileReferences(String oldPath, String newPath) {

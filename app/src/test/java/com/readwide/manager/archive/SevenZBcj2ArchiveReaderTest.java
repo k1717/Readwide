@@ -475,6 +475,48 @@ public class SevenZBcj2ArchiveReaderTest {
     }
 
     @Test
+    public void unfinishedBcj2ControlRejectsSingleEntryDespiteMatchingCrcs() throws Exception {
+        File archive = tinyBcj2(false, false, false, true, true);
+        File out = new File(tempFolder.getRoot(), "unfinished-single.bin");
+        org.junit.Assert.assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,
+                () -> SevenZBcj2ArchiveReader.extractSingleEntry(archive, "1.bin", out, null));
+        assertFalse(out.exists());
+    }
+
+    @Test
+    public void unfinishedBcj2ControlRollsBackAllOutputsInItsFolder() throws Exception {
+        File archive = tinyBcj2(false, false, false, false, true);
+        File out = tempFolder.newFolder("unfinished-bulk");
+        org.junit.Assert.assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,
+                () -> SevenZBcj2ArchiveReader.extractArchiveIntoDirectory(archive, out, null, null, null));
+        assertEquals(0, out.list().length);
+    }
+
+    @Test
+    public void unfinishedBcj2ControlCannotExposeForwardBytesAndCleansSpool() throws Exception {
+        File archive = tinyBcj2(false, false, false, false, true);
+        File spool = tempFolder.newFolder("unfinished-spool");
+        try (ArchiveSupport.ForwardArchiveReader reader =
+                     SevenZBcj2ArchiveReader.openSpecialForwardReader(archive, null, spool)) {
+            assertEquals("1.bin", reader.nextEntry().path);
+            org.junit.Assert.assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,
+                    () -> reader.read(new byte[1]));
+            assertEquals(0, spool.list().length);
+            assertRetired(reader);
+        }
+    }
+
+    @Test
+    public void publicSingleEntryRouteDoesNotSuppressUnfinishedBcj2Control() throws Exception {
+        File archive = tinyBcj2(false, false, false, true, true);
+        File out = new File(tempFolder.getRoot(), "unfinished-public.bin");
+        ArchiveSupport.ExtractionResult result = ArchiveSupport.extractSingleEntryDetailed(
+                archive, "1.bin", out, null);
+        assertFalse(result.success);
+        assertFalse(out.exists());
+    }
+
+    @Test
     public void forwardFolderBudgetFailureCleansPartialSpool() throws Exception {
         File archive = tinyBcj2(false, false, false, false);
         File spool = tempFolder.newFolder("budget-spool");
@@ -486,6 +528,255 @@ public class SevenZBcj2ArchiveReaderTest {
             catch (IOException expected) { }
             assertEquals(0, spool.list().length);
         }
+    }
+
+    @Test public void unusedEmptyPpmdAndLzma2BranchesStillAcceptPackedPadding() throws Exception {
+        for (boolean ppmd : new boolean[]{true, false}) {
+            for (boolean jump : new boolean[]{false, true}) {
+                File archive = tinyUnusedBranch(ppmd, false, jump, true);
+                File out = tempFolder.newFile();
+                assertTrue(SevenZBcj2ArchiveReader.extractSingleEntry(archive, "1.bin", out, null));
+                org.junit.Assert.assertArrayEquals(new byte[]{1,2,3,4}, Files.readAllBytes(out.toPath()));
+            }
+        }
+    }
+
+    @Test public void unusedCorruptPpmdAndLzma2BranchesRestoreSelectedDestination() throws Exception {
+        for (boolean ppmd : new boolean[]{true, false}) {
+            for (boolean jump : new boolean[]{false, true}) {
+                File archive = tinyUnusedBranch(ppmd, true, jump, true);
+                File out = tempFolder.newFile();
+                byte[] original = {9,8,7};
+                Files.write(out.toPath(), original);
+                org.junit.Assert.assertThrows(IOException.class,
+                        () -> SevenZBcj2ArchiveReader.extractSingleEntry(archive, "1.bin", out, null));
+                org.junit.Assert.assertArrayEquals(original, Files.readAllBytes(out.toPath()));
+            }
+        }
+    }
+
+    @Test public void nestedUnusedBranchesFinishDownstreamBeforeTheirInput() throws Exception {
+        for (boolean ppmd : new boolean[]{true, false}) {
+            for (boolean corrupt : new boolean[]{false, true}) {
+                File archive = tinyUnusedBranch(ppmd, corrupt, false, true, true);
+                File out = tempFolder.newFile();
+                if (corrupt) {
+                    org.junit.Assert.assertThrows(IOException.class,
+                            () -> SevenZBcj2ArchiveReader.extractSingleEntry(archive, "1.bin", out, null));
+                    assertEquals(0, out.length());
+                } else {
+                    assertTrue(SevenZBcj2ArchiveReader.extractSingleEntry(archive, "1.bin", out, null));
+                    org.junit.Assert.assertArrayEquals(new byte[]{1,2,3,4}, Files.readAllBytes(out.toPath()));
+                }
+            }
+        }
+    }
+
+    @Test public void unusedCorruptBranchRollsBackEveryFolderOutput() throws Exception {
+        for (boolean existing : new boolean[]{false, true}) {
+            File archive = tinyUnusedBranch(true, true, false, false);
+            File out = tempFolder.newFolder();
+            byte[] original = {9,8,7};
+            if (existing) for (String name : new String[]{"1.bin", "2.bin"}) {
+                Files.write(new File(out, name).toPath(), original);
+            }
+            org.junit.Assert.assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,
+                    () -> SevenZBcj2ArchiveReader.extractArchiveIntoDirectory(archive, out, null, null, null));
+            assertEquals(existing ? 2 : 0, out.list().length);
+            if (existing) for (String name : new String[]{"1.bin", "2.bin"}) {
+                org.junit.Assert.assertArrayEquals(original, Files.readAllBytes(new File(out, name).toPath()));
+            }
+        }
+    }
+
+    @Test public void unusedCorruptBranchCannotExposeForwardBytesAndCleansSpool() throws Exception {
+        for (boolean ppmd : new boolean[]{true, false}) {
+            File archive = tinyUnusedBranch(ppmd, true, true, false);
+            File spool = tempFolder.newFolder();
+            try (ArchiveSupport.ForwardArchiveReader reader =
+                         SevenZBcj2ArchiveReader.openSpecialForwardReader(archive, null, spool)) {
+                assertEquals("1.bin", reader.nextEntry().path);
+                byte[] untouched = {0x55};
+                org.junit.Assert.assertThrows(IOException.class, () -> reader.read(untouched));
+                assertEquals(0x55, untouched[0]);
+                assertEquals(0, spool.list().length);
+                assertRetired(reader);
+            }
+        }
+    }
+
+    @Test public void publicRouteDoesNotSuppressUnusedPpmdBranchFailure() throws Exception {
+        File archive = tinyUnusedBranch(true, true, false, true);
+        File out = new File(tempFolder.getRoot(), "unused-branch.bin");
+        assertFalse(ArchiveSupport.extractSingleEntryDetailed(archive, "1.bin", out, null).success);
+        assertFalse(out.exists());
+    }
+
+    @Test public void decodedBcj2InputTailsRejectMatchingCrcsAndPreserveTargets() throws Exception {
+        for (int slot = 0; slot < 4; slot++) {
+            for (boolean converted : new boolean[]{false, true}) {
+                if (converted && slot != 1) continue;
+                File archive = tinyBcj2InputTail(slot, true, converted, false, true, false);
+                File output = tempFolder.newFile(); byte[] original = {8,9};
+                Files.write(output.toPath(), original);
+                org.junit.Assert.assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,
+                        () -> SevenZBcj2ArchiveReader.extractSingleEntry(archive, "1.bin", output, null));
+                org.junit.Assert.assertArrayEquals(original, Files.readAllBytes(output.toPath()));
+            }
+        }
+    }
+
+    @Test public void exactDecodedBcj2InputsAndDownstreamCopyStillExtract() throws Exception {
+        for (int slot = 0; slot < 4; slot++) {
+            for (boolean downstreamCopy : new boolean[]{false, true}) {
+                File archive = tinyBcj2InputTail(slot, false, false, false, true, downstreamCopy);
+                File output = tempFolder.newFile();
+                assertTrue(SevenZBcj2ArchiveReader.extractSingleEntry(archive, "1.bin", output, null));
+                org.junit.Assert.assertArrayEquals(new byte[]{1,2,3,4}, Files.readAllBytes(output.toPath()));
+            }
+        }
+        File archive = tinyBcj2InputTail(1, false, true, false, true, true);
+        File output = tempFolder.newFile();
+        assertTrue(SevenZBcj2ArchiveReader.extractSingleEntry(archive, "1.bin", output, null));
+        org.junit.Assert.assertArrayEquals(new byte[]{(byte)0xe8,0,0,0,0}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test public void decodedBcj2TailRollsBackAllFolderSlices() throws Exception {
+        for (boolean existing : new boolean[]{false, true}) {
+            File archive = tinyBcj2InputTail(1, true, false, false, false, true);
+            File output = tempFolder.newFolder(); byte[] original = {8,9};
+            if (existing) for (String name : new String[]{"1.bin", "2.bin"})
+                Files.write(new File(output, name).toPath(), original);
+            org.junit.Assert.assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,
+                    () -> SevenZBcj2ArchiveReader.extractArchiveIntoDirectory(archive, output, null, null, null));
+            assertEquals(existing ? 2 : 0, output.list().length);
+            if (existing) for (String name : new String[]{"1.bin", "2.bin"})
+                org.junit.Assert.assertArrayEquals(original, Files.readAllBytes(new File(output, name).toPath()));
+        }
+    }
+
+    @Test public void decodedBcj2TailCannotPublishForwardBytesIncludingSplitVolumes() throws Exception {
+        for (boolean split : new boolean[]{false, true}) {
+            File archive = tinyBcj2InputTail(2, true, false, false, false, false);
+            File[] parts = split ? splitBytes(Files.readAllBytes(archive.toPath()), 7, 33) : null;
+            File spool = tempFolder.newFolder();
+            try (ArchiveSupport.ForwardArchiveReader reader = SevenZBcj2ArchiveReader.openSpecialForwardReader(
+                    split ? parts[1] : archive, null, spool)) {
+                assertEquals("1.bin", reader.nextEntry().path);
+                byte[] untouched = {0x55};
+                org.junit.Assert.assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,
+                        () -> reader.read(untouched));
+                assertEquals(0x55, untouched[0]);
+                assertEquals(0, spool.list().length);
+                assertRetired(reader);
+            }
+            if (parts != null) deleteParts(parts);
+        }
+    }
+
+    @Test public void rawPackedBcj2PaddingKeepsItsExistingCompatibilityPolicy() throws Exception {
+        for (int slot = 0; slot < 4; slot++) {
+            File archive = tinyBcj2InputTail(slot, true, false, true, true, false);
+            File output = tempFolder.newFile();
+            assertTrue(SevenZBcj2ArchiveReader.extractSingleEntry(archive, "1.bin", output, null));
+            org.junit.Assert.assertArrayEquals(new byte[]{1,2,3,4}, Files.readAllBytes(output.toPath()));
+        }
+    }
+
+    /** Copy -> one BCJ2 input, optionally BCJ2 -> Copy. All lengths and CRCs match. */
+    private File tinyBcj2InputTail(int slot, boolean tail, boolean converted, boolean packedOnly,
+                                 boolean single, boolean downstreamCopy) throws Exception {
+        byte[] raw = converted ? new byte[]{(byte)0xe8,0,0,0,0} : new byte[]{1,2,3,4};
+        byte[][] inputs = converted
+                ? new byte[][]{{(byte)0xe8},{0,0,0,5},{},{0,0x7f,(byte)0xff,(byte)0xfc,0}}
+                : new byte[][]{raw,new byte[0],new byte[0],new byte[5]};
+        if (tail) inputs[slot] = java.util.Arrays.copyOf(inputs[slot], inputs[slot].length +
+                (slot == 1 || slot == 2 ? 4 : 1));
+        java.io.ByteArrayOutputStream packed = new java.io.ByteArrayOutputStream();
+        java.io.ByteArrayOutputStream header = new java.io.ByteArrayOutputStream();
+        int[] order = new int[4]; int next = 0;
+        if (!packedOnly) order[next++] = slot;
+        for (int i = 0; i < 4; i++) if (packedOnly || i != slot) order[next++] = i;
+        header.write(new byte[]{1,4,6,0,4,9});
+        for (int i : order) { header.write(inputs[i].length); packed.write(inputs[i]); }
+        header.write(new byte[]{10,1});
+        for (int i : order) little(header,crc(inputs[i]),4);
+        header.write(new byte[]{0,7,11,1,0,(byte)(packedOnly ? 1 : downstreamCopy ? 3 : 2)});
+        if (!packedOnly) header.write(new byte[]{1,0}); // Copy.
+        header.write(new byte[]{0x14,3,3,1,0x1b,4,1});
+        if (downstreamCopy) header.write(new byte[]{1,0});
+        if (!packedOnly) { header.write(1 + slot); header.write(0); }
+        if (downstreamCopy) header.write(new byte[]{5,1});
+        if (!packedOnly) header.write(0);
+        for (int i = 0; i < 4; i++) if (packedOnly || i != slot) header.write(i + (packedOnly ? 0 : 1));
+        header.write(12);
+        if (!packedOnly) header.write(inputs[slot].length);
+        header.write(raw.length);
+        if (downstreamCopy) header.write(raw.length);
+        header.write(new byte[]{10,1}); little(header,crc(raw),4);
+        header.write(new byte[]{0,8});
+        if (!single) header.write(new byte[]{13,2,9,2});
+        header.write(new byte[]{10,1});
+        if (!single) {
+            little(header,crc(java.util.Arrays.copyOf(raw,2)),4);
+            little(header,crc(java.util.Arrays.copyOfRange(raw,2,raw.length)),4);
+        }
+        header.write(new byte[]{0,0,5,(byte)(single ? 1 : 2),17});
+        byte[] names = (single ? "1.bin\0" : "1.bin\0" + "2.bin\0")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_16LE);
+        header.write(names.length + 1); header.write(0); header.write(names); header.write(new byte[]{0,0});
+        return Round5Fixtures.wrap(tempFolder.newFolder(), packed.toByteArray(), header.toByteArray());
+    }
+
+    /** BCJ2 has no branches, but its unused CALL/JUMP input still owns a decoder. */
+    private File tinyUnusedBranch(boolean ppmd, boolean corrupt, boolean jump, boolean single) throws Exception {
+        return tinyUnusedBranch(ppmd, corrupt, jump, single, false);
+    }
+
+    private File tinyUnusedBranch(boolean ppmd, boolean corrupt, boolean jump, boolean single,
+                                  boolean nestedCopy) throws Exception {
+        byte[] raw = {1,2,3,4};
+        // Padding after a valid empty stream remains permitted. Every CRC is correct,
+        // even when the PPMd range code or LZMA2 terminator is deliberately invalid.
+        byte[] encoded = ppmd ? new byte[]{0,0,0,0,(byte)(corrupt ? 1 : 0),0x55}
+                : corrupt ? new byte[0] : new byte[]{0,0x55};
+        byte[] control = new byte[5];
+        java.io.ByteArrayOutputStream header = new java.io.ByteArrayOutputStream();
+        header.write(new byte[]{1,4,6,0,4,9,(byte)encoded.length,4,0,5,10,1});
+        little(header,crc(encoded),4); little(header,crc(raw),4);
+        little(header,0,4); little(header,crc(control),4);
+        header.write(new byte[]{0,7,11,1,0,(byte)(nestedCopy ? 3 : 2)});
+        if (nestedCopy) header.write(new byte[]{1,0}); // Copy -> compressed branch -> BCJ2.
+        if (ppmd) header.write(new byte[]{0x23,3,4,1,5,2,0,8,0,0}); // Order 2, 2048-byte model.
+        else header.write(new byte[]{0x21,0x21,1,0}); // LZMA2, minimum dictionary.
+        header.write(new byte[]{0x14,3,3,1,0x1b,4,1}); // BCJ2, four inputs.
+        if (nestedCopy) header.write(new byte[]{1,0}); // Compressed branch input <- Copy output.
+        int shift = nestedCopy ? 1 : 0;
+        header.write((jump ? 3 : 2) + shift); header.write(shift); // Branch <- compressed output.
+        header.write(new byte[]{0,(byte)(1 + shift),(byte)((jump ? 2 : 3) + shift),(byte)(4 + shift)});
+        header.write(12);
+        if (nestedCopy) header.write(encoded.length);
+        header.write(new byte[]{0,4,10,1}); // Empty branch, four-byte final result.
+        little(header,crc(raw),4);
+        header.write(new byte[]{0,8});
+        if (!single) header.write(new byte[]{13,2,9,2});
+        header.write(new byte[]{10,1});
+        if (!single) {
+            little(header,crc(new byte[]{1,2}),4); little(header,crc(new byte[]{3,4}),4);
+        }
+        header.write(new byte[]{0,0,5,(byte)(single ? 1 : 2),17});
+        byte[] names = (single ? "1.bin\0" : "1.bin\0" + "2.bin\0")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_16LE);
+        header.write(names.length + 1); header.write(0); header.write(names);
+        header.write(new byte[]{0,0});
+        java.io.ByteArrayOutputStream start = new java.io.ByteArrayOutputStream();
+        little(start,encoded.length + raw.length + control.length,8);
+        little(start,header.size(),8); little(start,crc(header.toByteArray()),4);
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        bytes.write(new byte[]{'7','z',(byte)0xbc,(byte)0xaf,0x27,0x1c,0,4});
+        little(bytes,crc(start.toByteArray()),4); bytes.write(start.toByteArray());
+        bytes.write(encoded); bytes.write(raw); bytes.write(control); bytes.write(header.toByteArray());
+        File file = tempFolder.newFile(); Files.write(file.toPath(),bytes.toByteArray()); return file;
     }
 
     @Test
@@ -567,11 +858,18 @@ public class SevenZBcj2ArchiveReaderTest {
 
     /** Self-made BCJ2 main stream without branch opcodes, empty CALL/JUMP and five zero RC bytes. */
     private File tinyBcj2(boolean badFolder, boolean badSubstream, boolean badPacked, boolean single) throws Exception {
+        return tinyBcj2(badFolder, badSubstream, badPacked, single, false);
+    }
+
+    private File tinyBcj2(boolean badFolder, boolean badSubstream, boolean badPacked,
+                         boolean single, boolean unfinishedControl) throws Exception {
         byte[] payload = {1, 2, 3, 4};
+        byte[] control = new byte[5];
+        if (unfinishedControl) control[4] = 1;
         java.io.ByteArrayOutputStream header = new java.io.ByteArrayOutputStream();
         header.write(new byte[]{1, 4, 6, 0, 4, 9, 4, 0, 0, 5, 10, 1});
         little(header, crc(payload) ^ (badPacked ? 1 : 0), 4);
-        little(header, 0, 4); little(header, 0, 4); little(header, crc(new byte[5]), 4);
+        little(header, 0, 4); little(header, 0, 4); little(header, crc(control), 4);
         header.write(new byte[]{0, 7, 11, 1, 0, 1, 0x14, 3, 3, 1, 0x1b, 4, 1, 0, 1, 2, 3, 12, 4, 10, 1});
         little(header, crc(payload) ^ (badFolder ? 1 : 0), 4);
         header.write(new byte[]{0, 8});
@@ -590,7 +888,7 @@ public class SevenZBcj2ArchiveReaderTest {
         java.io.ByteArrayOutputStream archive = new java.io.ByteArrayOutputStream();
         archive.write(new byte[]{'7', 'z', (byte) 0xbc, (byte) 0xaf, 0x27, 0x1c, 0, 4});
         little(archive, crc(start.toByteArray()), 4); archive.write(start.toByteArray());
-        archive.write(payload); archive.write(new byte[5]); archive.write(header.toByteArray());
+        archive.write(payload); archive.write(control); archive.write(header.toByteArray());
         File file = tempFolder.newFile("tiny-" + System.nanoTime() + ".7z");
         Files.write(file.toPath(), archive.toByteArray());
         return file;

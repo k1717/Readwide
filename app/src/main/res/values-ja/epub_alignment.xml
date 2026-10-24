@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">段落の配置</string>
+    <string name="epub_alignment_book">本の設定に従う</string>
+    <string name="epub_alignment_start">行頭揃え（左揃え）</string>
+    <string name="epub_alignment_justify">両端揃え</string>
+    <string name="epub_text_alignment_hint">画面に合わせて配置されるEPUB本文に適用します。行頭は左から右へ書く文章では左、右から左へ書く文章では右です。明示された中央揃え・右揃えは維持します。</string>
+</resources>

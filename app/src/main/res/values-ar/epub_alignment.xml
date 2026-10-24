@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">محاذاة الفقرات</string>
+    <string name="epub_alignment_book">إعداد الكتاب</string>
+    <string name="epub_alignment_start">محاذاة إلى بداية السطر</string>
+    <string name="epub_alignment_justify">ضبط النص</string>
+    <string name="epub_text_alignment_hint">لنص EPUB القابل لإعادة التدفق. تكون بداية السطر يسارًا للنص من اليسار إلى اليمين، ويمينًا للنص العربي. تُحفظ المحاذاة الصريحة إلى الوسط أو اليمين.</string>
+</resources>

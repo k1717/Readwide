@@ -97,12 +97,7 @@ final class PdfTtsIntegrationController {
         if (textBuilding) {
             final int retryDocumentGeneration = documentGeneration;
             View anchor = activity.getWindow().getDecorView();
-            anchor.postDelayed(() -> {
-                if (!activity.activityDestroyed
-                        && retryDocumentGeneration == documentGeneration) {
-                    autostart();
-                }
-            }, 150L);
+            anchor.postDelayed(() -> retryAutoStart(retryDocumentGeneration), 150L);
             return;
         }
         // Build the buffer, then resume/start. Reuses the same off-thread build
@@ -134,6 +129,15 @@ final class PdfTtsIntegrationController {
                 activity.pdfTts().autoStartOrResume(continuousMode);
             });
         });
+    }
+
+    void retryAutoStart(int generation) {
+        // A completed failed build has neither a pending task nor a buffer.
+        // Do not automatically repeat extraction; an explicit tap can retry.
+        if (!activity.activityDestroyed && generation == documentGeneration
+                && (textBuilding || activity.pdfTtsTextSource != null)) {
+            autostart();
+        }
     }
 
     /**

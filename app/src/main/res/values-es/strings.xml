@@ -828,4 +828,6 @@
     <string name="txt_contents_error">No se pudo cargar el índice. Vuelve a abrir el archivo e inténtalo de nuevo.</string>
     <string name="txt_contents_save_error">No se pudieron guardar los cambios del índice.</string>
     <string name="txt_contents_page">%1$s · pág. %2$d</string>
+    <string name="viewer_retry">Reintentar</string>
+    <string name="document_renderer_stopped">El visor de documentos se ha detenido. Vuelve a abrir el archivo para continuar desde la última posición guardada.</string>
 </resources>

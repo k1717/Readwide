@@ -98,6 +98,50 @@ public class SevenZLzmaArchiveTest {
         assertTrue(second.delete());
     }
 
+    @Test public void cancellationAtIntermediateSourceCheckRestoresCurrentFolder() throws Exception {
+        checkIntermediateSourceCancellation(true);
+    }
+
+    @Test public void activeTokenAtIntermediateSourceCheckCommitsBothFolders() throws Exception {
+        checkIntermediateSourceCancellation(false);
+    }
+
+    private void checkIntermediateSourceCancellation(boolean cancel) throws Exception {
+        File archive = fixture(false, false, false), directory = temp.newFolder();
+        File first = new File(directory, "1.bin"), second = new File(directory, "2.bin");
+        byte[] original = {8, 9, 10}; Files.write(first.toPath(), original);
+        com.readwide.manager.util.FileOperationProgress progress =
+                new com.readwide.manager.util.FileOperationProgress("7z", null);
+        int[] boundaryChecks = {0};
+        File observedArchive = new File(archive.getPath()) {
+            @Override public boolean canRead() {
+                boolean readable = super.canRead();
+                // SingleSourceStamp retains this File; physical reads use canonical paths.
+                // Only the first folder's completion sees its replacement, without 2.bin.
+                if (first.length() == 32768 && !second.exists()) {
+                    boundaryChecks[0]++;
+                    if (cancel) progress.cancel();
+                }
+                return readable;
+            }
+        };
+        if (cancel) {
+            assertThrows(InterruptedIOException.class, () -> SevenZBcj2ArchiveReader.extractArchiveIntoDirectory(
+                    observedArchive, directory, null, progress, null));
+            assertArrayEquals(original, Files.readAllBytes(first.toPath()));
+            assertFalse(second.exists());
+            assertArrayEquals(new String[]{"1.bin"}, directory.list());
+        } else {
+            assertTrue(SevenZBcj2ArchiveReader.extractArchiveIntoDirectory(observedArchive, directory, null, progress, null));
+            assertArrayEquals(data(1), Files.readAllBytes(first.toPath()));
+            assertArrayEquals(data(2), Files.readAllBytes(second.toPath()));
+            assertEquals(2, directory.list().length);
+        }
+        assertEquals(1, boundaryChecks[0]);
+        assertEquals(cancel, progress.isCancelled());
+        assertFalse(Thread.currentThread().isInterrupted());
+    }
+
     private static SevenZDecoderArrayCache cache(ArchiveSupport.ForwardArchiveReader reader) throws Exception {
         java.lang.reflect.Field field = reader.getClass().getDeclaredField("decoderArrays");
         field.setAccessible(true);

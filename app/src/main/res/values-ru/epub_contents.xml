@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Сноска</string>
+    <string name="epub_return_to_text">Вернуться к тексту</string>
+    <string name="epub_contents_fallback">Не найдено читаемое оглавление; разделы показаны в порядке чтения.</string>
+    <string name="epub_contents_empty">Нет подходящих пунктов.</string>
+</resources>

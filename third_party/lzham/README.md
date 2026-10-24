@@ -55,10 +55,10 @@ in addition to the container CRC, and never enables the upstream zero-padding EO
 mode. Explicit end, exact output and packed exhaustion are required. Failed state
 cannot resume; source ownership, cancellation and reentrant-close protection remain.
 
-The maintainer's 2026-10-11 log successfully built Release and the app Android-test
-APK and compiled local tests, including ARMv7/ARM64 native dependencies. It predates
-the warning cleanup above. No tests, fuzzing or device decoding were run by this
-audit; module-only test sources are not certified by the app test-APK build.
+The 1.0.20 build on 2026-10-11 assembled Release and the app Android-test APK
+and compiled local tests, including ARMv7/ARM64 native dependencies. It predates
+the warning cleanup above. No test execution, fuzzing or device decoding result
+is recorded; module-only test sources are not validated by the app test-APK build.
 Raw-block synthetic fixtures do not exercise compressed Huffman/
 LZ matches or prove interoperability. Producer/compressed/solid/split/BCJ2 and both
 Android ABIs remain validation work. See [integration status](../../docs/LZHAM_INTEGRATION_1_0_20.md).

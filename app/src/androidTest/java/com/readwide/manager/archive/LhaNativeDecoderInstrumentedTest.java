@@ -51,6 +51,116 @@ public class LhaNativeDecoderInstrumentedTest {
         }
     }
 
+    @Test public void pm0StoredAndEmptyMembersReachPublicRoutesAndKeepFollowingLh0() throws Exception {
+        byte[] plain = repeated('P', 1024), tail = new byte[]{42};
+        File archive = temporary.newFile("stored.pma");
+        Files.write(archive.toPath(), Files.readAllBytes(archive(
+                entry("-pm0-", "page", plain, plain),
+                entry("-pm0-", "empty", new byte[0], new byte[0]),
+                entry("-lh0-", "tail", tail, tail)).toPath()));
+        List<ArchiveSupport.EntryInfo> rows = ArchiveSupport.listEntries(archive, null);
+        assertEquals(3, rows.size());
+        for (String path : new String[]{"page", "empty", "tail"}) {
+            assertTrue(rows.stream().anyMatch(row -> path.equals(row.path) && !row.directory));
+        }
+        File selected = temporary.newFile();
+        assertTrue(ArchiveSupport.extractSingleEntry(archive, "page", selected, null));
+        assertArrayEquals(plain, Files.readAllBytes(selected.toPath()));
+        assertTrue(ArchiveSupport.extractSingleEntry(archive, "empty", selected, null));
+        assertEquals(0L, selected.length());
+        File root = temporary.newFolder();
+        assertTrue(ArchiveSupport.extractArchive(archive, root, false, null));
+        assertArrayEquals(plain, Files.readAllBytes(new File(root, "page").toPath()));
+        assertEquals(0L, new File(root, "empty").length());
+        assertArrayEquals(tail, Files.readAllBytes(new File(root, "tail").toPath()));
+        try (ArchiveSupport.ForwardArchiveReader reader = ArchiveSupport.openForwardReader(archive, null)) {
+            assertNotNull(reader);
+            String[] paths = {"page", "empty", "tail"};
+            byte[][] expected = {plain, new byte[0], tail};
+            for (int i = 0; i < paths.length; i++) {
+                assertEquals(paths[i], reader.nextEntry().path);
+                ByteArrayOutputStream output = new ByteArrayOutputStream();
+                byte[] buffer = new byte[97];
+                for (int count; (count = reader.read(buffer)) >= 0;) {
+                    assertTrue(count > 0); output.write(buffer, 0, count);
+                }
+                assertArrayEquals(expected[i], output.toByteArray());
+            }
+            assertNull(reader.nextEntry());
+        }
+    }
+
+    @Test public void pm0CommentsCannotBecomeUnixSymlinkMetadata() throws Exception {
+        byte[] comment = new byte[12];
+        comment[0] = 'U'; comment[6] = (byte) 0xff; comment[7] = (byte) 0xa1;
+        byte[] plain = new byte[]{42};
+        File archive = archive(entry("-pm0-", "page", plain, plain, comment));
+        List<ArchiveSupport.EntryInfo> rows = RarLibarchiveFallback.parseListingRows(
+                LibarchiveNativeBridge.listEntries(archive.getPath(), null));
+        assertEquals(1, rows.size());
+        assertEquals("page", rows.get(0).path);
+        assertFalse(rows.get(0).directory);
+        assertSelected(archive, "page", plain);
+    }
+
+    @Test public void pm0InsideLhaByteSplitsKeepsSelectedAndForwardIntegrity() throws Exception {
+        byte[] plain = repeated('P', 1024);
+        byte[] complete = Files.readAllBytes(archive(entry("-pm0-", "page", plain, plain)).toPath());
+        File folder = temporary.newFolder();
+        File first = new File(folder, "stored.lha"), last = new File(folder, "stored.l01");
+        int split = complete.length - 20;
+        Files.write(first.toPath(), Arrays.copyOf(complete, split));
+        Files.write(last.toPath(), Arrays.copyOfRange(complete, split, complete.length));
+        assertEquals("page", ArchiveSupport.listEntries(last, null).get(0).path);
+        File selected = temporary.newFile();
+        assertTrue(ArchiveSupport.extractSingleEntry(last, "page", selected, null));
+        assertArrayEquals(plain, Files.readAllBytes(selected.toPath()));
+        try (ArchiveSupport.ForwardArchiveReader reader = ArchiveSupport.openForwardReader(first, null)) {
+            assertNotNull(reader);
+            assertEquals("page", reader.nextEntry().path);
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[97];
+            for (int count; (count = reader.read(buffer)) >= 0;) {
+                assertTrue(count > 0); output.write(buffer, 0, count);
+            }
+            assertArrayEquals(plain, output.toByteArray());
+            assertNull(reader.nextEntry());
+        }
+        complete[split] ^= 1;
+        Files.write(last.toPath(), Arrays.copyOfRange(complete, split, complete.length));
+        Files.write(selected.toPath(), new byte[]{7});
+        assertFalse(ArchiveSupport.extractSingleEntry(last, "page", selected, null));
+        assertArrayEquals(new byte[]{7}, Files.readAllBytes(selected.toPath()));
+    }
+
+    @Test public void pm0RejectsBadChecksumsTruncationAndStoredSizeMismatchWithoutReplacingOutput() throws Exception {
+        byte[] plain = new byte[]{41, 42};
+        byte[] valid = entry("-pm0-", "page", plain, plain);
+        byte[] badHeader = valid.clone(); badHeader[1] ^= 1;
+        assertSelectedFailure(archive(badHeader));
+        assertSelectedFailure(archive(entry("-pm0-", "page", plain, new byte[]{43, 44})));
+        assertSelectedFailure(archive(Arrays.copyOf(valid, valid.length - 2)));
+        assertSelectedFailure(archive(entry("-pm0-", "page", plain, new byte[]{41})));
+        assertSelectedFailure(archive(entry("-pm0-", "page", new byte[0], plain)));
+        byte[] crcFree = Arrays.copyOf(valid, valid.length - 2);
+        int oldHeaderLength = (valid[0] & 255) + 2;
+        System.arraycopy(valid, oldHeaderLength, crcFree, oldHeaderLength - 2, plain.length);
+        crcFree[0] -= 2; updateLevel0Checksum(crcFree);
+        assertSelectedFailure(archive(crcFree));
+    }
+
+    @Test public void pm0DoesNotAdmitCompressedPmarcOrOtherHeaderLevels() throws Exception {
+        byte[] plain = new byte[]{42};
+        for (String method : new String[]{"-pm1-", "-pm2-", "-px0-", "-pmx-"}) {
+            assertSelectedFailure(archive(entry(method, "page", plain, plain)));
+        }
+        for (int level : new int[]{1, 2, 3}) {
+            byte[] value = entry("-pm0-", "page", plain, plain);
+            value[20] = (byte) level; updateLevel0Checksum(value);
+            assertSelectedFailure(archive(value));
+        }
+    }
+
     @Test public void lh4DecodesDynamicLiteralAndPositionTablesAtMaximumDistance() throws Exception {
         // A complete two-symbol code tree: A=0, B=1. The length tree encodes
         // a 65-zero run followed by two length-1 codes.
@@ -229,6 +339,11 @@ public class LhaNativeDecoderInstrumentedTest {
     }
 
     private static byte[] entry(String method, String name, byte[] packed, byte[] plain) throws IOException {
+        return entry(method, name, packed, plain, new byte[0]);
+    }
+
+    private static byte[] entry(String method, String name, byte[] packed, byte[] plain,
+                                byte[] extra) throws IOException {
         ByteArrayOutputStream header = new ByteArrayOutputStream();
         byte[] path = name.getBytes(StandardCharsets.US_ASCII);
         header.write(method.getBytes(StandardCharsets.US_ASCII));
@@ -236,12 +351,19 @@ public class LhaNativeDecoderInstrumentedTest {
         little(header, 0, 4); header.write(0x20); header.write(0);
         header.write(path.length); header.write(path);
         little(header, crc16(plain), 2);
+        header.write(extra);
         byte[] fields = header.toByteArray();
         int checksum = 0; for (byte value : fields) checksum += value & 255;
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         output.write(fields.length); output.write(checksum);
         output.write(fields); output.write(packed);
         return output.toByteArray();
+    }
+
+    private static void updateLevel0Checksum(byte[] entry) {
+        int checksum = 0, end = (entry[0] & 255) + 2;
+        for (int i = 2; i < end; i++) checksum += entry[i] & 255;
+        entry[1] = (byte) checksum;
     }
 
     private static byte[] entryLevel3(String method, String name, byte[] packed, byte[] plain) throws IOException {

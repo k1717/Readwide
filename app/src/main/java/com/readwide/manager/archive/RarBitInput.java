@@ -9,7 +9,8 @@ import java.io.InterruptedIOException;
 final class RarBitInput {
     private final byte[] data;
     private final InputStream stream;
-    private final long totalBits;
+    private long totalBits;
+    private boolean discoverStreamEnd;
     private long bytesFetched;
     private long consumedBits;
     private long reservoir;
@@ -20,6 +21,12 @@ final class RarBitInput {
         this.data = data != null ? data : new byte[0];
         stream = null;
         totalBits = this.data.length * 8L;
+    }
+
+    /** The payload owner already bounds the stream; its remaining byte count is unknown. */
+    RarBitInput(InputStream boundedStream) {
+        this(boundedStream, Long.MAX_VALUE / 8);
+        discoverStreamEnd = true;
     }
 
     /** Caller bounds/owns the input; this reader never closes it or allocates the payload. */
@@ -69,6 +76,23 @@ final class RarBitInput {
 
     long bitsRead() { return consumedBits; }
 
+    /** Non-consuming lookahead; a discovered clean tail is not a truncated payload. */
+    boolean hasBits(int count) throws IOException {
+        if (count < 0 || count > 24) throw new IllegalArgumentException("Invalid RAR bit count");
+        ensureAvailable(0);
+        if (remainingBits() < count) return false;
+        try {
+            fill(count);
+            return true;
+        } catch (EOFException end) {
+            // fill retains any shorter prefix it fetched. Only ordinary EOF in
+            // an already-bounded, unknown-length stream may use that prefix.
+            // Declared-range truncation and underlying EOFException stay fatal.
+            if (failure != null) throw end;
+            return false;
+        }
+    }
+
     /**
      * Byte reads use the same reservoir, including bytes fetched by an earlier peek.
      * Call alignToByte explicitly before switching modes. The view does not own input.
@@ -79,7 +103,14 @@ final class RarBitInput {
             @Override public int read() throws IOException {
                 ensureAligned();
                 ensureAvailable(0);
-                return remainingBits() == 0 ? -1 : readBits(8);
+                if (remainingBits() == 0) return -1;
+                try { return readBits(8); }
+                catch (EOFException end) {
+                    // An unknown-length byte view must preserve normal EOF for
+                    // the PPMd range reader. Declared-range truncation still fails.
+                    if (failure == null && remainingBits() == 0) return -1;
+                    throw end;
+                }
             }
 
             @Override public int read(byte[] bytes, int offset, int length) throws IOException {
@@ -92,7 +123,11 @@ final class RarBitInput {
                 if (length == 0) return 0;
                 if (remainingBits() == 0) return -1;
                 int count = (int) Math.min((long) length, remainingBits() / 8);
-                for (int i = 0; i < count; i++) bytes[offset + i] = (byte) readBits(8);
+                for (int i = 0; i < count; i++) {
+                    int value = read();
+                    if (value < 0) return i == 0 ? -1 : i;
+                    bytes[offset + i] = (byte) value;
+                }
                 return count;
             }
         };
@@ -115,18 +150,26 @@ final class RarBitInput {
     }
 
     private void fill(int count) throws IOException {
+        boolean discoveredEnd = false;
         try {
             while (bufferedBits < count) {
                 if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("RAR bit reading cancelled");
                 int value = data != null ? data[(int) bytesFetched] & 255 : stream.read();
-                if (value < 0) throw new EOFException("Truncated RAR packed bit stream");
+                if (value < 0) {
+                    if (discoverStreamEnd) {
+                        totalBits = bytesFetched * 8L;
+                        discoverStreamEnd = false;
+                        discoveredEnd = true;
+                    }
+                    throw new EOFException("Truncated RAR packed bit stream");
+                }
                 if (value > 255) throw new IOException("Invalid RAR packed source byte");
                 bytesFetched++;
                 reservoir = (reservoir << 8) | value;
                 bufferedBits += 8;
             }
         } catch (IOException | RuntimeException | Error error) {
-            failure = error;
+            if (!discoveredEnd) failure = error;
             throw error;
         }
     }

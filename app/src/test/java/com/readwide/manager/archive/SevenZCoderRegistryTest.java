@@ -15,6 +15,133 @@ import org.tukaani.xz.LZMAInputStream;
 import org.tukaani.xz.LZMAOutputStream;
 
 public class SevenZCoderRegistryTest {
+    @Test public void unadoptedDecoderCleanupClosesWithoutReadingAndRetainsPrimaryFailure() throws Exception {
+        int[] closes = {0};
+        InputStream input = new InputStream() {
+            @Override public int read() { throw new AssertionError("Cleanup must not decode"); }
+            @Override public void close() { closes[0]++; }
+        };
+        Error primary = new OutOfMemoryError("synthetic wrapper allocation failure");
+        closeUnadopted(input, primary);
+        assertEquals(1, closes[0]);
+        assertEquals(0, primary.getSuppressed().length);
+    }
+
+    @Test public void unadoptedDecoderCleanupSuppressesCheckedUncheckedAndErrorFailures() throws Exception {
+        for (Throwable cleanup : new Throwable[]{new IOException("close"),
+                new IllegalStateException("close"), new AssertionError("close")}) {
+            Error primary = new OutOfMemoryError("synthetic wrapper allocation failure");
+            InputStream input = new InputStream() {
+                @Override public int read() { throw new AssertionError("Cleanup must not decode"); }
+                @Override public void close() throws IOException {
+                    if (cleanup instanceof IOException) throw (IOException) cleanup;
+                    if (cleanup instanceof RuntimeException) throw (RuntimeException) cleanup;
+                    throw (Error) cleanup;
+                }
+            };
+            closeUnadopted(input, primary);
+            assertEquals(1, primary.getSuppressed().length);
+            assertSame(cleanup, primary.getSuppressed()[0]);
+        }
+    }
+
+    @Test public void unadoptedDecoderCleanupDoesNotSelfSuppress() throws Exception {
+        Error primary = new OutOfMemoryError("synthetic failure");
+        InputStream input = new InputStream() {
+            @Override public int read() { throw new AssertionError("Cleanup must not decode"); }
+            @Override public void close() { throw primary; }
+        };
+        closeUnadopted(input, primary);
+        assertEquals(0, primary.getSuppressed().length);
+    }
+
+    // Exercises failure cleanup without inducing actual allocation failure or opening JNI.
+    private static void closeUnadopted(InputStream input, Throwable primary) throws Exception {
+        java.lang.reflect.Method method = SevenZCoderRegistry.class.getDeclaredMethod(
+                "closeUnadopted", InputStream.class, Throwable.class);
+        method.setAccessible(true);
+        method.invoke(null, input, primary);
+    }
+
+    @Test public void xzPayloadCorruptionAndTruncationAreTerminalAndSticky() throws Exception {
+        SevenZCoderRegistry.Prepared lzma2 = SevenZCoderRegistry.require(id("21")).prepare(new byte[]{0}, 1);
+        for (byte[] packed : new byte[][]{new byte[0], {3}, {1,0,0,42}}) {
+            try (InputStream decoded = lzma2.open(new InputStream[]{new ByteArrayInputStream(packed)}, null)) {
+                IOException failure = assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,
+                        () -> readAll(decoded));
+                assertEquals(ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE,
+                        ArchiveFailureClassifier.classify(failure));
+                assertSame(failure, assertThrows(IOException.class, () -> decoded.read()));
+                assertSame(failure, assertThrows(IOException.class, () -> decoded.read(new byte[1])));
+                assertEquals(0, decoded.read(new byte[0]));
+            }
+        }
+        for (byte[] packed : new byte[][]{new byte[0], {1,0,0,0,0}}) {
+            assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class, () -> rawLzma(packed, 0));
+        }
+    }
+
+    @Test public void xzPayloadWrapperKeepsValidEmptyAndUncompressedStreams() throws Exception {
+        for (byte[] raw : new byte[][]{new byte[0], {42}}) {
+            byte[] packed = raw.length == 0 ? new byte[]{0} : new byte[]{1,0,0,42,0};
+            SevenZCoderRegistry.Prepared plan = SevenZCoderRegistry.require(id("21")).prepare(new byte[]{0}, raw.length);
+            try (InputStream decoded = plan.open(new InputStream[]{new ByteArrayInputStream(packed)}, null)) {
+                assertArrayEquals(raw, readAll(decoded));
+                assertEquals(-1, decoded.read());
+            }
+        }
+    }
+
+    @Test public void xzPayloadWrapperPreservesInputErrorIdentityAndCancellation() throws Exception {
+        for (IOException original : new IOException[]{new IOException("source unavailable"),
+                new java.io.EOFException("source changed"), new org.tukaani.xz.CorruptedInputException(),
+                new org.tukaani.xz.UnsupportedOptionsException("upstream option"),
+                new java.io.InterruptedIOException("cancelled")}) {
+            for (boolean lzma : new boolean[]{true, false}) {
+                InputStream source = new InputStream() {
+                    @Override public int read() throws IOException { throw original; }
+                    @Override public int read(byte[] bytes, int offset, int length) throws IOException { throw original; }
+                };
+                SevenZCoderRegistry.Prepared plan = lzma
+                        ? SevenZCoderRegistry.require(id("030101")).prepare(new byte[]{0x5d,0,0,16,0}, 1)
+                        : SevenZCoderRegistry.require(id("21")).prepare(new byte[]{0}, 1);
+                if (lzma) {
+                    assertSame(original, assertThrows(IOException.class,
+                            () -> plan.open(new InputStream[]{source}, null)));
+                } else {
+                    try (InputStream decoded = plan.open(new InputStream[]{source}, null)) {
+                        assertSame(original, assertThrows(IOException.class, () -> decoded.read()));
+                        assertSame(original, assertThrows(IOException.class, () -> decoded.read(new byte[1])));
+                    }
+                }
+            }
+        }
+    }
+
+    @Test public void xzInvalidPropertiesAreStillPreparationErrors() {
+        IOException failure = assertThrows(org.tukaani.xz.CorruptedInputException.class,
+                () -> SevenZCoderRegistry.require(id("030101")).prepare(new byte[]{(byte)255,0,0,16,0}, 1));
+        assertFalse(failure instanceof SevenZBcj2ArchiveReader.IntegrityException);
+    }
+
+    @Test public void preparedPpmdOpensIndependentModelsAndDoesNotRetainFailedStreamState() throws Exception {
+        byte[] properties = {6,0,0,1,0};
+        SevenZCoderRegistry.Prepared plan = SevenZCoderRegistry.require(id("030401")).prepare(properties, 1);
+        properties[0] = 1; // Owned properties, not caller state.
+        try (InputStream bad = plan.open(new InputStream[]{new ByteArrayInputStream(new byte[]{0,0,0,0,1,0})}, null);
+             InputStream good = plan.open(new InputStream[]{new ByteArrayInputStream(new byte[6])}, null)) {
+            IOException failure = assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class, () -> bad.read());
+            assertEquals(ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE, ArchiveFailureClassifier.classify(failure));
+            assertEquals(ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE,
+                    ArchiveFailureClassifier.classify(new IOException("unsupported password in display name", failure)));
+            assertSame(failure, assertThrows(IOException.class, () -> bad.read()));
+            assertEquals(0, good.read()); assertEquals(-1, good.read());
+        }
+        try (InputStream again = plan.open(new InputStream[]{new ByteArrayInputStream(new byte[6])}, null)) {
+            assertEquals(0, again.read()); assertEquals(-1, again.read());
+        }
+    }
+
     @Test public void capabilityTableIsCompleteAndReadOnly() {
         assertEquals(26, SevenZCoderRegistry.entries().size());
         for (SevenZCoderRegistry.Entry entry : SevenZCoderRegistry.entries()) {

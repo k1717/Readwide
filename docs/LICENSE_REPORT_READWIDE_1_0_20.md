@@ -26,7 +26,7 @@ It is a **direct-dependency/source-declared report**, not a fully resolved trans
 | `androidx.drawerlayout:drawerlayout:1.2.0` | DrawerLayout UI | Apache-2.0 |
 | `androidx.swiperefreshlayout:swiperefreshlayout:1.2.0` | Pull-to-refresh for the file list | Apache-2.0 |
 | `com.github.albfernandez:juniversalchardet:2.5.0` | Text encoding detection | MPL-1.1 option from upstream tri-license |
-| `com.google.re2j:re2j:1.8` | Non-backtracking user-defined TXT contents rules | BSD-3-Clause; full notice retained in APK assets |
+| `com.google.re2j:re2j:1.8` | Non-backtracking custom TXT contents rules | BSD-3-Clause; full notice retained in APK assets |
 | `org.apache.commons:commons-compress:1.28.0` | TAR/7z/stream archive support and ZIP method fallback | Apache-2.0 |
 | `project(':libarchiveAndroid')` (`third_party/libarchive-android`) | Source-built Android libarchive 3.8.9 backend for RAR/backend-dependent archive, CAB/LHA/LZH, and ZIPX PPMd/Zstandard paths | Apache-2.0 (Android wrapper); libarchive and zlib/bzip2/xz/lz4/Zstandard/Mbed TLS inputs retain their permissive FOSS notices |
 | `project(':zipxCodecsAndroid')` (`third_party/zipx-codecs-android`) | Separate source-built shared library for ZIPX JPEG (method 96), WavPack (method 97) and 7z LZ5/Lizard frames | XADMaster v1.10.8 WinZip JPEG and Readwide JNI bridge: LGPL-2.1-or-later; WavPack 5.9.0: BSD-3-Clause; LZ5/Lizard and selected entropy code: BSD-2-Clause; XAD LZMA SDK subset: public domain |
@@ -81,7 +81,7 @@ the license was checked against its [Google Maven metadata](https://dl.google.co
 TXT contents custom rules add `com.google.re2j:re2j:1.8`, BSD-3-Clause, with the
 complete upstream license retained in the APK asset
 `open_source_licenses/re2j_bsd_3_clause.txt`. The local release build completed
-successfully on 2026-10-11; a resolved-graph license audit is a separate check.
+successfully; a resolved-graph license audit is a separate check.
 
 Other dependency pins are retained from the updated 1.0.19 source. The 1.0.20
 archive work replaces the initial `org.brotli:dec:0.1.2` dependency with MIT Google

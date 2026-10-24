@@ -324,10 +324,10 @@ final class Rar3ClassicLzEngine {
     }
 
     private void buildTables(int[] table) throws IOException {
-        ldTable = RarCanonicalHuffman.fromCodeLengths(Arrays.copyOfRange(table, 0, NC30));
-        ddTable = RarCanonicalHuffman.fromCodeLengths(Arrays.copyOfRange(table, NC30, NC30 + DC30));
-        lddTable = RarCanonicalHuffman.fromCodeLengths(Arrays.copyOfRange(table, NC30 + DC30, NC30 + DC30 + LDC30));
-        rdTable = RarCanonicalHuffman.fromCodeLengths(Arrays.copyOfRange(table, NC30 + DC30 + LDC30, HUFF_TABLE_SIZE30));
+        ldTable = RarCanonicalHuffman.fromCodeLengths(table, 0, NC30);
+        ddTable = RarCanonicalHuffman.fromCodeLengths(table, NC30, DC30);
+        lddTable = RarCanonicalHuffman.fromCodeLengths(table, NC30 + DC30, LDC30);
+        rdTable = RarCanonicalHuffman.fromCodeLengths(table, NC30 + DC30 + LDC30, RC30);
         endCodeLength = table[256];
         vmCodeLength = table[257];
         int[] counts = new int[16];
@@ -366,16 +366,16 @@ final class Rar3ClassicLzEngine {
         // Legacy size-limited fixtures need not contain an EOF marker. Do not infer a
         // continuation from padding, a partial marker, another table or match overshoot.
         // No extra output/filter/table is executed beyond the declared output boundary.
-        try {
-            int markerBits = endCodeLength + 2;
-            int marker = in.peekBits(markerBits);
-            if ((marker >>> 2) != endCode || (marker & 2) != 0) return;
-            in.skipBits(markerBits);
-            reuseTablesForNextEntry = (marker & 1) == 0;
-            fileEndSeen = true;
-        } catch (java.io.EOFException missingMarker) {
+        int markerBits = endCodeLength + 2;
+        if (!in.hasBits(markerBits)) {
             reuseTablesForNextEntry = false;
+            return;
         }
+        int marker = in.peekBits(markerBits);
+        if ((marker >>> 2) != endCode || (marker & 2) != 0) return;
+        in.skipBits(markerBits);
+        reuseTablesForNextEntry = (marker & 1) == 0;
+        fileEndSeen = true;
     }
 
     // --- VM filter code reading ---
@@ -481,7 +481,7 @@ final class Rar3ClassicLzEngine {
             // Same-file tables can switch LZ/PPMd even after final output size
             // has been reached. A complete control stream must then end the file.
             if (matchesCode(endCode, endCodeLength)
-                    && in.remainingBits() >= endCodeLength + 1
+                    && in.hasBits(endCodeLength + 1)
                     && (in.peekBits(endCodeLength + 1) & 1) != 0) {
                 requireMarker = true;
                 in.skipBits(endCodeLength);
@@ -496,6 +496,6 @@ final class Rar3ClassicLzEngine {
     }
 
     private boolean matchesCode(int code, int length) throws IOException {
-        return length != 0 && in.remainingBits() >= length && in.peekBits(length) == code;
+        return length != 0 && in.hasBits(length) && in.peekBits(length) == code;
     }
 }

@@ -13,9 +13,9 @@ import java.io.OutputStream;
  * First-party RAR3/RAR4 compressed unpacker entry point.
  *
  * <p>Native libarchive remains primary. Production decoding streams LZ/PPMd blocks through
- * shared raw history and standard-filter output; the extractor restricts extended solid
- * admission to CRC/boundary-checked plain runs. Independent AES/split entries instead supply
- * a bounded logical stream without solid history. Mixed-mode and newly admitted input paths
+ * shared raw history and VM-filter output. Solid plans require CRC/boundary checks;
+ * the logical payload bridge also admits checked AES/split runs. Independent entries
+ * supply a bounded stream without solid history. Mixed-mode and newly admitted input paths
  * still require real-fixture runtime validation. The old array PPMd adapter below is test-only.</p>
  */
 final class Rar3Unpacker {
@@ -209,7 +209,7 @@ final class Rar3Unpacker {
         // This stream never closes/commits the caller's file. Failure leaves cleanup to its guard.
         try (Rar3PpmdFilterOutput filtered = new Rar3PpmdFilterOutput(
                 new java.io.BufferedOutputStream(target, 64 * 1024), limit, context.vmFilterState(),
-                4 * 1024 * 1024, context.deferredFilters())) {
+                4 * 1024 * 1024, context.deferredFilters(), context.allowsPartialFilterCarry(), progress)) {
             OutputStream clipped = new OutputStream() {
                 @Override public void write(int value) throws IOException {
                     // Preserve legacy final-match dictionary surplus, without publishing it.

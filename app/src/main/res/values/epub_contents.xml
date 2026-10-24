@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Footnote</string>
+    <string name="epub_return_to_text">Return to text</string>
+    <string name="epub_contents_fallback">No readable contents found; showing sections in reading order.</string>
+    <string name="epub_contents_empty">No matching entries.</string>
+</resources>

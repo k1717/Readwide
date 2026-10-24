@@ -64,6 +64,64 @@ public class BackupImportTransactionTest {
         } catch (Exception failure) { assertSame(expected, failure); }
     }
 
+    @Test public void allocationFailureRollsBackStartedStepsAndKeepsOriginalError() throws Exception {
+        List<String> calls = new ArrayList<>();
+        OutOfMemoryError expected = new OutOfMemoryError("serialization");
+        try {
+            BackupImportTransaction.run(Arrays.asList(
+                    BackupImportTransaction.step(() -> calls.add("a"), () -> calls.add("undo-a")),
+                    BackupImportTransaction.step(() -> { calls.add("partial-b"); throw expected; },
+                            () -> calls.add("undo-b")),
+                    BackupImportTransaction.step(() -> calls.add("c"), () -> calls.add("undo-c"))));
+            fail("Expected allocation failure");
+        } catch (OutOfMemoryError failure) { assertSame(expected, failure); }
+        assertEquals(Arrays.asList("a", "partial-b", "undo-b", "undo-a"), calls);
+    }
+
+    @Test public void stackFailureStillRestoresEarlierStepsAfterResourceFailureInUndo() throws Exception {
+        List<String> calls = new ArrayList<>();
+        StackOverflowError expected = new StackOverflowError("serialization nesting");
+        OutOfMemoryError undo = new OutOfMemoryError("undo allocation");
+        try {
+            BackupImportTransaction.run(Arrays.asList(
+                    BackupImportTransaction.step(() -> calls.add("a"), () -> calls.add("undo-a")),
+                    BackupImportTransaction.step(() -> { throw expected; }, () -> { throw undo; })));
+            fail("Expected stack failure");
+        } catch (StackOverflowError failure) {
+            assertSame(expected, failure);
+            assertArrayEquals(new Throwable[]{undo}, failure.getSuppressed());
+        }
+        assertEquals(Arrays.asList("a", "undo-a"), calls);
+    }
+
+    @Test public void ordinaryCommitFailureReportsResourceFailureDuringUndo() {
+        List<String> calls = new ArrayList<>();
+        IOException expected = new IOException("commit");
+        StackOverflowError undo = new StackOverflowError("undo nesting");
+        try {
+            BackupImportTransaction.run(Arrays.asList(
+                    BackupImportTransaction.step(() -> {}, () -> calls.add("undo-a")),
+                    BackupImportTransaction.step(() -> { throw expected; }, () -> { throw undo; })));
+            fail("Expected rollback failure");
+        } catch (Exception failure) {
+            assertSame(expected, failure.getCause());
+            assertArrayEquals(new Throwable[]{undo}, expected.getSuppressed());
+            assertTrue(failure.getMessage().contains("restoring previous data also failed"));
+        }
+        assertEquals(Collections.singletonList("undo-a"), calls);
+    }
+
+    @Test public void unrelatedFatalErrorIsNotConvertedIntoRecoverableFailure() throws Exception {
+        List<String> calls = new ArrayList<>();
+        InternalError expected = new InternalError("fatal");
+        try {
+            BackupImportTransaction.run(Collections.singletonList(BackupImportTransaction.step(
+                    () -> { throw expected; }, () -> calls.add("undo"))));
+            fail("Expected fatal error");
+        } catch (InternalError failure) { assertSame(expected, failure); }
+        assertTrue(calls.isEmpty());
+    }
+
     @Test public void emptyTransactionIsAllowed() throws Exception {
         BackupImportTransaction.run(Collections.emptyList());
     }

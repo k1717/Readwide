@@ -27,10 +27,169 @@ import java.util.zip.DeflaterOutputStream;
  * 14-byte EGG header is followed by archive-level extra fields terminated by
  * an END field, each FILE's extra fields are terminated by an END field, and
  * every BLOCK header ends with an END field before its data. Split fixtures
- * are a byte-level cut of one logical archive with prev/next header-id links,
- * exactly as ALZip writes {@code .vol1.egg}/{@code .vol2.egg} volumes.
+ * join logical bytes with prev/next header-id links. Some synthetic cuts are
+ * broader than ALZip's documented rule that headers stay within one volume.
  */
 public class EggArchiveReaderTest {
+    @Test public void changedSourceOnFinalBytesRollsBackPlainAndEncryptedOutputs() throws Exception {
+        for (boolean encrypted : new boolean[]{false, true}) {
+            for (boolean existing : new boolean[]{false, true}) {
+                File archive = buildEggArchive("last.bin", new byte[]{1, 2, 3}, 1, encrypted);
+                File directory = tempFolder.newFolder(), target = new File(directory, "last.bin");
+                if (existing) Files.write(target.toPath(), new byte[]{42});
+                com.readwide.manager.util.FileOperationProgress progress = sourceMutationProgress(archive, 3, null);
+                char[] password = encrypted ? TEST_PASSWORD.toCharArray() : null;
+                IOException changed = org.junit.Assert.assertThrows(IOException.class, () ->
+                        EggArchiveReader.extractArchiveIntoDirectory(archive, directory, password, progress, null));
+                assertTrue(changed.getMessage().contains("Split volume changed"));
+                if (existing) org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+                else assertFalse(target.exists());
+                assertEquals(existing ? 1 : 0, directory.list().length);
+            }
+        }
+    }
+
+    @Test public void changedSourceBeforeLaterNonSolidEntryKeepsVerifiedPrefix() throws Exception {
+        File archive = buildEggArchive("first.bin", new byte[]{7}, 0, false);
+        appendIndexedEntries(archive, buildEggArchive("last.bin", new byte[]{8}, 0, false));
+        File directory = tempFolder.newFolder(), target = new File(directory, "last.bin");
+        Files.write(target.toPath(), new byte[]{42});
+        com.readwide.manager.util.FileOperationProgress progress = sourceMutationProgress(archive, -1, "last.bin");
+        IOException changed = org.junit.Assert.assertThrows(IOException.class, () ->
+                EggArchiveReader.extractArchiveIntoDirectory(archive, directory, null, progress, null));
+        assertTrue(changed.getMessage().contains("Split volume changed"));
+        org.junit.Assert.assertArrayEquals(new byte[]{7}, Files.readAllBytes(new File(directory, "first.bin").toPath()));
+        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+        assertEquals(2, directory.list().length);
+    }
+
+    @Test public void changedEarlierSplitVolumePreventsFinalCommit() throws Exception {
+        byte[] plain = buildRepeatingPayload(6000);
+        writeSplitPair("source-change", plain, 0, plain, true);
+        File first = new File(tempFolder.getRoot(), "source-change.vol1.egg");
+        File last = new File(tempFolder.getRoot(), "source-change.vol2.egg");
+        File directory = tempFolder.newFolder(), target = new File(directory, "data.txt");
+        Files.write(target.toPath(), new byte[]{42});
+        com.readwide.manager.util.FileOperationProgress progress = sourceMutationProgress(first, plain.length, null);
+        IOException changed = org.junit.Assert.assertThrows(IOException.class, () -> EggArchiveReader.extractArchiveIntoDirectory(
+                last, directory, TEST_PASSWORD.toCharArray(), progress, null));
+        assertTrue(changed.getMessage().contains("Split volume changed"));
+        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+        assertEquals(1, directory.list().length);
+    }
+
+    @Test public void nonSolidFinalProgressCancellationDoesNotCommit() throws Exception {
+        File archive = buildEggArchive("last.bin", new byte[]{7}, 0, false);
+        File directory = tempFolder.newFolder(), target = new File(directory, "last.bin");
+        Files.write(target.toPath(), new byte[]{42});
+        com.readwide.manager.util.FileOperationProgress progress =
+                new com.readwide.manager.util.FileOperationProgress("cancel", null);
+        progress.setListener(s -> { if (!s.cancelled && s.doneBytes == 1) progress.cancel(); });
+        org.junit.Assert.assertThrows(IOException.class, () ->
+                EggArchiveReader.extractArchiveIntoDirectory(archive, directory, null, progress, null));
+        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+        assertEquals(1, directory.list().length);
+    }
+
+    @Test public void changedSolidSourceRollsBackCurrentBlockButKeepsEarlierBlock() throws Exception {
+        for (int method : new int[]{0, 1}) {
+            File archive = buildSolidEggArchive(new String[]{"first.bin", "last.bin"},
+                    new byte[][]{new byte[]{7}, new byte[]{8}}, method, 2);
+            File directory = tempFolder.newFolder(), target = new File(directory, "last.bin");
+            Files.write(target.toPath(), new byte[]{42});
+            com.readwide.manager.util.FileOperationProgress progress = sourceMutationProgress(archive, 2, null);
+            IOException changed = org.junit.Assert.assertThrows(IOException.class, () ->
+                    EggArchiveReader.extractArchiveIntoDirectory(archive, directory, null, progress, null));
+            assertTrue(changed.getMessage().contains("Split volume changed"));
+            org.junit.Assert.assertArrayEquals(new byte[]{7}, Files.readAllBytes(new File(directory, "first.bin").toPath()));
+            org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+            assertEquals(2, directory.list().length);
+        }
+    }
+
+    @Test public void changedSourceAtTrailingEmptySolidFileRollsBackOnlyTail() throws Exception {
+        File archive = solidLayoutFixture(new String[]{"first.bin", "tail.bin"},
+                new long[]{1, 0}, new byte[]{7}, 0, 1);
+        File directory = tempFolder.newFolder(), target = new File(directory, "tail.bin");
+        Files.write(target.toPath(), new byte[]{42});
+        com.readwide.manager.util.FileOperationProgress progress = sourceMutationProgress(archive, -1, "tail.bin");
+        IOException changed = org.junit.Assert.assertThrows(IOException.class, () ->
+                EggArchiveReader.extractArchiveIntoDirectory(archive, directory, null, progress, null));
+        assertTrue(changed.getMessage().contains("Split volume changed"));
+        org.junit.Assert.assertArrayEquals(new byte[]{7}, Files.readAllBytes(new File(directory, "first.bin").toPath()));
+        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+        assertEquals(2, directory.list().length);
+    }
+
+    @Test public void forwardChangeBeforeDecodePublishesNoBytesAndClosesSpools() throws Exception {
+        File archive = buildSolidEggArchive(new String[]{"first.bin"}, new byte[][]{new byte[]{7}}, 1, 1);
+        File spool = tempFolder.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = EggArchiveReader.openSolidForwardReader(archive, spool)) {
+            assertEquals("first.bin", reader.nextEntry().path);
+            assertTrue(archive.setLastModified(archive.lastModified() + 10000));
+            byte[] untouched = {42};
+            IOException changed = org.junit.Assert.assertThrows(IOException.class, () -> reader.read(untouched));
+            assertTrue(changed.getMessage().contains("Split volume changed"));
+            org.junit.Assert.assertArrayEquals(new byte[]{42}, untouched);
+            assertEquals(0, spool.list().length);
+            org.junit.Assert.assertThrows(IOException.class, reader::nextEntry);
+        }
+    }
+
+    @Test public void forwardAuthenticatedCachedBlockRechecksSourceAtEntryEndAndAdvance() throws Exception {
+        for (boolean advance : new boolean[]{false, true}) {
+            File original = writeFixture("source-check-" + advance + ".egg", AES128_STORE_B64);
+            File archive = solidFromEncrypted(original, aesStorePayload().length, 7);
+            File spool = tempFolder.newFolder();
+            try (ArchiveSupport.ForwardArchiveReader reader =
+                         EggArchiveReader.openSolidForwardReader(archive, spool, AES_PASSWORD.toCharArray())) {
+                assertEquals("prefix.bin", reader.nextEntry().path);
+                byte[] prefix = new byte[7];
+                assertEquals(7, reader.read(prefix));
+                org.junit.Assert.assertArrayEquals(java.util.Arrays.copyOf(aesStorePayload(), 7), prefix);
+                assertTrue(archive.setLastModified(archive.lastModified() + 10000));
+                IOException changed = advance
+                        ? org.junit.Assert.assertThrows(IOException.class, reader::nextEntry)
+                        : org.junit.Assert.assertThrows(IOException.class, () -> reader.read(new byte[1]));
+                assertTrue(changed.getMessage().contains("Split volume changed"));
+                assertEquals(0, spool.list().length);
+                org.junit.Assert.assertThrows(IOException.class, reader::nextEntry);
+            }
+        }
+    }
+
+    private static com.readwide.manager.util.FileOperationProgress sourceMutationProgress(
+            File source, long done, String detail) {
+        boolean[] changed = {false};
+        com.readwide.manager.util.FileOperationProgress progress =
+                new com.readwide.manager.util.FileOperationProgress("source mutation", null);
+        progress.setListener(s -> {
+            if (!changed[0] && (detail == null ? s.doneBytes == done : detail.equals(s.detail))) {
+                changed[0] = true;
+                assertTrue(source.setLastModified(source.lastModified() + 10000));
+            }
+        });
+        return progress;
+    }
+
+    @Test public void solidCancellationAtTrailingEmptyEntryPreservesVerifiedPrefix() throws Exception {
+        for (boolean existing : new boolean[]{false, true}) {
+            File archive = solidLayoutFixture(new String[]{"first.bin", "tail.bin"},
+                    new long[]{1, 0}, new byte[]{7}, 0, 1);
+            File directory = tempFolder.newFolder();
+            File tail = new File(directory, "tail.bin");
+            if (existing) Files.write(tail.toPath(), new byte[]{42});
+            com.readwide.manager.util.FileOperationProgress progress =
+                    new com.readwide.manager.util.FileOperationProgress("EGG", null);
+            progress.setListener(s -> { if (!s.cancelled && "tail.bin".equals(s.detail)) progress.cancel(); });
+            org.junit.Assert.assertThrows(IOException.class, () ->
+                    EggArchiveReader.extractArchiveIntoDirectory(archive, directory, null, progress, null));
+            org.junit.Assert.assertArrayEquals(new byte[]{7}, Files.readAllBytes(new File(directory, "first.bin").toPath()));
+            if (existing) org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(tail.toPath()));
+            else assertFalse(tail.exists());
+        }
+    }
+
     @Test public void otherFamilyExtensionPlainArchiveUsesActualDecoder() throws Exception { familyBridge(false); }
     @Test public void otherFamilyExtensionEncryptedArchiveUsesActualDecoder() throws Exception { familyBridge(true); }
     @Test public void otherFamilyExtensionWrongPasswordPreservesTarget() throws Exception {
@@ -632,6 +791,71 @@ public class EggArchiveReaderTest {
         }
     }
 
+    @Test public void solidForwardRejectsSameLengthDecodedSpoolEditOnRead() throws Exception {
+        assertSameLengthDecodedSpoolEditFails(0);
+    }
+
+    @Test public void solidForwardRejectsSameLengthDecodedSpoolEditOnDrain() throws Exception {
+        assertSameLengthDecodedSpoolEditFails(1);
+    }
+
+    @Test public void solidForwardRejectsSameLengthDecodedSpoolEditAtEntryEof() throws Exception {
+        assertSameLengthDecodedSpoolEditFails(2);
+    }
+
+    @Test public void solidForwardRejectsSameLengthDecodedSpoolEditBeforeNextEntry() throws Exception {
+        assertSameLengthDecodedSpoolEditFails(3);
+    }
+
+    private void assertSameLengthDecodedSpoolEditFails(int boundary) throws Exception {
+        File archive = buildSolidEggArchive(new String[]{"first.jpg", "next.jpg"},
+                new byte[][]{new byte[]{1, 2}, new byte[]{3, 4}}, 0, 1);
+        byte[] original = Files.readAllBytes(archive.toPath());
+        long modified = archive.lastModified();
+        File directory = tempFolder.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = EggArchiveReader.openSolidForwardReader(archive, directory)) {
+            assertEquals("first.jpg", reader.nextEntry().path);
+            int prefix = boundary >= 2 ? 2 : 1;
+            assertEquals(prefix, reader.read(new byte[prefix]));
+            editSpoolByte(findSpool(directory, "egg_verified_block_"), prefix);
+            byte[] untouched = {42};
+            // A zero-length read remains a no-op, not an integrity completion request.
+            assertEquals(0, reader.read(new byte[0]));
+            IOException changed = org.junit.Assert.assertThrows(IOException.class, () -> {
+                if (boundary == 1) reader.drainCurrentEntry(Long.MAX_VALUE);
+                else if (boundary == 3) reader.nextEntry();
+                else reader.read(untouched);
+            });
+            assertTrue(changed.getMessage().contains("spool"));
+            org.junit.Assert.assertArrayEquals(new byte[]{42}, untouched);
+            assertEquals(0, directory.list().length);
+            assertRetiredForward(reader);
+        }
+        org.junit.Assert.assertArrayEquals(original, Files.readAllBytes(archive.toPath()));
+        assertEquals(modified, archive.lastModified());
+    }
+
+    private static File findSpool(File directory, String prefix) {
+        File[] files = directory.listFiles((parent, name) -> name.startsWith(prefix) && name.endsWith(".spool"));
+        org.junit.Assert.assertNotNull(files);
+        assertEquals(1, files.length);
+        return files[0];
+    }
+
+    private static void editSpoolByte(File file, long offset) throws IOException {
+        long length = file.length(), modified = file.lastModified();
+        try (java.io.RandomAccessFile editing = new java.io.RandomAccessFile(file, "rw")) {
+            editing.seek(offset);
+            int original = editing.read();
+            assertTrue(original >= 0);
+            editing.seek(offset);
+            editing.write(original ^ 1);
+        }
+        assertEquals(length, file.length());
+        assertTrue(file.setLastModified(modified + 10000));
+        assertTrue(file.lastModified() != modified);
+    }
+
     @Test public void solidForwardCrcFailureCannotBeRetriedOnSameReader() throws Exception {
         File archive = buildSolidEggArchive(new String[]{"page.jpg"},
                 new byte[][]{new byte[]{1, 2, 3}}, 0, 1);
@@ -1037,6 +1261,61 @@ public class EggArchiveReaderTest {
         }
     }
 
+    @Test public void bufferedBzipKeepsEncryptedMultiBlockAndSolidSplitOwnership() throws Exception {
+        byte[][] plain = {Round4Fixtures.data(130007), Round4Fixtures.data(160003)};
+        byte[][] packed = {packProbeBlock(plain[0], 2), packProbeBlock(plain[1], 2)};
+        assertTrue(packed[0].length > 65536); assertTrue(packed[1].length > 65536);
+        byte[] expected = joinProbeBlocks(plain);
+        for (String encoding : new String[]{"UTF-8", "MS949"}) {
+            for (boolean solid : new boolean[]{false, true}) {
+                File original = ambiguousEgg(plain, new int[]{2, 2}, packed, encoding);
+                if (solid) original = solidFromEncrypted(original, expected.length, 70001);
+                File archive = splitBufferedBzipFixture(Files.readAllBytes(original.toPath()));
+                if (solid) {
+                    checkEncryptedSolid(archive, expected, 70001, "비밀번호".toCharArray());
+                } else {
+                    File output = tempFolder.newFolder();
+                    com.readwide.manager.util.FileOperationProgress progress =
+                            new com.readwide.manager.util.FileOperationProgress("test", null);
+                    assertTrue(EggArchiveReader.extractArchiveIntoDirectory(archive, output,
+                            "비밀번호".toCharArray(), progress));
+                    org.junit.Assert.assertArrayEquals(expected, Files.readAllBytes(new File(output, "secret.txt").toPath()));
+                    assertEquals(expected.length, progress.snapshot().doneBytes);
+                }
+            }
+        }
+    }
+
+    @Test public void lzmaRefillsKeepEncryptedSplitSolidAndPasswordProbeOwnership() throws Exception {
+        byte[][] plain = {Round4Fixtures.data(130007), Round4Fixtures.data(160003)};
+        byte[][] packed = {packProbeBlock(plain[0], 4), packProbeBlock(plain[1], 4)};
+        assertTrue(packed[0].length > 65545); assertTrue(packed[1].length > 65545);
+        byte[] expected = joinProbeBlocks(plain);
+        for (String encoding : new String[]{"UTF-8", "MS949"}) {
+            File original = solidFromEncrypted(ambiguousEgg(plain, new int[]{4, 4}, packed, encoding),
+                    expected.length, 70001);
+            // Reuse the same codec-independent split framing, including SOLID extras.
+            File archive = splitBufferedBzipFixture(Files.readAllBytes(original.toPath()));
+            checkEncryptedSolid(archive, expected, 70001, "비밀번호".toCharArray());
+        }
+    }
+
+    private File splitBufferedBzipFixture(byte[] raw) throws Exception {
+        File directory = tempFolder.newFolder(), last = null;
+        for (int part = 0; part < 5; part++) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            byte[] prefix = Round4Fixtures.prefix(1001 + part, part == 0 ? 0 : 1000 + part,
+                    part == 4 ? 0 : 1002 + part, true);
+            // The first volume retains original SOLID extras and the original END.
+            bytes.write(prefix, 0, prefix.length - (part == 0 ? 4 : 0));
+            int from = 14 + (raw.length - 14) * part / 5;
+            int to = 14 + (raw.length - 14) * (part + 1) / 5;
+            bytes.write(raw, from, to - from);
+            last = Round4Fixtures.write(directory, "book.vol" + (part + 1) + ".egg", bytes.toByteArray());
+        }
+        return last;
+    }
+
     @Test public void ambiguousSolidPasswordKeepsMixedCodecsAndPackedTailAligned() throws Exception {
         byte[][] plain = new byte[5][], packed = new byte[5][];
         for (int method = 0; method <= 4; method++) {
@@ -1312,6 +1591,79 @@ public class EggArchiveReaderTest {
         assertTrue(failure.getMessage().contains("CRC mismatch"));
     }
 
+    @Test public void terminalEmptySolidBlockChecksCrcAfterVerifiedFiles() throws Exception {
+        for (int encryption = 0; encryption < 3; encryption++) {
+            byte[] plain = encryption == 2 ? aesStorePayload() : buildRepeatingPayload(100);
+            File base = terminalEmptySolidBase(encryption, plain);
+            char[] password = encryption == 0 ? null : (encryption == 1 ? TEST_PASSWORD : AES_PASSWORD).toCharArray();
+            for (boolean corrupt : new boolean[]{false, true}) {
+                File archive = withTerminalEmptySolidBlock(base, corrupt);
+                File target = tempFolder.newFolder();
+                if (corrupt) {
+                    IOException failure = org.junit.Assert.assertThrows(IOException.class,
+                            () -> EggArchiveReader.extractArchiveIntoDirectory(archive, target, password));
+                    assertTrue(failure.getMessage().contains("CRC mismatch"));
+                } else assertTrue(EggArchiveReader.extractArchiveIntoDirectory(archive, target, password));
+                // A later empty-block failure must not erase earlier verified files.
+                org.junit.Assert.assertArrayEquals(java.util.Arrays.copyOf(plain, 7),
+                        Files.readAllBytes(new File(target, "prefix.bin").toPath()));
+                org.junit.Assert.assertArrayEquals(java.util.Arrays.copyOfRange(plain, 7, plain.length),
+                        Files.readAllBytes(new File(target, "secret.txt").toPath()));
+                assertEquals(2, target.list().length);
+            }
+        }
+    }
+
+    @Test public void terminalEmptySolidBlockCompletesOrRetiresForwardSession() throws Exception {
+        for (int encryption = 0; encryption < 3; encryption++) {
+            byte[] plain = encryption == 2 ? aesStorePayload() : buildRepeatingPayload(100);
+            File base = terminalEmptySolidBase(encryption, plain);
+            char[] password = encryption == 0 ? null : (encryption == 1 ? TEST_PASSWORD : AES_PASSWORD).toCharArray();
+            for (boolean corrupt : new boolean[]{false, true}) {
+                File archive = withTerminalEmptySolidBlock(base, corrupt);
+                File spool = tempFolder.newFolder();
+                try (ArchiveSupport.ForwardArchiveReader reader =
+                             EggArchiveReader.openSolidForwardReader(archive, spool, password)) {
+                    assertEquals("prefix.bin", reader.nextEntry().path);
+                    org.junit.Assert.assertArrayEquals(java.util.Arrays.copyOf(plain, 7), readForwardEntry(reader));
+                    assertEquals("secret.txt", reader.nextEntry().path);
+                    org.junit.Assert.assertArrayEquals(java.util.Arrays.copyOfRange(plain, 7, plain.length),
+                            readForwardEntry(reader));
+                    if (corrupt) {
+                        IOException failure = org.junit.Assert.assertThrows(IOException.class, reader::nextEntry);
+                        assertTrue(failure.getMessage().contains("CRC mismatch"));
+                        assertRetiredForward(reader);
+                    } else org.junit.Assert.assertNull(reader.nextEntry());
+                    // Both authenticated and decoded spools retire at EOF, not only close().
+                    assertEquals(0, spool.list().length);
+                    if (password != null) assertEquals(encryption == 1 ? TEST_PASSWORD : AES_PASSWORD, new String(password));
+                }
+                assertEquals(0, spool.list().length);
+            }
+        }
+    }
+
+    private File terminalEmptySolidBase(int encryption, byte[] plain) throws Exception {
+        if (encryption == 0) return buildSolidEggArchive(new String[]{"prefix.bin", "secret.txt"},
+                new byte[][]{java.util.Arrays.copyOf(plain, 7), java.util.Arrays.copyOfRange(plain, 7, plain.length)}, 0, 1);
+        File original = encryption == 1 ? buildTwoBlockEncryptedStoreArchive("secret.txt", plain)
+                : writeFixture("terminal-aes.egg", AES128_STORE_B64);
+        return solidFromEncrypted(original, plain.length, 7);
+    }
+
+    private File withTerminalEmptySolidBlock(File base, boolean corrupt) throws Exception {
+        byte[] original = Files.readAllBytes(base.toPath());
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        bytes.write(original, 0, original.length - 4);
+        // Outer SKIP metadata is not cipher input. Keep the empty block's own END unambiguous.
+        writeIntLE(bytes, 0xffff0000); bytes.write(0); writeShortLE(bytes, 3); bytes.write(new byte[]{1,2,3});
+        writeIntLE(bytes, MAGIC_BLOCK); bytes.write(0); bytes.write(0);
+        writeIntLE(bytes, 0); writeIntLE(bytes, 0); writeIntLE(bytes, corrupt ? 1 : 0);
+        writeIntLE(bytes, MAGIC_END); writeIntLE(bytes, MAGIC_END);
+        File archive = tempFolder.newFile(); Files.write(archive.toPath(), bytes.toByteArray());
+        return archive;
+    }
+
     @Test public void solidPreflightPreservesDirectoriesEmptyFilesAndBlockCrossings() throws Exception {
         String[] names = {"dir/", "dir/empty.bin", "dir/page.bin", "tail.bin"};
         byte[][] payloads = {new byte[0], new byte[0], new byte[]{7, 8}, new byte[0]};
@@ -1429,12 +1781,116 @@ public class EggArchiveReaderTest {
         checkEncryptedSolid(archive, plain, 7, TEST_PASSWORD.toCharArray());
     }
 
+    @Test public void skipBetweenEncryptedBlocksPreservesCipherAndAuthentication() throws Exception {
+        for (boolean aes : new boolean[]{false,true}) {
+            byte[] plain = aes ? aesStorePayload() : buildRepeatingPayload(4000);
+            char[] password = (aes ? AES_PASSWORD : TEST_PASSWORD).toCharArray();
+            File original = aes ? twoBlockAesNoCrcArchive()
+                    : buildTwoBlockEncryptedStoreArchive("secret.txt",plain);
+            for (boolean solid : new boolean[]{false,true}) {
+                File archive = new File(tempFolder.newFolder(),"fixture.egg");
+                Files.copy(original.toPath(),archive.toPath());
+                if (solid) archive = solidFromEncrypted(archive,plain.length,7);
+                byte[] raw = Files.readAllBytes(archive.toPath());
+                int first = boundsTestMagicOffset(raw,MAGIC_BLOCK);
+                int packed = java.nio.ByteBuffer.wrap(raw,first+10,4)
+                        .order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt();
+                int second = first + 22 + packed;
+                assertEquals(MAGIC_BLOCK,java.nio.ByteBuffer.wrap(raw,second,4)
+                        .order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt());
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                bytes.write(raw,0,second);
+                writeIntLE(bytes,0xffff0000); bytes.write(0); writeShortLE(bytes,4);
+                bytes.write(new byte[]{9,8,7,6}); // Metadata is not cipher or MAC input.
+                bytes.write(raw,second,raw.length-second);
+                Files.write(archive.toPath(),bytes.toByteArray());
+                if (solid) {
+                    checkEncryptedSolid(archive,plain,7,password);
+                } else {
+                    String name = EggArchiveReader.listEntries(archive,password).get(0).path;
+                    File output = tempFolder.newFile();
+                    assertTrue(EggArchiveReader.extractSingleEntry(archive,name,output,password));
+                    org.junit.Assert.assertArrayEquals(plain,Files.readAllBytes(output.toPath()));
+                }
+            }
+        }
+    }
+
     @Test public void encryptedSolidAesStoreAndDeflateUseBlockOwner() throws Exception {
         for (String fixture : new String[]{AES128_STORE_B64, AES256_STORE_B64, AES256_DEFLATE_B64}) {
             byte[] plain = fixture.equals(AES256_DEFLATE_B64) ? aesDeflatePayload() : aesStorePayload();
             File archive = solidFromEncrypted(writeFixture("encrypted-" + System.nanoTime() + ".egg", fixture), plain.length, 7);
             checkEncryptedSolid(archive, plain, 7, AES_PASSWORD.toCharArray());
         }
+    }
+
+    @Test public void blockExtrasPreserveEncryptedSplitAndSolidCipherOwnership() throws Exception {
+        for (boolean aes : new boolean[]{false,true}) {
+            byte[] plain = aes ? aesStorePayload() : buildRepeatingPayload(4000);
+            char[] password = (aes ? AES_PASSWORD : TEST_PASSWORD).toCharArray();
+            File original = aes ? twoBlockAesNoCrcArchive()
+                    : buildTwoBlockEncryptedStoreArchive("secret.txt",plain);
+            for (boolean solid : new boolean[]{false,true}) for (boolean split : new boolean[]{false,true}) {
+                File source = new File(tempFolder.newFolder(),"fixture.egg");
+                Files.copy(original.toPath(),source.toPath());
+                if (solid) source = solidFromEncrypted(source,plain.length,7);
+                byte[] raw = Files.readAllBytes(source.toPath());
+                int pos = boundsTestMagicOffset(raw,MAGIC_BLOCK);
+                ByteArrayOutputStream framed = new ByteArrayOutputStream();
+                framed.write(raw,0,pos);
+                for (int block=0; block<2; block++) {
+                    java.nio.ByteBuffer fields = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                    assertEquals(MAGIC_BLOCK,fields.getInt(pos));
+                    assertEquals(MAGIC_END,fields.getInt(pos+18));
+                    int packed = fields.getInt(pos+10);
+                    framed.write(raw,pos,18);
+                    writeIntLE(framed,0xffff0000); framed.write(1); writeIntLE(framed,packed+32);
+                    // The legacy endpoint lies inside these opaque zeros, never a tag.
+                    framed.write(new byte[packed+32]);
+                    framed.write(raw,pos+18,4+packed); // Original END and ciphertext unchanged.
+                    pos += 22+packed;
+                }
+                assertEquals(raw.length-4,pos);
+                framed.write(raw,pos,4);
+                byte[] bytes = framed.toByteArray();
+                Files.write(source.toPath(),bytes);
+                if (split) source = splitEncryptedBlockExtras(bytes);
+                final File archive = source;
+                if (solid) {
+                    checkEncryptedSolid(archive,plain,7,password);
+                } else {
+                    File output = tempFolder.newFile();
+                    assertTrue(EggArchiveReader.extractSingleEntry(archive,"secret.txt",output,password));
+                    org.junit.Assert.assertArrayEquals(plain,Files.readAllBytes(output.toPath()));
+                    File directory = tempFolder.newFolder();
+                    assertTrue(EggArchiveReader.extractArchiveIntoDirectory(archive,directory,password));
+                    org.junit.Assert.assertArrayEquals(plain,Files.readAllBytes(new File(directory,"secret.txt").toPath()));
+                }
+                File output = tempFolder.newFile(); Files.write(output.toPath(),new byte[]{42});
+                org.junit.Assert.assertThrows(IOException.class, () -> EggArchiveReader.extractSingleEntry(
+                        archive,solid ? "prefix.bin" : "secret.txt",output,"wrong".toCharArray()));
+                org.junit.Assert.assertArrayEquals(new byte[]{42},Files.readAllBytes(output.toPath()));
+            }
+        }
+    }
+
+    private File splitEncryptedBlockExtras(byte[] raw) throws Exception {
+        int first = boundsTestMagicOffset(raw,MAGIC_BLOCK);
+        int packed = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt(first+10);
+        int cut = first+18+9+packed+32+4+packed/2;
+        File directory = tempFolder.newFolder();
+        File second = new File(directory,"extras.vol2.egg");
+        for (int part=1; part<=2; part++) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            writeIntLE(bytes,MAGIC_EGG); writeShortLE(bytes,0x0100);
+            writeIntLE(bytes,part); writeIntLE(bytes,0);
+            writeIntLE(bytes,MAGIC_SPLIT); bytes.write(0); writeShortLE(bytes,8);
+            writeIntLE(bytes,part == 1 ? 0 : 1); writeIntLE(bytes,part == 1 ? 2 : 0);
+            if (part == 1) bytes.write(raw,14,cut-14); // Keep the original prefix extras/END.
+            else { writeIntLE(bytes,MAGIC_END); bytes.write(raw,cut,raw.length-cut); }
+            Files.write(new File(directory,"extras.vol"+part+".egg").toPath(),bytes.toByteArray());
+        }
+        return second; // Opening a continuation must still resolve the first volume.
     }
 
     @Test public void encryptedSolidAuthenticatesLaterCiphertextBeforeEarlySelectedOutput() throws Exception {
@@ -1470,6 +1926,71 @@ public class EggArchiveReaderTest {
     }
 
     @Test public void encryptedSolidAesAuthenticatesWholeOwnerAcrossBlocks() throws Exception {
+        int size = aesStorePayload().length;
+        File archive = solidFromEncrypted(twoBlockAesNoCrcArchive(), size, 7);
+        checkEncryptedSolid(archive, aesStorePayload(), 7, AES_PASSWORD.toCharArray());
+        byte[] damaged = Files.readAllBytes(archive.toPath()); damaged[damaged.length - 8] ^= 1;
+        Files.write(archive.toPath(), damaged);
+        File output = tempFolder.newFile(); Files.write(output.toPath(), new byte[]{42});
+        org.junit.Assert.assertThrows(IOException.class, () -> EggArchiveReader.extractSingleEntry(
+                archive, "prefix.bin", output, AES_PASSWORD.toCharArray()));
+        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test public void encryptedSolidRechecksPackedSpoolBetweenBlocks() throws Exception {
+        byte[] plain = aesStorePayload();
+        int split = plain.length / 2;
+        File archive = solidFromEncrypted(twoBlockAesNoCrcArchive(), plain.length, split);
+        byte[] original = Files.readAllBytes(archive.toPath());
+        long modified = archive.lastModified();
+        File directory = tempFolder.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader =
+                     EggArchiveReader.openSolidForwardReader(archive, directory, AES_PASSWORD.toCharArray())) {
+            assertEquals("prefix.bin", reader.nextEntry().path);
+            org.junit.Assert.assertArrayEquals(java.util.Arrays.copyOf(plain, split), readForwardEntry(reader));
+            editSpoolByte(findSpool(directory, "egg_authenticated_packed_"), split);
+            assertEquals("secret.txt", reader.nextEntry().path);
+            byte[] untouched = {42};
+            IOException changed = org.junit.Assert.assertThrows(IOException.class, () -> reader.read(untouched));
+            assertTrue(changed.getMessage().contains("spool"));
+            org.junit.Assert.assertArrayEquals(new byte[]{42}, untouched);
+            assertEquals(0, directory.list().length);
+            assertRetiredForward(reader);
+        }
+        org.junit.Assert.assertArrayEquals(original, Files.readAllBytes(archive.toPath()));
+        assertEquals(modified, archive.lastModified());
+    }
+
+    @Test public void encryptedSolidPackedSpoolChangeAtFinalProgressRollsBackOnlyPendingBlock() throws Exception {
+        for (boolean existing : new boolean[]{false, true}) {
+            byte[] plain = aesStorePayload();
+            int split = plain.length / 2;
+            File archive = solidFromEncrypted(twoBlockAesNoCrcArchive(), plain.length, split);
+            File directory = tempFolder.newFolder(), target = new File(directory, "secret.txt");
+            if (existing) Files.write(target.toPath(), new byte[]{42});
+            boolean[] changed = {false};
+            com.readwide.manager.util.FileOperationProgress progress =
+                    new com.readwide.manager.util.FileOperationProgress("packed spool", null);
+            progress.setListener(s -> {
+                if (!changed[0] && s.doneBytes == plain.length) {
+                    changed[0] = true;
+                    try { editSpoolByte(findSpool(directory, "egg_authenticated_packed_"), split); }
+                    catch (IOException error) { throw new AssertionError(error); }
+                }
+            });
+            IOException failure = org.junit.Assert.assertThrows(IOException.class, () ->
+                    EggArchiveReader.extractArchiveIntoDirectory(archive, directory, AES_PASSWORD.toCharArray(), progress, null));
+            assertTrue(changed[0]);
+            assertTrue(failure.getMessage().contains("spool"));
+            org.junit.Assert.assertArrayEquals(java.util.Arrays.copyOf(plain, split),
+                    Files.readAllBytes(new File(directory, "prefix.bin").toPath()));
+            if (existing) org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+            else assertFalse(target.exists());
+            assertEquals(existing ? 2 : 1, directory.list().length);
+        }
+    }
+
+    private File twoBlockAesNoCrcArchive() throws Exception {
         byte[] original = java.util.Base64.getDecoder().decode(AES128_NOCRC_B64);
         int size = aesStorePayload().length;
         int data = original.length - 4 - size;
@@ -1484,14 +2005,7 @@ public class EggArchiveReaderTest {
         }
         writeIntLE(bytes, MAGIC_END);
         File source = tempFolder.newFile(); Files.write(source.toPath(), bytes.toByteArray());
-        File archive = solidFromEncrypted(source, size, 7);
-        checkEncryptedSolid(archive, aesStorePayload(), 7, AES_PASSWORD.toCharArray());
-        byte[] damaged = Files.readAllBytes(archive.toPath()); damaged[damaged.length - 8] ^= 1;
-        Files.write(archive.toPath(), damaged);
-        File output = tempFolder.newFile(); Files.write(output.toPath(), new byte[]{42});
-        org.junit.Assert.assertThrows(IOException.class, () -> EggArchiveReader.extractSingleEntry(
-                archive, "prefix.bin", output, AES_PASSWORD.toCharArray()));
-        org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+        return source;
     }
 
     @Test public void encryptedSolidEmptyFirstFileStillAuthenticatesOwner() throws Exception {

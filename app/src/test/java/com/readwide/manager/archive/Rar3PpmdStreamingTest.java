@@ -8,6 +8,27 @@ import java.io.OutputStream;
 import static org.junit.Assert.*;
 
 public class Rar3PpmdStreamingTest {
+    @Test public void unfinishedFilterRunInvalidatesPpmdModelAndClearsDeferredState() throws Exception {
+        // Seed the output-stage state directly; this is not a producer PPMd fixture.
+        Rar3PpmdSolidStreamDecoder decoder = new Rar3PpmdSolidStreamDecoder();
+        java.lang.reflect.Field stateField = Rar3PpmdSolidStreamDecoder.class.getDeclaredField("deferredFilters");
+        stateField.setAccessible(true);
+        Rar3PpmdFilterOutput.DeferredFilters state =
+                (Rar3PpmdFilterOutput.DeferredFilters) stateField.get(decoder);
+        java.lang.reflect.Field ready = Rar3PpmdSolidStreamDecoder.class.getDeclaredField("modelReady");
+        ready.setAccessible(true); ready.setBoolean(decoder, true);
+        try (Rar3PpmdFilterOutput out = new Rar3PpmdFilterOutput(new ByteArrayOutputStream(), 1,
+                new Rar3VmFilter.ProgramState(), Rar3PpmdFilterOutput.MAX_FILTER_BYTES, state)) {
+            Rar3VmFilter.PendingFilter filter = new Rar3VmFilter.PendingFilter();
+            filter.type = Rar3VmFilter.StandardFilter.DELTA;
+            filter.blockStartAbs = 1; filter.blockLength = 2; filter.initR[0] = 1;
+            out.queue(filter); out.write(42); out.finish(true);
+        }
+        assertThrows(IOException.class, decoder::requireCompleteFilterRun);
+        assertFalse(ready.getBoolean(decoder));
+        state.requireEmpty(); decoder.requireCompleteFilterRun();
+    }
+
     @Test public void invalidOrderAndMixedLzTableFailBeforeAllocatingModel() throws Exception {
         for (byte[] header : new byte[][]{{(byte)0xa0,0},{0}}) {
             try { new Rar3PpmdSolidStreamDecoder().decodeEntry(

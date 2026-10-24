@@ -103,13 +103,13 @@ public final class SettingsBackupViewModel extends ViewModel {
             state.setValue(new State(Phase.FAILURE, operation, "Another backup operation is still running"));
             return;
         }
-        state.setValue(new State(Phase.WORKING, operation, null));
         try {
+            state.setValue(new State(Phase.WORKING, operation, null));
             worker.execute(() -> {
                 State result;
                 try {
                     result = work.run();
-                } catch (Exception failure) {
+                } catch (Exception | OutOfMemoryError | StackOverflowError failure) {
                     result = failure(operation, failure);
                 } finally {
                     BACKUP_RUNNING.set(false);
@@ -117,16 +117,26 @@ public final class SettingsBackupViewModel extends ViewModel {
                 State completed = result;
                 main.post(() -> { if (!cleared) state.setValue(completed); });
             });
-        } catch (RuntimeException rejected) {
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError rejected) {
             BACKUP_RUNNING.set(false);
             state.setValue(failure(operation, rejected));
         }
     }
 
-    private static State failure(Operation operation, Exception failure) {
+    private static State failure(Operation operation, Throwable failure) {
         String message = failure.getMessage();
-        return new State(Phase.FAILURE, operation,
-                message == null || message.isEmpty() ? failure.getClass().getSimpleName() : message);
+        if (message == null || message.isEmpty()) message = failure.getClass().getSimpleName();
+        if (failure instanceof OutOfMemoryError || failure instanceof StackOverflowError) {
+            try {
+                if (failure.getSuppressed().length != 0) {
+                    // Suppressed failures can come from either rollback or stream cleanup.
+                    message += ". Additional recovery errors were reported. Keep the original backup.";
+                }
+            } catch (OutOfMemoryError | StackOverflowError unavailable) {
+                // Reporting resource exhaustion must not depend on extra diagnostics.
+            }
+        }
+        return new State(Phase.FAILURE, operation, message);
     }
 
     private static State idle() { return new State(Phase.IDLE, null, null); }

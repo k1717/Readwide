@@ -9,7 +9,9 @@ import java.util.zip.CRC32;
  *
  * <p>RAR3/RAR4 streams do not carry a simple public "standard filter id" here; common decoder-style
  * implementations recognize common filters by VM-bytecode length plus CRC signature. This table
- * is used for diagnostics and to mark the narrow E8/E8E9 standalone primitive candidates. Unknown/custom filters remain clean first-party gaps.</p>
+ * is used by the legacy diagnostic/planning scaffold and marks its E8/E8E9 standalone primitive
+ * candidates. Live extraction uses {@link Rar3VmFilter}; an unknown signature here does not imply
+ * that its custom VM path is unavailable.</p>
  */
 final class RarStandardFilters {
     private RarStandardFilters() {}

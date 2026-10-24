@@ -13,6 +13,7 @@ import java.util.List;
 final class Rar3PpmdForwardReader implements ArchiveSupport.ForwardArchiveReader {
     private final List<RarArchiveReader.RarEntry> entries;
     private final RarVolumeChain.Index chains;
+    private final java.util.Set<RarArchiveReader.RarEntry> continuations;
     private final File directory;
     private final char[] password;
     private Rar3PpmdSolidStreamDecoder decoder;
@@ -23,10 +24,21 @@ final class Rar3PpmdForwardReader implements ArchiveSupport.ForwardArchiveReader
     private long verifiedSize, remainingBytes;
     private boolean decoded, failed, closed;
 
-    Rar3PpmdForwardReader(List<RarArchiveReader.RarEntry> entries, char[] password, File directory,
-            RarVolumeChain.Index chains) {
-        this.entries = new ArrayList<>(entries); this.directory = directory;
-        this.chains = chains;
+    Rar3PpmdForwardReader(List<RarArchiveReader.RarEntry> entries, char[] password, File directory) throws IOException {
+        this.entries = new ArrayList<>(entries.size()); this.directory = directory;
+        java.util.IdentityHashMap<RarArchiveReader.RarEntry, RarArchiveReader.RarEntry> copies =
+                new java.util.IdentityHashMap<>();
+        for (RarArchiveReader.RarEntry entry : entries) {
+            if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
+            if (entry == null) continue;
+            // Preserve aliases so the topology validator still rejects duplicate identities.
+            RarArchiveReader.RarEntry copy = copies.get(entry);
+            if (copy == null) { copy = Rar3DecodePlan.snapshot(entry); copies.put(entry, copy); }
+            this.entries.add(copy);
+        }
+        // Chains and continuation membership must refer to the same owned metadata.
+        this.chains = RarVolumeChain.index(this.entries);
+        this.continuations = Rar3PpmdSolidArchiveExtractor.solidContinuations(this.entries);
         this.password = password == null ? null : password.clone();
     }
 
@@ -45,6 +57,10 @@ final class Rar3PpmdForwardReader implements ArchiveSupport.ForwardArchiveReader
         do { current = index < entries.size() ? entries.get(index++) : null; }
         while (current != null && current.splitBefore);
         decoded = false;
+        if (current == null) {
+            releaseDecoder();
+            if (password != null) java.util.Arrays.fill(password, '\0');
+        }
         return current == null ? null : new ArchiveSupport.ForwardEntry(
                 current.path, current.directory, !current.directory);
     }
@@ -61,15 +77,20 @@ final class Rar3PpmdForwardReader implements ArchiveSupport.ForwardArchiveReader
                 if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create RAR spool directory");
                 spool = File.createTempFile("rar3_ppmd_verified_", ".spool", directory);
                 if (stored) RarArchiveReader.extractStoredEntry(current, spool, password, chain, null);
-                else Rar3PpmdSolidArchiveExtractor.writeVerifiedEntry(decoder, current, chain, password, spool, null);
+                else Rar3PpmdSolidArchiveExtractor.writeVerifiedEntry(decoder, current, chain, password, spool, null,
+                        continuations.contains(current));
                 if (retain) {
                     verifiedSize = remainingBytes = spool.length();
                     input = new java.io.BufferedInputStream(new java.io.FileInputStream(spool));
                 } else clearSpool();
             } else {
                 // Skipping output must still advance the model/window and check the primer CRC.
-                Rar3PpmdSolidArchiveExtractor.discardVerifiedEntry(decoder, current, chain, password, null);
+                Rar3PpmdSolidArchiveExtractor.discardVerifiedEntry(decoder, current, chain, password, null,
+                        continuations.contains(current));
             }
+            // The full member is verified before exposing its spool. Keep history
+            // only while a checked solid successor needs it, even if reads pause here.
+            if (!stored && !continuations.contains(current)) releaseDecoder();
             decoded = true;
         } catch (IOException | RuntimeException | Error failure) {
             retire(failure);
@@ -137,10 +158,15 @@ final class Rar3PpmdForwardReader implements ArchiveSupport.ForwardArchiveReader
         if (failure instanceof Error) throw (Error) failure;
     }
 
+    private void releaseDecoder() {
+        if (decoder != null) decoder.invalidate();
+        decoder = null;
+    }
+
     @Override public void close() throws IOException {
         if (closed && spool == null && input == null) return;
         closed = true;
-        decoder = null;
+        releaseDecoder();
         if (password != null) java.util.Arrays.fill(password, '\0');
         clearSpool();
     }

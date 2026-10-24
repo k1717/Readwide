@@ -31,7 +31,7 @@ final class DocumentTtsIntegrationController {
 
     /** True while an EXTRA_AUTOSTART_TTS intent is waiting for the document to load. */
     private boolean pendingAutoStartTts = false;
-    /** The autostart extra is honored once per activity instance. */
+    /** The autostart extra is honored once per loaded document intent. */
     private boolean autoStartTtsConsumed = false;
     private int autoStartTtsAttempts = 0;
 
@@ -56,7 +56,7 @@ final class DocumentTtsIntegrationController {
      * document's playback state was reset. Arms auto-start when the intent
      * carries {@link DocumentPageActivity#EXTRA_AUTOSTART_TTS} (the
      * "continue reading aloud" resume from the main screen), honored once per
-     * activity instance.
+     * loaded document intent.
      */
     void onLoadFromIntent(Intent intent) {
         if (!autoStartTtsConsumed && intent != null
@@ -64,7 +64,7 @@ final class DocumentTtsIntegrationController {
             autoStartTtsConsumed = true;
             pendingAutoStartTts = true;
             autoStartTtsAttempts = 0;
-            scheduleAutoStartCheck();
+            scheduleAutoStartCheck(activity.loadGeneration);
         }
     }
 
@@ -91,6 +91,8 @@ final class DocumentTtsIntegrationController {
         // A new document invalidates any autostart still pending for the previous
         // one; loadFromIntent re-arms it when the new intent carries the extra.
         pendingAutoStartTts = false;
+        autoStartTtsConsumed = false;
+        autoStartTtsAttempts = 0;
     }
 
     /**
@@ -140,16 +142,17 @@ final class DocumentTtsIntegrationController {
     // asynchronously, so poll briefly until pages are ready, then build the text
     // buffer off-thread and begin playback in the saved continuous mode. Gives up
     // quietly after a few seconds if nothing becomes readable.
-    private void scheduleAutoStartCheck() {
+    private void scheduleAutoStartCheck(int generation) {
         View anchor = activity.webView != null
                 ? activity.webView : activity.getWindow().getDecorView();
         anchor.postDelayed(() -> {
-            if (activity.activityDestroyed || !pendingAutoStartTts) return;
+            if (activity.activityDestroyed || generation != activity.loadGeneration
+                    || !pendingAutoStartTts) return;
             if (activity.documentSupportsTts()) {
                 pendingAutoStartTts = false;
                 autostart();
             } else if (++autoStartTtsAttempts <= 40) {
-                scheduleAutoStartCheck();
+                scheduleAutoStartCheck(generation);
             } else {
                 pendingAutoStartTts = false;
             }
@@ -178,7 +181,9 @@ final class DocumentTtsIntegrationController {
             View anchor = activity.webView != null
                     ? activity.webView : activity.getWindow().getDecorView();
             anchor.postDelayed(() -> {
-                if (!activity.activityDestroyed && retryGeneration == activity.loadGeneration) {
+                if (!activity.activityDestroyed && retryGeneration == activity.loadGeneration
+                        && (textBuilding || activity.documentTtsTextSource != null)) {
+                    // A completed failed build must not restart itself under resource pressure.
                     autostart();
                 }
             }, 150L);
@@ -200,24 +205,40 @@ final class DocumentTtsIntegrationController {
      * loaded.
      */
     private void buildTextSourceThen(@NonNull Runnable onReady) {
-        textBuilding = true;
+        if (activity.activityDestroyed || activity.executor.isShutdown()) return;
         final int generation = activity.loadGeneration;
-        final java.util.List<DocumentPageActivity.Page> snapshot =
-                new java.util.ArrayList<>(activity.pages);
-        activity.submitDocumentTask(() -> {
-            DocumentTtsTextSource built = DocumentTtsTextSource.build(activity, snapshot);
-            activity.runOnUiThread(() -> {
-                if (activity.activityDestroyed) return;
-                if (generation != activity.loadGeneration) {
-                    // A different document loaded while we were extracting.
-                    textBuilding = false;
-                    return;
+        try {
+            final java.util.List<DocumentPageActivity.Page> snapshot =
+                    new java.util.ArrayList<>(activity.pages);
+            textBuilding = true;
+            activity.submitDocumentTask(() -> {
+                DocumentTtsTextSource result;
+                try {
+                    result = DocumentTtsTextSource.build(activity, snapshot);
+                } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                    android.util.Log.w("ReadwideTts", "Document read-aloud text build failed", failure);
+                    result = null;
                 }
-                activity.documentTtsTextSource = built;
-                textBuilding = false;
-                onReady.run();
+                final DocumentTtsTextSource built = result;
+                activity.runOnUiThread(() -> {
+                    if (activity.activityDestroyed || generation != activity.loadGeneration) {
+                        // A different document owns any newer in-flight build flag.
+                        return;
+                    }
+                    textBuilding = false;
+                    if (built == null) {
+                        ShortToast.show(activity, R.string.file_operation_failed);
+                        return;
+                    }
+                    activity.documentTtsTextSource = built;
+                    onReady.run();
+                });
             });
-        });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            textBuilding = false;
+            android.util.Log.w("ReadwideTts", "Document read-aloud text build could not start", failure);
+            if (!activity.activityDestroyed) ShortToast.show(activity, R.string.file_operation_failed);
+        }
     }
 
     // ---- Markdown approximate following -------------------------------------

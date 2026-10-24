@@ -20,8 +20,8 @@ Local changes:
   `LIZARDF_DISABLE_OBSOLETE_ENUMS` before including the frame headers. Their
   obsolete unprefixed enum/typedef aliases collide in one translation unit;
   the adapter uses only the separate prefixed APIs. This integration fix does
-  not modify the imported headers, decoder behavior or ABI. The reported ARM64
-  compilation failure is patched; the user's follow-up log passed ARM64/ARMv7
+  not modify the imported headers, decoder behavior or ABI. The ARM64
+  compilation failure is patched; a subsequent 1.0.20 build passed ARM64/ARMv7
   native build tasks before an unrelated app Java compilation failure.
 - Both frame decoders accept optional block checksums and verify seed-zero XXH32
   over packed block bytes before decoding/copying the block. Existing input buffers
@@ -56,7 +56,7 @@ Local changes:
 
 The decoders are linked into the existing replaceable LGPL ZIPX shared library;
 its LGPL distribution/relinking obligations remain. All sources and build rules
-are supplied. The user's follow-up build passed ARMv7/ARM64 native compilation;
+are supplied. A subsequent 1.0.20 build passed ARMv7/ARM64 native compilation;
 regression sources remain uncompiled/unrun. Device decoding, real compressed
 producer files, AES/split/solid 7z compositions,
 malformed input and native memory-safety checks remain release validation work.

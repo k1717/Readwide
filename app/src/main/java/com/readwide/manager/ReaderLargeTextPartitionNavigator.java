@@ -159,78 +159,89 @@ final class ReaderLargeTextPartitionNavigator {
             activity.showLoadingWindowForPartitionJump(switchGeneration);
         }
 
-        activity.largeTextPartitionExecutor.executeForeground(() -> {
-            try {
-                java.util.function.BooleanSupplier keepReading = () ->
-                        !isStale(generation, switchGeneration, expectedPath)
-                                && activity.largeTextPartitionCache.isCurrent(cacheGeneration);
-                File source = new File(expectedPath);
-                int selectChar = targetChar;
-                if (displayLine > 0) {
-                    selectChar = activity.resolveLargeTextCharPositionForLine(source, displayLine, keepReading);
-                } else if (anchorSelect) {
-                    int anchoredChar = com.readwide.manager.util.LargeTextPartitionReader.readWhile(
-                            keepReading, () -> activity.resolveLargeTextCharPositionForAnchor(
-                                    source, targetChar, anchorBefore, anchorAfter));
-                    if (anchoredChar >= 0) selectChar = anchoredChar;
+        try {
+            activity.largeTextPartitionExecutor.executeForeground(() -> {
+                try {
+                    java.util.function.BooleanSupplier keepReading = () ->
+                            !isStale(generation, switchGeneration, expectedPath)
+                                    && activity.largeTextPartitionCache.isCurrent(cacheGeneration);
+                    File source = new File(expectedPath);
+                    int selectChar = targetChar;
+                    if (displayLine > 0) {
+                        selectChar = activity.resolveLargeTextCharPositionForLine(source, displayLine, keepReading);
+                    } else if (anchorSelect) {
+                        int anchoredChar = com.readwide.manager.util.LargeTextPartitionReader.readWhile(
+                                keepReading, () -> activity.resolveLargeTextCharPositionForAnchor(
+                                        source, targetChar, anchorBefore, anchorAfter));
+                        if (anchoredChar >= 0) selectChar = anchoredChar;
+                    }
+                    final int appliedChar = selectChar;
+                    LargeTextLinePartitionResult partition =
+                            com.readwide.manager.util.LargeTextPartitionReader.readWhile(keepReading,
+                                    () -> {
+                                        // A line scan now supplies an absolute coordinate.
+                                        // Recheck the thread-safe cache before doing another
+                                        // file scan; the UI commit still validates its epoch.
+                                        if (displayLine > 0) {
+                                            LargeTextLinePartitionResult owner = activity.largeTextPartitionCache
+                                                    .getNormalOwnerForChar(appliedChar);
+                                            if (owner != null) return owner;
+                                        }
+                                        // Only on a cache miss, and on the worker: adjacent
+                                        // targets may already be in the immutable loaded text.
+                                        // Unknown/newline-expanded windows keep the full scan.
+                                        int readStartLine = targetStartLine;
+                                        if (readStartLine <= 0 && !anchorSelect) {
+                                            readStartLine = LargeTextContinuityMath.partitionStartLineForLoadedChar(
+                                                    loadedContent, loadedBase, loadedStartLine, appliedChar,
+                                                    partitionLines, loadedWindowLines);
+                                        }
+                                        return readStartLine > 0
+                                                ? activity.readLargeTextLinePartitionAtStartLine(
+                                                        source, readStartLine, knownTotalLines, knownTotalChars, useManualLookbehind)
+                                                : activity.readLargeTextLinePartitionForChar(source, appliedChar);
+                                    });
+                    activity.handler.post(() -> {
+                        if (isStale(generation, switchGeneration, expectedPath)
+                                || !activity.largeTextPartitionCache.isCurrent(cacheGeneration)) {
+                            clearIfCurrent(switchGeneration);
+                            activity.hideLoadingWindowForPartitionJumpIfCurrent(
+                                    showLoadingForAsyncPartitionJump,
+                                    switchGeneration);
+                            return;
+                        }
+                        // The applier caches only after this UI-thread ownership check.
+                        activity.applyLargeTextPartitionInPlace(
+                                partition, appliedChar, displayPage, totalPages, anchorBefore, anchorAfter,
+                                showLoadingForAsyncPartitionJump, switchGeneration, viewport);
+                    });
+                } catch (Throwable t) {
+                    activity.handler.post(() -> finishFailedSwitch(t, generation, switchGeneration,
+                            expectedPath, showLoadingForAsyncPartitionJump));
                 }
-                final int appliedChar = selectChar;
-                LargeTextLinePartitionResult partition =
-                        com.readwide.manager.util.LargeTextPartitionReader.readWhile(keepReading,
-                                () -> {
-                                    // A line scan now supplies an absolute coordinate.
-                                    // Recheck the thread-safe cache before doing another
-                                    // file scan; the UI commit still validates its epoch.
-                                    if (displayLine > 0) {
-                                        LargeTextLinePartitionResult owner = activity.largeTextPartitionCache
-                                                .getNormalOwnerForChar(appliedChar);
-                                        if (owner != null) return owner;
-                                    }
-                                    // Only on a cache miss, and on the worker: adjacent
-                                    // targets may already be in the immutable loaded text.
-                                    // Unknown/newline-expanded windows keep the full scan.
-                                    int readStartLine = targetStartLine;
-                                    if (readStartLine <= 0 && !anchorSelect) {
-                                        readStartLine = LargeTextContinuityMath.partitionStartLineForLoadedChar(
-                                                loadedContent, loadedBase, loadedStartLine, appliedChar,
-                                                partitionLines, loadedWindowLines);
-                                    }
-                                    return readStartLine > 0
-                                            ? activity.readLargeTextLinePartitionAtStartLine(
-                                                    source, readStartLine, knownTotalLines, knownTotalChars, useManualLookbehind)
-                                            : activity.readLargeTextLinePartitionForChar(source, appliedChar);
-                                });
-                activity.handler.post(() -> {
-                    if (isStale(generation, switchGeneration, expectedPath)
-                            || !activity.largeTextPartitionCache.isCurrent(cacheGeneration)) {
-                        clearIfCurrent(switchGeneration);
-                        activity.hideLoadingWindowForPartitionJumpIfCurrent(
-                                showLoadingForAsyncPartitionJump,
-                                switchGeneration);
-                        return;
-                    }
-                    // The applier caches only after this UI-thread ownership check.
-                    activity.applyLargeTextPartitionInPlace(
-                            partition, appliedChar, displayPage, totalPages, anchorBefore, anchorAfter,
-                            showLoadingForAsyncPartitionJump, switchGeneration, viewport);
-                });
-            } catch (Throwable t) {
-                activity.handler.post(() -> {
-                    if (!isStale(generation, switchGeneration, expectedPath)
-                            && !activity.ensureLoadedTextCurrent()) return;
-                    clearIfCurrent(switchGeneration);
-                    activity.hideLoadingWindowForPartitionJumpIfCurrent(
-                            showLoadingForAsyncPartitionJump,
-                            switchGeneration);
-                    if (!(t instanceof java.io.InterruptedIOException)
-                            && !activity.activityDestroyed
-                            && generation == activity.loadGeneration.get()
-                            && switchGeneration == activity.largeTextPartitionSwitchGeneration.get()) {
-                        ShortToast.show(activity, activity.getString(R.string.error_prefix) + t.getMessage());
-                    }
-                });
+            });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            // Submission itself can fail before the worker's catch boundary runs.
+            try {
+                finishFailedSwitch(failure, generation, switchGeneration,
+                        expectedPath, showLoadingForAsyncPartitionJump);
+            } finally {
+                // Thread startup can fail after enqueueing. Retire its callbacks
+                // even if the executor later drains that abandoned work.
+                activity.largeTextPartitionSwitchGeneration.compareAndSet(switchGeneration, switchGeneration + 1);
             }
-        });
+        }
+    }
+
+    private void finishFailedSwitch(Throwable failure, int generation, int switchGeneration,
+                                    String expectedPath, boolean hideLoading) {
+        if (isStale(generation, switchGeneration, expectedPath)) return;
+        if (!activity.ensureLoadedTextCurrent()) return;
+        clearIfCurrent(switchGeneration);
+        activity.hideLoadingWindowForPartitionJumpIfCurrent(hideLoading, switchGeneration);
+        if (!(failure instanceof java.io.InterruptedIOException)) {
+            ShortToast.show(activity, activity.getString(R.string.error_prefix) + failure.getMessage());
+        }
     }
 
     private LargeTextLinePartitionResult getCachedPartition(int targetChar,

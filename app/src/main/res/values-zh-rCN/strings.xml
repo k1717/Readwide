@@ -832,4 +832,6 @@
     <string name="txt_contents_error">无法加载目录。请重新打开文件后重试。</string>
     <string name="txt_contents_save_error">无法保存目录修改。</string>
     <string name="txt_contents_page">%1$s · 第%2$d页</string>
+    <string name="viewer_retry">重试</string>
+    <string name="document_renderer_stopped">文档阅读器已停止。重新打开文件即可从上次保存的位置继续阅读。</string>
 </resources>

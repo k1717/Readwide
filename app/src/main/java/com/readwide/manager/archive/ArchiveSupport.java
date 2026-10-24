@@ -814,7 +814,11 @@ public final class ArchiveSupport {
              InputStream payloadIn = wrapTarPayloadInputStream(fileIn, type);
              TarArchiveInputStream tar = new TarArchiveInputStream(payloadIn)) {
             ArchiveEntry entry;
-            while ((entry = tar.getNextEntry()) != null) {
+            while (true) {
+                ArchiveCancellation.checkpoint(null);
+                entry = tar.getNextEntry();
+                ArchiveCancellation.checkpoint(null);
+                if (entry == null) break;
                 if (!isReadableTarMember(entry)) continue;
                 if (!tar.canReadEntryData(entry)) throw new IOException("Cannot read TAR entry");
                 String path = sanitizeEntryPathForList(entry.getName());
@@ -853,23 +857,21 @@ public final class ArchiveSupport {
     private static List<EntryInfo> listSevenZEntriesWithFallback(@NonNull File archive,
                                                                  @NonNull Type type,
                                                                  @Nullable char[] password) throws IOException {
+        // Validate supplemental container rules before a permissive backend can
+        // accept only part of an encoded header. Reuse that parsed listing.
+        List<EntryInfo> supplemental = tryListSevenZBcj2Entries(archive, password);
+        if (supplemental != null) return supplemental;
         try {
             return listSevenZEntries(archive, password);
         } catch (PasswordRequiredException e) {
-            List<EntryInfo> bcj2 = tryListSevenZBcj2Entries(archive, password);
-            if (bcj2 != null) return bcj2;
             throw e;
         } catch (IOException e) {
             ArchiveCancellation.rethrowIfCancelled(e, null);
-            List<EntryInfo> bcj2 = tryListSevenZBcj2Entries(archive, password);
-            if (bcj2 != null) return bcj2;
             List<EntryInfo> fallback = tryListEntriesWithLibarchive(archive, type, password);
             if (fallback != null) return fallback;
             throw e;
         } catch (SecurityException e) {
             ArchiveCancellation.rethrowIfCancelled(e, null);
-            List<EntryInfo> bcj2 = tryListSevenZBcj2Entries(archive, password);
-            if (bcj2 != null) return bcj2;
             List<EntryInfo> fallback = tryListEntriesWithLibarchive(archive, type, password);
             if (fallback != null) return fallback;
             throw new IOException(e);
@@ -886,8 +888,7 @@ public final class ArchiveSupport {
                                                             @Nullable char[] password) throws IOException {
         ArchiveCancellation.checkpoint(null);
         try {
-            if (!SevenZBcj2ArchiveReader.archiveUsesSpecialCoder(archive, password)) return null;
-            return SevenZBcj2ArchiveReader.listEntries(archive, password);
+            return SevenZBcj2ArchiveReader.tryListSpecialEntries(archive, password);
         } catch (RuntimeException e) {
             ArchiveCancellation.rethrowIfCancelled(e, null);
             throw new IOException("7z supplemental listing failed", e);
@@ -1878,7 +1879,7 @@ public final class ArchiveSupport {
                                                              @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
         ArchiveCancellation.checkpoint(progress);
         try {
-            if (!SevenZBcj2ArchiveReader.archiveUsesSpecialCoder(archive, password)) return null;
+            if (!SevenZBcj2ArchiveReader.archiveUsesSpecialCoder(archive, password, progress)) return null;
             return SevenZBcj2ArchiveReader.extractArchiveIntoDirectory(archive, targetDir, password, progress, entryProgress);
         } catch (RuntimeException e) {
             ArchiveCancellation.rethrowIfCancelled(e, progress);
@@ -2642,7 +2643,11 @@ public final class ArchiveSupport {
              InputStream payloadIn = wrapTarPayloadInputStream(fileIn, type);
              TarArchiveInputStream tar = new TarArchiveInputStream(payloadIn)) {
             ArchiveEntry entry;
-            while ((entry = tar.getNextEntry()) != null) {
+            while (true) {
+                ArchiveCancellation.checkpoint(null);
+                entry = tar.getNextEntry();
+                ArchiveCancellation.checkpoint(null);
+                if (entry == null) break;
                 if (!isReadableTarMember(entry)) continue;
                 if (!tar.canReadEntryData(entry)) return false;
                 if (entry.isDirectory()) continue;
@@ -2759,6 +2764,10 @@ public final class ArchiveSupport {
         }
     }
 
+    // Commons Compress 1.28.0's builder changes failure-close ownership for both
+    // supplied channels and file origins. Keep these constructors so split-open
+    // cleanup preserves its original failure and ordinary file opens close on error.
+    @SuppressWarnings("deprecation")
     private static SevenZFile openSevenZFile(@NonNull File archive, @Nullable char[] password) throws IOException {
         SevenZSplitVolumeResolver.VolumeSet splitVolumes = SevenZSplitVolumeResolver.resolve(archive);
         if (splitVolumes != null) {
@@ -2810,15 +2819,43 @@ public final class ArchiveSupport {
     private static InputStream checkedTarPayload(InputStream payload) {
         return new java.io.FilterInputStream(payload) {
             @Override public int read() throws IOException {
-                try { return in.read(); }
+                try {
+                    ArchiveCancellation.checkpoint(null);
+                    int value = in.read();
+                    ArchiveCancellation.checkpoint(null);
+                    return value;
+                }
                 catch (IOException | RuntimeException failure) { throw tarPayloadFailure(failure); }
             }
             @Override public int read(byte[] bytes, int offset, int length) throws IOException {
-                try { return in.read(bytes, offset, length); }
+                java.util.Objects.requireNonNull(bytes, "bytes");
+                if ((offset | length) < 0 || length > bytes.length - offset) throw new IndexOutOfBoundsException();
+                if (length == 0) return 0;
+                try {
+                    ArchiveCancellation.checkpoint(null);
+                    int count = in.read(bytes, offset, length);
+                    ArchiveCancellation.checkpoint(null);
+                    return count;
+                }
                 catch (IOException | RuntimeException failure) { throw tarPayloadFailure(failure); }
             }
             @Override public long skip(long count) throws IOException {
-                try { return in.skip(count); }
+                if (count <= 0L) return 0L;
+                try {
+                    long total = 0L;
+                    while (total < count) {
+                        ArchiveCancellation.checkpoint(null);
+                        // TAR advances over non-selected members with skip(). A codec
+                        // may decode that whole request internally without polling interrupts.
+                        long requested = Math.min(64L * 1024L, count - total);
+                        long skipped = in.skip(requested);
+                        ArchiveCancellation.checkpoint(null);
+                        if (skipped < 0L || skipped > requested) throw new IOException("Invalid TAR payload skip count");
+                        if (skipped == 0L) break; // Legal short skip: let the TAR caller read or handle EOF.
+                        total += skipped;
+                    }
+                    return total;
+                }
                 catch (IOException | RuntimeException failure) { throw tarPayloadFailure(failure); }
             }
             @Override public void close() throws IOException {
@@ -2832,11 +2869,13 @@ public final class ArchiveSupport {
         InputStream payload;
         switch (type) {
             case TAR_GZ:
-                payload = new GzipCompressorInputStream(input, true); break;
+                payload = GzipCompressorInputStream.builder().setInputStream(input)
+                        .setDecompressConcatenated(true).get(); break;
             case TAR_BZ2:
                 payload = new BZip2CompressorInputStream(input, true); break;
             case TAR_XZ:
-                payload = new XZCompressorInputStream(input, true); break;
+                payload = XZCompressorInputStream.builder().setInputStream(input)
+                        .setDecompressConcatenated(true).get(); break;
             case TAR_LZMA:
                 payload = new LZMACompressorInputStream(input); break;
             case TAR_Z:
@@ -2856,11 +2895,13 @@ public final class ArchiveSupport {
     private static InputStream wrapSingleCompressedInputStream(@NonNull InputStream input, @NonNull Type type) throws IOException {
         switch (type) {
             case SINGLE_GZ:
-                return new GzipCompressorInputStream(input, true);
+                return GzipCompressorInputStream.builder().setInputStream(input)
+                        .setDecompressConcatenated(true).get();
             case SINGLE_BZ2:
                 return new BZip2CompressorInputStream(input, true);
             case SINGLE_XZ:
-                return new XZCompressorInputStream(input, true);
+                return XZCompressorInputStream.builder().setInputStream(input)
+                        .setDecompressConcatenated(true).get();
             case SINGLE_LZMA:
                 return new LZMACompressorInputStream(input);
             case SINGLE_Z:
@@ -2950,8 +2991,20 @@ public final class ArchiveSupport {
     public static OutputStream openExtractionOutputStream(@NonNull File out) throws IOException {
         File parent = out.getAbsoluteFile().getParentFile();
         long standaloneBudget = parent != null ? runtimeExtractionBudgetBytes(parent) : Long.MAX_VALUE;
-        return new BufferedOutputStream(
-                ArchiveExtractionByteBudget.openOutputStream(out, standaloneBudget));
+        OutputStream raw = ArchiveExtractionByteBudget.openOutputStream(out, standaloneBudget);
+        try {
+            return new BufferedOutputStream(raw);
+        } catch (RuntimeException | Error failure) {
+            closeUnadoptedExtractionOutput(raw, failure);
+            throw failure;
+        }
+    }
+
+    private static void closeUnadoptedExtractionOutput(OutputStream raw, Throwable failure) {
+        try { raw.close(); }
+        catch (IOException | RuntimeException | Error cleanup) {
+            if (cleanup != failure) failure.addSuppressed(cleanup);
+        }
     }
 
     private static long sumZipPayloadBytes(@NonNull List<FileHeader> headers) {

@@ -828,4 +828,6 @@
     <string name="txt_contents_error">Δεν ήταν δυνατή η φόρτωση περιεχομένων. Ανοίξτε ξανά το αρχείο και δοκιμάστε πάλι.</string>
     <string name="txt_contents_save_error">Δεν ήταν δυνατή η αποθήκευση των αλλαγών στα περιεχόμενα.</string>
     <string name="txt_contents_page">%1$s · σ. %2$d</string>
+    <string name="viewer_retry">Επανάληψη</string>
+    <string name="document_renderer_stopped">Η προβολή εγγράφων διακόπηκε. Ανοίξτε ξανά το αρχείο για να συνεχίσετε από την τελευταία αποθηκευμένη θέση.</string>
 </resources>

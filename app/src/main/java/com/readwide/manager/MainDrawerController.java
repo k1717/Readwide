@@ -4,11 +4,13 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.Environment;
 import android.view.View;
+import android.view.WindowInsets;
 import android.widget.LinearLayout;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.widget.Toolbar;
-import androidx.core.content.ContextCompat;
+import androidx.core.graphics.Insets;
 import androidx.core.view.GravityCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -84,8 +86,9 @@ final class MainDrawerController {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             navDrawer.setOnApplyWindowInsetsListener((v, insets) -> {
-                int topInset = insets != null ? insets.getSystemWindowInsetTop() : 0;
-                int bottomInset = insets != null ? insets.getSystemWindowInsetBottom() : 0;
+                Insets compatInsets = drawerCompatInsets(insets);
+                int topInset = compatInsets.top;
+                int bottomInset = compatInsets.bottom;
                 boolean changed = activity.drawerTopInsetPx != topInset || activity.drawerBottomInsetPx != bottomInset;
                 activity.drawerTopInsetPx = topInset;
                 activity.drawerBottomInsetPx = bottomInset;
@@ -102,6 +105,16 @@ final class MainDrawerController {
             });
             navDrawer.requestApplyInsets();
         }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static Insets drawerCompatInsets(@Nullable WindowInsets insets) {
+        // Keep the window's legacy compatibility mask: MainActivity uses
+        // adjustResize, so this can include IME, cutout and stable-bar insets.
+        // A typed systemBars query (or an unconditional IME union) changes
+        // padding on some Android versions and window configurations.
+        return insets == null ? Insets.NONE : Insets.of(
+                0, insets.getSystemWindowInsetTop(), 0, insets.getSystemWindowInsetBottom());
     }
 
     void rebuildDrawerStorageEntries() {
@@ -360,7 +373,7 @@ final class MainDrawerController {
         }
 
         // Method 2: derive from getExternalFilesDirs (skip the first = internal)
-        File[] appDirs = ContextCompat.getExternalFilesDirs(activity, null);
+        File[] appDirs = activity.getExternalFilesDirs(null);
         if (appDirs.length > 1) {
             for (int i = 1; i < appDirs.length; i++) {
                 File d = appDirs[i];

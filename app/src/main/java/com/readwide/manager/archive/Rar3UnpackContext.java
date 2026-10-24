@@ -38,11 +38,19 @@ final class Rar3UnpackContext {
     private int retained;
     private final Rar3MixedPpmdState mixedPpmd = new Rar3MixedPpmdState();
     private boolean requireFileBoundary;
+    private boolean allowPartialFilterCarry;
     private Rar3PackedPayload logicalPayload;
     private boolean logicalPayloadClaimed;
 
     void requireFileBoundary() { requireFileBoundary = true; }
     boolean requiresFileBoundary() { return requireFileBoundary; }
+    void allowPartialFilterCarry() {
+        if (solidState == null || !requireFileBoundary) {
+            throw new IllegalStateException("Partial RAR filter carry requires a checked solid plan");
+        }
+        allowPartialFilterCarry = true;
+    }
+    boolean allowsPartialFilterCarry() { return allowPartialFilterCarry; }
     Rar3MixedPpmdState mixedPpmd() { return solidState != null ? solidState.mixedPpmd() : mixedPpmd; }
 
     /** One already-open, independently decoded logical stream; no solid history is inferred. */

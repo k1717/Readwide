@@ -834,4 +834,6 @@ Aturan: %2$d aturan aktif</string>
     <string name="txt_contents_error">Daftar isi tidak dapat dimuat. Buka kembali berkas lalu coba lagi.</string>
     <string name="txt_contents_save_error">Perubahan daftar isi tidak dapat disimpan.</string>
     <string name="txt_contents_page">%1$s · hlm. %2$d</string>
+    <string name="viewer_retry">Coba lagi</string>
+    <string name="document_renderer_stopped">Penampil dokumen berhenti. Buka kembali berkas untuk melanjutkan dari posisi terakhir yang disimpan.</string>
 </resources>

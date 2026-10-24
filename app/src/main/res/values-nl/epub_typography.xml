@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">EPUB-tekstgrootte: %1$d%%</string>
+    <string name="epub_line_height">Regelafstand</string>
+    <string name="epub_typography_hint">Alleen voor EPUB. De boekstandaard behoudt de oorspronkelijke regelafstand. Pagina’s met een vaste indeling, voornamelijk afbeeldingen of verticale tekst behouden hun alinea-indeling.</string>
+    <string name="epub_paragraph_layout_kept">De alineaopmaak kan op deze pagina niet worden gewijzigd. De indeling van het boek blijft behouden.</string>
+</resources>

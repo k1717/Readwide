@@ -14,6 +14,7 @@ final class PreferenceBackupSchema {
         switch (key) {
             case "brightness_value":
             case "font_size":
+            case "epub_font_size":
             case "line_spacing":
                 return Float.class;
             case "archive_landscape_spread_enabled":
@@ -48,6 +49,8 @@ final class PreferenceBackupSchema {
             case "epub_bottom_padding_dp":
             case "epub_left_padding_dp":
             case "epub_page_direction":
+            case "epub_text_alignment":
+            case "epub_line_height":
             case "epub_right_padding_dp":
             case "epub_side_padding_dp":
             case "epub_top_padding_dp":

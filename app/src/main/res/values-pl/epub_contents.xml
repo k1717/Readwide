@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Przypis</string>
+    <string name="epub_return_to_text">Wróć do tekstu</string>
+    <string name="epub_contents_fallback">Nie znaleziono czytelnego spisu treści; sekcje są wyświetlane w kolejności czytania.</string>
+    <string name="epub_contents_empty">Brak pasujących pozycji.</string>
+</resources>

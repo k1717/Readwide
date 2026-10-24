@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">Выравнивание абзацев</string>
+    <string name="epub_alignment_book">Как в книге</string>
+    <string name="epub_alignment_start">По началу строки</string>
+    <string name="epub_alignment_justify">По ширине</string>
+    <string name="epub_text_alignment_hint">Для текста EPUB с адаптивной вёрсткой. Начало строки — слева при LTR и справа при RTL. Явно заданное выравнивание по центру или справа сохраняется.</string>
+</resources>

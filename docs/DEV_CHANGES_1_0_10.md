@@ -208,7 +208,7 @@ its whole-archive path; random-access types keep direct per-entry extraction.
   `ArchiveImageEntryCache.ensureReady` prefetch.
 - Reader-yield for rapid paging: the forward reader is one stream behind one lock,
   so a deep read-ahead could hold it across several image extractions and delay
-  the page the user just tapped to. `ensureArchiveImageExtracted` now raises an
+  the page just requested by touch. `ensureArchiveImageExtracted` now raises an
   `onDemandReaderWaiters` counter around the forward-readable extract, and the
   sequential prefetch loop breaks out while that counter is non-zero, so the
   on-demand page gets the reader first (waiting at most one in-flight prefetch

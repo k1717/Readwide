@@ -1,8 +1,10 @@
 package com.readwide.manager;
 
 import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.webkit.WebSettings;
@@ -27,6 +29,7 @@ final class EpubMediaOverlayController {
     private final DocumentPageActivity activity;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final AudioManager audioManager;
+    private AudioFocusRequest audioFocusRequest;
 
     private MediaPlayer player;
     private boolean playerPrepared;
@@ -465,15 +468,48 @@ final class EpubMediaOverlayController {
     private boolean requestAudioFocus() {
         if (!playbackGate.isForeground()) return false;
         if (playbackGate.canPlay()) return true;
-        boolean granted = audioManager != null && audioManager.requestAudioFocus(
-                focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
-                == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
-        return playbackGate.recordFocusRequest(granted);
+        if (audioManager == null) return playbackGate.recordFocusRequest(false);
+        int result;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (audioFocusRequest == null) {
+                audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                        .setAudioAttributes(new AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build())
+                        // Narration pauses on ducking; it must not play quieter over other audio.
+                        .setWillPauseWhenDucked(true)
+                        .setOnAudioFocusChangeListener(focusListener, handler)
+                        .build();
+            }
+            result = audioManager.requestAudioFocus(audioFocusRequest);
+        } else {
+            result = requestLegacyAudioFocus();
+        }
+        return playbackGate.recordFocusRequest(result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
     }
 
     private void abandonAudioFocus() {
         playbackGate.abandonFocus();
-        if (audioManager != null) audioManager.abandonAudioFocus(focusListener);
+        if (audioManager == null) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (audioFocusRequest != null) audioManager.abandonAudioFocusRequest(audioFocusRequest);
+        } else {
+            abandonLegacyAudioFocus();
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private int requestLegacyAudioFocus() {
+        // API 24–25 has no AudioFocusRequest overload; keep the narration listener and stream.
+        return audioManager.requestAudioFocus(
+                focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void abandonLegacyAudioFocus() {
+        // Pair the API 24–25 request with the same listener, after the caller clears the gate.
+        audioManager.abandonAudioFocus(focusListener);
     }
 
     private void releasePlayer() {

@@ -17,6 +17,31 @@ import java.util.List;
 import java.util.zip.CRC32;
 
 public class Rar3FirstPartyArchiveExtractorTest {
+    @Test public void plannedHistoryLivesAcrossInterleavingButNotBeyondVerifiedRun() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        addCheckedRun(entries, "state");
+        entries.add(1, stored("note.txt", "note", false, crc("note")));
+        entries.add(2, directory("empty"));
+        addCheckedRun(entries, "fresh");
+        Rar3FirstPartyArchiveExtractor.PlannedDecoder decoder = new Rar3FirstPartyArchiveExtractor.PlannedDecoder(
+                Rar3DecodePlan.forArchive(entries));
+        java.lang.reflect.Field field = decoder.getClass().getDeclaredField("state"); field.setAccessible(true);
+        try {
+            decoder.extractNext(null, null);
+            Rar3SolidState first = (Rar3SolidState) field.get(decoder);
+            org.junit.Assert.assertNotNull(first);
+            decoder.extractNext(tempFolder.newFile(), null); decoder.extractNext(null, null);
+            org.junit.Assert.assertSame(first, field.get(decoder)); first.ensureUsable();
+            decoder.extractNext(null, null);
+            org.junit.Assert.assertNull(field.get(decoder));
+            org.junit.Assert.assertThrows(java.io.IOException.class, first::ensureUsable);
+            decoder.extractNext(null, null);
+            org.junit.Assert.assertNotNull(field.get(decoder));
+            org.junit.Assert.assertNotSame(first, field.get(decoder));
+            decoder.extractNext(null, null); org.junit.Assert.assertNull(field.get(decoder));
+        } finally { decoder.retire(); }
+    }
+
     static byte[] independentLzFixture() {
         return syntheticPayload(block(new int[]{'A','B',256}, "00011000"));
     }

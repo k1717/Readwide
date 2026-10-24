@@ -41,6 +41,7 @@ final class Rar3SolidState {
     void invalidate() {
         reuseClassicTables = false;
         mixedPpmd.reset();
+        vmFilterState.reset();
         deferredFilters.reset();
         invalid = true;
     }

@@ -11,6 +11,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import com.readwide.manager.model.Bookmark;
+import com.readwide.manager.model.DocumentAnnotation;
 import com.readwide.manager.util.BookmarkManager;
 import com.readwide.manager.view.CustomReaderView;
 
@@ -19,6 +20,7 @@ import org.junit.runner.RunWith;
 
 import java.io.File;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.UUID;
 
@@ -73,6 +75,31 @@ public class ReaderBookmarkActionInstrumentedTest {
         });
     }
 
+    @Test public void staleSourceOrTransformCannotCreateOrUpdateABookmark() throws Exception {
+        withManager(manager -> {
+            BookmarkActivity activity = prepareReader(true);
+            try {
+                activity.bookmarkManager = manager;
+                activity.sourceCurrent = false;
+                assertRejected(activity);
+                assertTrue(manager.getBookmarksForFile(activity.filePath).isEmpty());
+                assertEquals(1, activity.sourceChecks);
+
+                activity.sourceCurrent = true;
+                new ReaderBookmarkActionController(activity).saveCurrentBookmarkTekStyle(null);
+                Bookmark saved = manager.getBookmarksForFile(activity.filePath).get(0);
+                saved.setExcerpt("existing bookmark");
+                manager.updateBookmark(saved);
+                activity.positionReads = 0;
+                activity.sourceCurrent = false;
+                assertRejected(activity);
+                assertEquals(1, manager.getBookmarksForFile(activity.filePath).size());
+                assertEquals("existing bookmark", manager.getBookmarksForFile(activity.filePath).get(0).getExcerpt());
+                assertEquals(3, activity.sourceChecks);
+            } finally { releaseReader(activity); }
+        });
+    }
+
     @Test public void partitionBookmarkExcerptEndSaturatesInsteadOfWrapping() throws Exception {
         withManager(manager -> {
             BookmarkActivity activity = prepareReader(true);
@@ -86,6 +113,50 @@ public class ReaderBookmarkActionInstrumentedTest {
                 assertEquals(Integer.MAX_VALUE, saved.getEndPosition());
             } finally { releaseReader(activity); }
         });
+    }
+
+    @Test public void staleSourceCannotCreateANoteOrHighlightFromOldSelection() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            BookmarkActivity activity = prepareReader(true);
+            try {
+                activity.sourceCurrent = false;
+                callAnnotation(activity, "addTxtAnnotation", DocumentAnnotation.TYPE_NOTE, 0, 5);
+                callAnnotation(activity, "addTxtAnnotation", DocumentAnnotation.TYPE_HIGHLIGHT, 0, 5);
+                assertEquals(2, activity.sourceChecks);
+                assertEquals(0, activity.positionReads);
+            } finally { releaseReader(activity); }
+        });
+    }
+
+    @Test public void annotationCoordinatesKeepOrdinaryPartitionOffsetsAndNeverWrap() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            BookmarkActivity activity = prepareReader(true);
+            try {
+                activity.largeTextEstimateActive = true;
+                activity.largeTextPreviewBaseCharOffset = 100;
+                DocumentAnnotation normal = (DocumentAnnotation) callAnnotation(activity,
+                        "buildTxtAnnotation", DocumentAnnotation.TYPE_HIGHLIGHT, 2, 9);
+                assertEquals(102, normal.getStartPosition());
+                assertEquals(109, normal.getEndPosition());
+                activity.largeTextPreviewBaseCharOffset = Integer.MAX_VALUE - 3;
+                DocumentAnnotation end = (DocumentAnnotation) callAnnotation(activity,
+                        "buildTxtAnnotation", DocumentAnnotation.TYPE_HIGHLIGHT, 2, 9);
+                assertEquals(Integer.MAX_VALUE - 1, end.getStartPosition());
+                assertEquals(Integer.MAX_VALUE, end.getEndPosition());
+            } finally { releaseReader(activity); }
+        });
+    }
+
+    private static Object callAnnotation(BookmarkActivity activity, String methodName,
+                                         String type, int start, int end) {
+        try {
+            Method method = ReaderActivity.class.getDeclaredMethod(methodName,
+                    String.class, String.class, int.class, int.class);
+            method.setAccessible(true);
+            return method.invoke(activity, type, "first", start, end);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
     }
 
     private static void assertRejected(BookmarkActivity activity) {
@@ -149,10 +220,13 @@ public class ReaderBookmarkActionInstrumentedTest {
     private static final class BookmarkActivity extends ReaderActivity {
         int savedPosition;
         int positionReads;
+        int sourceChecks;
+        boolean sourceCurrent = true;
         @Override public Context getApplicationContext() {
             return InstrumentationRegistry.getInstrumentation().getTargetContext();
         }
         @Override public Resources getResources() { return getApplicationContext().getResources(); }
+        @Override boolean ensureLoadedTextCurrent() { sourceChecks++; return sourceCurrent; }
         @Override int getBookmarkSaveCharPosition() { positionReads++; return savedPosition; }
         @Override int countLinesUntilChar(int position) { return 1; }
         @Override String getExcerpt(int position) { return "excerpt for save"; }

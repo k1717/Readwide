@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Виноска</string>
+    <string name="epub_return_to_text">Повернутися до тексту</string>
+    <string name="epub_contents_fallback">Не знайдено читабельного змісту; розділи показано в порядку читання.</string>
+    <string name="epub_contents_empty">Немає відповідних пунктів.</string>
+</resources>

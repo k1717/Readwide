@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">حاشية</string>
+    <string name="epub_return_to_text">العودة إلى النص</string>
+    <string name="epub_contents_fallback">لا يوجد فهرس قابل للقراءة؛ تُعرض الأقسام بترتيب القراءة.</string>
+    <string name="epub_contents_empty">لا توجد عناصر مطابقة.</string>
+</resources>

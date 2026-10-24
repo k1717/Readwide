@@ -27,7 +27,7 @@ applicationId com.readwide.manager
 
 No new dependency. The change is internal to the archive image viewer; the dependency set is identical to 1.0.9. See `THIRD_PARTY_NOTICES.md`, `docs/LICENSE_REPORT_READWIDE_1_0_10.md`, and `docs/SBOM_READWIDE_1_0_10.spdx.json`.
 
-## Migration for existing users
+## Migration from earlier versions
 
 - Updating from 1.0.6, 1.0.7, 1.0.8, or 1.0.9: 1.0.10 uses the same signing key, so it installs in place as a normal update; no uninstall or backup step is required.
 - Updating from 1.0.4/1.0.5: those used the previous signing key, so Android will not install 1.0.10 over them (signature mismatch). Uninstall the previous version, install 1.0.10, then import a JSON backup to restore bookmarks, reading positions, themes, and settings.

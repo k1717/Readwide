@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">EPUB metin boyutu: %1$d%%</string>
+    <string name="epub_line_height">Satır aralığı</string>
+    <string name="epub_typography_hint">Yalnızca EPUB için geçerlidir. Kitabın varsayılan ayarı özgün satır aralığını korur. Sabit düzenli, resim ağırlıklı veya dikey yazılı sayfalar paragraf düzenini korur.</string>
+    <string name="epub_paragraph_layout_kept">Bu sayfada paragraf biçimi değiştirilemez. Kitabın düzeni korunur.</string>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">EPUB-textstorlek: %1$d%%</string>
+    <string name="epub_line_height">Radavstånd</string>
+    <string name="epub_typography_hint">Endast EPUB. Bokens standardinställning behåller det ursprungliga radavståndet. Sidor med fast layout, främst bilder eller vertikal text behåller sin styckelayout.</string>
+    <string name="epub_paragraph_layout_kept">Styckeformateringen kan inte ändras på den här sidan. Bokens layout behålls.</string>
+</resources>

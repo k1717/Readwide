@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">구간</string>
+    <string name="epub_section_progress">구간 %1$s / %2$d</string>
+    <string name="epub_section_move">구간 이동</string>
+    <string name="epub_section_hint">책의 구성 구간을 셉니다. 화면에 표시되는 페이지 수나 인쇄된 페이지 번호가 아닙니다.</string>
+    <string name="epub_section_range_error">1~%1$d 사이의 구간 번호를 입력하세요.</string>
+    <string name="epub_bookmarks_status">전체 북마크: 파일 %1$d개 / 북마크 %2$d개\n현재: 구간 %3$d / %4$d</string>
+</resources>

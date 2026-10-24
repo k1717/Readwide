@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">각주</string>
+    <string name="epub_return_to_text">본문으로 돌아가기</string>
+    <string name="epub_contents_fallback">읽을 수 있는 목차가 없어 읽기 순서대로 구간을 표시합니다.</string>
+    <string name="epub_contents_empty">일치하는 항목이 없습니다.</string>
+</resources>

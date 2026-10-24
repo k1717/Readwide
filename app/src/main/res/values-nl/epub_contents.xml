@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Voetnoot</string>
+    <string name="epub_return_to_text">Terug naar tekst</string>
+    <string name="epub_contents_fallback">Geen leesbare inhoudsopgave gevonden; secties worden in leesvolgorde getoond.</string>
+    <string name="epub_contents_empty">Geen overeenkomende items.</string>
+</resources>

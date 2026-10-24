@@ -69,6 +69,7 @@ public class NavigationPreferencesInstrumentedTest {
             int night = AppCompatDelegate.getDefaultNightMode();
             LocaleListCompat locales = AppCompatDelegate.getApplicationLocales();
             try { prefs.resetReaderAndAppSettings(); }
+            catch (java.io.IOException failure) { throw new AssertionError(failure); }
             finally {
                 AppCompatDelegate.setDefaultNightMode(night);
                 AppCompatDelegate.setApplicationLocales(locales);

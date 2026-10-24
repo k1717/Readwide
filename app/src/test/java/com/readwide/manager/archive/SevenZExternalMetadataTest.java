@@ -42,6 +42,19 @@ public class SevenZExternalMetadataTest {
     @Test public void externalSwapFolderGraphExtracts() throws Exception { folderSuccess(2, false); }
     @Test public void encryptedExternalFolderGraphExtracts() throws Exception { folderSuccess(2, true); }
 
+    @Test public void prefixedEncryptedExternalFolderDefinitionsExtract() throws Exception {
+        File archive = folderArchive(2, true, false, 0, false, true);
+        byte[] original = Files.readAllBytes(archive.toPath());
+        ByteArrayOutputStream prefixed = new ByteArrayOutputStream();
+        prefixed.write(new byte[]{'M', 'Z', 0, 1, 2, 3, 4});
+        prefixed.write(original);
+        Files.write(archive.toPath(), prefixed.toByteArray());
+        File output = temp.newFile();
+        assertTrue(SevenZBcj2ArchiveReader.extractSingleEntry(
+                archive, "data.bin", output, Round4Fixtures.PASSWORD));
+        assertArrayEquals(DATA, Files.readAllBytes(output.toPath()));
+    }
+
     @Test public void invalidExternalFolderIndexIsRejected() throws Exception {
         File archive = folderArchive(0, false, false, 1, false);
         assertThrows(IOException.class, () -> SevenZBcj2ArchiveReader.listEntries(archive, null));

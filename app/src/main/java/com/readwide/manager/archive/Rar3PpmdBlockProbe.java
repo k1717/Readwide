@@ -29,7 +29,8 @@ final class Rar3PpmdBlockProbe {
 
     @NonNull
     static Result probe(@NonNull RarArchiveReader.RarEntry entry) {
-        if (entry.rarVersion >= 5 || entry.directory || entry.method == 0 || entry.method == 0x30) {
+        if (!RarFeatureClassifier.hasRar3DecoderVersion(entry)
+                || entry.directory || entry.method == 0 || entry.method == 0x30) {
             return new Result(KIND_NOT_RAR3_OR4_COMPRESSED, false, -1, -1,
                     "not a RAR3/RAR4 compressed payload");
         }

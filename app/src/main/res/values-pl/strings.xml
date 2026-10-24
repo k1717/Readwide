@@ -840,4 +840,6 @@ Reguły: %2$d włączonych reguł</string>
     <string name="txt_contents_error">Nie udało się wczytać spisu treści. Otwórz plik ponownie i spróbuj jeszcze raz.</string>
     <string name="txt_contents_save_error">Nie udało się zapisać zmian w spisie treści.</string>
     <string name="txt_contents_page">%1$s · s. %2$d</string>
+    <string name="viewer_retry">Spróbuj ponownie</string>
+    <string name="document_renderer_stopped">Przeglądarka dokumentów została zatrzymana. Otwórz plik ponownie, aby kontynuować od ostatnio zapisanej pozycji.</string>
 </resources>

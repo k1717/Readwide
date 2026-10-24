@@ -38,7 +38,9 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /** TXT contents UI and task ownership. Does not build or alter page indexes. */
 final class ReaderContentsController {
@@ -56,6 +58,8 @@ final class ReaderContentsController {
     private TextView status, add, rescan, restore, optionsAction;
     private EditText search;
     private ContentsAdapter adapter;
+    private RecyclerView contentsList;
+    private boolean initialContentsPositionPending;
     private TxtContentsRepository.Result result;
     private int documentGeneration, foreground, background, currentPosition;
     private String path, transform;
@@ -94,6 +98,8 @@ final class ReaderContentsController {
         status.setPadding(activity.dpToPx(12), activity.dpToPx(8), activity.dpToPx(12), activity.dpToPx(8));
         panel.addView(status);
         RecyclerView list = new RecyclerView(activity);
+        contentsList = list;
+        initialContentsPositionPending = true;
         list.setLayoutManager(new LinearLayoutManager(activity));
         list.setItemAnimator(null);
         adapter = new ContentsAdapter();
@@ -137,6 +143,7 @@ final class ReaderContentsController {
         search.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                initialContentsPositionPending = false;
                 activity.handler.removeCallbacks(filterTick);
                 activity.handler.postDelayed(filterTick, 120);
             }
@@ -233,7 +240,12 @@ final class ReaderContentsController {
         result = null;
         filter();
         busy(true);
-        scan = worker.submit(() -> {
+        Consumer<Throwable> failed = failure -> activity.handler.post(() -> {
+            if (!visible(token)) return;
+            busy(false);
+            status.setText(R.string.txt_contents_error);
+        });
+        scan = submitTask(worker, () -> {
             com.readwide.manager.util.LargeTextPageIndexCache.Checkpoint check = () -> {
                 if (closed || request.get() != token || generation != activity.loadGeneration.get() || Thread.currentThread().isInterrupted()) {
                     throw new InterruptedIOException("Contents scan cancelled");
@@ -257,14 +269,24 @@ final class ReaderContentsController {
                 });
             } catch (InterruptedIOException cancelled) {
                 // A closed/replaced dialog must never receive old results.
-            } catch (Exception | OutOfMemoryError failure) {
-                activity.handler.post(() -> {
-                    if (!visible(token)) return;
-                    busy(false);
-                    status.setText(R.string.txt_contents_error);
-                });
+            } catch (Exception | OutOfMemoryError | StackOverflowError failure) {
+                failed.accept(failure);
             }
-        });
+        }, failed);
+    }
+
+    /** Cancel a task rejected during worker startup, even if the executor queued it first. */
+    static Future<?> submitTask(ExecutorService worker, Runnable action, Consumer<Throwable> failed) {
+        FutureTask<Void> task = null;
+        try {
+            task = new FutureTask<>(action, null);
+            worker.execute(task);
+            return task;
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            if (task != null) task.cancel(false);
+            failed.accept(failure);
+            return null;
+        }
     }
 
     private void busy(boolean busy) {
@@ -290,6 +312,16 @@ final class ReaderContentsController {
         }
         adapter.activeId = activeId;
         adapter.notifyDataSetChanged();
+        if (initialContentsPositionPending && result != null && query.isEmpty()) {
+            initialContentsPositionPending = false;
+            for (int i = 0; i < adapter.rows.size(); i++) {
+                if (adapter.rows.get(i).id.equals(activeId)) {
+                    ((LinearLayoutManager) contentsList.getLayoutManager())
+                            .scrollToPositionWithOffset(Math.max(0, i - 1), 0);
+                    break;
+                }
+            }
+        }
         if (result != null) {
             String message = activity.getString(adapter.rows.isEmpty() ? R.string.txt_contents_empty : R.string.txt_contents_hint);
             if (result.previousEdits) message += "\n" + activity.getString(R.string.txt_contents_old_edits);
@@ -398,7 +430,12 @@ final class ReaderContentsController {
         String sourcePath = path;
         int token = request.get();
         busy(true);
-        worker.execute(() -> {
+        Consumer<Throwable> failed = failure -> activity.handler.post(() -> {
+            if (!visible(token)) return;
+            busy(false);
+            status.setText(R.string.txt_contents_error);
+        });
+        submitTask(worker, () -> {
             try {
                 TxtContentsOptions saved = repository.loadOptions(sourcePath);
                 activity.handler.post(() -> {
@@ -407,14 +444,10 @@ final class ReaderContentsController {
                     status.setText(R.string.txt_contents_error);
                     showOptions(saved);
                 });
-            } catch (Exception | OutOfMemoryError failure) {
-                activity.handler.post(() -> {
-                    if (!visible(token)) return;
-                    busy(false);
-                    status.setText(R.string.txt_contents_error);
-                });
+            } catch (Exception | OutOfMemoryError | StackOverflowError failure) {
+                failed.accept(failure);
             }
-        });
+        }, failed);
     }
 
     private void showOptions(TxtContentsOptions current) {
@@ -551,7 +584,20 @@ final class ReaderContentsController {
         saveAction.setEnabled(false);
         resetAction.setEnabled(false);
         rules.setError(null);
-        worker.execute(() -> {
+        Consumer<Throwable> failed = failure -> activity.handler.post(() -> {
+            if (!visible(token)) return;
+            busy(false);
+            filter();
+            if (editor == next && next.isShowing()) {
+                saveAction.setEnabled(true);
+                resetAction.setEnabled(true);
+                if (failure instanceof TxtContentsOptions.InvalidPattern invalid) {
+                    rules.setError(activity.getString(R.string.txt_contents_invalid_pattern, invalid.line, invalid.getMessage()));
+                    rules.requestFocus();
+                } else ShortToast.show(activity, activity.getString(R.string.txt_contents_save_error));
+            } else ShortToast.show(activity, activity.getString(R.string.txt_contents_save_error));
+        });
+        submitTask(worker, () -> {
             try {
                 repository.saveOptions(sourcePath, updated);
                 activity.handler.post(() -> {
@@ -559,22 +605,10 @@ final class ReaderContentsController {
                     if (editor == next) next.dismiss();
                     load(false);
                 });
-            } catch (Exception | OutOfMemoryError failure) {
-                activity.handler.post(() -> {
-                    if (!visible(token)) return;
-                    busy(false);
-                    filter();
-                    if (editor == next && next.isShowing()) {
-                        saveAction.setEnabled(true);
-                        resetAction.setEnabled(true);
-                        if (failure instanceof TxtContentsOptions.InvalidPattern invalid) {
-                            rules.setError(activity.getString(R.string.txt_contents_invalid_pattern, invalid.line, invalid.getMessage()));
-                            rules.requestFocus();
-                        } else ShortToast.show(activity, activity.getString(R.string.txt_contents_save_error));
-                    } else ShortToast.show(activity, activity.getString(R.string.txt_contents_save_error));
-                });
+            } catch (Exception | OutOfMemoryError | StackOverflowError failure) {
+                failed.accept(failure);
             }
-        });
+        }, failed);
     }
 
     private void edit(TxtContentsScanner.Entry addEntry, String removeId, boolean restoreHidden) {
@@ -583,7 +617,11 @@ final class ReaderContentsController {
         int token = request.get();
         busy(true);
         // Do not cancel an accepted edit on dismissal/destruction: let the atomic write finish.
-        worker.execute(() -> {
+        Consumer<Throwable> failed = failure -> activity.handler.post(() -> {
+            if (!closed && !activity.activityDestroyed) ShortToast.show(activity, activity.getString(R.string.txt_contents_save_error));
+            if (visible(token)) { busy(false); filter(); }
+        });
+        submitTask(worker, () -> {
             try {
                 TxtContentsRepository.Result edited = repository.edit(snapshot, addEntry, removeId, restoreHidden);
                 activity.handler.post(() -> {
@@ -592,13 +630,10 @@ final class ReaderContentsController {
                     busy(false);
                     filter();
                 });
-            } catch (Exception | OutOfMemoryError failure) {
-                activity.handler.post(() -> {
-                    if (!closed && !activity.activityDestroyed) ShortToast.show(activity, activity.getString(R.string.txt_contents_save_error));
-                    if (visible(token)) { busy(false); filter(); }
-                });
+            } catch (Exception | OutOfMemoryError | StackOverflowError failure) {
+                failed.accept(failure);
             }
-        });
+        }, failed);
     }
 
     private int[] exactPage(TxtContentsScanner.Entry entry) {

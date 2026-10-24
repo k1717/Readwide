@@ -21,6 +21,177 @@ public class Rar3LogicalSolidArchiveExtractorTest {
     private static final char[] PASSWORD = "bridge".toCharArray();
     private static final byte[] SALT = {1,2,3,4,5,6,7,8};
 
+    @Test public void snapshotCannotDisguiseRepeatedSolidPayloadIdentity() throws Exception {
+        for (boolean encrypted : new boolean[]{false, true}) for (boolean split : new boolean[]{false, true}) {
+            List<RarArchiveReader.RarEntry> entries = unfinishedFutureFixture(encrypted, split);
+            // Repeating the complete list leaves split topology superficially complete,
+            // but must not turn original entry aliases into distinct owned payloads.
+            entries.addAll(new ArrayList<>(entries));
+            IOException failure = assertThrows(IOException.class,
+                    () -> Rar3LogicalSolidArchiveExtractor.prepareArchive(entries));
+            assertTrue(failure.getMessage().contains("Repeated RAR payload entry"));
+        }
+    }
+
+    @Test public void wholeRunCannotDropFutureFilterAtArchiveEndOrIndependentReset() throws Exception {
+        for (boolean encrypted : new boolean[]{false, true}) for (boolean split : new boolean[]{false, true}) {
+            for (boolean reset : new boolean[]{false, true}) {
+                List<RarArchiveReader.RarEntry> entries = unfinishedFutureFixture(encrypted, split);
+                if (reset) append(entries, "reset.bin", Rar3FirstPartyArchiveExtractorTest.independentLzFixture(),
+                        new byte[]{'A','B'}, false, encrypted, split, false);
+                File directory = temporary.newFolder();
+                File output = new File(directory, "target.bin"); Files.write(output.toPath(), new byte[]{42});
+                IOException failure = assertThrows(IOException.class, () -> Rar3LogicalSolidArchiveExtractor.tryExtractArchive(
+                        entries, directory, PASSWORD, null, null));
+                assertTrue(failure.getMessage().contains("unfinished VM filter"));
+                assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+                assertFalse(new File(directory, "reset.bin").exists());
+                if (!encrypted && !split) {
+                    File plain = temporary.newFolder();
+                    File previous = new File(plain, "target.bin"); Files.write(previous.toPath(), new byte[]{42});
+                    assertThrows(IOException.class, () -> Rar3FirstPartyArchiveExtractor.tryExtractArchiveLimitedFallback(
+                            entries, plain, null, null, null));
+                    assertArrayEquals(new byte[]{42}, Files.readAllBytes(previous.toPath()));
+                }
+            }
+        }
+    }
+
+    @Test public void selectedPrefixKeepsOwnValidOutputWithoutScanningUnselectedFilterTarget() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = unfinishedFutureFixture(false, false);
+        RarArchiveReader.RarEntry selected = target(entries);
+        append(entries, "after.bin", Rar3UnpackerTest.deferredFilterTarget(), new byte[]{'A'}, true, false, false, false);
+        entries.get(entries.size() - 1).sourceArchive = new File(temporary.getRoot(), "unselected-absent.rar");
+        File output = original();
+        assertTrue(Rar3LogicalSolidArchiveExtractor.tryExtractEntry(selected, entries, output, null, null));
+        assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(output.toPath()));
+        assertTrue(Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(selected, entries, output, null));
+        assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test public void completeRunConsumesFutureFilterAndPreservesStoredInterleaving() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = unfinishedFutureFixture(true, true);
+        appendStored(entries, "stored.bin", new byte[]{42}, true, true, true);
+        append(entries, "after.bin", Rar3UnpackerTest.deferredFilterTarget(), new byte[]{'A'}, true, true, true, false);
+        File directory = temporary.newFolder();
+        assertTrue(Rar3LogicalSolidArchiveExtractor.tryExtractArchive(entries, directory, PASSWORD, null, null));
+        assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(new File(directory, "after.bin").toPath()));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(new File(directory, "stored.bin").toPath()));
+    }
+
+    @Test public void danglingForwardFilterExposesNoBytesAndRetiresWithEmptySpool() throws Exception {
+        for (boolean plain : new boolean[]{false, true}) {
+            List<RarArchiveReader.RarEntry> entries = unfinishedFutureFixture(!plain, !plain);
+            File spool = temporary.newFolder();
+            try (ArchiveSupport.ForwardArchiveReader reader = plain
+                    ? Rar3CheckedForwardReader.open(entries, spool, false)
+                    : Rar3LogicalSolidArchiveExtractor.openForwardReader(entries, PASSWORD, spool)) {
+                assertNotNull(reader); reader.nextEntry(); reader.nextEntry();
+                byte[] bytes = {42, 42};
+                assertThrows(IOException.class, () -> reader.read(bytes));
+                assertArrayEquals(new byte[]{42, 42}, bytes);
+                assertThrows(IOException.class, () -> reader.nextEntry());
+            }
+            assertEquals(0, spool.list().length);
+        }
+    }
+
+    @Test public void oversizedResultCannotSatisfyTwoFileCrcsBySplittingOutput() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        append(entries, "primer.bin", Rar3UnpackerTest.oversizedFilterResult(), new byte[]{'A'}, false, true, true, false);
+        append(entries, "target.bin", Rar3UnpackerTest.partialFilterTarget(), new byte[]{'B',0,0}, true, true, true, false);
+        File output = original();
+        assertThrows(IOException.class, () -> extract(entries, output));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+    }
+
+    private List<RarArchiveReader.RarEntry> unfinishedFutureFixture(boolean encrypted, boolean split) throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        append(entries, "primer.bin", Rar3UnpackerTest.partialFilterTarget(), new byte[]{'B'}, false, encrypted, split, false);
+        append(entries, "target.bin", Rar3UnpackerTest.deferredLzPrimer(true), new byte[]{'A'}, true, encrypted, split, false);
+        return entries;
+    }
+
+    @Test public void partialFilterSelectedAndBulkAcrossPlainAesAndSplitPayloads() throws Exception {
+        for (boolean encrypted : new boolean[]{false, true}) for (boolean split : new boolean[]{false, true}) {
+            List<RarArchiveReader.RarEntry> entries = partialFixture(encrypted, split, false, false);
+            File output = original();
+            assertTrue(Rar3LogicalSolidArchiveExtractor.tryExtractEntry(target(entries), entries, output, PASSWORD, null));
+            assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(output.toPath()));
+            File directory = temporary.newFolder();
+            assertTrue(Rar3LogicalSolidArchiveExtractor.tryExtractArchive(entries, directory, PASSWORD, null, null));
+            assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(new File(directory, "primer.bin").toPath()));
+            assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(new File(directory, "target.bin").toPath()));
+            if (!encrypted && !split) {
+                File plainSelected = original();
+                assertTrue(Rar3FirstPartyArchiveExtractor.tryExtractSingleEntryLimitedFallback(
+                        target(entries), entries, plainSelected, null));
+                assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(plainSelected.toPath()));
+                File plainDirectory = temporary.newFolder();
+                assertTrue(Rar3FirstPartyArchiveExtractor.tryExtractArchiveLimitedFallback(entries, plainDirectory, null, null, null));
+                assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(new File(plainDirectory, "target.bin").toPath()));
+            }
+        }
+    }
+
+    @Test public void partialFilterForwardSkipsPrimerAndStoredMemberWithoutLosingPrefix() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = partialFixture(true, true, false, false);
+        List<RarArchiveReader.RarEntry> stored = new ArrayList<>();
+        appendStored(stored, "stored.bin", new byte[]{42, 43}, true, true, true);
+        entries.addAll(entries.indexOf(target(entries)), stored);
+        File directory = temporary.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = Rar3PpmdSolidArchiveExtractor.openForwardReader(
+                entries, PASSWORD, directory, true)) {
+            assertNotNull(reader);
+            assertEquals("primer.bin", reader.nextEntry().path);
+            assertEquals("stored.bin", reader.nextEntry().path);
+            assertEquals("target.bin", reader.nextEntry().path);
+            byte[] bytes = {42, 42};
+            assertEquals(1, reader.read(bytes)); assertEquals('A', bytes[0]);
+            assertNull(reader.nextEntry());
+        }
+        assertEquals(0, directory.list().length);
+    }
+
+    @Test public void partialFilterCrcFailureRestoresTargetAndRetiresForwardSession() throws Exception {
+        for (boolean badPrimer : new boolean[]{false, true}) {
+            List<RarArchiveReader.RarEntry> entries = partialFixture(false, true, badPrimer, !badPrimer);
+            File output = original();
+            assertThrows(IOException.class, () -> extract(entries, output));
+            assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+            File spool = temporary.newFolder();
+            try (ArchiveSupport.ForwardArchiveReader reader = Rar3LogicalSolidArchiveExtractor.openForwardReader(entries, null, spool)) {
+                reader.nextEntry();
+                if (!badPrimer) reader.nextEntry();
+                byte[] bytes = {42, 42};
+                assertThrows(IOException.class, () -> reader.read(bytes));
+                assertArrayEquals(new byte[]{42, 42}, bytes);
+                assertThrows(IOException.class, () -> reader.nextEntry());
+            }
+            assertEquals(0, spool.list().length);
+        }
+    }
+
+    @Test public void partialFilterCannotBeLostAtIndependentReset() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        append(entries, "primer.bin", Rar3UnpackerTest.partialFilterPrimer(), new byte[]{'A'}, false, true, false, false);
+        append(entries, "reset.bin", Rar3FirstPartyArchiveExtractorTest.independentLzFixture(),
+                new byte[]{'A','B'}, false, true, false, false);
+        File directory = temporary.newFolder();
+        File output = new File(directory, "primer.bin"); Files.write(output.toPath(), new byte[]{42});
+        assertThrows(IOException.class, () -> Rar3LogicalSolidArchiveExtractor.tryExtractArchive(entries, directory, PASSWORD, null, null));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+        assertFalse(new File(directory, "reset.bin").exists());
+    }
+
+    private List<RarArchiveReader.RarEntry> partialFixture(boolean encrypted, boolean split,
+            boolean badPrimer, boolean badTarget) throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        append(entries, "primer.bin", Rar3UnpackerTest.partialFilterPrimer(), new byte[]{'A'}, false, encrypted, split, badPrimer);
+        append(entries, "target.bin", Rar3UnpackerTest.partialFilterTarget(), new byte[]{'A'}, true, encrypted, split, badTarget);
+        return entries;
+    }
+
     @Test public void selectedAesSolidContinuationReusesCheckedLzTables() throws Exception { successful(true, false); }
     @Test public void selectedSplitSolidContinuationReusesCheckedLzTables() throws Exception { successful(false, true); }
     @Test public void selectedAesSplitSolidContinuationCrossesCbcBoundary() throws Exception { successful(true, true); }
@@ -367,12 +538,17 @@ public class Rar3LogicalSolidArchiveExtractorTest {
 
     private void appendStored(List<RarArchiveReader.RarEntry> entries, String name, byte[] raw,
             boolean encrypted, boolean split) throws Exception {
+        appendStored(entries, name, raw, encrypted, split, false);
+    }
+
+    private void appendStored(List<RarArchiveReader.RarEntry> entries, String name, byte[] raw,
+            boolean encrypted, boolean split, boolean solid) throws Exception {
         int start = entries.size();
-        append(entries, name, raw, raw, false, encrypted, split, false);
+        append(entries, name, raw, raw, solid, encrypted, split, false);
         for (int i = start; i < entries.size(); i++) {
             RarArchiveReader.RarEntry part = entries.get(i);
             RarArchiveReader.RarEntry stored = new RarArchiveReader.RarEntry(part.path, false,
-                    part.unpackedSize, part.packedSize, part.dataOffset, 4, 0x30, false,
+                    part.unpackedSize, part.packedSize, part.dataOffset, 4, 0x30, solid,
                     part.splitBefore, part.splitAfter, part.encryption, part.dataCrc, 0);
             stored.sourceArchive = part.sourceArchive;
             entries.set(i, stored);
@@ -383,6 +559,99 @@ public class Rar3LogicalSolidArchiveExtractorTest {
     @Test public void storedSplitOnlyForwardCoverage() throws Exception { storedForward(false, true, true); }
     @Test public void storedAesSplitOnlyForwardCoverage() throws Exception { storedForward(true, true, true); }
     @Test public void storedPlainOnlyForwardWithoutNative() throws Exception { storedForward(false, false, false); }
+
+    @Test public void selectedPlainStoredSolidSplitCopiesWithoutDictionary() throws Exception {
+        selectedStoredSolidSplit(false);
+    }
+
+    @Test public void selectedAesStoredSolidSplitCopiesAcrossCipherBlockBoundary() throws Exception {
+        selectedStoredSolidSplit(true);
+    }
+
+    @Test public void bulkPlainStoredSolidSplitPreservesCompressedHistory() throws Exception {
+        bulkStoredSolidSplit(false);
+    }
+
+    @Test public void bulkAesStoredSolidSplitPreservesCompressedHistory() throws Exception {
+        bulkStoredSolidSplit(true);
+    }
+
+    @Test public void forwardPlainStoredSolidSplitPreservesCompressedHistory() throws Exception {
+        forwardStoredSolidSplit(false);
+    }
+
+    @Test public void forwardAesStoredSolidSplitPreservesCompressedHistory() throws Exception {
+        forwardStoredSolidSplit(true);
+    }
+
+    @Test public void selectedStoredSolidSplitBadCrcRestoresExistingOutput() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        appendStored(entries, "stored.bin", new byte[]{42,43}, false, true, true);
+        Files.write(entries.get(1).sourceArchive.toPath(), new byte[]{99});
+        File output = original();
+
+        IOException failure = assertThrows(IOException.class, () -> RarArchiveReader.extractStoredEntry(
+                entries.get(0), output, null, entries, null));
+
+        assertTrue(failure instanceof RarSplitStoredFailure.ExtractionException);
+        assertEquals(RarSplitStoredFailure.Code.CRC_MISMATCH,
+                ((RarSplitStoredFailure.ExtractionException) failure).failure().code);
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test public void storedSolidSplitCannotPrimeCompressedContinuation() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = mixedStoredSolidSplit(false);
+        RarArchiveReader.RarEntry compressedTarget = entries.get(entries.size() - 1);
+        entries.remove(0);
+
+        assertNull(Rar3LogicalSolidArchiveExtractor.prepare(compressedTarget, entries));
+        assertNull(Rar3LogicalSolidArchiveExtractor.prepareArchive(entries));
+    }
+
+    private void selectedStoredSolidSplit(boolean encrypted) throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        appendStored(entries, "stored.bin", new byte[]{42,43}, encrypted, true, true);
+        File output = original();
+
+        RarArchiveReader.extractStoredEntry(entries.get(0), output, PASSWORD, entries, null);
+
+        assertArrayEquals(new byte[]{42,43}, Files.readAllBytes(output.toPath()));
+    }
+
+    private void bulkStoredSolidSplit(boolean encrypted) throws Exception {
+        File directory = temporary.newFolder();
+        assertTrue(Rar3LogicalSolidArchiveExtractor.tryExtractArchive(
+                mixedStoredSolidSplit(encrypted), directory, PASSWORD, null, null));
+        assertArrayEquals(new byte[]{42,43}, Files.readAllBytes(new File(directory, "stored.bin").toPath()));
+        assertArrayEquals(new byte[]{'B'}, Files.readAllBytes(new File(directory, "target.bin").toPath()));
+    }
+
+    private void forwardStoredSolidSplit(boolean encrypted) throws Exception {
+        File directory = temporary.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = Rar3PpmdSolidArchiveExtractor.openForwardReader(
+                mixedStoredSolidSplit(encrypted), PASSWORD, directory, true)) {
+            assertNotNull(reader);
+            assertEquals("primer.bin", reader.nextEntry().path);
+            assertTrue(reader.drainCurrentEntry(2));
+            assertEquals("stored.bin", reader.nextEntry().path);
+            byte[] bytes = new byte[4];
+            assertEquals(2, reader.read(bytes));
+            assertArrayEquals(new byte[]{42,43}, Arrays.copyOf(bytes, 2));
+            assertEquals("target.bin", reader.nextEntry().path);
+            assertEquals(1, reader.read(bytes));
+            assertEquals('B', bytes[0]);
+            assertNull(reader.nextEntry());
+        }
+        assertEquals(0, directory.list().length);
+    }
+
+    private List<RarArchiveReader.RarEntry> mixedStoredSolidSplit(boolean encrypted) throws Exception {
+        List<RarArchiveReader.RarEntry> entries = fixture(false, false, false);
+        List<RarArchiveReader.RarEntry> stored = new ArrayList<>();
+        appendStored(stored, "stored.bin", new byte[]{42,43}, encrypted, true, true);
+        entries.addAll(1, stored);
+        return entries;
+    }
 
     @Test public void storedPlainOnlyStillPrefersNativeAndBulkRoute() throws Exception {
         List<RarArchiveReader.RarEntry> entries = new ArrayList<>();

@@ -1,7 +1,5 @@
 # Readwide 1.0.20 development changes
 
-Release date: 2026-10-11.
-
 This note records the implementation delta from 1.0.19, grouped by subsystem. Format-specific boundaries remain in [archive support notes](ARCHIVE_BOUNDARY_SUPPORT_NOTES.md); source licensing is recorded in the [license report](LICENSE_REPORT_READWIDE_1_0_20.md).
 
 ## TXT exact-page indexes and partition navigation
@@ -212,7 +210,7 @@ This note records the implementation delta from 1.0.19, grouped by subsystem. Fo
 - External native staging uses short `cxx/archive` and `cxx/zipx` directories; WavPack's binary subdirectory is `wv` to leave room for its nested architecture probe. LZ5's compression-only constant follows its existing decode-only guard. LZHAM's no-exit branch excludes the unused exit flag, marks unused location parameters, and labels the intentional decoder-only portable build so it does not warn about compressor threading. Decoding, exception behavior and fallback platforms remain unchanged.
 - Document renderer/extractor test fixtures use the actual `new TextStyle.Builder()` constructor; six calls to a nonexistent static `builder()` factory are corrected without changing production rendering or assertions.
 - `ArchiveTestTextFiles` replaces the Java convenience text-file methods unavailable to Android local-test compilation. It preserves strict UTF-8 decoding/encoding and create/truncate/write defaults, encoding before opening an existing destination. Archive assertions and fixture data remain unchanged; the standalone ALZ fixture path uses `Paths.get`.
-- Release date: `2026-10-11`; version `1.0.20 / 10020`. Historical release notes remain records of their own versions.
+- Version metadata is `1.0.20` / `10020`. Historical release notes remain records of their own versions.
 - Supported Android 13+ launchers can use the themed icon; the normal book artwork remains. Localized Contents/reader resources accompany the UI changes.
 - RE2/J 1.8 is BSD-3-Clause. Added source-built decoder components retain their own notices: Brotli and LEA/LZHAM components use MIT terms, scoped RAR VM/LZ5/Lizard components retain BSD notices, and independent PPMd-I sources retain their public-domain notices.
 - CAB uses a separate libmspack shared module under LGPL-2.1 terms. Existing ZIPX JPEG/WavPack components retain their respective LGPL/BSD boundaries. Corresponding sources/notices remain included; the app's first-party source remains Apache License 2.0.
@@ -222,7 +220,7 @@ This note records the implementation delta from 1.0.19, grouped by subsystem. Fo
 
 ## Validation boundary
 
-- Release APK assembly, local-test Java compilation and Android-test APK assembly completed successfully on 2026-10-11. This covers the Home edits and the test I/O/`TextStyle.Builder` corrections, but no test suite was executed and device behavior remains unverified.
+- Release APK assembly, local-test Java compilation and Android-test APK assembly completed successfully. This covers the Home edits and the test I/O/`TextStyle.Builder` corrections, but no test suite was executed and device behavior remains unverified.
 - A subsequent signed release build completed after the build-setting/native warning cleanup, with v2 signature verification. It displayed 100 deprecated-API warnings; this was not a zero-warning build or a test-suite result.
 - Subsequent system-bar/WebView fixes have static review only. Eight instrumentation regression methods cover scale observation ownership, fallback and invalid values; they have not been compiled or executed. These changes have no follow-up build, device or benchmark results. Necessary legacy-Android/abstract API implementations and gesture zoom probes remain; warnings are not globally suppressed.
 - Earlier host/device/build results apply only to their recorded checkpoints. The confirmed large-TXT saved-count fix does not validate subsequent partition, lifecycle or cache changes.

@@ -828,4 +828,6 @@
     <string name="txt_contents_error">تعذّر تحميل المحتويات. أعد فتح الملف وحاول مجدداً.</string>
     <string name="txt_contents_save_error">تعذّر حفظ تعديلات المحتويات.</string>
     <string name="txt_contents_page">%1$s · ص. %2$d</string>
+    <string name="viewer_retry">إعادة المحاولة</string>
+    <string name="document_renderer_stopped">توقف عارض المستندات. أعد فتح الملف للمتابعة من آخر موضع محفوظ.</string>
 </resources>

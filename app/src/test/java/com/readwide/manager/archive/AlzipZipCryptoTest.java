@@ -13,6 +13,83 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 public class AlzipZipCryptoTest {
+    @Test public void scalarReadsReusePrivateScratchAndKeepMixedReadKeyState() throws Exception {
+        char[] password = "secret".toCharArray();
+        byte[] plain = {0, 1, (byte) 255, 3, 4};
+        byte[][] scratch = {null};
+        java.io.InputStream source = new java.io.ByteArrayInputStream(new Encryptor(password).encrypt(plain)) {
+            @Override public synchronized int read(byte[] bytes, int offset, int length) {
+                if (length == 1) {
+                    if (scratch[0] == null) scratch[0] = bytes;
+                    else assertSame(scratch[0], bytes);
+                }
+                return super.read(bytes, offset, length);
+            }
+        };
+        try (java.io.InputStream input = decryptingStream(source, new AlzipZipCrypto(password))) {
+            assertEquals(0, input.read());
+            assertEquals(1, input.read());
+            byte[] bulk = new byte[4];
+            assertEquals(2, input.read(bulk, 1, 2));
+            assertArrayEquals(new byte[]{0, (byte) 255, 3, 0}, bulk);
+            assertEquals(4, input.read());
+            assertEquals(-1, input.read());
+            assertEquals(-1, input.read());
+        }
+        assertArrayEquals(new byte[1], scratch[0]);
+    }
+
+    @Test public void decryptingStreamsDoNotShareScalarScratch() throws Exception {
+        byte[][] scratch = new byte[2][];
+        java.io.InputStream[] streams = new java.io.InputStream[2];
+        try {
+            for (int i = 0; i < streams.length; i++) {
+                final int index = i;
+                streams[i] = decryptingStream(new java.io.ByteArrayInputStream(new byte[]{1}) {
+                    @Override public synchronized int read(byte[] bytes, int offset, int length) {
+                        scratch[index] = bytes;
+                        return super.read(bytes, offset, length);
+                    }
+                }, new AlzipZipCrypto(new char[0]));
+                streams[i].read();
+            }
+            assertTrue(scratch[0] != scratch[1]);
+        } finally {
+            for (java.io.InputStream stream : streams) if (stream != null) stream.close();
+        }
+    }
+
+    @Test public void scalarReadAndCloseFailuresKeepIdentityAndErasePrivateState() throws Exception {
+        java.io.IOException readFailure = new java.io.IOException("read");
+        java.io.IOException closeFailure = new java.io.IOException("close");
+        byte[][] scratch = {null};
+        AlzipZipCrypto crypto = new AlzipZipCrypto("secret".toCharArray());
+        java.io.InputStream input = decryptingStream(new java.io.InputStream() {
+            @Override public int read() { throw new AssertionError("Use the bulk decryption path"); }
+            @Override public int read(byte[] bytes, int offset, int length) throws java.io.IOException {
+                scratch[0] = bytes;
+                bytes[offset] = 42;
+                throw readFailure;
+            }
+            @Override public void close() throws java.io.IOException { throw closeFailure; }
+        }, crypto);
+        assertSame(readFailure, assertThrows(java.io.IOException.class, () -> input.read()));
+        assertSame(closeFailure, assertThrows(java.io.IOException.class, () -> input.close()));
+        assertArrayEquals(new byte[1], scratch[0]);
+        java.lang.reflect.Field keys = AlzipZipCrypto.class.getDeclaredField("keys");
+        keys.setAccessible(true);
+        assertArrayEquals(new int[3], (int[]) keys.get(crypto));
+    }
+
+    private static java.io.InputStream decryptingStream(java.io.InputStream source, AlzipZipCrypto crypto)
+            throws Exception {
+        Class<?> type = Class.forName(AlzipArchiveReader.class.getName() + "$AlzDecryptingInputStream");
+        java.lang.reflect.Constructor<?> constructor = type.getDeclaredConstructor(
+                java.io.InputStream.class, AlzipZipCrypto.class);
+        constructor.setAccessible(true);
+        return (java.io.InputStream) constructor.newInstance(source, crypto);
+    }
+
     @Test public void ambiguousEncodingsUsePayloadCrcAndReturnFreshKeyState() throws Exception {
         byte[] plain = "payload CRC resolves a header collision".getBytes(StandardCharsets.UTF_8);
         for (String encoding : new String[]{"UTF-8", "MS949"}) {

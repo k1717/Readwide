@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">EPUBの文字サイズ: %1$d%%</string>
+    <string name="epub_line_height">行間</string>
+    <string name="epub_typography_hint">EPUBのみに適用されます。「本の設定」では本来の行間を維持します。固定レイアウト・画像中心・縦書きのページでは、元の段落レイアウトを維持します。</string>
+    <string name="epub_paragraph_layout_kept">このページでは段落の書式を変更できません。本来のレイアウトを維持します。</string>
+</resources>

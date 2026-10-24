@@ -96,8 +96,7 @@ public class BookmarkListActivity extends AppCompatActivity
         int sub = bookmarkSubTextColor();
 
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-        getWindow().setStatusBarColor(bar);
-        getWindow().setNavigationBarColor(bg);
+        com.readwide.manager.util.EdgeToEdgeUtil.setSystemBarColors(getWindow(), bar, bg);
 
         WindowInsetsControllerCompat controller =
                 WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
@@ -180,7 +179,9 @@ public class BookmarkListActivity extends AppCompatActivity
 
             @Override public void setAlpha(int alpha) {}
             @Override public void setColorFilter(ColorFilter colorFilter) { linePaint.setColorFilter(colorFilter); }
-            @Override public int getOpacity() { return PixelFormat.OPAQUE; }
+            // Drawable still requires this abstract method on supported APIs.
+            @Override @SuppressWarnings("deprecation")
+            public int getOpacity() { return PixelFormat.OPAQUE; }
         };
     }
 
@@ -460,7 +461,9 @@ public class BookmarkListActivity extends AppCompatActivity
 
             @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
             @Override public void setColorFilter(ColorFilter colorFilter) { paint.setColorFilter(colorFilter); }
-            @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+            // Drawable still requires this abstract method on supported APIs.
+            @Override @SuppressWarnings("deprecation")
+            public int getOpacity() { return PixelFormat.TRANSLUCENT; }
         };
     }
 
@@ -561,7 +564,7 @@ public class BookmarkListActivity extends AppCompatActivity
         window.setAttributes(lp);
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         window.setWindowAnimations(0);
-        window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        AdaptiveDialogLayoutHelper.setResizeSoftInputMode(window, 0);
     }
 
     @Override

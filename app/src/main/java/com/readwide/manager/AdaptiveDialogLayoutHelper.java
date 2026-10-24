@@ -28,6 +28,14 @@ import androidx.appcompat.app.AppCompatActivity;
 final class AdaptiveDialogLayoutHelper {
     private AdaptiveDialogLayoutHelper() {}
 
+    @SuppressWarnings("deprecation")
+    static void setResizeSoftInputMode(@NonNull Window window, int stateFlags) {
+        // These wrap-content bottom dialogs still use window-managed resizing.
+        // Replacing it with IME padding requires a different layout ownership
+        // policy; retain both resize and each caller's original visibility flags.
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE | stateFlags);
+    }
+
     static Dialog createStableBottomDialog(@NonNull AppCompatActivity activity,
                                            @NonNull View content,
                                            int yDp,
@@ -64,7 +72,7 @@ final class AdaptiveDialogLayoutHelper {
             window.setAttributes(lp);
             window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
             if (adjustResize) {
-                window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+                setResizeSoftInputMode(window, 0);
             }
         }
 

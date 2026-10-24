@@ -17,7 +17,7 @@ applicationId com.readwide.manager
 
 1.0.8 keeps the `com.readwide.manager` application ID introduced in 1.0.4 and the `readwide` release signing key introduced in 1.0.6, so it installs in place over 1.0.7 and 1.0.6.
 
-## Migration for existing users
+## Migration from earlier versions
 
 - Updating from 1.0.6 or 1.0.7: 1.0.8 uses the same signing key, so it installs in place as a normal update; no uninstall or backup step is required.
 - Updating from 1.0.4/1.0.5: those used the previous signing key, so Android will not install 1.0.8 over them (signature mismatch). Uninstall the previous version, install 1.0.8, then import a JSON backup to restore bookmarks, reading positions, themes, and settings.

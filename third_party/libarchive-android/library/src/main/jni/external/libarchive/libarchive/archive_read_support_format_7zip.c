@@ -3220,7 +3220,8 @@ decode_encoded_header_info(struct archive_read *a, struct _7z_stream_info *si)
 		return (ARCHIVE_FATAL);
 	}
 
-	if (si->pi.numPackStreams == 0 || si->ci.numFolders == 0) {
+	/* An encoded header has one folder; later folders must not be ignored. */
+	if (si->pi.numPackStreams == 0 || si->ci.numFolders != 1) {
 		archive_set_error(&a->archive, -1, "Malformed 7-Zip archive");
 		return (ARCHIVE_FATAL);
 	}

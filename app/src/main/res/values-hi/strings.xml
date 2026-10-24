@@ -828,4 +828,6 @@
     <string name="txt_contents_error">विषय-सूची लोड नहीं हुई। फ़ाइल दोबारा खोलकर फिर कोशिश करें।</string>
     <string name="txt_contents_save_error">विषय-सूची के बदलाव सहेजे नहीं जा सके।</string>
     <string name="txt_contents_page">%1$s · पृ. %2$d</string>
+    <string name="viewer_retry">फिर से कोशिश करें</string>
+    <string name="document_renderer_stopped">दस्तावेज़ व्यूअर बंद हो गया। पिछली सहेजी गई जगह से पढ़ना जारी रखने के लिए फ़ाइल दोबारा खोलें।</string>
 </resources>

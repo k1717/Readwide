@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">Розмір тексту EPUB: %1$d%%</string>
+    <string name="epub_line_height">Міжрядковий інтервал</string>
+    <string name="epub_typography_hint">Лише для EPUB. Налаштування книги зберігає початковий міжрядковий інтервал. Сторінки з фіксованим макетом, переважно зображеннями або вертикальним текстом зберігають розташування абзаців.</string>
+    <string name="epub_paragraph_layout_kept">На цій сторінці не можна змінити форматування абзаців. Макет книги збережено.</string>
+</resources>

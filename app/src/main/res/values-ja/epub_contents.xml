@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">脚注</string>
+    <string name="epub_return_to_text">本文に戻る</string>
+    <string name="epub_contents_fallback">読み取れる目次がないため、読む順序でセクションを表示します。</string>
+    <string name="epub_contents_empty">一致する項目がありません。</string>
+</resources>

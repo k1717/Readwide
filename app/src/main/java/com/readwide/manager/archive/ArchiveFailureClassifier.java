@@ -27,6 +27,7 @@ final class ArchiveFailureClassifier {
             if (cause instanceof ArchiveSupport.PasswordRequiredException) return ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED;
             if (cause instanceof ArchiveSupport.UnsupportedArchiveFeatureException) return ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE;
             if (cause instanceof java.io.EOFException
+                    || cause instanceof SevenZBcj2ArchiveReader.IntegrityException
                     || cause instanceof Rar5CompressedArchiveExtractor.ChecksumException) {
                 return ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE;
             }

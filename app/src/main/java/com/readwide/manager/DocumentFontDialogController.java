@@ -521,39 +521,7 @@ final class DocumentFontDialogController {
     }
 
     private TextView makeDocumentFontActionRow(String text, int fgColor, boolean selected) {
-        TextView row = new TextView(activity);
-        row.setText(text);
-        row.setTextColor(fgColor);
-        row.setTextSize(16f);
-        row.setTypeface(selected ? android.graphics.Typeface.DEFAULT_BOLD : android.graphics.Typeface.DEFAULT);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        // Keep the rounded row background but remove the radio/circle icon.
-        // This matches the intended TXT/EPUB/Word font picker style.
-        row.setPadding(dpToPx(18), dpToPx(4), dpToPx(18), dpToPx(4));
-        row.setMinHeight(dpToPx(40));
-        row.setSingleLine(false);
-        row.setCompoundDrawables(null, null, null, null);
-        row.setCompoundDrawablePadding(0);
-        GradientDrawable bg = new GradientDrawable();
-        int panel = dialogPanel();
-        boolean darkPanel = activity.isDarkColor(panel);
-        int normalFill = activity.blendColors(panel, fgColor, darkPanel ? 0.055f : 0.035f);
-        int selectedFill = activity.blendColors(panel, fgColor, darkPanel ? 0.120f : 0.075f);
-        int normalStroke = activity.blendColors(panel, fgColor, darkPanel ? 0.130f : 0.100f);
-        int selectedStroke = activity.blendColors(panel, fgColor, darkPanel ? 0.420f : 0.360f);
-
-        // Keep every font row as a rounded card. Selection is indicated only by
-        // stronger text weight and outline; no radio/circle icon is used.
-        bg.setColor(selected ? selectedFill : normalFill);
-        bg.setCornerRadius(dpToPx(10));
-        bg.setStroke(1, selected ? selectedStroke : normalStroke);
-        row.setBackground(bg);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.setMargins(0, 0, 0, dpToPx(8));
-        row.setLayoutParams(lp);
-        return row;
+        return activity.makeDocumentSelectionRow(text, fgColor, selected);
     }
 
     private GradientDrawable positionedActionPanelBackground(int fill, int line) {
@@ -608,7 +576,9 @@ final class DocumentFontDialogController {
 
             @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
             @Override public void setColorFilter(ColorFilter colorFilter) { paint.setColorFilter(colorFilter); }
-            @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+            // Drawable still requires this abstract method on supported APIs.
+            @Override @SuppressWarnings("deprecation")
+            public int getOpacity() { return PixelFormat.TRANSLUCENT; }
         };
     }
 

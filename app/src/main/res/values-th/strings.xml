@@ -828,4 +828,6 @@
     <string name="txt_contents_error">โหลดสารบัญไม่ได้ โปรดเปิดไฟล์ใหม่แล้วลองอีกครั้ง</string>
     <string name="txt_contents_save_error">บันทึกการเปลี่ยนแปลงสารบัญไม่ได้</string>
     <string name="txt_contents_page">%1$s · หน้า %2$d</string>
+    <string name="viewer_retry">ลองอีกครั้ง</string>
+    <string name="document_renderer_stopped">ตัวอ่านเอกสารหยุดทำงาน เปิดไฟล์อีกครั้งเพื่ออ่านต่อจากตำแหน่งที่บันทึกไว้ล่าสุด</string>
 </resources>

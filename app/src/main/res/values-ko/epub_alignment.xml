@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">문단 정렬</string>
+    <string name="epub_alignment_book">책 기본값</string>
+    <string name="epub_alignment_start">시작 방향 정렬 (왼쪽)</string>
+    <string name="epub_alignment_justify">양쪽 정렬</string>
+    <string name="epub_text_alignment_hint">화면에 맞춰 배치되는 EPUB 본문에 적용합니다. 시작 방향은 왼쪽에서 오른쪽으로 쓰는 글에서는 왼쪽, 반대 방향의 글에서는 오른쪽입니다. 명시된 가운데·오른쪽 정렬은 유지합니다.</string>
+</resources>

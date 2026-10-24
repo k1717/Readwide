@@ -28,7 +28,7 @@ applicationId com.readwide.manager
 
 - `com.tom-roush:pdfbox-android:2.0.27.0` — Apache-2.0, pure Java. Used only for PDF text extraction with glyph positions, to support in-document find. It does not render PDF pages. The optional JP2/JPEG2000 image decoder (`com.gemalto.jp2`) is not bundled, so JPX images are ignored; this does not affect text search. See `THIRD_PARTY_NOTICES.md`, `docs/LICENSE_REPORT_READWIDE_1_0_9.md`, and `docs/SBOM_READWIDE_1_0_9.spdx.json`.
 
-## Migration for existing users
+## Migration from earlier versions
 
 - Updating from 1.0.6, 1.0.7, or 1.0.8: 1.0.9 uses the same signing key, so it installs in place as a normal update; no uninstall or backup step is required.
 - Updating from 1.0.4/1.0.5: those used the previous signing key, so Android will not install 1.0.9 over them (signature mismatch). Uninstall the previous version, install 1.0.9, then import a JSON backup to restore bookmarks, reading positions, themes, and settings.

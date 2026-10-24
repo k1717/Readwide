@@ -22,6 +22,66 @@ import java.nio.file.Files;
 public class ArchiveExtractionByteBudgetTest {
     @Rule public final TemporaryFolder temp = new TemporaryFolder();
 
+    @Test public void rejectedBufferedAdoptionClosesItsUnreturnedOutput() throws Exception {
+        int[] closes = {0};
+        OutputStream raw = new OutputStream() {
+            @Override public void write(int value) { fail("No write before buffer adoption"); }
+            @Override public void close() { closes[0]++; }
+        };
+        Error primary = new AssertionError("simulated wrapper allocation failure");
+        closeUnadopted(raw, primary);
+        assertEquals(1, closes[0]);
+        assertEquals(0, primary.getSuppressed().length);
+    }
+
+    @Test public void rejectedBufferedAdoptionSuppressesCleanupWithoutReplacingFailure() throws Exception {
+        for (Throwable cleanup : new Throwable[]{new IOException("close"),
+                new IllegalStateException("close"), new AssertionError("close")}) {
+            Error primary = new AssertionError("simulated wrapper allocation failure");
+            closeUnadopted(failedClose(cleanup), primary);
+            assertEquals(1, primary.getSuppressed().length);
+            assertSame(cleanup, primary.getSuppressed()[0]);
+        }
+        Error same = new AssertionError("shared failure");
+        closeUnadopted(failedClose(same), same);
+        assertEquals(0, same.getSuppressed().length);
+    }
+
+    @Test public void publicBufferedOutputRetainsAccountingAndCancelledOpenProtection() throws Exception {
+        File file = temp.newFile();
+        try (ArchiveExtractionByteBudget.Scope scope = ArchiveExtractionByteBudget.begin(8)) {
+            try (OutputStream output = ArchiveSupport.openExtractionOutputStream(file)) {
+                output.write(new byte[]{4, 5, 6});
+                output.flush();
+                assertEquals(3, scope.budgetForTest().totalBytesForTest());
+            }
+        }
+        assertArrayEquals(new byte[]{4, 5, 6}, Files.readAllBytes(file.toPath()));
+        Thread.currentThread().interrupt();
+        try {
+            assertThrows(InterruptedIOException.class, () -> ArchiveSupport.openExtractionOutputStream(file));
+        } finally { Thread.interrupted(); }
+        assertArrayEquals(new byte[]{4, 5, 6}, Files.readAllBytes(file.toPath()));
+    }
+
+    private static OutputStream failedClose(Throwable failure) {
+        return new OutputStream() {
+            @Override public void write(int value) { fail("No write before buffer adoption"); }
+            @Override public void close() throws IOException {
+                if (failure instanceof IOException) throw (IOException) failure;
+                if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+                throw (Error) failure;
+            }
+        };
+    }
+
+    private static void closeUnadopted(OutputStream raw, Throwable failure) throws Exception {
+        java.lang.reflect.Method method = ArchiveSupport.class.getDeclaredMethod(
+                "closeUnadoptedExtractionOutput", OutputStream.class, Throwable.class);
+        method.setAccessible(true);
+        method.invoke(null, raw, failure);
+    }
+
     @Test public void cancelledOpenPreservesExistingOutput() throws Exception {
         File file = temp.newFile();
         Files.write(file.toPath(), new byte[]{7, 8});

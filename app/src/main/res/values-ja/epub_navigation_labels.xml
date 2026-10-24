@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">セクション</string>
+    <string name="epub_section_progress">セクション %1$s / %2$d</string>
+    <string name="epub_section_move">セクションへ移動</string>
+    <string name="epub_section_hint">本を構成するセクションの数です。画面上のページ数や印刷されたページ番号ではありません。</string>
+    <string name="epub_section_range_error">1～%1$dのセクション番号を入力してください。</string>
+    <string name="epub_bookmarks_status">すべてのブックマーク: %1$dファイル / %2$d件\n現在: セクション %3$d / %4$d</string>
+</resources>

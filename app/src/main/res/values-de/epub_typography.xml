@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">EPUB-Schriftgröße: %1$d%%</string>
+    <string name="epub_line_height">Zeilenabstand</string>
+    <string name="epub_typography_hint">Nur für EPUB. Die Buchvorgabe behält den ursprünglichen Zeilenabstand bei. Seiten mit festem Layout, überwiegend Bildern oder vertikaler Schrift behalten ihre Absatzgestaltung.</string>
+    <string name="epub_paragraph_layout_kept">Die Absatzformatierung lässt sich auf dieser Seite nicht ändern. Das Buchlayout bleibt erhalten.</string>
+</resources>

@@ -628,6 +628,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     @Override
     protected void onNewIntent(@NonNull Intent intent) {
         super.onNewIntent(intent);
+        if (TtsPlaybackBridge.isNotificationReturnTo(this, intent, EXTRA_FILE_PATH)) return;
         autoStartTtsConsumed = false; // A new explicit launch may request read-aloud again.
         startup().onNewIntent(intent);
     }
@@ -1022,8 +1023,9 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
                                                    int localStart,
                                                    int localEnd) {
         int base = largeTextEstimateActive ? Math.max(0, largeTextPreviewBaseCharOffset) : 0;
-        int absoluteStart = Math.max(0, base + Math.max(0, localStart));
-        int absoluteEnd = Math.max(absoluteStart, base + Math.max(localStart, localEnd));
+        int absoluteStart = (int) Math.min(Integer.MAX_VALUE, (long) base + Math.max(0, localStart));
+        int absoluteEnd = (int) Math.min(Integer.MAX_VALUE,
+                Math.max((long) absoluteStart, (long) base + Math.max(localStart, localEnd)));
         DocumentAnnotation annotation = new DocumentAnnotation();
         annotation.setFilePath(filePath);
         annotation.setFileName(fileName);
@@ -1043,13 +1045,19 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
                                   int localStart,
                                   int localEnd) {
         if (filePath == null || filePath.trim().isEmpty()) return;
+        if (!textContentReadyForPersistence || readerView == null
+                || !readerView.hasCurrentTextLayout() || !ensureLoadedTextCurrent()) return;
         DocumentAnnotation annotation = buildTxtAnnotation(
                 type, selectedText, localStart, localEnd);
         if (annotation.isHighlight()) {
-            boolean added = annotations().add(annotation);
-            if (added) refreshTxtAnnotationHighlights();
-            ShortToast.show(this, added
-                    ? R.string.annotation_saved : R.string.annotation_already_saved);
+            try {
+                boolean added = annotations().add(annotation);
+                if (added) refreshTxtAnnotationHighlights();
+                ShortToast.show(this, added
+                        ? R.string.annotation_saved : R.string.annotation_already_saved);
+            } catch (DocumentAnnotationManager.PersistenceException failure) {
+                ShortToast.show(this, R.string.file_operation_failed);
+            }
             return;
         }
         annotationDialogs().showNoteEditor(annotation, true);
@@ -1082,7 +1090,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
     void refreshTxtAnnotationHighlights() {
         if (readerView == null || filePath == null) return;
         int base = largeTextEstimateActive ? Math.max(0, largeTextPreviewBaseCharOffset) : 0;
-        int limit = base + (fileContent != null ? fileContent.length() : 0);
+        long limit = (long) base + (fileContent != null ? fileContent.length() : 0);
         ArrayList<CustomReaderView.AnnotationHighlightRange> ranges = new ArrayList<>();
         for (DocumentAnnotation annotation : annotations().getForFile(filePath)) {
             if (!annotation.isHighlight()) continue;
@@ -1091,7 +1099,7 @@ public class ReaderActivity extends AppCompatActivity implements TtsHost, Reader
             if (end <= base || start >= limit) continue;
             ranges.add(new CustomReaderView.AnnotationHighlightRange(
                     Math.max(0, start - base),
-                    Math.min(limit, end) - base));
+                    (int) (Math.min(limit, end) - base)));
         }
         readerView.setAnnotationHighlights(ranges);
     }

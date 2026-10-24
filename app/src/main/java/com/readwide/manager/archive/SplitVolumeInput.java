@@ -42,11 +42,48 @@ final class SplitVolumeInput implements Closeable {
         final File file;
         final long dataOffset; // physical offset of this volume's payload
         final long length;     // payload length (file length - dataOffset)
+        private final SourceState source;
 
         Segment(@NonNull File file, long dataOffset, long length) {
             this.file = file;
             this.dataOffset = dataOffset;
             this.length = length;
+            this.source = null;
+        }
+
+        Segment(@NonNull SourceState source, long dataOffset, long length) {
+            this.file = source.file;
+            this.dataOffset = dataOffset;
+            this.length = length;
+            this.source = source;
+        }
+    }
+
+    /** Metadata captured at a source/verified-spool boundary; owns no open handle. */
+    static final class SourceState {
+        final File file;
+        final long length;
+        final long modifiedTime;
+
+        private SourceState(File file, long length, long modifiedTime) {
+            this.file = file;
+            this.length = length;
+            this.modifiedTime = modifiedTime;
+        }
+
+        static SourceState capture(File file) throws IOException {
+            File canonical = file.getCanonicalFile();
+            if (!canonical.isFile() || !canonical.canRead()) throw new IOException("Split volume unavailable");
+            return new SourceState(canonical, canonical.length(), canonical.lastModified());
+        }
+
+        void requireUnchanged(long openedLength) throws IOException {
+            // Check both the opened file and its path. This is not a content snapshot:
+            // same-size edits preserving the timestamp can still evade detection.
+            if (openedLength != length || !file.isFile() || file.length() != length
+                    || file.lastModified() != modifiedTime) {
+                throw new IOException("Split volume changed after source capture: " + file.getName());
+            }
         }
     }
 
@@ -60,7 +97,7 @@ final class SplitVolumeInput implements Closeable {
     private final long totalLength;
     private long position;
     private boolean closed;
-    private IOException failure;
+    private Throwable failure;
     private final byte[] scalarBytes = new byte[8]; // Access only while holding this reader's lock.
 
     SplitVolumeInput(@NonNull List<Segment> segments) throws IOException {
@@ -77,14 +114,17 @@ final class SplitVolumeInput implements Closeable {
                 checkReadable();
                 Segment seg = segments.get(i);
                 if (seg.dataOffset < 0 || seg.length < 0) throw new IOException("Invalid split volume segment");
-                files[i] = seg.file.getCanonicalFile();
+                files[i] = seg.source == null ? seg.file.getCanonicalFile() : seg.source.file;
                 if (!files[i].isFile() || !files[i].canRead()) throw new IOException("Split volume unavailable");
                 long physicalLength;
                 try (RandomAccessFile checking = new RandomAccessFile(files[i], "r")) {
                     physicalLength = checking.length();
+                    if (seg.source != null) seg.source.requireUnchanged(physicalLength);
                 }
                 physicalLengths[i] = physicalLength;
-                modifiedTimes[i] = files[i].lastModified();
+                // Framed EGG/ALZ windows must retain the pre-parse baseline. Plain
+                // segments (including split 7z) still capture it when adopted.
+                modifiedTimes[i] = seg.source == null ? files[i].lastModified() : seg.source.modifiedTime;
                 if (seg.dataOffset > physicalLength || seg.length > physicalLength - seg.dataOffset) {
                     throw new IOException("Split volume segment exceeds physical file bounds");
                 }
@@ -102,6 +142,33 @@ final class SplitVolumeInput implements Closeable {
 
     long length() {
         return totalLength;
+    }
+
+    /** Checks terminal input state without rereading metadata or moving the cursor. */
+    synchronized void requireUsable() throws IOException {
+        checkReadable();
+    }
+
+    /**
+     * Rechecks the captured physical set at a parser/output transaction boundary.
+     * Includes already-open and not-yet-read volumes without moving any cursor or
+     * opening additional handles. This is metadata validation, not an immutable
+     * snapshot: same-size writes preserving timestamps can remain undetected.
+     */
+    synchronized void requireUnchanged() throws IOException {
+        checkReadable();
+        try {
+            for (int i = 0; i < files.length; i++) {
+                checkReadable();
+                requireVolumeUnchanged(i);
+            }
+            if (activeFile != null && activeFile.length() != physicalLengths[activeSegment]) {
+                throw new IOException("Open split volume size changed during read");
+            }
+        } catch (IOException | RuntimeException | Error error) {
+            rememberFailure(error);
+            throw error;
+        }
     }
 
     synchronized long getFilePointer() {
@@ -189,9 +256,10 @@ final class SplitVolumeInput implements Closeable {
                 pos += n;
                 if (n < want) break; // A short OS read is valid; the next read still checks bounds.
             }
-        } catch (IOException error) {
+        } catch (IOException | RuntimeException | Error error) {
             // A caller buffer may contain a partial prefix: never allow a retry to replay it.
-            throw retire(error);
+            rememberFailure(error);
+            throw error;
         }
         return done;
     }
@@ -299,6 +367,8 @@ final class SplitVolumeInput implements Closeable {
 
     private void checkReadable() throws IOException {
         if (closed) throw new IOException("Split volume set closed");
+        if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+        if (failure instanceof Error) throw (Error) failure;
         if (failure != null) throw new IOException("Split volume reader is unusable after failure", failure);
         if (Thread.currentThread().isInterrupted()) {
             throw retire(new InterruptedIOException("Split volume read cancelled"));
@@ -306,25 +376,36 @@ final class SplitVolumeInput implements Closeable {
     }
 
     private IOException retire(IOException error) {
-        if (failure == null) failure = error;
-        closeQuietly();
+        rememberFailure(error);
         return error;
+    }
+
+    private void rememberFailure(Throwable error) {
+        if (failure == null) failure = error;
+        try { closeQuietly(); }
+        catch (RuntimeException | Error cleanup) {
+            if (cleanup != error) error.addSuppressed(cleanup);
+        }
     }
 
     private RandomAccessFile fileFor(int segment) throws IOException {
         if (activeSegment == segment) return activeFile;
         closeQuietly();
-        File file = files[segment];
-        if (!file.isFile() || file.length() != physicalLengths[segment]
-                || file.lastModified() != modifiedTimes[segment]) {
-            throw new IOException("Split volume changed during read: " + file.getName());
-        }
-        activeFile = new RandomAccessFile(file, "r");
+        requireVolumeUnchanged(segment);
+        activeFile = new RandomAccessFile(files[segment], "r");
         if (activeFile.length() != physicalLengths[segment]) {
             throw new IOException("Split volume size changed during open");
         }
         activeSegment = segment;
         return activeFile;
+    }
+
+    private void requireVolumeUnchanged(int segment) throws IOException {
+        File file = files[segment];
+        if (!file.isFile() || file.length() != physicalLengths[segment]
+                || file.lastModified() != modifiedTimes[segment]) {
+            throw new IOException("Split volume changed during read: " + file.getName());
+        }
     }
 
     private void closeQuietly() {

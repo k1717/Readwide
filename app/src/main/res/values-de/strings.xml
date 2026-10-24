@@ -828,4 +828,6 @@
     <string name="txt_contents_error">Inhalt konnte nicht geladen werden. Datei erneut öffnen und nochmals versuchen.</string>
     <string name="txt_contents_save_error">Änderungen am Inhaltsverzeichnis konnten nicht gespeichert werden.</string>
     <string name="txt_contents_page">%1$s · S. %2$d</string>
+    <string name="viewer_retry">Erneut versuchen</string>
+    <string name="document_renderer_stopped">Die Dokumentansicht wurde beendet. Öffne die Datei erneut, um an der zuletzt gespeicherten Stelle weiterzulesen.</string>
 </resources>

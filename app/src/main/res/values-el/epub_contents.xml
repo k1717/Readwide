@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Υποσημείωση</string>
+    <string name="epub_return_to_text">Επιστροφή στο κείμενο</string>
+    <string name="epub_contents_fallback">Δεν βρέθηκαν αναγνώσιμα περιεχόμενα· εμφανίζονται οι ενότητες με τη σειρά ανάγνωσης.</string>
+    <string name="epub_contents_empty">Δεν βρέθηκαν αντίστοιχες καταχωρίσεις.</string>
+</resources>

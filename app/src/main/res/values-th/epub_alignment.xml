@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">การจัดแนวย่อหน้า</string>
+    <string name="epub_alignment_book">ตามหนังสือ</string>
+    <string name="epub_alignment_start">ชิดต้นบรรทัด</string>
+    <string name="epub_alignment_justify">ชิดขอบทั้งสองด้าน</string>
+    <string name="epub_text_alignment_hint">ใช้กับข้อความ EPUB ที่ปรับการจัดหน้าได้ ต้นบรรทัดอยู่ด้านซ้ายสำหรับข้อความ LTR และด้านขวาสำหรับ RTL โดยคงรูปแบบที่ระบุให้จัดกึ่งกลางหรือชิดขวาไว้</string>
+</resources>

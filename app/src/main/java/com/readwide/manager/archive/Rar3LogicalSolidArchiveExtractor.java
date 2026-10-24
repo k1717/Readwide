@@ -21,10 +21,12 @@ final class Rar3LogicalSolidArchiveExtractor {
         if (plan == null) return false;
         Rar3SolidState state = new Rar3SolidState();
         try {
-            for (RarSolidReadPlan.Step step : plan.steps) {
+            for (int i = 0; i < plan.steps.size(); i++) {
+                RarSolidReadPlan.Step step = plan.steps.get(i);
                 checkpoint(progress);
                 try (Rar3PackedPayload payload = Rar3PackedPayload.open(step.entry, step.parts, password, progress)) {
                     Rar3UnpackContext context = Rar3UnpackContext.forLogicalSolidPayload(step.entry, payload, state);
+                    if (i + 1 < plan.steps.size()) context.allowPartialFilterCarry();
                     if (step.entry == target) {
                         try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(output)) {
                             Rar3Unpacker.unpack(context, output, progress);
@@ -77,6 +79,7 @@ final class Rar3LogicalSolidArchiveExtractor {
         final List<RarArchiveReader.RarEntry> parts;
         final boolean stored;
         boolean checked;
+        boolean continuesSolid;
         Step(RarArchiveReader.RarEntry entry, List<RarArchiveReader.RarEntry> parts, boolean stored) {
             this.entry = entry; this.parts = parts; this.stored = stored;
         }
@@ -98,9 +101,16 @@ final class Rar3LogicalSolidArchiveExtractor {
     private static Plan prepareArchive(List<RarArchiveReader.RarEntry> entries,
             boolean allowStoredOnly, boolean nativeAvailable) throws IOException {
         java.util.ArrayList<RarArchiveReader.RarEntry> snapshot = new java.util.ArrayList<>();
+        java.util.IdentityHashMap<RarArchiveReader.RarEntry, RarArchiveReader.RarEntry> copies =
+                new java.util.IdentityHashMap<>();
         for (RarArchiveReader.RarEntry entry : entries) {
             checkpoint(null);
-            if (entry != null) snapshot.add(Rar3DecodePlan.snapshot(entry));
+            if (entry == null) continue;
+            // Preserve identity aliases for the topology check; copying each occurrence
+            // separately would disguise a repeated solid payload as a new member.
+            RarArchiveReader.RarEntry copy = copies.get(entry);
+            if (copy == null) { copy = Rar3DecodePlan.snapshot(entry); copies.put(entry, copy); }
+            snapshot.add(copy);
         }
         RarVolumeChain.Index chains = RarVolumeChain.index(snapshot);
         java.util.ArrayList<Step> steps = new java.util.ArrayList<>();
@@ -116,7 +126,8 @@ final class Rar3LogicalSolidArchiveExtractor {
                 continue;
             }
             boolean stored = RarFeatureClassifier.isRar3Or4StoredMethod(entry.method);
-            if ((!stored && !RarCompressedPayloadDecoder.isRar3Or4CompressionMethod(entry.method))
+            if ((!stored && (!RarFeatureClassifier.hasRar3DecoderVersion(entry)
+                    || !RarCompressedPayloadDecoder.isRar3Or4CompressionMethod(entry.method)))
                     || (entry.encrypted() && !entry.encryption.isRar4Aes())) return null;
             List<RarArchiveReader.RarEntry> parts = chains.chain(entry);
             long packed = Rar3PackedPayload.validateMetadata(entry, parts);
@@ -135,6 +146,7 @@ final class Rar3LogicalSolidArchiveExtractor {
                 if (entry.solid) {
                     if (previousCompressed == null) return null;
                     previousCompressed.checked = step.checked = true;
+                    previousCompressed.continuesSolid = true;
                     // The same logical history is needed for plain runs interrupted by
                     // stored members; encryption/volume splitting is not a prerequisite.
                     needsBridge = true;
@@ -190,24 +202,39 @@ final class Rar3LogicalSolidArchiveExtractor {
                                 context.requireFileBoundary();
                             }
                         }
-                        if (output == null) Rar3Unpacker.unpackToDiscard(context, progress);
+                        if (step.continuesSolid) context.allowPartialFilterCarry();
+                        if (output == null) {
+                            Rar3Unpacker.unpackToDiscard(context, progress);
+                            checkRunEnd(step);
+                        }
                         else try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(output)) {
                             Rar3Unpacker.unpack(context, output, progress);
+                            checkRunEnd(step);
                             checkpoint(progress);
                             guard.commit();
                         }
                     }
                 }
                 checkpoint(progress);
+                // The payload, output close and final filter check all succeeded.
+                // Keep mixed history across stored members only if a later solid
+                // compressed member needs it; a retained viewer spool does not.
+                if (!entry.directory && !step.stored && !step.continuesSolid) releaseState();
                 position++;
             } catch (IOException | RuntimeException | Error failure) {
                 retire(); throw failure;
             }
         }
-        void retire() {
-            retired = true;
+        private void checkRunEnd(Step step) throws IOException {
+            if (!step.continuesSolid && state != null) state.deferredFilters().requireEmpty();
+        }
+        private void releaseState() {
             if (state != null) state.invalidate();
             state = null;
+        }
+        void retire() {
+            retired = true;
+            releaseState();
             if (password != null) java.util.Arrays.fill(password, '\0');
         }
     }
@@ -377,7 +404,8 @@ final class Rar3LogicalSolidArchiveExtractor {
         for (RarSolidReadPlan.Step step : plan.steps) {
             checkpoint(null);
             RarArchiveReader.RarEntry entry = step.entry;
-            if (entry.rarVersion != 4 || !RarCompressedPayloadDecoder.isRar3Or4CompressionMethod(entry.method)
+            if (!RarFeatureClassifier.hasRar3DecoderVersion(entry)
+                    || !RarCompressedPayloadDecoder.isRar3Or4CompressionMethod(entry.method)
                     || (entry.encrypted() && !entry.encryption.isRar4Aes())) return null;
         }
         // Stored members neither feed nor reset the compressed dictionary/model.

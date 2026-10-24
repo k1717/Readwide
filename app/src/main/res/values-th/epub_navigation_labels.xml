@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">ส่วน</string>
+    <string name="epub_section_progress">ส่วน %1$s / %2$d</string>
+    <string name="epub_section_move">ไปยังส่วน</string>
+    <string name="epub_section_hint">นับส่วนต่าง ๆ ของหนังสือ ไม่ใช่จำนวนหน้าบนหน้าจอหรือเลขหน้าฉบับพิมพ์</string>
+    <string name="epub_section_range_error">ป้อนหมายเลขส่วนตั้งแต่ 1 ถึง %1$d</string>
+    <string name="epub_bookmarks_status">บุ๊กมาร์กทั้งหมด: %1$d ไฟล์ / %2$d บุ๊กมาร์ก\nปัจจุบัน: ส่วน %3$d / %4$d</string>
+</resources>

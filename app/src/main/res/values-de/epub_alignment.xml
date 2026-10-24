@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">Absatzausrichtung</string>
+    <string name="epub_alignment_book">Buchvorgabe</string>
+    <string name="epub_alignment_start">Am Zeilenanfang</string>
+    <string name="epub_alignment_justify">Blocksatz</string>
+    <string name="epub_text_alignment_hint">Für anpassbaren EPUB-Text. Der Zeilenanfang liegt bei LTR links und bei RTL rechts. Explizit zentrierte oder rechtsbündige Formatierung bleibt erhalten.</string>
+</resources>

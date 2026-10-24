@@ -1,16 +1,16 @@
 # Public release build checklist
 
-This file is the practical build and verification checklist for Readwide 1.0.20.
+This file is the practical build and verification checklist for Readwide 1.0.21.
 
 ## Version metadata
 
 ```text
 applicationId com.readwide.manager
-versionCode 10020
-versionName 1.0.20
+versionCode 10021
+versionName 1.0.21
 ```
 
-The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.20 keeps that key, so it installs in place over 1.0.19 through 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.20, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
+The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.21 keeps that key, so it installs in place over 1.0.20 through 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.21, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
 
 ## Keystore policy
 
@@ -23,25 +23,34 @@ READWIDE_KEY_ALIAS=readwide
 READWIDE_KEY_PASSWORD=...
 ```
 
-If these four values are absent, `assembleRelease` is expected to build an unsigned release artifact instead of failing. This supports F-Droid-style source-builder workflows. Local GitHub APK releases should still be signed with the developer release key outside the source tree.
+If these four values are absent, `assembleRelease` is expected to build an unsigned release artifact instead of failing. This supports F-Droid-style source-builder workflows. Local GitHub APK releases should still be signed with the project release key outside the source tree. Supply all four values for signing; partial configuration is not a signed-build setup.
 
 ## Build commands
 
 Linux/macOS:
 
 ```bash
-./gradlew clean testDebugUnitTest assembleDebug lintDebug
 ./gradlew clean assembleRelease
 ```
 
 Windows:
 
 ```powershell
-.\gradlew.bat clean testDebugUnitTest assembleDebug lintDebug
 .\gradlew.bat clean assembleRelease
 ```
 
-Optional source-builder check without private signing values:
+These commands assemble the release variant; they do not run regression tests or
+install the app. Optional JVM tests and lint are separate tasks:
+
+```bash
+./gradlew testDebugUnitTest lintDebug
+```
+
+On Windows, use `.\gradlew.bat testDebugUnitTest lintDebug`. Compiling test code
+alone is not test execution; device/instrumentation checks are separate again.
+
+Optional source-builder check without private signing values (also ensure no
+signing values are set in project or global Gradle properties):
 
 ```bash
 unset READWIDE_KEYSTORE_PATH READWIDE_KEYSTORE_PASSWORD READWIDE_KEY_ALIAS READWIDE_KEY_PASSWORD TEXTVIEW_KEYSTORE_PATH TEXTVIEW_KEYSTORE_PASSWORD TEXTVIEW_KEY_ALIAS TEXTVIEW_KEY_PASSWORD
@@ -57,16 +66,18 @@ Keep these files with source and binary release materials:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_20.md`
-- `docs/SBOM_READWIDE_1_0_20.spdx.json`
+- `docs/LICENSE_REPORT_READWIDE_1_0_21.md`
+- `docs/SBOM_READWIDE_1_0_21.spdx.json`
 
-The 1.0.20 reports retain the dependency versions declared by the updated 1.0.19 source. They cover direct dependencies and bundled source; a resolved transitive report is still needed for submission.
+The 1.0.21 reports retain the dependency pins declared by the 1.0.20 source. They cover direct dependencies and bundled source; a resolved transitive report is still needed for submission.
 
-The source-controlled native notice file at `app/src/main/assets/open_source_licenses/libarchive_android_and_codecs.txt` must also remain in the APK.
+All source-controlled notice assets in `app/src/main/assets/open_source_licenses/`
+must remain in the APK, not only the libarchive/ZIPX notices. The inventory and
+component obligations are recorded in [third-party notices](THIRD_PARTY_NOTICES.md).
 
 ## APK verification
 
-Publish the verified signed APK as `Readwide_1.0.20.apk`. Local build output names may differ.
+Publish the verified signed APK as `Readwide_1.0.21.apk`. Local build output names may differ.
 
 ```bash
 APK=app/build/outputs/apk/release/app-release.apk
@@ -76,12 +87,7 @@ test -f "$APK"
 aapt dump xmltree "$APK" AndroidManifest.xml \
   | grep -E "debuggable|usesCleartextTraffic|INTERNET|allowBackup"
 
-strings "$APK" \
-  | grep -E "^/(home|Users|builds)/" | sort -u
-
-sha256sum "$APK"
-unzip -p "$APK" assets/open_source_licenses/libarchive_android_and_codecs.txt \
-  | grep -E "libarchive|bzip2|XZ Utils|LZ4|Zstandard|zlib|Mbed TLS"
+unzip -l "$APK" 'assets/open_source_licenses/*'
 ```
 
 For a signed GitHub asset, additionally run `apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk`. Do not expect signature verification to pass for the intentionally unsigned source-builder artifact.
@@ -92,9 +98,15 @@ Expected default release baseline:
 - `INTERNET` is absent;
 - `usesCleartextTraffic="false"`;
 - `allowBackup="false"`;
-- no local user path strings are embedded;
+- no accidental machine-local path strings are embedded;
 - no keystore/private signing material is embedded.
-- the native libarchive/codecs notice asset is present and readable.
+- all required notice assets are present and readable.
+
+Compare the APK notice inventory with the source asset directory and inspect
+their contents. A filename listing alone does not validate license text. Likewise,
+running `strings` on the compressed APK cannot establish that DEX/native entries
+are free of private paths; inspect the relevant extracted entries when auditing
+binary contents. Manifest inspection and signature verification serve different purposes.
 
 ## Source tree checks before tagging
 
@@ -115,22 +127,31 @@ Expected result:
 
 ## Source ZIP portability
 
-The public source ZIP must use `/` path separators and preserve POSIX modes. Store `gradlew` and `*.sh` as executable (`0755`) and ordinary source/document files as `0644`. Create it with `python3 scripts/create_source_zip.py <output.zip>` or, on Windows without Python, `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create_source_zip.ps1 <output.zip>`. Both scripts perform a full CRC read and compare the normalized file list with the filtered source tree. They exclude generated `.gradle/` and `build/` trees, IDE state, local properties, signing material, and compiled artifacts, while retaining libarchive's checked-in `external/libarchive/build/cmake/` source modules.
+The public source ZIP must use `/` path separators and preserve POSIX modes. Store
+`gradlew` and `*.sh` as executable (`0755`) and ordinary source/document files as
+`0644`. Use a fresh, timestamped destination outside the source tree; never
+overwrite an earlier package. From the project root:
 
-Gradle 9.4.1 integrity baseline:
-
-```text
-gradle-wrapper.jar SHA-256: 55243ef57851f12b070ad14f7f5bb8302daceeebc5bce5ece5fa6edb23e1145c
-gradle-9.4.1-bin.zip SHA-256: 2ab2958f2a1e51120c326cad6f385153bb11ee93b3c216c5fccebfdfbb7ec6cb
+```bash
+python3 scripts/create_source_zip.py <new-output.zip> --no-digest
 ```
 
-The distribution hash is pinned with `distributionSha256Sum` in `gradle/wrapper/gradle-wrapper.properties`.
+On Windows, use `python` or `py -3` in place of `python3`. This route validates
+the filtered inventory, CRC and executable modes without generating a package
+digest. It excludes generated `.gradle/` and `build/` trees, IDE state, local
+properties, signing material and compiled artifacts, while retaining libarchive's
+checked-in `external/libarchive/build/cmake/` source modules. The older PowerShell
+packager generates a digest and is not the documented no-digest route.
+
+Keep the official Gradle wrapper and its pinned distribution configuration in
+`gradle/wrapper/gradle-wrapper.properties`. Packaging does not replace or disable
+the build tooling's own dependency/distribution verification.
 
 ## F-Droid handoff
 
 Before opening an F-Droid Data merge request:
 
-1. Publish a final Git tag, e.g. `v1.0.20`.
+1. Publish a final Git tag, e.g. `v1.0.21`.
 2. Start from current fdroiddata upstream. The checked-in historical mirror stops at 1.0.19 and must not replace upstream metadata. Add only the version actually submitted and pin it to the final tag's full 40-character commit hash.
 3. Keep the verified official Gradle 9.4.1 wrapper; F-Droid checks known wrapper hashes, so no `rm` rule is needed.
 4. Confirm a no-private-keystore `assembleRelease` build works.
@@ -147,15 +168,22 @@ Run representative files through these paths before publishing:
 - HWP/HWPX text-first open, encrypted-HWP failure, archive-internal HWP/HWPX open, and document search highlight/reveal.
 - PDF single-page and vertical-continuous modes, zoom/pan, bookmarks, slider, and toolbar hidden/visible state in portrait/landscape. Verify that Android status/navigation bars remain, app chrome leaves no blank reserve, and no PDF rerender flash occurs.
 - Browser and Recent list/tile switching from the fixed upper-right overflow, including thumbnails off/on, rotation, position retention, search paths, selection, and long-hold actions.
-- ZIP/CBZ, 7z/CB7, RAR/CBR, TAR-family, ALZ, and EGG fixture coverage according to `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md`.
+- ZIP/CBZ, 7z/CB7, RAR/CBR, TAR-family, CAB, LHA, ALZ and EGG examples according to [current archive support notes](docs/ARCHIVE_BOUNDARY_SUPPORT_NOTES.md), including the inherited profile limits. The 1.0.2 matrix is historical, not the current acceptance checklist.
 - Android 3-button navigation and gesture navigation safe areas across TXT, WebView documents, PDF, and image viewer.
 - Copy/move/delete/extract/compress queues with pause/resume/cancel/background behavior.
 
 Optional external archive fixture tests can be run by setting:
 
 ```bash
-TEXTVIEW_EXTERNAL_ARCHIVE_FIXTURE_DIR=/path/to/archive-fixtures
+export TEXTVIEW_EXTERNAL_ARCHIVE_FIXTURE_DIR=/path/to/archive-fixtures
 ./gradlew testDebugUnitTest
 ```
 
-Run the build, lint, signing and device checks against the release commit before publishing the APK. Record the source ZIP and APK checksums separately.
+On PowerShell, set `$env:TEXTVIEW_EXTERNAL_ARCHIVE_FIXTURE_DIR` before starting
+`.\gradlew.bat testDebugUnitTest`. A shell-local variable is not inherited by
+Gradle; missing fixture configuration makes these optional tests skip.
+
+The [release readiness record](docs/RELEASE_READINESS_1_0_21.md) distinguishes
+completed checks from outstanding verification. Verify source ZIP inventory, CRC
+and executable modes separately from APK identity/signature and runtime checks;
+none substitutes for the others.

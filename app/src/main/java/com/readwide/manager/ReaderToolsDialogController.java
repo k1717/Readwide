@@ -478,17 +478,22 @@ final class ReaderToolsDialogController {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 activity.dpToPx(52)));
 
+        TextView optionsToggle = makeSearchDialogButton(activity.getString(R.string.txt_contents_options), bg, fg, sub);
+        LinearLayout advanced = new LinearLayout(activity);
+        advanced.setOrientation(LinearLayout.VERTICAL);
+        box.addView(optionsToggle, new LinearLayout.LayoutParams(-1, -2));
+        box.addView(advanced, new LinearLayout.LayoutParams(-1, -2));
         EditText occurrenceInput = activity.dialogStyler().makeReaderDialogEditText(activity.getString(R.string.search_occurrence_hint), bg, fg, sub);
         occurrenceInput.setInputType(InputType.TYPE_CLASS_NUMBER);
         LinearLayout.LayoutParams occurrenceLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 activity.dpToPx(48));
         occurrenceLp.setMargins(0, activity.dpToPx(8), 0, 0);
-        box.addView(occurrenceInput, occurrenceLp);
+        advanced.addView(occurrenceInput, occurrenceLp);
 
         TextView hint = activity.dialogStyler().makeReaderDialogLabel(activity.getString(R.string.search_hint_multiple), sub, 12f);
         hint.setPadding(0, activity.dpToPx(6), 0, activity.dpToPx(8));
-        box.addView(hint, new LinearLayout.LayoutParams(
+        advanced.addView(hint, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -543,9 +548,11 @@ final class ReaderToolsDialogController {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         optionsRow.addView(regexBox, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        box.addView(optionsRow, new LinearLayout.LayoutParams(
+        advanced.addView(optionsRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
+        // Persisted non-default conditions stay visible on opening; folding never resets them.
+        SearchOptionsDisclosure.bind(optionsToggle, advanced, caseBox, wholeBox, regexBox);
 
         LinearLayout buttons = new LinearLayout(activity);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
@@ -558,7 +565,7 @@ final class ReaderToolsDialogController {
         TextView nextButton = makeSearchDialogButton(activity.getString(R.string.find_next), bg, fg, sub);
 
         buttons.addView(prevButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        buttons.addView(nthButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        advanced.addView(nthButton, new LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT));
         buttons.addView(closeButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         buttons.addView(nextButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         box.addView(buttons, new LinearLayout.LayoutParams(
@@ -795,7 +802,11 @@ final class ReaderToolsDialogController {
         // clipping; keep a tap-target minimum height for short labels.
         button.setMinHeight(activity.dpToPx(44));
         button.setPadding(activity.dpToPx(4), activity.dpToPx(8), activity.dpToPx(4), activity.dpToPx(8));
-        button.setBackgroundColor(Color.TRANSPARENT);
+        GradientDrawable surface = new GradientDrawable();
+        surface.setColor(activity.dialogStyler().blendColors(bg, fg, 0.08f));
+        surface.setCornerRadius(activity.dpToPx(10));
+        button.setBackground(new android.graphics.drawable.InsetDrawable(surface, activity.dpToPx(2)));
+        button.setFocusable(true);
         return button;
     }
 }

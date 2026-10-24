@@ -43,7 +43,7 @@ final class EggVolumeResolver {
         ArrayList<File> files = new ArrayList<>();
         ArrayList<SplitVolumeInput.Segment> segments = new ArrayList<>();
         files.add(first);
-        segments.add(new SplitVolumeInput.Segment(first, 0, first.length()));
+        segments.add(new SplitVolumeInput.Segment(prefix.source, 0, prefix.source.length));
         long ordinal = 1;
         while (prefix.split && prefix.next != 0) {
             checkpoint();
@@ -56,7 +56,8 @@ final class EggVolumeResolver {
                 throw new IOException("EGG split volume chain mismatch at " + next.getName());
             }
             files.add(next);
-            segments.add(new SplitVolumeInput.Segment(next, following.offset, next.length() - following.offset));
+            segments.add(new SplitVolumeInput.Segment(following.source, following.offset,
+                    following.source.length - following.offset));
             prefix = following;
         }
         String selectedPath = selected.getCanonicalPath();
@@ -95,15 +96,22 @@ final class EggVolumeResolver {
             return file;
         }
     }
-    private static final class Prefix { long id, prev, next, offset; boolean split; }
+    private static final class Prefix {
+        final SplitVolumeInput.SourceState source;
+        long id, prev, next, offset;
+        boolean split;
+        Prefix(SplitVolumeInput.SourceState source) { this.source = source; }
+    }
 
     private static Prefix prefix(File file) throws IOException {
         checkpoint();
-        try (RandomAccessFile input = new RandomAccessFile(file, "r")) {
+        SplitVolumeInput.SourceState source = SplitVolumeInput.SourceState.capture(file);
+        try (RandomAccessFile input = new RandomAccessFile(source.file, "r")) {
             long size = input.length();
+            source.requireUnchanged(size);
             if (size < 14 || readInt(input) != EGG) throw new IOException("Invalid EGG volume signature: " + file.getName());
             input.skipBytes(2); // version; existing versions share the same header layout
-            Prefix result = new Prefix();
+            Prefix result = new Prefix(source);
             result.id = uint(input);
             input.skipBytes(4); // reserved
             while (input.getFilePointer() <= size - 4) {
@@ -112,6 +120,8 @@ final class EggVolumeResolver {
                 int signature = readInt(input);
                 if (signature == END || signature == FILE) {
                     result.offset = signature == END ? input.getFilePointer() : start;
+                    checkpoint();
+                    source.requireUnchanged(input.length());
                     return result; // retain legacy prefix without END
                 }
                 int flags = input.readUnsignedByte();

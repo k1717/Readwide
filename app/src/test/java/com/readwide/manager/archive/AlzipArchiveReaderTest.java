@@ -26,6 +26,349 @@ import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
 
 public class AlzipArchiveReaderTest {
+    @Test public void unknownMethodStillRejectedWithoutReplacingOutput() throws Exception {
+        byte[] plain = "ALZ method admission".getBytes(StandardCharsets.UTF_8);
+        // Method 3 is now supported; unknown method 4 must not fall back to Deflate.
+        File archive = buildAlzArchiveWithStoredPayload("page.txt", plain, 4, rawDeflate(plain));
+        File directory = tempFolder.newFolder(), output = new File(directory, "page.txt");
+        Files.write(output.toPath(), new byte[]{42});
+        assertThrows(ArchiveSupport.UnsupportedArchiveFeatureException.class, () ->
+                AlzipArchiveReader.extractSingleEntry(archive, "page.txt", output, null));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+        assertThrows(ArchiveSupport.UnsupportedArchiveFeatureException.class, () ->
+                AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, null));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+        assertEquals(1, directory.list().length);
+    }
+
+    @Test public void obfuscatedDeflateExtractsSelectedAndBulkForEveryOrder() throws Exception {
+        for (int residue = 0; residue < 16; residue++) {
+            byte[] plain = new byte[32 + residue];
+            for (int i = 0; i < plain.length; i++) plain[i] = (byte) (i * 7);
+            File archive = buildAlzArchive("page.txt", plain, 3, false, null);
+            File output = tempFolder.newFile();
+            assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "page.txt", output, null));
+            assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+            File directory = tempFolder.newFolder();
+            assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, null));
+            assertArrayEquals(plain, Files.readAllBytes(new File(directory, "page.txt").toPath()));
+        }
+    }
+
+    @Test public void obfuscatedDeflateEncryptedSplitAndPasswordProbeShareDecoder() throws Exception {
+        byte[] plain = new byte[513];
+        for (int i = 0; i < plain.length; i++) plain[i] = (byte) i;
+        byte[] packed = AlzObfuscatedDeflateInputStreamTest.dynamic(plain, plain.length);
+        for (String encoding : new String[]{"UTF-8", "MS949"}) {
+            File archive = ambiguousEncodedAlz(plain, 3, packed, encoding);
+            byte[] bytes = Files.readAllBytes(archive.toPath());
+            int payloadOffset = bytes.length - packed.length - 4;
+            ByteArrayOutputStream framed = new ByteArrayOutputStream();
+            framed.write(bytes, 0, bytes.length - 4); writeSegmentTrailer(framed, 0x025a4c43);
+            for (int cut : new int[]{payloadOffset - 6, payloadOffset + packed.length / 2}) {
+                File selected = splitWithFinalTail(framed.toByteArray(), cut);
+                File output = tempFolder.newFile();
+                assertTrue(AlzipArchiveReader.extractSingleEntry(selected, "data.bin", output, "비밀번호".toCharArray()));
+                assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+                File directory = tempFolder.newFolder();
+                assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(selected, directory, "비밀번호".toCharArray()));
+                assertArrayEquals(plain, Files.readAllBytes(new File(directory, "data.bin").toPath()));
+            }
+        }
+    }
+
+    @Test public void obfuscatedDeflateDamagePreservesExistingOutput() throws Exception {
+        byte[] plain = {1,2,3,4,5};
+        byte[] valid = AlzObfuscatedDeflateInputStreamTest.dynamic(plain, plain.length);
+        byte[] wrong = AlzObfuscatedDeflateInputStreamTest.dynamic(new byte[]{6,7,8,9,10}, plain.length);
+        for (byte[] packed : new byte[][]{java.util.Arrays.copyOf(valid, valid.length - 1), wrong,
+                AlzObfuscatedDeflateInputStreamTest.dynamic(new byte[]{1,2,3,4,5,6}, plain.length)}) {
+            File archive = buildAlzArchiveWithStoredPayload("page.txt", plain, 3, packed);
+            File directory = tempFolder.newFolder(), output = new File(directory, "page.txt");
+            Files.write(output.toPath(), new byte[]{42});
+            assertThrows(IOException.class, () -> AlzipArchiveReader.extractSingleEntry(archive, "page.txt", output, null));
+            assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+            assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, null));
+            assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+            assertEquals(1, directory.list().length);
+        }
+    }
+
+    @Test public void obfuscatedEncryptedSplitsCrossInputRefillsAndOutputChunks() throws Exception {
+        byte[] plain = new byte[70003];
+        new java.util.Random(321).nextBytes(plain);
+        byte[] packed = AlzObfuscatedDeflateInputStreamTest.dynamic(plain, plain.length);
+        assertTrue(packed.length > 65536);
+        for (String encoding : new String[]{"UTF-8", "MS949"}) {
+            File original = ambiguousEncodedAlz(plain, 3, packed, encoding);
+            byte[] bytes = framedAlzBytes(original);
+            int payloadOffset = bytes.length - packed.length - 16;
+            for (int relativeCut : new int[]{-1, 16383, 16384, 16385, 32768}) {
+                File archive = splitWithFinalTail(bytes, payloadOffset + relativeCut);
+                File output = tempFolder.newFile();
+                assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, "비밀번호".toCharArray()));
+                assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+                File directory = tempFolder.newFolder();
+                long[] done = {0};
+                com.readwide.manager.util.FileOperationProgress progress =
+                        new com.readwide.manager.util.FileOperationProgress("test", null);
+                progress.setListener(snapshot -> done[0] = snapshot.doneBytes);
+                assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(
+                        archive, directory, "비밀번호".toCharArray(), progress));
+                assertArrayEquals(plain, Files.readAllBytes(new File(directory, "data.bin").toPath()));
+                assertEquals(plain.length, done[0]); // Candidate probes must not count as extracted bytes.
+            }
+        }
+    }
+
+    @Test public void obfuscatedDescriptorCheckByteSurvivesEveryEncryptionHeaderCut() throws Exception {
+        byte[] plain = {1, 2, 3, 4, 5};
+        CRC32 crc = new CRC32(); crc.update(plain);
+        assertTrue((crc.getValue() >>> 24) != 0); // Zero must come from the descriptor flag, not the CRC.
+        byte[] packed = AlzObfuscatedDeflateInputStreamTest.dynamic(plain, plain.length);
+        File original = ambiguousEncodedAlz(plain, 3, packed, "MS949", true);
+        byte[] bytes = framedAlzBytes(original);
+        int payloadOffset = bytes.length - packed.length - 16;
+        for (int relativeCut = -12; relativeCut <= 0; relativeCut++) {
+            File archive = splitWithFinalTail(bytes, payloadOffset + relativeCut);
+            File output = tempFolder.newFile();
+            assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, "비밀번호".toCharArray()));
+            assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+            File directory = tempFolder.newFolder();
+            assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, "비밀번호".toCharArray()));
+            assertArrayEquals(plain, Files.readAllBytes(new File(directory, "data.bin").toPath()));
+        }
+    }
+
+    @Test public void obfuscatedEncryptedSplitsRetainHistoryAcrossAllBlockKinds() throws Exception {
+        byte[] prefix = new byte[32768], suffix = {9, 8, 7};
+        new java.util.Random(322).nextBytes(prefix);
+        byte[] plain = java.util.Arrays.copyOf(prefix, prefix.length + 258 + suffix.length);
+        System.arraycopy(prefix, 0, plain, prefix.length, 258);
+        System.arraycopy(suffix, 0, plain, prefix.length + 258, suffix.length);
+        byte[] packed = AlzObfuscatedDeflateInputStreamTest.storedFixedDynamic(prefix, suffix, plain.length);
+        byte[] bytes = framedAlzBytes(ambiguousEncodedAlz(plain, 3, packed, "UTF-8"));
+        int payloadOffset = bytes.length - packed.length - 16;
+        // Stored header = five bytes; cuts bracket its end and the fixed match.
+        for (int relativeCut : new int[]{32772, 32773, 32774, 32776, packed.length - 1}) {
+            File archive = splitWithFinalTail(bytes, payloadOffset + relativeCut);
+            File output = tempFolder.newFile();
+            assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, "비밀번호".toCharArray()));
+            assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+        }
+    }
+
+    @Test public void obfuscatedBulkRunsKeepEncryptedSplitAndProbeContinuity() throws Exception {
+        byte[] prefix = new byte[65535]; new java.util.Random(324).nextBytes(prefix);
+        for (int distance : new int[]{1, 32768}) {
+            byte[] plain = java.util.Arrays.copyOf(prefix, prefix.length + 3 * 258);
+            for (int i = prefix.length; i < plain.length; i++) plain[i] = plain[i - distance];
+            byte[] packed = AlzObfuscatedDeflateInputStreamTest.storedWithRepeatedMatches(prefix, distance, 3);
+            for (String encoding : new String[]{"UTF-8", "MS949"}) {
+                byte[] bytes = framedAlzBytes(ambiguousEncodedAlz(plain, 3, packed, encoding));
+                int payloadOffset = bytes.length - packed.length - 16;
+                for (int relativeCut : new int[]{16383, 16384, 65540, packed.length - 1}) {
+                    File archive = splitWithFinalTail(bytes, payloadOffset + relativeCut);
+                    File output = tempFolder.newFile();
+                    assertTrue(AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, "비밀번호".toCharArray()));
+                    assertArrayEquals(plain, Files.readAllBytes(output.toPath()));
+                    File directory = tempFolder.newFolder();
+                    assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, "비밀번호".toCharArray()));
+                    assertArrayEquals(plain, Files.readAllBytes(new File(directory, "data.bin").toPath()));
+                }
+            }
+        }
+    }
+
+    @Test public void obfuscatedBulkRunFailureStillRollsBackEncryptedSplitOutput() throws Exception {
+        byte[] prefix = new byte[65535]; java.util.Arrays.fill(prefix, (byte) 42);
+        byte[] plain = java.util.Arrays.copyOf(prefix, prefix.length + 3 * 258);
+        java.util.Arrays.fill(plain, prefix.length, plain.length, (byte) 42);
+        byte[] packed = AlzObfuscatedDeflateInputStreamTest.storedWithRepeatedMatches(prefix, 1, 3);
+        for (boolean truncated : new boolean[]{false, true}) {
+            byte[] expected = plain.clone();
+            if (!truncated) expected[expected.length - 1] ^= 1; // CRC disagrees only after full decode.
+            byte[] candidate = truncated ? java.util.Arrays.copyOf(packed, packed.length - 2) : packed;
+            byte[] bytes = framedAlzBytes(ambiguousEncodedAlz(expected, 3, candidate, "UTF-8"));
+            File archive = splitWithFinalTail(bytes, bytes.length - candidate.length - 16 + 16384);
+            File directory = tempFolder.newFolder(), output = new File(directory, "data.bin");
+            Files.write(output.toPath(), new byte[]{17});
+            assertThrows(IOException.class, () -> AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, "비밀번호".toCharArray()));
+            assertArrayEquals(new byte[]{17}, Files.readAllBytes(output.toPath()));
+            assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, "비밀번호".toCharArray()));
+            assertArrayEquals(new byte[]{17}, Files.readAllBytes(output.toPath()));
+            assertEquals(1, directory.list().length);
+        }
+    }
+
+    @Test public void obfuscatedEncryptedSplitFailuresPreserveExistingOutput() throws Exception {
+        byte[] plain = {1, 2, 3, 4, 5};
+        byte[] packed = AlzObfuscatedDeflateInputStreamTest.dynamic(plain, plain.length);
+        byte[][] candidates = {packed, java.util.Arrays.copyOf(packed, packed.length - 1),
+                AlzObfuscatedDeflateInputStreamTest.dynamic(new byte[]{5, 4, 3, 2, 1}, plain.length)};
+        for (int kind = 0; kind < candidates.length; kind++) {
+            byte[] bytes = framedAlzBytes(ambiguousEncodedAlz(plain, 3, candidates[kind], "UTF-8"));
+            int payloadOffset = bytes.length - candidates[kind].length - 16;
+            File archive = splitWithFinalTail(bytes, payloadOffset + candidates[kind].length / 2);
+            char[] password = (kind == 0 ? "wrong" : "비밀번호").toCharArray();
+            File directory = tempFolder.newFolder(), output = new File(directory, "data.bin");
+            Files.write(output.toPath(), new byte[]{42});
+            assertThrows(IOException.class, () -> AlzipArchiveReader.extractSingleEntry(archive, "data.bin", output, password));
+            assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+            assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, password));
+            assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+            assertEquals(1, directory.list().length);
+        }
+    }
+
+    @Test public void obfuscatedEncryptedSplitFinalMutationRollsBackBothVolumePositions() throws Exception {
+        byte[] plain = new byte[70003];
+        new java.util.Random(323).nextBytes(plain);
+        File original = buildAlzArchive("data.bin", plain, 3, true, "pw".toCharArray());
+        byte[] bytes = framedAlzBytes(original);
+        for (boolean earlierVolume : new boolean[]{false, true}) {
+            for (boolean existing : new boolean[]{false, true}) {
+                File archive = splitWithFinalTail(bytes, bytes.length / 2);
+                File changed = earlierVolume ? new File(archive.getParentFile(), "split.alz") : archive;
+                File directory = tempFolder.newFolder(), output = new File(directory, "data.bin");
+                if (existing) Files.write(output.toPath(), new byte[]{42});
+                com.readwide.manager.util.FileOperationProgress progress = sourceMutationProgress(changed, plain.length, null);
+                IOException failure = assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(
+                        archive, directory, "pw".toCharArray(), progress));
+                assertTrue(failure.getMessage().contains("Split volume changed"));
+                if (existing) assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+                else assertFalse(output.exists());
+                assertEquals(existing ? 1 : 0, directory.list().length);
+            }
+        }
+    }
+
+    @Test public void obfuscatedEntryStateDoesNotLeakToOtherMethodsOrEmptyEntries() throws Exception {
+        char[] password = "pw".toCharArray();
+        File archive = buildAlzArchive("first", new byte[]{1}, 3, true, password);
+        appendLocalEntries(archive, buildAlzArchive("empty", new byte[0], 3, true, password));
+        appendLocalEntries(archive, buildAlzArchive("stored", new byte[]{2, 3}, 0, true, password));
+        appendLocalEntries(archive, buildAlzArchive("deflate", new byte[]{4, 5, 6}, 2, true, password));
+        appendLocalEntries(archive, buildAlzArchive("last", new byte[]{7, 8, 9, 10}, 3, true, password));
+        File directory = tempFolder.newFolder();
+        assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, password));
+        String[] names = {"first", "empty", "stored", "deflate", "last"};
+        byte[][] contents = {{1}, {}, {2, 3}, {4, 5, 6}, {7, 8, 9, 10}};
+        for (int i = names.length - 1; i >= 0; i--) {
+            assertArrayEquals(contents[i], Files.readAllBytes(new File(directory, names[i]).toPath()));
+            File output = tempFolder.newFile();
+            assertTrue(AlzipArchiveReader.extractSingleEntry(archive, names[i], output, password));
+            assertArrayEquals(contents[i], Files.readAllBytes(output.toPath()));
+        }
+    }
+
+    private byte[] framedAlzBytes(File archive) throws Exception {
+        byte[] bytes = Files.readAllBytes(archive.toPath());
+        ByteArrayOutputStream framed = new ByteArrayOutputStream();
+        framed.write(bytes, 0, bytes.length - 4);
+        writeSegmentTrailer(framed, 0x025a4c43);
+        return framed.toByteArray();
+    }
+
+    @Test public void obfuscatedDeflateSourceChangeAndCancelStillRollBack() throws Exception {
+        for (boolean cancel : new boolean[]{false, true}) {
+            byte[] plain = {1,2,3,4,5};
+            File archive = buildAlzArchive("page.txt", plain, 3, true, "pw".toCharArray());
+            File directory = tempFolder.newFolder(), output = new File(directory, "page.txt");
+            Files.write(output.toPath(), new byte[]{42});
+            com.readwide.manager.util.FileOperationProgress progress = cancel
+                    ? new com.readwide.manager.util.FileOperationProgress("test", null)
+                    : sourceMutationProgress(archive, plain.length, null);
+            if (cancel) progress.setListener(snapshot -> {
+                if (!snapshot.cancelled && snapshot.doneBytes == plain.length) progress.cancel();
+            });
+            assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(
+                    archive, directory, "pw".toCharArray(), progress, null));
+            assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+            assertEquals(1, directory.list().length);
+        }
+    }
+
+    @Test public void changedSourceOnFinalBytesRollsBackPlainAndEncryptedOutputs() throws Exception {
+        for (boolean encrypted : new boolean[]{false, true}) {
+            for (boolean existing : new boolean[]{false, true}) {
+                char[] password = encrypted ? "pw".toCharArray() : null;
+                File archive = buildAlzArchive("last.bin", new byte[]{1, 2, 3}, 2, encrypted, password);
+                File directory = tempFolder.newFolder(), target = new File(directory, "last.bin");
+                if (existing) Files.write(target.toPath(), new byte[]{42});
+                com.readwide.manager.util.FileOperationProgress progress = sourceMutationProgress(archive, 3, null);
+                IOException changed = assertThrows(IOException.class, () ->
+                        AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, password, progress, null));
+                assertTrue(changed.getMessage().contains("Split volume changed"));
+                if (existing) assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+                else assertFalse(target.exists());
+                assertEquals(existing ? 1 : 0, directory.list().length);
+            }
+        }
+    }
+
+    @Test public void changedSourceBeforeLaterEntryKeepsVerifiedPrefix() throws Exception {
+        File archive = buildAlzArchive("first.bin", new byte[]{7}, 0, false, null);
+        appendLocalEntries(archive, buildAlzArchive("last.bin", new byte[]{8}, 0, false, null));
+        File directory = tempFolder.newFolder(), target = new File(directory, "last.bin");
+        Files.write(target.toPath(), new byte[]{42});
+        com.readwide.manager.util.FileOperationProgress progress = sourceMutationProgress(archive, -1, "last.bin");
+        IOException changed = assertThrows(IOException.class, () ->
+                AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, null, progress, null));
+        assertTrue(changed.getMessage().contains("Split volume changed"));
+        assertArrayEquals(new byte[]{7}, Files.readAllBytes(new File(directory, "first.bin").toPath()));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+        assertEquals(2, directory.list().length);
+    }
+
+    @Test public void changedEarlierSplitVolumePreventsFinalCommit() throws Exception {
+        File original = buildAlzArchive("last.bin", new byte[]{1, 2, 3}, 0, true, "pw".toCharArray());
+        byte[] bytes = Files.readAllBytes(original.toPath());
+        ByteArrayOutputStream framed = new ByteArrayOutputStream();
+        framed.write(bytes, 0, bytes.length - 4); writeSegmentTrailer(framed, 0x025a4c43);
+        File archive = splitWithFinalTail(framed.toByteArray(), bytes.length - 6);
+        File first = new File(archive.getParentFile(), "split.alz");
+        File directory = tempFolder.newFolder(), target = new File(directory, "last.bin");
+        Files.write(target.toPath(), new byte[]{42});
+        com.readwide.manager.util.FileOperationProgress progress = sourceMutationProgress(first, 3, null);
+        IOException changed = assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(
+                archive, directory, "pw".toCharArray(), progress, null));
+        assertTrue(changed.getMessage().contains("Split volume changed"));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+    }
+
+    private static com.readwide.manager.util.FileOperationProgress sourceMutationProgress(
+            File source, long done, String detail) {
+        boolean[] changed = {false};
+        com.readwide.manager.util.FileOperationProgress progress =
+                new com.readwide.manager.util.FileOperationProgress("source mutation", null);
+        progress.setListener(s -> {
+            if (!changed[0] && (detail == null ? s.doneBytes == done : detail.equals(s.detail))) {
+                changed[0] = true;
+                assertTrue(source.setLastModified(source.lastModified() + 10000));
+            }
+        });
+        return progress;
+    }
+
+    @Test public void cancellationOnFinalBytesRollsBackCurrentFile() throws Exception {
+        byte[] plain = {1, 2, 3};
+        for (boolean existing : new boolean[]{false, true}) {
+            File archive = buildAlzArchive("last.bin", plain, 0, false, null);
+            File directory = tempFolder.newFolder();
+            File target = new File(directory, "last.bin");
+            if (existing) Files.write(target.toPath(), new byte[]{42});
+            com.readwide.manager.util.FileOperationProgress progress =
+                    new com.readwide.manager.util.FileOperationProgress("ALZ", null);
+            progress.setListener(s -> { if (!s.cancelled && s.doneBytes == plain.length) progress.cancel(); });
+            assertThrows(IOException.class, () ->
+                    AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, null, progress, null));
+            if (existing) assertArrayEquals(new byte[]{42}, Files.readAllBytes(target.toPath()));
+            else assertFalse(target.exists());
+            assertEquals(existing ? 1 : 0, directory.list().length);
+        }
+    }
+
     @Test public void compressedPasswordCollisionsResolveAcrossDeflateAndBzipFlavors() throws Exception {
         byte[] plain = alzBzipSingleBlockPlain();
         ByteArrayOutputStream bzip = new ByteArrayOutputStream();
@@ -144,12 +487,18 @@ public class AlzipArchiveReaderTest {
     }
 
     private File ambiguousEncodedAlz(byte[] plain, int method, byte[] packed, String encoding) throws Exception {
+        return ambiguousEncodedAlz(plain, method, packed, encoding, false);
+    }
+
+    private File ambiguousEncodedAlz(byte[] plain, int method, byte[] packed, String encoding,
+                                     boolean descriptor) throws Exception {
         File archive = buildAlzArchiveWithStoredPayload("data.bin", plain, method, packed);
         CRC32 crc = new CRC32(); crc.update(plain);
-        byte[][] encrypted = AlzipZipCryptoTest.collidingPasswordFixture(packed, encoding, (int)(crc.getValue() >>> 24));
+        byte[][] encrypted = AlzipZipCryptoTest.collidingPasswordFixture(packed, encoding,
+                descriptor ? 0 : (int)(crc.getValue() >>> 24));
         byte[] bytes = Files.readAllBytes(archive.toPath());
         int payloadOffset = bytes.length - packed.length - 4;
-        bytes[19] |= 1; // Encryption bit of the local descriptor.
+        bytes[19] |= descriptor ? 9 : 1; // Encryption and optional data-descriptor bits.
         ByteArrayOutputStream result = new ByteArrayOutputStream();
         result.write(bytes, 0, payloadOffset);
         result.write(encrypted[0]); result.write(encrypted[1]);
@@ -1104,7 +1453,8 @@ public class AlzipArchiveReaderTest {
                                              boolean encrypted,
                                              char[] password) throws Exception {
         File archive = tempFolder.newFile("fixture-" + System.nanoTime() + ".alz");
-        byte[] storedPayload = method == 2 ? rawDeflate(plainPayload) : plainPayload;
+        byte[] storedPayload = method == 2 ? rawDeflate(plainPayload)
+                : method == 3 ? AlzObfuscatedDeflateInputStreamTest.dynamic(plainPayload, plainPayload.length) : plainPayload;
         CRC32 crc = new CRC32();
         crc.update(plainPayload);
         byte[] encryptedHeader = null;

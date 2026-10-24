@@ -12,6 +12,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.lifecycle.ViewModelProvider;
 
@@ -32,6 +33,22 @@ public class LockActivity extends AppCompatActivity {
     private PrefsManager prefs;
     private int mode;
     private LockEntryViewModel entryState;
+    private final OnBackPressedCallback backCallback = new OnBackPressedCallback(true) {
+        @Override public void handleOnBackPressed() {
+            if (mode == MODE_UNLOCK) {
+                // Can't back out of unlock.
+                finishAffinity();
+                return;
+            }
+            setResult(RESULT_CANCELED);
+            setEnabled(false);
+            try {
+                getOnBackPressedDispatcher().onBackPressed();
+            } finally {
+                setEnabled(true);
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,6 +65,7 @@ public class LockActivity extends AppCompatActivity {
         applyLockTheme();
 
         mode = getIntent().getIntExtra(EXTRA_MODE, MODE_UNLOCK);
+        getOnBackPressedDispatcher().addCallback(this, backCallback);
         bindEntryState();
 
         btnConfirm.setOnClickListener(v -> onConfirm());
@@ -213,14 +231,4 @@ public class LockActivity extends AppCompatActivity {
         }
     }
 
-    @Override
-    public void onBackPressed() {
-        if (mode == MODE_UNLOCK) {
-            // Can't back out of unlock
-            finishAffinity();
-        } else {
-            setResult(RESULT_CANCELED);
-            super.onBackPressed();
-        }
-    }
 }

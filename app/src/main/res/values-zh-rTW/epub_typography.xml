@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">EPUB 字級：%1$d%%</string>
+    <string name="epub_line_height">行距</string>
+    <string name="epub_typography_hint">僅適用於 EPUB。「書籍預設」保留原書行距。固定版面、以圖片為主的頁面和直排頁面保留原有段落配置。</string>
+    <string name="epub_paragraph_layout_kept">此頁面無法變更段落格式，將保留原書配置。</string>
+</resources>

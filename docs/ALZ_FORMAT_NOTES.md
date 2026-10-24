@@ -1,15 +1,52 @@
 # ALZ container notes
 
-Reference notes for `AlzipArchiveReader`. Verified empirically against real
-ALZip-created archives (store, deflate, bzip2, ZipCrypto-encrypted, CP949
-file names, and a two-segment split set). All multi-byte integers are little
+Reference notes for `AlzipArchiveReader`. Earlier empirical checks used real
+ALZip-created archives (store, ordinary deflate, bzip2, ZipCrypto-encrypted, CP949
+file names, and a two-segment split set). They do not validate the new method-3
+decoder, whose regression sources are uncompiled/unrun. All multi-byte integers are little
 endian. Provenance: the container parser is first-party Java. Its trimmed-BZip2
 decoder is a modified Apache Commons Compress source file, with attribution
 retained in `AlzBzip2InputStream.java`; no unalz extractor code is included.
 Synthetic and embedded codec fixtures are present in the test sources. See
 `../THIRD_PARTY_NOTICES.md` for the decoder provenance.
 
+## Support boundary
+
+Readwide retains methods 0/1/2 (Store, the supported BZip2 variants and ordinary
+Deflate) and adds a separate method-3 Obfuscated Deflate decoder in source.
+Bandizip 6.29 binary inspection shows a separate method-3 dispatch, and its
+[official format guide](https://en.bandisoft.com/bandizip/help/how-to-open-alz-and-egg-files/)
+lists Obfuscated Deflate separately. Public XADMaster supplies the missing format
+contract described below; no proprietary decoder or XADMaster implementation is
+incorporated. Unknown methods still fail without replacing existing output.
+Method-3 synthetic sources cover plain/encrypted/split paths, but no new producer
+fixture, decoder execution or device validation is claimed.
+
 ## Layout
+
+Physical length and modification time are captured before header/trailer reads,
+checked after parsing and carried into `SplitVolumeInput` segment adoption. An
+observable change between framing validation and reader creation is rejected,
+including changes only to an omitted continuation header or intermediate trailer.
+Single files and raw continuations carry the same baseline; payload trimming and
+final-trailer retention are unchanged. Handoff regression sources are uncompiled/unrun.
+
+After parsing and before file acceptance, ALZ checks existence, physical length
+and modification time for every captured volume, including an already-open handle
+and earlier split parts. Changes after final byte-progress callbacks still roll
+back current output; earlier verified files remain. No per-byte metadata probes,
+new decoder or source locking is added. Same-metadata edits/replacements and
+final-check races remain limitations. Added regression sources are uncompiled/unrun.
+
+ALZ extraction checks cancellation after decoder/output closure and before target
+commit. A request from the final byte-progress callback therefore restores an
+existing destination or removes the new one. Earlier verified entries remain.
+The added regression source is uncompiled/unrun; codec and ZipCrypto rules are unchanged.
+
+In 1.0.21, shared `SplitVolumeInput` also retires on unchecked volume-access/read
+failures after a partial prefix. Existing bounded views cannot replay that prefix
+after access returns. Volume framing, ZipCrypto and decoder selection are unchanged;
+the new injected-failure regression source is uncompiled/unrun.
 
 Local-header DOS timestamps are decoded non-leniently in the local timezone for
 entry listings; absent/invalid calendar values remain unknown (`0`). File-system
@@ -59,7 +96,8 @@ repeat:
     descriptor u16              low byte: bit0 encrypted, bit3 data descriptor,
                                 high nibble = size-field width (0/1/2/4/8)
     -- present only when the size nibble is non-zero --
-    method u16                  (0 store, 1 bzip2, 2 deflate)
+    method u8                   (0 store, 1 bzip2, 2 deflate, 3 obfuscated deflate)
+    reserved u8
     crc32 u32
     compressedSize  uN
     uncompressedSize uN
@@ -75,6 +113,16 @@ A zero size nibble means the method/CRC/size fields are entirely absent
 (directories and empty files); the entry still carries its name.
 
 ## Compression method 1: the ALZ bzip2 variant
+
+Extraction and password probes now pass the optional operation token into the
+trimmed decoder. Existing bit/output checkpoints, successful input refills and
+inverse-BWT table preparation observe Cancel/Pause. Constructor/factory overloads
+preserve tokenless callers; I/O failures remain sticky and the owning factory
+closes failed construction. Codec arithmetic, framing, CRC and cipher ownership
+are unchanged. Seven added regression method sources are uncompiled/unrun.
+Standard third-party BZip2 buffered loops and individual allocations are not made
+preemptible by this change. Bandizip 6.29 static dispatcher inspection corroborates
+separate decrypt/decode/final-integrity responsibilities, not executed compatibility.
 
 Method 1 payloads come in **two flavors**. Some real archives carry plain
 bzip2 (with or without the `BZh` magic; one such real file was CRC-verified
@@ -114,7 +162,67 @@ compiled `unalz` 0.65. The embedded test fixtures in
 was ported; only the bitstream facts above (its zlib license would permit it,
 but the Apache-2.0 commons-compress base needed fewer changes).
 
+## Compression method 3: Obfuscated Deflate
+
+`AlzObfuscatedDeflateInputStream` follows [RFC 1951](https://www.rfc-editor.org/rfc/rfc1951.html)
+with one format variation: the dynamic header's 19-symbol code-length order.
+The public [XADMaster ALZ parser](https://raw.githubusercontent.com/MacPaw/XADMaster/master/XADALZipParser.m)
+specifies an identity ordering, then swaps position `i` with
+`3 * (i % 6) + (unpackedSize % 16)` for `i=0..18`; an index greater than 18 is
+reduced modulo 18, while index 18 stays 18. Its
+[Deflate reader](https://raw.githubusercontent.com/MacPaw/XADMaster/master/XADDeflateHandle.m)
+uses that order only for the dynamic code-length alphabet. Bandizip static
+inspection corroborates the table seam and normal Deflate mode. These are format
+facts, not a port of either implementation.
+
+Readwide uses the nonnegative long entry size, not a signed 32-bit narrowing.
+Stored/fixed blocks, repeat codes and cross-block LZ77 history retain standard
+Deflate rules. The 32 KiB history is a format window, not an entry-size cap.
+Huffman validation rejects oversubscribed/incomplete trees except permitted
+single-code/empty-distance cases; invalid references and truncation fail.
+Failures are terminal and closing owns/wipes the compressed buffer and history.
+Progress checkpoints include empty-block chains, input refill and buffered output.
+
+Fixed Huffman trees are created lazily once per decoder; dynamic trees consume
+checked length-array ranges without changing local symbol numbers. Bulk reads
+copy pending stored bytes and validated matches in runs bounded by the existing
+4,096-byte output checkpoint. Match copies seed from old ring history before
+repeating the initialized prefix, preserving overlapping distances and wrap.
+The scalar path and bit grammar remain unchanged. Regression sources cover
+mixed reads, short refills, encrypted splits, cancellation and rollback, but
+are uncompiled/unrun; no throughput result is claimed.
+
+Selected/bulk extraction and password probes use the same decoder after bounded
+split input and optional ZipCrypto. Existing length/CRC, source-change,
+free-space and output-rollback checks remain. Synthetic sources cover table
+residues, shortened headers, repeats, window wrap, errors, cancellation and
+encrypted splits. They are uncompiled/unrun; real method-3 archives, especially
+large-size and encrypted/split combinations, still need interoperability checks.
+
+The encrypted/split recheck found no new mismatch in the reviewed production
+paths. Bandizip static inspection retains one ZipCrypto key state across input
+chunks; the method-3 route decrypts before decoding and uses the shared final
+check without an additional ZipCrypto authentication trailer. Readwide likewise
+keeps one post-header cipher and decoder across logical split segments. This is
+static corroboration, not an observation of successful extraction.
+
+Seven additional regression sources cover 70,003-byte encrypted payloads with
+UTF-8/MS949 header collisions, cuts around 16 KiB input refills, 64 KiB output
+chunks and unchanged progress during candidate probes. Other cases place every
+cut of the 12-byte check header under the existing data-descriptor flag, combine
+stored/fixed/dynamic blocks with a 32 KiB backward distance, reject wrong
+passwords or damaged payloads, change either physical volume at final progress,
+and isolate state across empty and mixed-method entries. These sources have not
+been compiled or run. Decoder/cipher/container code is unchanged by this recheck;
+producer fixtures and runtime regression validation remain outstanding.
+
 ## Encryption (ZipCrypto)
+
+The streaming adapter reuses private one-byte scratch for scalar reads rather
+than allocating on every call. Bulk reads, key updates and split-input ownership
+are unchanged. Close clears both scratch and key state even when source closure
+fails. Focused regression sources cover mixed reads and cleanup; they are
+uncompiled/unrun and do not establish a measured performance improvement.
 
 Classic PKWARE keystream keyed from the password bytes. The 12 check bytes
 decrypt first; `plain[11]` must equal the CRC's top byte (or 0 when the
@@ -134,7 +242,7 @@ avoids the extra read. Temporary encoded password buffers and rejected/probe key
 states are wiped; no immutable password String is created.
 
 The one-byte header and payload CRC are not cryptographic authentication or password
-recovery. The shared factory covers Deflate, standard/stripped BZip2 and DLZ. Source
+recovery. The shared factory covers ordinary/Obfuscated Deflate, standard/stripped BZip2 and DLZ. Source
 failures are recorded below the decoder; resource closure is outside the content-
 rejection catch. EGG now supplies its own multi-block verifier, described in
 [EGG notes](EGG_FORMAT_NOTES.md). Nineteen synthetic

@@ -137,5 +137,5 @@ native/device interoperability.
 
 Use the current complete source package. No old hotfix-only ZIP or incremental
 copy instruction is needed. The [ALZ archive validation](ALZ_ARCHIVE_BOUNDARY_REVIEW.md)
-records the broader decoder/container checks, and [current support boundaries](ARCHIVE_DECODE_BOUNDARIES_1_0_20.md)
+records the broader decoder/container checks, and [current support notes](ARCHIVE_BOUNDARY_SUPPORT_NOTES.md)
 describe later format additions and remaining exclusions.

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">เชิงอรรถ</string>
+    <string name="epub_return_to_text">กลับไปยังเนื้อหา</string>
+    <string name="epub_contents_fallback">ไม่พบสารบัญที่อ่านได้ จึงแสดงส่วนต่าง ๆ ตามลำดับการอ่าน</string>
+    <string name="epub_contents_empty">ไม่พบรายการที่ตรงกัน</string>
+</resources>

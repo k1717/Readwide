@@ -105,4 +105,48 @@ public class Rar3VmFilterSafetyTest {
         assertEquals(0x7ff,((Integer)get.invoke(null,bytes,0L,11)).intValue());
         assertEquals(1,((Integer)get.invoke(null,bytes,31L,1)).intValue());
     }
+
+    @Test public void audioAdaptsAfterThirtyTwoSamplesWithIndependentChannelHistory() throws Exception {
+        // Hand-derived constant-residual vector, not output from another decoder.
+        // Samples 1..32 make diff[2] uniquely smallest (224 vs baseline 256), so k1 becomes +1.
+        // The next sample then decreases by two instead of one. Each channel starts fresh.
+        for (int channels : new int[]{1, 2}) {
+            byte[] input = new byte[40 * channels];
+            java.util.Arrays.fill(input, (byte) 1);
+            byte[] expected = new byte[input.length];
+            for (int sample = 0; sample < 40; sample++) {
+                int value = sample <= 32 ? -(sample + 1) : 223 - 2 * (sample - 32);
+                for (int channel = 0; channel < channels; channel++) {
+                    expected[sample * channels + channel] = (byte) value;
+                }
+            }
+            int[] registers = new int[7]; registers[0] = channels;
+            assertArrayEquals(expected, Rar3VmFilter.apply(
+                    Rar3VmFilter.StandardFilter.AUDIO, input, input.length, registers, 0));
+            for (byte value : input) assertEquals(1, value);
+        }
+    }
+
+    @Test public void itaniumTransformsActiveBundlesOnlyBeforeTheReservedTail() throws Exception {
+        // Template 0x10 enables slot 2. Its operand occupies bits 100..119 and opcode 5
+        // occupies bits 124..127. Literal bytes keep this oracle independent of the bit helpers.
+        byte[] raw = new byte[38];
+        raw[0] = 0x10; raw[12] = 0x5a; raw[13] = 0x34; raw[14] = 0x12; raw[15] = 0x5b;
+        raw[16] = 0x10; raw[28] = 0x1a; raw[31] = 0x5b;
+        java.util.Arrays.fill(raw, 32, raw.length, (byte) 0x66);
+        for (int length : new int[]{21, 22, 37, 38}) {
+            byte[] input = java.util.Arrays.copyOf(raw, length);
+            byte[] expected = input.clone();
+            if (length > 21) {
+                // 0x12345 - (0x230 / 16) = 0x12322; neighboring nibbles stay intact.
+                expected[12] = 0x2a; expected[13] = 0x32;
+            }
+            if (length > 37) {
+                // Next bundle advances the offset: (1 - 0x24) mod 2^20 = 0xfffdd.
+                expected[28] = (byte) 0xda; expected[29] = (byte) 0xfd; expected[30] = (byte) 0xff;
+            }
+            assertArrayEquals(expected, Rar3VmFilter.apply(
+                    Rar3VmFilter.StandardFilter.ITANIUM, input, length, new int[7], 0x230));
+        }
+    }
 }

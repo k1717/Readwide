@@ -1,6 +1,6 @@
 # Independent ZIP PPMd-I stream — Readwide 1.0.20
 
-Source checkpoint: 2026-10-10. No builds, compilation, tests or native execution.
+Source review only; no builds, compilation, tests or native execution.
 
 ## Scope implemented in source
 

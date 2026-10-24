@@ -1,6 +1,9 @@
 package com.readwide.manager.archive;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import com.readwide.manager.util.FileOperationProgress;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -37,10 +40,18 @@ final class AzoDecoder {
 
     @NonNull
     static byte[] decode(@NonNull byte[] data, long expectedSize) throws IOException {
-        ArchiveCancellation.checkpoint(null);
+        return decode(data, expectedSize, null);
+    }
+
+    @NonNull
+    static byte[] decode(@NonNull byte[] data, long expectedSize,
+                         @Nullable FileOperationProgress progress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
         int outputSize = checkedArraySize(expectedSize);
         try {
-            return decodeArray(data, outputSize);
+            byte[] result = decodeArray(data, outputSize, progress);
+            ArchiveCancellation.checkpoint(progress);
+            return result;
         } catch (OutOfMemoryError error) {
             // A valid array length is not a promise that this device has enough heap.
             // Do not retry the raw decoder after an allocation failure.
@@ -57,23 +68,24 @@ final class AzoDecoder {
     }
 
     @NonNull
-    private static byte[] decodeArray(@NonNull byte[] data, int expectedSize) throws IOException {
+    private static byte[] decodeArray(@NonNull byte[] data, int expectedSize,
+                                      @Nullable FileOperationProgress progress) throws IOException {
         IOException framedFailure = null;
         if (looksLikeFramedAzo(data)) {
             try {
-                byte[] framed = new FramedDecoder(data, expectedSize).decode();
+                byte[] framed = new FramedDecoder(data, expectedSize, progress).decode();
                 if (framed.length == expectedSize) return framed;
                 throw unsupported("AZO framed output size mismatch");
             } catch (IOException e) {
-                ArchiveCancellation.rethrowIfCancelled(e, null);
+                ArchiveCancellation.rethrowIfCancelled(e, progress);
                 framedFailure = e;
             }
         }
         try {
             if (expectedSize == 0 && data.length == 0) return new byte[0];
-            return decodeRawBlock(data, expectedSize);
+            return decodeRawBlock(data, expectedSize, progress);
         } catch (IOException rawFailure) {
-            ArchiveCancellation.rethrowIfCancelled(rawFailure, null);
+            ArchiveCancellation.rethrowIfCancelled(rawFailure, progress);
             if (framedFailure != null) throw framedFailure;
             throw rawFailure;
         }
@@ -84,8 +96,9 @@ final class AzoDecoder {
     }
 
     @NonNull
-    private static byte[] decodeRawBlock(@NonNull byte[] data, int expectedSize) throws IOException {
-        ArchiveCancellation.checkpoint(null);
+    private static byte[] decodeRawBlock(@NonNull byte[] data, int expectedSize,
+                                         @Nullable FileOperationProgress progress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
         if (expectedSize < 0) {
             throw unsupported("AZO raw block output size is outside decoder limits");
         }
@@ -94,7 +107,7 @@ final class AzoDecoder {
             if (data.length == 0) return new byte[0];
             throw unsupported("AZO raw block has data for zero-size output");
         }
-        RawBlockDecoder decoder = new RawBlockDecoder(data, expectedSize);
+        RawBlockDecoder decoder = new RawBlockDecoder(data, expectedSize, progress);
         return decoder.decode();
     }
 
@@ -106,15 +119,18 @@ final class AzoDecoder {
     private static final class FramedDecoder {
         private final byte[] input;
         private final int expectedSize;
+        @Nullable private final FileOperationProgress progress;
         private byte[] output;
         private int outputPos;
         private int readPos;
         private boolean x86Filter;
         private boolean endOfBlocks;
 
-        FramedDecoder(@NonNull byte[] input, int expectedSize) {
+        FramedDecoder(@NonNull byte[] input, int expectedSize,
+                      @Nullable FileOperationProgress progress) {
             this.input = input;
             this.expectedSize = expectedSize;
+            this.progress = progress;
         }
 
         @NonNull
@@ -135,7 +151,7 @@ final class AzoDecoder {
         private void validateLayout() throws IOException {
             long total = 0;
             while (true) {
-                ArchiveCancellation.checkpoint(null);
+                ArchiveCancellation.checkpoint(progress);
                 int uncomp = readUInt32BE(), comp = readUInt32BE(), check = readUInt32BE();
                 if (uncomp == 0 && comp == 0 && check == 0) break;
                 validateBlock(uncomp, comp, check, expectedSize - total);
@@ -157,7 +173,7 @@ final class AzoDecoder {
         }
 
         private void decodeOneBlock() throws IOException {
-            ArchiveCancellation.checkpoint(null);
+            ArchiveCancellation.checkpoint(progress);
             int uncomp = readUInt32BE();
             int comp = readUInt32BE();
             int check = readUInt32BE();
@@ -171,7 +187,7 @@ final class AzoDecoder {
                 // temporary array and no ByteArrayOutputStream growth/final copy.
                 int copied = 0;
                 while (copied < comp) {
-                    ArchiveCancellation.checkpoint(null);
+                    ArchiveCancellation.checkpoint(progress);
                     int count = Math.min(64 * 1024, comp - copied);
                     System.arraycopy(input, readPos + copied, output, outputPos + copied, count);
                     copied += count;
@@ -180,10 +196,10 @@ final class AzoDecoder {
             } else {
                 byte[] compressed = Arrays.copyOfRange(input, readPos, readPos + comp);
                 readPos += comp;
-                byte[] plain = decodeRawBlock(compressed, uncomp);
+                byte[] plain = decodeRawBlock(compressed, uncomp, progress);
                 System.arraycopy(plain, 0, output, outputPos, uncomp);
             }
-            if (x86Filter) applyX86Filter(output, outputPos, uncomp);
+            if (x86Filter) applyX86Filter(output, outputPos, uncomp, progress);
             outputPos += uncomp;
         }
 
@@ -201,11 +217,12 @@ final class AzoDecoder {
         }
     }
 
-    private static void applyX86Filter(@NonNull byte[] buf, int offset, int length) throws IOException {
+    private static void applyX86Filter(@NonNull byte[] buf, int offset, int length,
+                                       @Nullable FileOperationProgress progress) throws IOException {
         int untilCheckpoint = 0;
         for (int i = 0; i < length - 4; i++) {
             if (--untilCheckpoint <= 0) {
-                ArchiveCancellation.checkpoint(null);
+                ArchiveCancellation.checkpoint(progress);
                 untilCheckpoint = 64 * 1024;
             }
             int position = offset + i;
@@ -247,6 +264,7 @@ final class AzoDecoder {
 
         private final byte[] input;
         private final byte[] output;
+        @Nullable private final FileOperationProgress progress;
         private final ArithDecoder arith = new ArithDecoder();
         private final LiteralProb literal = new LiteralProb();
         private final LenProb lenProb = new LenProb();
@@ -266,9 +284,11 @@ final class AzoDecoder {
         private final int[] extraBits = new int[1];
         private int writePos;
 
-        RawBlockDecoder(@NonNull byte[] input, int outputSize) {
+        RawBlockDecoder(@NonNull byte[] input, int outputSize,
+                        @Nullable FileOperationProgress progress) {
             this.input = input;
             this.output = new byte[outputSize];
+            this.progress = progress;
         }
 
         @NonNull
@@ -314,7 +334,7 @@ final class AzoDecoder {
         }
 
         private void write(int value) throws IOException {
-            if ((writePos & 0xffff) == 0) ArchiveCancellation.checkpoint(null);
+            if ((writePos & 0xffff) == 0) ArchiveCancellation.checkpoint(progress);
             if (writePos >= output.length) throw unsupported("AZO decoder wrote beyond output size");
             output[writePos++] = (byte) value;
         }

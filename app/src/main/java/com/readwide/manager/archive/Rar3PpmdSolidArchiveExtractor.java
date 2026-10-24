@@ -11,7 +11,7 @@ import java.io.OutputStream;
 import java.util.List;
 
 /**
- * Extracts a RAR3/RAR4 PPMd solid entry with the first-party
+ * Extracts a RAR3/RAR4 PPMd-starting solid entry with the first-party
  * {@link Rar3PpmdSolidStreamDecoder} engine.
  *
  * <p>Solid semantics: the target's PPMd model and LZ window depend on every
@@ -36,7 +36,7 @@ final class Rar3PpmdSolidArchiveExtractor {
 
     private Rar3PpmdSolidArchiveExtractor() {}
 
-    /** Mixed classic-LZ/PPMd archives retain the broader extraction routes. */
+    /** Non-PPMd starting members retain the broader routes; internal switches stay in-session. */
     @Nullable
     static ArchiveSupport.ForwardArchiveReader openForwardReader(File archive, File spoolDirectory,
             boolean nativeAvailable) throws IOException {
@@ -75,6 +75,7 @@ final class Rar3PpmdSolidArchiveExtractor {
             if (entry.directory || entry.splitBefore) continue;
             if (entry.unpackedSize < 0 || entry.dataCrc < 0) return null;
             if (RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) continue;
+            if (!RarFeatureClassifier.hasRar3DecoderVersion(entry)) return null;
             if (!isPpmdBlockStart(entry, chains.chain(entry), password, null)) return null;
             if (!sawPpmd && entry.solid) return null; // Missing solid-set primer.
             sawPpmd = true;
@@ -83,7 +84,7 @@ final class Rar3PpmdSolidArchiveExtractor {
         // Keep ordinary non-solid PPMd on native when available. The scoped solid
         // engine handles model carryover that otherwise degrades to bulk extraction.
         return sawPpmd && needsFirstParty
-                ? new Rar3PpmdForwardReader(entries, password, spoolDirectory, chains) : null;
+                ? new Rar3PpmdForwardReader(entries, password, spoolDirectory) : null;
     }
 
     /**
@@ -118,7 +119,7 @@ final class Rar3PpmdSolidArchiveExtractor {
                 writeVerifiedEntry(decoder, entry, step.parts, password, outFile, progress);
                 return true;
             }
-            discardVerifiedEntry(decoder, entry, step.parts, password, progress);
+            discardVerifiedEntry(decoder, entry, step.parts, password, progress, true);
         }
         // Unreachable: the chain always ends with the target.
         throw new RarArchiveReader.UnsupportedRarFeatureException(
@@ -127,7 +128,7 @@ final class Rar3PpmdSolidArchiveExtractor {
 
     /**
      * Extracts a whole archive whose compressed members are all RAR3/RAR4
-     * PPMd entries (stored members are allowed and delegated to the stored
+     * PPMd-starting entries (stored members are allowed and delegated to the stored
      * path). One shared decoder pass keeps the solid model and window state
      * without re-priming per entry.
      *
@@ -150,7 +151,7 @@ final class Rar3PpmdSolidArchiveExtractor {
             if (RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) {
                 continue; // handled by the stored path below
             }
-            if (entry.rarVersion != 4) {
+            if (!RarFeatureClassifier.hasRar3DecoderVersion(entry)) {
                 return false;
             }
             if (entry.unpackedSize < 0) {
@@ -171,6 +172,7 @@ final class Rar3PpmdSolidArchiveExtractor {
         }
         Rar3PpmdSolidStreamDecoder decoder = new Rar3PpmdSolidStreamDecoder();
         boolean sawEntry = false;
+        java.util.Set<RarArchiveReader.RarEntry> continuations = solidContinuations(entries);
         for (RarArchiveReader.RarEntry entry : entries) {
             if (entry == null || entry.splitBefore) {
                 continue;
@@ -194,9 +196,24 @@ final class Rar3PpmdSolidArchiveExtractor {
                 continue;
             }
             if (!entry.solid) decoder = new Rar3PpmdSolidStreamDecoder();
-            writeVerifiedEntry(decoder, entry, chain, password, out, progress);
+            writeVerifiedEntry(decoder, entry, chain, password, out, progress, continuations.contains(entry));
         }
         return sawEntry;
+    }
+
+    /** One scan; stored files, directories and physical split tails do not consume VM history. */
+    static java.util.Set<RarArchiveReader.RarEntry> solidContinuations(List<RarArchiveReader.RarEntry> entries) throws IOException {
+        java.util.Set<RarArchiveReader.RarEntry> result = java.util.Collections.newSetFromMap(
+                new java.util.IdentityHashMap<>());
+        RarArchiveReader.RarEntry previous = null;
+        for (RarArchiveReader.RarEntry entry : entries) {
+            checkpoint(null);
+            if (entry == null || entry.directory || entry.splitBefore
+                    || RarFeatureClassifier.isRar3Or4StoredMethod(entry.method)) continue;
+            if (entry.solid && previous != null) result.add(previous);
+            previous = entry;
+        }
+        return result;
     }
 
     private static long sumUnpackedBytes(@NonNull List<RarArchiveReader.RarEntry> entries) {
@@ -225,7 +242,7 @@ final class Rar3PpmdSolidArchiveExtractor {
         if (plan == null) return null;
         for (RarSolidReadPlan.Step step : plan.steps) {
             RarArchiveReader.RarEntry entry = step.entry;
-            if (entry.rarVersion != 4) {
+            if (!RarFeatureClassifier.hasRar3DecoderVersion(entry)) {
                 return null;
             }
             if (entry.unpackedSize < 0) {
@@ -239,7 +256,8 @@ final class Rar3PpmdSolidArchiveExtractor {
         for (RarSolidReadPlan.Step step : plan.steps) {
             RarArchiveReader.RarEntry entry = step.entry;
             if (!isPpmdBlockStart(entry, step.parts, password, progress)) {
-                // Classic-LZ solid members are a different decoder problem.
+                // Initial LZ/table-less members use the broader plan. This does
+                // not classify every internal block: the decoder handles switches.
                 return null;
             }
         }
@@ -277,24 +295,47 @@ final class Rar3PpmdSolidArchiveExtractor {
     static void discardVerifiedEntry(Rar3PpmdSolidStreamDecoder decoder,
             RarArchiveReader.RarEntry entry, List<RarArchiveReader.RarEntry> entries,
             char[] password, FileOperationProgress progress) throws IOException {
-        decodeOne(decoder, entry, entries, password, DISCARD, progress);
+        decodeOne(decoder, entry, entries, password, DISCARD, progress, false, false);
+    }
+
+    /** Full-archive/forward plans know whether this is the real end of the solid run. */
+    static void discardVerifiedEntry(Rar3PpmdSolidStreamDecoder decoder,
+            RarArchiveReader.RarEntry entry, List<RarArchiveReader.RarEntry> entries,
+            char[] password, FileOperationProgress progress, boolean continuesSolid) throws IOException {
+        decodeOne(decoder, entry, entries, password, DISCARD, progress, continuesSolid, !continuesSolid);
     }
 
     static void writeVerifiedEntry(Rar3PpmdSolidStreamDecoder decoder,
             RarArchiveReader.RarEntry entry, List<RarArchiveReader.RarEntry> entries, char[] password,
             File target, FileOperationProgress progress) throws IOException {
+        // A selected prefix may end before queued future descriptors are consumed.
+        writeVerifiedEntry(decoder, entry, entries, password, target, progress, false, false);
+    }
+
+    static void writeVerifiedEntry(Rar3PpmdSolidStreamDecoder decoder,
+            RarArchiveReader.RarEntry entry, List<RarArchiveReader.RarEntry> entries, char[] password,
+            File target, FileOperationProgress progress, boolean continuesSolid) throws IOException {
+        writeVerifiedEntry(decoder, entry, entries, password, target, progress, continuesSolid, !continuesSolid);
+    }
+
+    private static void writeVerifiedEntry(Rar3PpmdSolidStreamDecoder decoder,
+            RarArchiveReader.RarEntry entry, List<RarArchiveReader.RarEntry> entries, char[] password,
+            File target, FileOperationProgress progress, boolean continuesSolid, boolean completeRun) throws IOException {
         try (RarOutputFileGuard guard = RarOutputFileGuard.forTarget(target)) {
             try (OutputStream out = ArchiveSupport.openExtractionOutputStream(target)) {
-                decodeOne(decoder, entry, entries, password, out, progress);
+                decodeOne(decoder, entry, entries, password, out, progress, continuesSolid, completeRun);
             }
             guard.commit();
+        } catch (IOException | RuntimeException | Error failure) {
+            decoder.invalidate();
+            throw failure;
         }
     }
 
     private static void decodeOne(Rar3PpmdSolidStreamDecoder decoder,
             RarArchiveReader.RarEntry entry, List<RarArchiveReader.RarEntry> entries,
             char[] password, OutputStream destination,
-            FileOperationProgress progress) throws IOException {
+            FileOperationProgress progress, boolean continuesSolid, boolean completeRun) throws IOException {
         OutputStream checked = new OutputStream() {
             @Override public void write(int value) throws IOException {
                 if (Thread.currentThread().isInterrupted()) throw new IOException("RAR extraction cancelled");
@@ -308,16 +349,26 @@ final class Rar3PpmdSolidArchiveExtractor {
                 destination.write(bytes, offset, length);
                 if (progress != null) progress.addDoneBytes(length);
             }
+            @Override public void flush() throws IOException {
+                checkpoint(progress);
+                destination.flush();
+                checkpoint(progress);
+            }
         };
         try (Rar3PackedPayload payload = Rar3PackedPayload.open(entry, entries, password, progress)) {
             java.io.InputStream input = payload.input;
-            long crc = decoder.decodeEntry(input, payload.checksumEntry.unpackedSize, checked);
+            long crc = decoder.decodeEntry(input, payload.checksumEntry.unpackedSize, checked, continuesSolid, progress);
             // Force physical range/truncation checks even when the range coder stopped early.
             payload.finish(progress);
             if (crc != (payload.checksumEntry.dataCrc & 0xffffffffL)) {
                 throw new RarArchiveReader.UnsupportedRarFeatureException(
                         "RAR3 PPMd solid entry or primer failed CRC verification: " + entry.path);
             }
+            if (completeRun) decoder.requireCompleteFilterRun();
+        } catch (IOException | RuntimeException | Error failure) {
+            // Payload draining, CRC and close can fail after the symbol decoder returned.
+            decoder.invalidate();
+            throw failure;
         }
     }
 }

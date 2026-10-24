@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">Wyrównanie akapitów</string>
+    <string name="epub_alignment_book">Domyślne dla książki</string>
+    <string name="epub_alignment_start">Do początku wiersza</string>
+    <string name="epub_alignment_justify">Wyjustowane</string>
+    <string name="epub_text_alignment_hint">Dla tekstu EPUB o płynnym układzie. Początek wiersza jest po lewej dla LTR i po prawej dla RTL. Jawnie ustawione wyśrodkowanie i wyrównanie do prawej pozostają bez zmian.</string>
+</resources>

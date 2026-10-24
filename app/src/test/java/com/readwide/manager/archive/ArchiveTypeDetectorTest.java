@@ -2,6 +2,8 @@ package com.readwide.manager.archive;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 
 import org.junit.Test;
 
@@ -35,5 +37,12 @@ public class ArchiveTypeDetectorTest {
         assertTrue(ArchiveTypeDetector.isFirstRarSplitName("book.rar"));
         assertTrue(ArchiveTypeDetector.isFirstRarSplitName("book.part1.rar"));
         assertTrue(ArchiveTypeDetector.isFirstNumericSplitName("book.zip.001"));
+    }
+
+    @Test public void pmarcUsesNativeArchiveRouteWithoutAmigaVolumeAssociation() {
+        assertEquals(ArchiveSupport.Type.LIBARCHIVE, ArchiveTypeDetector.fromFileName("legacy.PMA"));
+        assertEquals("legacy", ArchiveTypeDetector.outputBaseName(new File("legacy.PMA"), "fallback"));
+        assertNull(ArchiveTypeDetector.fromFileName("legacy.pma.tmp"));
+        assertFalse(LhaVolumeResolver.isCandidate("legacy.pma"));
     }
 }

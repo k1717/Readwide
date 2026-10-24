@@ -840,4 +840,6 @@
     <string name="txt_contents_error">Не вдалося завантажити зміст. Відкрийте файл знову та повторіть спробу.</string>
     <string name="txt_contents_save_error">Не вдалося зберегти зміни змісту.</string>
     <string name="txt_contents_page">%1$s · с. %2$d</string>
+    <string name="viewer_retry">Спробувати знову</string>
+    <string name="document_renderer_stopped">Перегляд документа зупинено. Відкрийте файл знову, щоб продовжити з останньої збереженої позиції.</string>
 </resources>

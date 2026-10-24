@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Nota de rodapé</string>
+    <string name="epub_return_to_text">Voltar ao texto</string>
+    <string name="epub_contents_fallback">Não foi encontrado um índice legível; as seções são exibidas na ordem de leitura.</string>
+    <string name="epub_contents_empty">Nenhum item correspondente.</string>
+</resources>

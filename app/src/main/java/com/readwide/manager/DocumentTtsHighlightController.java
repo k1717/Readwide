@@ -1,6 +1,5 @@
 package com.readwide.manager;
 
-import android.webkit.WebSettings;
 import android.webkit.WebView;
 
 import androidx.annotation.NonNull;
@@ -50,7 +49,7 @@ final class DocumentTtsHighlightController {
         if (activity.webView == null) return;
         evaluate(HIGHLIGHT_SCRIPT, null);
         if (pendingSentence != null && pendingPage == activity.currentPage && pendingLocation != null) {
-            evaluate(showJs(pendingSentence, pendingAllowScroll, pendingLocation), null);
+            showHighlight(pendingSentence, pendingAllowScroll, pendingLocation);
         }
     }
 
@@ -73,7 +72,16 @@ final class DocumentTtsHighlightController {
         pendingAllowScroll = allowScroll;
         pendingPage = page;
         pendingLocation = location;
-        if (page == activity.currentPage) evaluate(showJs(normalized, allowScroll, location), null);
+        if (page == activity.currentPage) showHighlight(normalized, allowScroll, location);
+    }
+
+    private void showHighlight(String sentence, boolean allowScroll,
+                               DocumentTtsHighlightMath.TextLocation location) {
+        String script = showJs(sentence, allowScroll, location);
+        // DOM scrolling can precede its native scroll callback. Retire earlier
+        // captures before following speech, without inventing a user interaction.
+        if (allowScroll) activity.invalidateDocumentContentPositionCapture();
+        evaluate(script, null);
     }
 
     private static String showJs(@NonNull String normalized, boolean allowScroll,
@@ -100,14 +108,7 @@ final class DocumentTtsHighlightController {
             return;
         }
         final int targetPage = activity.currentPage;
-        WebSettings settings = webView.getSettings();
-        boolean restoreJavascriptOff = !settings.getJavaScriptEnabled();
-        if (restoreJavascriptOff) settings.setJavaScriptEnabled(true);
-        webView.evaluateJavascript(js, value -> {
-            activity.restoreDocumentJavaScriptPolicy(
-                    webView, targetPage, restoreJavascriptOff);
-            if (cb != null) cb.onReceiveValue(value);
-        });
+        activity.evaluateDocumentJavascript(webView, targetPage, js, cb);
     }
 
     /**

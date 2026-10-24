@@ -15,8 +15,93 @@ final class EpubCssCompatibility {
 
     private static final Pattern IMPORTANT = Pattern.compile("(?i)!\\s*important\\s*$");
     private static final Pattern LEGACY_PREFIX = Pattern.compile("(?i)-epub-");
+    private static final Pattern TEXT_ALIGN = Pattern.compile("(?i)text-align");
+    private static final Pattern LINE_HEIGHT = Pattern.compile("(?i)line-height");
+    private static final Pattern SIMPLE_LINE_HEIGHT = Pattern.compile(
+            "(?i)(?:normal|(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?:%|em|rem|ex|ch|px|pt|pc|in|cm|mm|q|vh|vw|vmin|vmax)?)");
 
     private EpubCssCompatibility() {}
+
+    /**
+     * Wrap only literal prose alignment values. The original value is the fallback
+     * when a page has no override (including fixed/image/vertical pages). This also
+     * makes shared/imported stylesheets independent of the page requesting them.
+     * Explicit center/right/end, expressions, custom-property bodies and priorities
+     * are preserved; no document scripts or selector-specific !important override
+     * are needed.
+     */
+    static String prepareParagraphAlignment(String css) {
+        if (css == null || css.isEmpty()) return css == null ? "" : css;
+        if (!TEXT_ALIGN.matcher(css).find()) return css;
+        StringBuilder out = new StringBuilder(css.length());
+        int[] copied = {0};
+        scanDeclarations(css, (property, valueStart, end, scope) -> {
+            if (!scope.screen) return;
+            boolean alignment = "text-align".equalsIgnoreCase(property);
+            boolean lastLine = "text-align-last".equalsIgnoreCase(property);
+            if (!alignment && !lastLine) return;
+            String value = cleanValue(css.substring(valueStart, end));
+            Matcher important = IMPORTANT.matcher(value);
+            boolean priority = important.find();
+            if (priority) value = value.substring(0, important.start()).trim();
+            if (!("justify".equalsIgnoreCase(value)
+                    || (alignment && ("left".equalsIgnoreCase(value) || "start".equalsIgnoreCase(value))))) return;
+            out.append(css, copied[0], valueStart).append("var(")
+                    .append(alignment ? "--readwide-epub-align" : "--readwide-epub-align-last")
+                    .append(',').append(value).append(')');
+            if (priority) out.append(" !important");
+            copied[0] = end;
+        });
+        return copied[0] == 0 ? css : out.append(css, copied[0], css.length()).toString();
+    }
+
+    /** Insert before book styles so explicit book centering still wins the cascade. */
+    static String paragraphAlignmentStyle(int alignment) {
+        int mode = com.readwide.manager.util.EpubTextAlignment.normalize(alignment);
+        if (mode == com.readwide.manager.util.EpubTextAlignment.BOOK_DEFAULT) return "";
+        String value = mode == com.readwide.manager.util.EpubTextAlignment.START ? "start" : "justify";
+        return "<style id=\"readwide-epub-paragraph-alignment\">"
+                + "html{--readwide-epub-align:" + value + " !important;"
+                + "--readwide-epub-align-last:auto !important;text-align:" + value + ";}"
+                // Invalid custom properties activate the original declaration's fallback.
+                // Do not add per-paragraph rules: they would override an inherited center.
+                + "h1,h2,h3,h4,h5,h6,table,pre,code,figure,figcaption,caption,svg,math,nav,blockquote,"
+                + "[epub\\:type~=\"z3998:poem\"],[epub\\:type~=\"z3998:verse\"]"
+                + "{--readwide-epub-align:initial !important;--readwide-epub-align-last:initial !important;}"
+                + "</style>";
+    }
+
+    /** Keep complex expressions and font shorthands intact; literal values retain a fallback. */
+    static String prepareLineHeight(String css) {
+        if (css == null || css.isEmpty()) return css == null ? "" : css;
+        if (!LINE_HEIGHT.matcher(css).find()) return css;
+        StringBuilder out = new StringBuilder(css.length());
+        int[] copied = {0};
+        scanDeclarations(css, (property, valueStart, end, scope) -> {
+            if (!scope.screen || !"line-height".equalsIgnoreCase(property)) return;
+            String value = cleanValue(css.substring(valueStart, end));
+            Matcher important = IMPORTANT.matcher(value);
+            boolean priority = important.find();
+            if (priority) value = value.substring(0, important.start()).trim();
+            if (!SIMPLE_LINE_HEIGHT.matcher(value).matches()) return;
+            out.append(css, copied[0], valueStart).append("var(--readwide-epub-line-height,")
+                    .append(value).append(')');
+            if (priority) out.append(" !important");
+            copied[0] = end;
+        });
+        return copied[0] == 0 ? css : out.append(css, copied[0], css.length()).toString();
+    }
+
+    static String lineHeightStyle(int choice) {
+        String value = com.readwide.manager.util.EpubTypography.lineHeightCss(choice);
+        if (value.isEmpty()) return "";
+        return "<style id=\"readwide-epub-line-height\">"
+                + "html{--readwide-epub-line-height:" + value + " !important;line-height:" + value + ";}"
+                + "h1,h2,h3,h4,h5,h6,table,pre,code,figure,figcaption,caption,svg,math,nav,blockquote,"
+                + "[epub\\:type~=\"z3998:poem\"],[epub\\:type~=\"z3998:verse\"]"
+                + "{--readwide-epub-line-height:initial !important;}"
+                + "</style>";
+    }
 
     static String addHtmlWebViewAliases(String html) {
         if (html == null || html.isEmpty()) return html == null ? "" : html;

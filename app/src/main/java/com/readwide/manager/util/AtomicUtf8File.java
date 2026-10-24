@@ -64,8 +64,23 @@ final class AtomicUtf8File {
                     || new File(file.getPath() + ".bak").exists()) {
                 throw new IOException("Atomic file commit did not complete: " + file.getName());
             }
-        } catch (IOException | RuntimeException failure) {
-            if (output != null) atomicFile.failWrite(output);
+        } catch (IOException | RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            if (output != null) {
+                try { atomicFile.failWrite(output); }
+                catch (RuntimeException | OutOfMemoryError | StackOverflowError cleanup) {
+                    // failWrite syncs before closing; a failed cleanup may still own the stream.
+                    try { output.close(); }
+                    catch (IOException | RuntimeException | OutOfMemoryError | StackOverflowError unavailable) {
+                        // Best effort: retain the original failure and cleanup diagnostic.
+                    }
+                    if (cleanup != failure) {
+                        try { failure.addSuppressed(cleanup); }
+                        catch (OutOfMemoryError | StackOverflowError unavailable) {
+                            // Preserve the original failure if diagnostics cannot allocate.
+                        }
+                    }
+                }
+            }
             throw failure;
         }
     }

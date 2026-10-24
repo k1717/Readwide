@@ -19,6 +19,74 @@ public class Rar3UnpackerTest {
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
+    @Test public void partialRawFilterCrossesCheckedBoundaryWithoutReplayingDictionaryPrefix() throws Exception {
+        Rar3SolidState state = new Rar3SolidState();
+        Rar3UnpackContext first = solidContext("partial-primer.rar", partialFilterPrimer(), 1, crc("A"), state);
+        first.requireFileBoundary(); first.allowPartialFilterCarry();
+        File primer = tempFolder.newFile(); Rar3Unpacker.unpack(first, primer, null);
+        assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(primer.toPath()));
+        File target = tempFolder.newFile();
+        Rar3Unpacker.unpack(solidContext("partial-target.rar", partialFilterTarget(), 1, crc("A"), state), target, null);
+        assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(target.toPath()));
+        assertEquals(3, state.retained());
+    }
+
+    @Test public void partialRawFilterDoesNotPassLastEntryOrBadPrimerCrc() throws Exception {
+        for (boolean badCrc : new boolean[]{false, true}) {
+            Rar3SolidState state = new Rar3SolidState();
+            Rar3UnpackContext context = solidContext("partial-fail-" + badCrc,
+                    partialFilterPrimer(), 1, badCrc ? 0 : crc("A"), state);
+            context.requireFileBoundary(); if (badCrc) context.allowPartialFilterCarry();
+            File output = tempFolder.newFile();
+            org.junit.Assert.assertThrows(java.io.IOException.class, () -> Rar3Unpacker.unpack(context, output, null));
+            assertFalse(output.exists());
+            org.junit.Assert.assertThrows(java.io.IOException.class, state::ensureUsable);
+        }
+    }
+
+    @Test public void symbolCodedPartialFilterCrossesExplicitPpmdFileMarker() throws Exception {
+        Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
+        Rar3PpmdFilterOutput.DeferredFilters deferred = new Rar3PpmdFilterOutput.DeferredFilters();
+        for (int entry = 0; entry < 2; entry++) {
+            ByteArrayOutputStream symbols = new ByteArrayOutputStream();
+            if (entry == 0) {
+                symbols.write(2); symbols.write(3);
+                writeVmTransport(symbols, Rar3VirtualMachineTest.deferredResizingRecord(1, 2, 1));
+                symbols.write('A'); symbols.write('A');
+            } else symbols.write('B');
+            symbols.write(2); symbols.write(2);
+            byte[] encoded = symbols.toByteArray(); int[] cursor = {0};
+            Rar3ClassicLzEngine.PpmdSource ppmd = new Rar3ClassicLzEngine.PpmdSource() {
+                @Override public void readTable(java.io.InputStream in) throws java.io.IOException { assertEquals(0xa1, in.read()); }
+                @Override public int symbol() { return encoded[cursor[0]++] & 255; }
+                @Override public int escape() { return 2; }
+            };
+            ByteArrayOutputStream target = new ByteArrayOutputStream();
+            try (Rar3PpmdFilterOutput out = new Rar3PpmdFilterOutput(target, 1, programs, 0x40000, deferred, entry == 0)) {
+                Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(new RarBitInput(new byte[]{(byte)0xa1}),
+                        new RarLzWindow(8, out), 1, new int[Rar3HuffmanTables.TABLE_SIZE], programs,
+                        new Rar3UnpackState(), ppmd, out, false, true);
+                assertTrue(engine.fileEndSeen()); out.finish(engine.fileEndSeen());
+            }
+            assertEquals(encoded.length, cursor[0]); assertArrayEquals(new byte[]{'A'}, target.toByteArray());
+        }
+    }
+
+    static byte[] partialFilterPrimer() throws Exception {
+        BitWriter bits = new BitWriter();
+        writeTable(bits, new int[]{'A','B',256,257}, new int[0]);
+        bits.writeBitString("11");
+        ByteArrayOutputStream record = new ByteArrayOutputStream();
+        writeVmTransport(record, Rar3VirtualMachineTest.deferredResizingRecord(1,2,1));
+        for (byte value : record.toByteArray()) bits.writeBits(value & 255,8);
+        bits.writeBitString("00001001"); // Plain A, next-file raw prefix A, EOF/new tables.
+        return bits.toByteArray();
+    }
+
+    static byte[] partialFilterTarget() {
+        return syntheticPayload(block(new int[]{'A','B',256,257}, "011001")); // B, EOF/new tables.
+    }
+
     @Test public void solidLzDescriptorAppliesToNextEntryAfterExplicitBoundary() throws Exception {
         Rar3SolidState state = new Rar3SolidState();
         byte[] first = deferredLzPrimer(true);
@@ -85,7 +153,7 @@ public class Rar3UnpackerTest {
         }
     }
 
-    private static byte[] deferredLzPrimer(boolean marker) throws Exception {
+    static byte[] deferredLzPrimer(boolean marker) throws Exception {
         BitWriter bits = new BitWriter();
         writeTable(bits,new int[]{'A','B',256,257},new int[0]);
         bits.writeBitString("11");
@@ -95,6 +163,12 @@ public class Rar3UnpackerTest {
         bits.writeBitString(marker ? "001001" : "00"); // A, then EOF with next-entry tables.
         return bits.toByteArray();
     }
+
+    static byte[] deferredFilterTarget() {
+        return syntheticPayload(block(new int[]{'A','B',256,257}, "00011001"));
+    }
+
+    static byte[] oversizedFilterResult() throws Exception { return resizingLzPayload(4, true); }
 
     private Rar3UnpackContext solidContext(String name,byte[] packed,long size,long checksum,Rar3SolidState state) throws Exception {
         return Rar3UnpackContext.forSolidSequenceEntry(writeArchive(name,packed),0,packed.length,size,0x33,
@@ -161,6 +235,58 @@ public class Rar3UnpackerTest {
             assertEquals(encoded.length, cursor[0]);
             assertArrayEquals(java.util.Arrays.copyOf(new byte[]{'A','B'}, finalSize), target.toByteArray());
         }
+    }
+
+    @Test public void lzZeroIntermediateChainPreservesFinalCrcAndFileBoundary() throws Exception {
+        for (int mode = 0; mode < 3; mode++) {
+            BitWriter bits = new BitWriter();
+            writeTable(bits, new int[]{'A','B',256,257}, new int[0]);
+            for (int input : new int[]{2,0}) {
+                bits.writeBitString("11");
+                ByteArrayOutputStream transport = new ByteArrayOutputStream();
+                writeVmTransport(transport, Rar3VirtualMachineTest.resizingRecord(input,0));
+                for (byte value : transport.toByteArray()) bits.writeBits(value & 255,8);
+            }
+            bits.writeBitString("000100"); // Raw A, B (filtered away), then final A.
+            if (mode != 1) bits.writeBitString("1000");
+            byte[] packed = bits.toByteArray();
+            File archive = writeArchive("zero-chain-" + mode + ".rar", packed);
+            File output = tempFolder.newFile();
+            Rar3UnpackContext context = contextFor(archive, packed, 1, mode == 2 ? 123 : crc("A"));
+            context.requireFileBoundary();
+            if (mode == 0) {
+                Rar3Unpacker.unpack(context, output, null);
+                assertArrayEquals(new byte[]{'A'}, Files.readAllBytes(output.toPath()));
+            } else {
+                org.junit.Assert.assertThrows(java.io.IOException.class, () -> Rar3Unpacker.unpack(context, output, null));
+                assertFalse(output.exists());
+            }
+        }
+    }
+
+    @Test public void ppmdZeroIntermediateChainConsumesAllRecordsAndTheFileMarker() throws Exception {
+        ByteArrayOutputStream symbols = new ByteArrayOutputStream();
+        for (int input : new int[]{2,0}) {
+            symbols.write(2); symbols.write(3);
+            writeVmTransport(symbols, Rar3VirtualMachineTest.resizingRecord(input,0));
+        }
+        symbols.write('A'); symbols.write('B'); symbols.write('C'); symbols.write(2); symbols.write(2);
+        byte[] encoded = symbols.toByteArray(); int[] cursor = {0};
+        Rar3ClassicLzEngine.PpmdSource ppmd = new Rar3ClassicLzEngine.PpmdSource() {
+            @Override public void readTable(java.io.InputStream input) throws java.io.IOException { assertEquals(0xa1, input.read()); }
+            @Override public int symbol() { return encoded[cursor[0]++] & 255; }
+            @Override public int escape() { return 2; }
+        };
+        ByteArrayOutputStream target = new ByteArrayOutputStream();
+        Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(target,1,programs)) {
+            RarLzWindow window = new RarLzWindow(8,output);
+            Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(new RarBitInput(new byte[]{(byte)0xa1}),
+                    window,1,new int[Rar3HuffmanTables.TABLE_SIZE],programs,
+                    new Rar3UnpackState(),ppmd,output,false,false);
+            output.finish(); assertTrue(engine.fileEndSeen()); assertEquals(3,window.written());
+        }
+        assertEquals(encoded.length,cursor[0]); assertArrayEquals(new byte[]{'C'},target.toByteArray());
     }
 
     private static byte[] resizingLzPayload(int finalSize, boolean marker) throws Exception {
@@ -328,6 +454,171 @@ public class Rar3UnpackerTest {
             assertEquals(3, cursor[0]);
             assertArrayEquals(new byte[]{'A','B','C'}, actual.toByteArray());
         }
+    }
+
+    @Test public void keepOldLzLengthsSurvivePpmdWithinOneFile() throws Exception {
+        assertKeepOldLzLengthsAcrossPpmd(false);
+    }
+
+    @Test public void keepOldLzLengthsSurvivePpmdSolidFileBoundary() throws Exception {
+        assertKeepOldLzLengthsAcrossPpmd(true);
+    }
+
+    private static void assertKeepOldLzLengthsAcrossPpmd(boolean nextFile) throws Exception {
+        int[] lengths = new int[Rar3HuffmanTables.TABLE_SIZE];
+        for (int symbol : new int[]{'A',256,258,271}) lengths[symbol] = 2;
+        lengths[Rar3HuffmanTables.NC + 10] = 1;
+        int low = Rar3HuffmanTables.NC + Rar3HuffmanTables.DC;
+        lengths[low + 7] = lengths[low + 16] = 1;
+        lengths[low + Rar3HuffmanTables.LDC] = 1;
+        BitWriter packed = new BitWriter();
+        packed.writeBits(0, 2);
+        for (int i = 0; i < Rar3HuffmanTables.BC; i++) {
+            packed.writeBits(i == 0 || i == 1 || i == 2 || i == 18 ? 2 : 0, 4);
+        }
+        writeMainTableLengths(packed, lengths);
+        // Two distance-40/length-3 matches; the second starts a low-distance repeat.
+        // Then switch tables within this file. PPMd symbols are synthetic dispatch input.
+        packed.writeBitString("11001101011");
+        packed.alignToByte(); packed.writeBits(0xa1, 8);
+        if (!nextFile) {
+            writeUnchangedOldLengths(packed);
+            packed.writeBitString("100101"); // Repeat-last, EOF requiring a new table.
+        }
+        Rar3UnpackState matches = new Rar3UnpackState();
+        int[] symbols = {'B',2,nextFile ? 2 : 0};
+        int[] cursor = {0};
+        Rar3ClassicLzEngine.PpmdSource source = new Rar3ClassicLzEngine.PpmdSource() {
+            @Override public void readTable(java.io.InputStream input) throws java.io.IOException {
+                assertEquals(0xa1, input.read());
+                assertEquals(40, matches.oldDistance(0));
+                assertEquals(40, matches.oldDistance(1));
+                assertEquals(3, matches.lastLength());
+                assertEquals(7, matches.previousLowDistance());
+                assertEquals(15, matches.lowDistanceRepeatCount());
+            }
+            @Override public int symbol() { return symbols[cursor[0]++]; }
+            @Override public int escape() { return 2; }
+        };
+        ByteArrayOutputStream actual = new ByteArrayOutputStream();
+        Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
+        RarLzWindow window;
+        int[] savedLengths;
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(actual, nextFile ? 7 : 10, programs)) {
+            byte[] history = new byte[64]; java.util.Arrays.fill(history, (byte)'Z');
+            window = new RarLzWindow(history, 0, history.length, RarOutputStreamDecodedOutput.wrapOrMemory(output));
+            Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(
+                    new RarBitInput(packed.toByteArray()), window, nextFile ? 7 : 10,
+                    new int[Rar3HuffmanTables.TABLE_SIZE], programs, matches, source, output, false, true);
+            output.finish();
+            savedLengths = engine.tableState();
+            assertArrayEquals(lengths, savedLengths); // All 404 lengths, including low/repeat tables.
+            assertTrue(engine.fileEndSeen()); assertFalse(engine.reuseTablesForNextEntry());
+            assertEquals(symbols.length, cursor[0]);
+            assertArrayEquals(nextFile ? new byte[]{'Z','Z','Z','Z','Z','Z','B'}
+                    : new byte[]{'Z','Z','Z','Z','Z','Z','B','Z','Z','Z'}, actual.toByteArray());
+        }
+        if (nextFile) {
+            assertEquals(7, matches.previousLowDistance());
+            assertEquals(15, matches.lowDistanceRepeatCount());
+            BitWriter successor = new BitWriter();
+            writeUnchangedOldLengths(successor); successor.writeBitString("100101");
+            ByteArrayOutputStream second = new ByteArrayOutputStream();
+            try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(second, 3, programs)) {
+                RarLzWindow continued = new RarLzWindow(window.bytes(), window.position(), window.retained(),
+                        RarOutputStreamDecodedOutput.wrapOrMemory(output));
+                Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(
+                        new RarBitInput(successor.toByteArray()), continued, 3, savedLengths,
+                        programs, matches, source, output, false, true);
+                output.finish();
+                assertArrayEquals(new byte[]{'Z','Z','Z'}, second.toByteArray());
+                assertArrayEquals(lengths, engine.tableState());
+                assertTrue(engine.fileEndSeen()); assertFalse(engine.reuseTablesForNextEntry());
+                assertEquals(symbols.length, cursor[0]);
+            }
+        }
+        assertEquals(40, matches.oldDistance(0)); assertEquals(40, matches.oldDistance(1));
+        assertEquals(3, matches.lastLength());
+        // A new LZ table resets low-distance state, not repeated-match history.
+        assertEquals(0, matches.previousLowDistance()); assertEquals(0, matches.lowDistanceRepeatCount());
+    }
+
+    private static void writeUnchangedOldLengths(BitWriter bits) {
+        bits.writeBits(1, 2); // LZ with keep-old lengths.
+        for (int i = 0; i < Rar3HuffmanTables.BC; i++) bits.writeBits(i == 0 ? 1 : 0, 4);
+        // Direct delta zero preserves each length; a zero-run symbol would erase it.
+        for (int i = 0; i < Rar3HuffmanTables.TABLE_SIZE; i++) bits.writeBits(0, 1);
+    }
+
+    @Test public void lzAndPpmdRecordsShareVmChainButMatchesUseRawHistory() throws Exception {
+        BitWriter packed = new BitWriter();
+        writeTable(packed, new int[]{256,257}, new int[0]);
+        packed.writeBitString("01"); // LZ VM record, before any raw bytes.
+        ByteArrayOutputStream record = new ByteArrayOutputStream();
+        writeVmTransport(record, Rar3VirtualMachineTest.slicingRecord(2, 2, 1));
+        for (byte value : record.toByteArray()) packed.writeBits(value & 255, 8);
+        packed.writeBitString("001"); // New table in this file.
+        packed.alignToByte(); packed.writeBits(0xa1, 8);
+        writeTable(packed, new int[]{256,271}, new int[]{1});
+        packed.writeBitString("0100000"); // Three-byte distance-2 match, then reusable LZ EOF.
+        // Synthetic PPMd symbols, not an encoder-produced range stream: reuse
+        // the LZ-defined program/old length at the same raw start, then switch back.
+        int[] symbols = {2,3,0,0,'A','B',2,0}; int[] cursor = {0};
+        Rar3ClassicLzEngine.PpmdSource source = new Rar3ClassicLzEngine.PpmdSource() {
+            @Override public void readTable(java.io.InputStream input) throws java.io.IOException {
+                assertEquals(0xa1, input.read());
+            }
+            @Override public int symbol() { return symbols[cursor[0]++]; }
+            @Override public int escape() { return 2; }
+        };
+        ByteArrayOutputStream actual = new ByteArrayOutputStream();
+        Rar3VmFilter.ProgramState programs = new Rar3VmFilter.ProgramState();
+        Rar3UnpackState matches = new Rar3UnpackState();
+        try (Rar3PpmdFilterOutput output = new Rar3PpmdFilterOutput(actual, 5, programs)) {
+            RarLzWindow window = new RarLzWindow(8, output);
+            Rar3ClassicLzEngine engine = Rar3ClassicLzEngine.decodeMixed(new RarBitInput(packed.toByteArray()),
+                    window, 5, new int[Rar3HuffmanTables.TABLE_SIZE], programs, matches,
+                    source, output, false, true);
+            output.finish();
+            assertTrue(engine.fileEndSeen()); assertTrue(engine.reuseTablesForNextEntry());
+            assertEquals(symbols.length, cursor[0]); assertEquals(1, programs.programCount());
+            // The slice runs twice: AB -> B,0 -> 0,0. LZ must still copy original AB.
+            assertArrayEquals(new byte[]{0,0,'A','B','A'}, actual.toByteArray());
+            assertEquals(5, window.written());
+            assertEquals(2, matches.oldDistance(0)); assertEquals(3, matches.lastLength());
+        }
+    }
+
+    static byte[] emptyLzFileBoundary() {
+        BitWriter packed = new BitWriter();
+        writeTable(packed, new int[]{'A',256}, new int[0]);
+        packed.writeBitString("0101"); // No raw output; EOF requests a new table next file.
+        return packed.toByteArray();
+    }
+
+    static byte[] lzBlockForPpmdSwitch(int[] main, int[] distance, String actions) {
+        BitWriter packed = new BitWriter();
+        writeTable(packed, main, distance); packed.writeBitString(actions);
+        return packed.toByteArray();
+    }
+
+    static byte[] lzVmReuseForPpmdSwitch() {
+        BitWriter packed = new BitWriter();
+        writeTable(packed, new int[]{'A','B',256,257}, new int[0]);
+        packed.writeBitString("11"); packed.writeBits(0,8); packed.writeBits(0,8);
+        packed.writeBitString("00011001"); // AB and EOF, request a new table.
+        return packed.toByteArray();
+    }
+
+    static byte[] lzVmDefinitionForPpmdSwitch() throws java.io.IOException {
+        BitWriter packed = new BitWriter();
+        writeTable(packed, new int[]{'A','B',256,257}, new int[0]);
+        packed.writeBitString("11");
+        ByteArrayOutputStream record = new ByteArrayOutputStream();
+        writeVmTransport(record, Rar3VirtualMachineTest.slicingRecord(2,2,1));
+        for (byte value : record.toByteArray()) packed.writeBits(value & 255,8);
+        packed.writeBitString("00011001");
+        return packed.toByteArray();
     }
 
     @Test public void mixedPpmdMatchUsesLzHistoryWithoutChangingLzMatchCache() throws Exception {

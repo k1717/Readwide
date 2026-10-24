@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">EPUB 글자 크기: %1$d%%</string>
+    <string name="epub_line_height">줄 간격</string>
+    <string name="epub_typography_hint">EPUB에만 적용됩니다. ‘책 기본값’은 책의 줄 간격을 유지합니다. 고정 레이아웃·이미지 중심·세로쓰기 페이지는 원래 문단 배치를 유지합니다.</string>
+    <string name="epub_paragraph_layout_kept">이 페이지에서는 문단 서식을 변경할 수 없습니다. 책의 원래 배치를 유지합니다.</string>
+</resources>

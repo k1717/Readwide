@@ -57,6 +57,16 @@ public class Rar3VmFilterProgramStateTest {
         assertEquals(1, state.programCount());
     }
 
+    @Test public void zeroIntermediateLengthCanBeExplicitOrReused() throws Exception {
+        Rar3VmFilter.ProgramState state = new Rar3VmFilter.ProgramState();
+        BitWriter first = definition(0, 0);
+        assertEquals(0, state.parse(0xa0, first.toByteArray(), 0, 1 << 20).filter.blockLength);
+        BitWriter reused = new BitWriter(); reused.writeData(0);
+        Rar3VmFilter.PendingFilter filter = state.parse(0, reused.toByteArray(), 0, 1 << 20).filter;
+        assertEquals(0, filter.blockLength); assertEquals(0, filter.initR[4]);
+        assertEquals(1, filter.initR[5]); assertEquals(1, state.programCount());
+    }
+
     @Test public void uniqueProgramSlotsAreMemoryBounded() throws Exception {
         Rar3VmFilter.ProgramState state = new Rar3VmFilter.ProgramState();
         for (int i=0;i<1025;i++) {

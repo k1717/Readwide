@@ -129,6 +129,50 @@ public class EggPasswordProbeTest {
         try { return EggArchiveReader.verifyPasswordBlock(input, method, packed, unpacked, crc, crypto, progress); }
         finally { crypto.destroy(); }
     }
+
+    @Test public void azoPackedReadCancellationIsTerminalAndClosesOnce() throws Exception {
+        byte[] plain = new byte[65537];
+        FileOperationProgress progress = new FileOperationProgress("probe", null);
+        int[] reads = {0}, closes = {0}, requested = {0};
+        InputStream source = new ByteArrayInputStream(ciphertext(plain)) {
+            @Override public synchronized int read(byte[] bytes, int offset, int length) {
+                reads[0]++; requested[0] = length;
+                int count = super.read(bytes, offset, length);
+                progress.cancel();
+                return count;
+            }
+            @Override public void close() { closes[0]++; }
+        };
+        assertThrows(InterruptedIOException.class,
+                () -> probe(source, 3, plain.length, plain.length, crc(plain), progress));
+        assertEquals(1, reads[0]); assertEquals(65536, requested[0]); assertEquals(1, closes[0]);
+        assertEquals(0, progress.snapshot().doneBytes);
+        assertFalse(Thread.currentThread().isInterrupted());
+    }
+
+    @Test public void azoChunkedReadsPreserveCipherStateForNextBlock() throws Exception {
+        byte[] plain = new byte[65537], next = {4, 5, 6, 7};
+        for (int i = 0; i < plain.length; i++) plain[i] = (byte) i;
+        AlzipZipCryptoTest.Encryptor encryptor = new AlzipZipCryptoTest.Encryptor("probe".toCharArray());
+        byte[] firstCipher = encryptor.encrypt(plain), nextCipher = encryptor.encrypt(next);
+        AlzipZipCrypto crypto = new AlzipZipCrypto("probe".toCharArray());
+        FileOperationProgress progress = new FileOperationProgress("probe", null);
+        int[] reads = {0};
+        InputStream source = new ByteArrayInputStream(firstCipher) {
+            @Override public synchronized int read(byte[] bytes, int offset, int length) {
+                assertTrue(length <= 65536); reads[0]++;
+                return super.read(bytes, offset, length);
+            }
+        };
+        try {
+            assertTrue(EggArchiveReader.verifyPasswordBlock(source, 3, plain.length,
+                    plain.length, crc(plain), crypto, progress));
+            assertEquals(3, reads[0]); // Two packed chunks and the existing EOF drain check.
+            assertTrue(EggArchiveReader.verifyPasswordBlock(new ByteArrayInputStream(nextCipher), 0,
+                    next.length, next.length, crc(next), crypto, progress));
+            assertEquals(0, progress.snapshot().doneBytes);
+        } finally { crypto.destroy(); }
+    }
     private static byte[] ciphertext(byte[] bytes) {
         return new AlzipZipCryptoTest.Encryptor("probe".toCharArray()).encrypt(bytes);
     }

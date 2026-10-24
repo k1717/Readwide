@@ -1,5 +1,6 @@
 package com.readwide.manager.archive;
 
+import com.readwide.manager.util.FileOperationProgress;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -70,6 +71,87 @@ public class AzoDecoderSafetyTest {
         } finally { Thread.interrupted(); }
     }
 
+    @Test public void tokenCancellationIsTerminalWithoutThreadInterruption() throws Exception {
+        FileOperationProgress progress = new FileOperationProgress("AZO", null);
+        progress.cancel();
+        for (byte[] packed : new byte[][] {frame(false, new byte[] {1}), {'1', 0, 8, 9, 10}}) {
+            assertThrows(InterruptedIOException.class, () -> AzoDecoder.decode(packed, packed.length, progress));
+        }
+        assertThrows(InterruptedIOException.class, () -> AzoDecoder.decode(new byte[0], Long.MAX_VALUE, progress));
+        assertFalse(Thread.currentThread().isInterrupted());
+        assertEquals(0, progress.snapshot().doneBytes);
+    }
+
+    @Test public void activeTokenPreservesStoredFallbackAndFilteredBytes() throws Exception {
+        FileOperationProgress progress = new FileOperationProgress("AZO", null);
+        byte[] raw = {'1', 0, 8, 9, 10};
+        assertArrayEquals(raw, AzoDecoder.decode(raw, raw.length, progress));
+        byte[] block = {5, (byte) 0xe8, 5, 0, 0, 0};
+        assertArrayEquals(new byte[] {42, 5, (byte) 0xe8, 4, 0, 0, 0},
+                AzoDecoder.decode(frame(true, new byte[] {42}, block), 7, progress));
+        assertArrayEquals(new byte[0], AzoDecoder.decode(frame(false), 0, progress));
+        assertEquals(0, progress.snapshot().doneBytes);
+    }
+
+    @Test public void framedCheckpointsObserveCancellationAfterConstruction() throws Exception {
+        Class<?> type = Class.forName(AzoDecoder.class.getName() + "$FramedDecoder");
+        Constructor<?> constructor = type.getDeclaredConstructor(byte[].class, int.class, FileOperationProgress.class);
+        constructor.setAccessible(true);
+        java.lang.reflect.Field readPos = type.getDeclaredField("readPos"); readPos.setAccessible(true);
+        for (String stage : new String[] {"validateLayout", "decodeOneBlock"}) {
+            FileOperationProgress progress = new FileOperationProgress("AZO", null);
+            Object decoder = constructor.newInstance(frame(false, new byte[] {1}), 1, progress);
+            readPos.setInt(decoder, 2);
+            progress.cancel();
+            Method method = type.getDeclaredMethod(stage); method.setAccessible(true);
+            assertThrows(InterruptedIOException.class, () -> invoke(method, decoder));
+            assertEquals(2, readPos.getInt(decoder));
+        }
+        assertFalse(Thread.currentThread().isInterrupted());
+    }
+
+    @Test public void rawOutputCheckpointObservesTokenWithoutChangingNextByte() throws Exception {
+        Class<?> type = Class.forName(AzoDecoder.class.getName() + "$RawBlockDecoder");
+        Constructor<?> constructor = type.getDeclaredConstructor(byte[].class, int.class, FileOperationProgress.class);
+        constructor.setAccessible(true);
+        FileOperationProgress progress = new FileOperationProgress("AZO", null);
+        Object decoder = constructor.newInstance(new byte[0], 65537, progress);
+        Method write = type.getDeclaredMethod("write", int.class); write.setAccessible(true);
+        invoke(write, decoder, 7);
+        // Exercise the existing output checkpoint, not the arithmetic decoder.
+        java.lang.reflect.Field position = type.getDeclaredField("writePos"); position.setAccessible(true);
+        position.setInt(decoder, 65536);
+        progress.cancel();
+        assertThrows(InterruptedIOException.class, () -> invoke(write, decoder, 8));
+        assertEquals(65536, position.getInt(decoder));
+        java.lang.reflect.Field output = type.getDeclaredField("output"); output.setAccessible(true);
+        byte[] bytes = (byte[]) output.get(decoder);
+        assertEquals(7, bytes[0]); assertEquals(0, bytes[65536]);
+        assertFalse(Thread.currentThread().isInterrupted());
+    }
+
+    @Test public void x86CheckpointObservesTokenBeforeModifyingBytes() throws Exception {
+        Method filter = AzoDecoder.class.getDeclaredMethod("applyX86Filter",
+                byte[].class, int.class, int.class, FileOperationProgress.class);
+        filter.setAccessible(true);
+        byte[] bytes = {5, (byte) 0xe8, 5, 0, 0, 0};
+        byte[] original = bytes.clone();
+        FileOperationProgress progress = new FileOperationProgress("AZO", null);
+        progress.cancel();
+        assertThrows(InterruptedIOException.class, () -> invoke(filter, null, bytes, 0, bytes.length, progress));
+        assertArrayEquals(original, bytes);
+        assertFalse(Thread.currentThread().isInterrupted());
+    }
+
+    private static Object invoke(Method method, Object target, Object... args) throws Exception {
+        try { return method.invoke(target, args); }
+        catch (InvocationTargetException wrapper) {
+            Throwable cause = wrapper.getCause();
+            if (cause instanceof Exception) throw (Exception) cause;
+            throw (Error) cause;
+        }
+    }
+
     private static byte[] frame(boolean filter,byte[]... blocks) throws IOException {
         ByteArrayOutputStream bytes=new ByteArrayOutputStream();
         DataOutputStream out=new DataOutputStream(bytes);
@@ -84,10 +166,10 @@ public class AzoDecoderSafetyTest {
     // retries raw AZO when stored bytes happen to share the two-byte prefix.
     private static byte[] decodeFramed(byte[] input,int size) throws Exception {
         Class<?> type=Class.forName(AzoDecoder.class.getName()+"$FramedDecoder");
-        Constructor<?> constructor=type.getDeclaredConstructor(byte[].class,int.class);
+        Constructor<?> constructor=type.getDeclaredConstructor(byte[].class,int.class,FileOperationProgress.class);
         constructor.setAccessible(true);
         Method decode=type.getDeclaredMethod("decode");decode.setAccessible(true);
-        try { return (byte[])decode.invoke(constructor.newInstance(input,size)); }
+        try { return (byte[])decode.invoke(constructor.newInstance(input,size,null)); }
         catch(InvocationTargetException wrapper) {
             Throwable cause=wrapper.getCause();
             if(cause instanceof Exception)throw (Exception)cause;

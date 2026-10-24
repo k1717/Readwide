@@ -294,6 +294,11 @@ lha_check_header_format(const void *h)
 	const unsigned char *p = h;
 	size_t next_skip_bytes;
 
+	/* PMarc stored members reuse the level-0 LHA header and data CRC. */
+	if (p[0] != 0 && p[H_LEVEL_OFFSET] == 0 &&
+	    memcmp(p + H_METHOD_OFFSET, "-pm0-", 5) == 0)
+		return (0);
+
 	switch (p[H_METHOD_OFFSET+3]) {
 	/*
 	 * "-lh0-" ... "-lh7-" "-lhd-"
@@ -538,7 +543,8 @@ archive_read_format_lha_read_header(struct archive_read *a,
 	else
 		lha->directory = 0;
 	if (memcmp(lha->method, "lh0", 3) == 0 ||
-	    memcmp(lha->method, "lz4", 3) == 0)
+	    memcmp(lha->method, "lz4", 3) == 0 ||
+	    memcmp(lha->method, "pm0", 3) == 0)
 		lha->entry_is_compressed = 0;
 	else
 		lha->entry_is_compressed = 1;
@@ -812,10 +818,17 @@ lha_read_file_header_0(struct archive_read *a, struct lha *lha)
 	headersum = p[H0_HEADER_SUM_OFFSET];
 	lha->compsize = archive_le32dec(p + H0_COMP_SIZE_OFFSET);
 	lha->origsize = archive_le32dec(p + H0_ORIG_SIZE_OFFSET);
+	if (memcmp(lha->method, "pm0", 3) == 0 &&
+	    lha->compsize != lha->origsize) {
+		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+		    "Invalid PMarc stored entry size");
+		return (ARCHIVE_FATAL);
+	}
 	lha->mtime = dos_to_unix(archive_le32dec(p + H0_DOS_TIME_OFFSET));
 	namelen = p[H0_NAME_LEN_OFFSET];
 	extdsize = (int)lha->header_size - H0_FIXED_SIZE - namelen;
-	if ((namelen > 221 || extdsize < 0) && extdsize != -2) {
+	if (((namelen > 221 || extdsize < 0) && extdsize != -2) ||
+	    (memcmp(lha->method, "pm0", 3) == 0 && extdsize < 0)) {
 		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
 		    "Invalid LHa header");
 		return (ARCHIVE_FATAL);
@@ -832,7 +845,8 @@ lha_read_file_header_0(struct archive_read *a, struct lha *lha)
 	sum_calculated = lha_calcsum(0, p, 2, lha->header_size - 2);
 
 	/* Read an extended header */
-	if (extdsize > 0) {
+	/* PMarc uses this area for comments, not Unix ownership or mode data. */
+	if (extdsize > 0 && memcmp(lha->method, "pm0", 3) != 0) {
 		/* This extended data is set by 'LHa for UNIX' only.
 		 * Maybe fixed size.
 		 */

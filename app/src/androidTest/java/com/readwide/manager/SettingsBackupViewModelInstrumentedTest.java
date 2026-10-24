@@ -63,6 +63,83 @@ public class SettingsBackupViewModelInstrumentedTest {
         });
     }
 
+    @Test public void allocationFailurePublishesFailureAndReleasesBackupOwnership() {
+        resourceFailureAllowsRetry(new OutOfMemoryError("backup allocation"));
+    }
+
+    @Test public void parserStackFailurePublishesFailureAndReleasesBackupOwnership() {
+        resourceFailureAllowsRetry(new StackOverflowError("backup nesting"));
+    }
+
+    @Test public void resourceFailureReportsAdditionalRecoveryErrorsWithoutClaimingRollback() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        SettingsBackupViewModel[] model = new SettingsBackupViewModel[1];
+        OutOfMemoryError failure = new OutOfMemoryError("backup allocation");
+        // Stream close failures are also suppressed; they need not be failed rollback steps.
+        failure.addSuppressed(new IOException("close"));
+        main(() -> {
+            model[0] = new SettingsBackupViewModel(queue::add);
+            model[0].submit(SettingsBackupViewModel.Operation.EXPORT, () -> { throw failure; });
+        });
+        queue.remove().run();
+        idle();
+        main(() -> {
+            try {
+                SettingsBackupViewModel.State result = model[0].state().getValue();
+                assertEquals(SettingsBackupViewModel.Phase.FAILURE, result.phase);
+                assertTrue(result.text.startsWith("backup allocation"));
+                assertTrue(result.text.contains("Additional recovery errors"));
+                assertFalse(result.text.contains("rollback"));
+                assertFalse(result.text.contains("restoring previous data also failed"));
+            } finally { model[0].onCleared(); }
+        });
+    }
+
+    private static void resourceFailureAllowsRetry(Error failure) {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        SettingsBackupViewModel[] model = new SettingsBackupViewModel[1];
+        main(() -> {
+            model[0] = new SettingsBackupViewModel(queue::add);
+            model[0].submit(SettingsBackupViewModel.Operation.REPLACE, () -> { throw failure; });
+        });
+        queue.remove().run();
+        idle();
+        main(() -> {
+            assertEquals(SettingsBackupViewModel.Phase.FAILURE, model[0].state().getValue().phase);
+            assertEquals(failure.getMessage(), model[0].state().getValue().text);
+            model[0].consumeResult();
+            model[0].submit(SettingsBackupViewModel.Operation.MERGE,
+                    SettingsBackupViewModelInstrumentedTest::success);
+            assertTrue(model[0].isWorking());
+            assertEquals(1, queue.size());
+        });
+        queue.remove().run();
+        idle();
+        main(() -> {
+            assertEquals(SettingsBackupViewModel.Phase.SUCCESS, model[0].state().getValue().phase);
+            model[0].onCleared();
+        });
+    }
+
+    @Test public void executorAllocationFailureDoesNotStrandAnotherSettingsInstance() {
+        ArrayDeque<Runnable> queue = new ArrayDeque<>();
+        SettingsBackupViewModel[] models = new SettingsBackupViewModel[2];
+        main(() -> {
+            models[0] = new SettingsBackupViewModel(task -> { throw new OutOfMemoryError("worker allocation"); });
+            models[1] = new SettingsBackupViewModel(queue::add);
+            models[0].submit(SettingsBackupViewModel.Operation.EXPORT,
+                    SettingsBackupViewModelInstrumentedTest::success);
+            assertEquals(SettingsBackupViewModel.Phase.FAILURE, models[0].state().getValue().phase);
+            models[1].submit(SettingsBackupViewModel.Operation.MERGE,
+                    SettingsBackupViewModelInstrumentedTest::success);
+            assertTrue(models[1].isWorking());
+            assertEquals(1, queue.size());
+        });
+        queue.remove().run();
+        idle();
+        main(() -> { models[0].onCleared(); models[1].onCleared(); });
+    }
+
     @Test public void closingOwnerDoesNotInterruptCommitOrPublishToClosedScreen() {
         ArrayDeque<Runnable> queue = new ArrayDeque<>();
         SettingsBackupViewModel[] model = new SettingsBackupViewModel[1];

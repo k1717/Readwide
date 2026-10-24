@@ -19,6 +19,15 @@ public final class ArchiveCancellation {
         }
     }
 
+    /** Final observation after validation; a pause wait belongs BEFORE validation. */
+    static void checkCancelled(FileOperationProgress progress) throws InterruptedIOException {
+        // Do not make a just-validated source stale by waiting for resume here.
+        // checkpoint still records thread interruption in the operation token.
+        if (Thread.currentThread().isInterrupted() || (progress != null && progress.isCancelled())) {
+            checkpoint(progress);
+        }
+    }
+
     /** Preserve cancellation when an exception leaves the throwing API as a result. */
     public static boolean restoreIfCancelled(Throwable failure, FileOperationProgress progress) {
         try {

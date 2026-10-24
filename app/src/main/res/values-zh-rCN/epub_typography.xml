@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">EPUB 字号：%1$d%%</string>
+    <string name="epub_line_height">行距</string>
+    <string name="epub_typography_hint">仅适用于 EPUB。“书籍默认”保留原书行距。固定版式、以图片为主的页面和竖排页面保留原有段落布局。</string>
+    <string name="epub_paragraph_layout_kept">此页面无法更改段落格式，将保留原书布局。</string>
+</resources>

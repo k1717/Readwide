@@ -20,6 +20,25 @@ import org.junit.Test;
 public class DocumentArchiveUtilsTest {
 
     @Test
+    public void deeplyNestedOptionalCoverMetadataDoesNotPreventTheNextCover() throws Exception {
+        String nested = "<package>" + repeat("<metadata>", 8192)
+                + repeat("</metadata>", 8192) + "</package>";
+        File deep = createEpub(nested, new LinkedHashMap<>());
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        entries.put("OPS/cover.png", new byte[]{1});
+        File ordinary = createEpub("<package><manifest><item id='cover' href='cover.png' "
+                + "media-type='image/png' properties='cover-image'/></manifest></package>", entries);
+        try (ZipFile deepZip = new ZipFile(deep); ZipFile ordinaryZip = new ZipFile(ordinary)) {
+            // Parsers may accept this depth or decline it; neither path may escape optional discovery.
+            assertEquals(null, DocumentArchiveUtils.findEpubCoverImagePath(deepZip));
+            assertEquals("OPS/cover.png", DocumentArchiveUtils.findEpubCoverImagePath(ordinaryZip));
+        } finally {
+            deep.delete();
+            ordinary.delete();
+        }
+    }
+
+    @Test
     public void epub3CoverImagePropertyWinsOverOtherManifestImages() throws Exception {
         String opf = "<?xml version='1.0' encoding='UTF-8'?>"
                 + "<package xmlns='http://www.idpf.org/2007/opf' version='3.0'>"

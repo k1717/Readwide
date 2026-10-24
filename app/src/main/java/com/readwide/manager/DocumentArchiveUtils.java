@@ -159,6 +159,8 @@ final class DocumentArchiveUtils {
         final Map<String, String> mediaTypesByPath = new LinkedHashMap<>();
         final Map<String, EpubBinding> bindingsByMediaType = new LinkedHashMap<>();
         String packagePath = "";
+        String navigationPath = "";
+        String ncxPath = "";
         String mediaOverlayActiveClass = "";
 
         String mediaTypeForPath(String path) {
@@ -613,7 +615,8 @@ final class DocumentArchiveUtils {
                 if (isRasterCoverResource(zip, item)) return item.path;
             }
             return firstRaster != null ? firstRaster.path : null;
-        } catch (Exception ignored) {
+        } catch (Exception | StackOverflowError ignored) {
+            // Cover discovery is optional; deeply nested metadata must not strand its thumbnail job.
             return null;
         }
     }
@@ -695,8 +698,18 @@ final class DocumentArchiveUtils {
                 if (resourceEntry != null && !resourceEntry.isDirectory()
                         && !mediaType.isEmpty()) {
                     result.mediaTypesByPath.put(path, mediaType);
+                    if (result.navigationPath.isEmpty() && containsProperty(item.properties, "nav")
+                            && "application/xhtml+xml".equalsIgnoreCase(mediaType)) {
+                        result.navigationPath = path;
+                    }
                 }
             }
+
+            Node spineNode = firstNodeByLocalName(opfDoc, "spine");
+            EpubManifestItem ncx = manifest.get(attributeValue(
+                    spineNode == null ? null : spineNode.getAttributes(), "toc"));
+            if (ncx != null && "application/x-dtbncx+xml".equalsIgnoreCase(ncx.mediaType)
+                    && result.mediaTypesByPath.containsKey(ncx.path)) result.ncxPath = ncx.path;
 
             NodeList bindingNodes = opfDoc.getElementsByTagName("mediaType");
             if (bindingNodes.getLength() == 0) {

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">註腳</string>
+    <string name="epub_return_to_text">返回內文</string>
+    <string name="epub_contents_fallback">未找到可讀取的目錄，按閱讀順序顯示各節。</string>
+    <string name="epub_contents_empty">沒有符合的項目。</string>
+</resources>

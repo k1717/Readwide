@@ -102,9 +102,7 @@ final class EggAuthenticatedCrypto {
      * first (encrypt-then-MAC, verified against the footer at file end).
      */
     void decryptInPlace(@NonNull byte[] buffer, int offset, int length) throws IOException {
-        if ((offset | length) < 0 || length > buffer.length - offset) throw new IndexOutOfBoundsException();
-        if (Thread.currentThread().isInterrupted()) throw new IOException("EGG extraction cancelled");
-        hmac.update(buffer, offset, length);
+        authenticateCiphertext(buffer, offset, length);
         for (int i = 0; i < length; i++) {
             if (keystreamUsed == 16) {
                 try {
@@ -118,6 +116,13 @@ final class EggAuthenticatedCrypto {
             }
             buffer[offset + i] ^= keystream[keystreamUsed++];
         }
+    }
+
+    /** Checks candidate ciphertext without advancing CTR or exposing plaintext. */
+    void authenticateCiphertext(@NonNull byte[] buffer, int offset, int length) throws IOException {
+        if ((offset | length) < 0 || length > buffer.length - offset) throw new IndexOutOfBoundsException();
+        if (Thread.currentThread().isInterrupted()) throw new IOException("EGG extraction cancelled");
+        hmac.update(buffer, offset, length);
     }
 
     /** Verifies the 10-byte truncated HMAC-SHA1 footer over the ciphertext. */

@@ -832,4 +832,6 @@
     <string name="txt_contents_error">無法載入目錄。請重新開啟檔案後再試。</string>
     <string name="txt_contents_save_error">無法儲存目錄修改。</string>
     <string name="txt_contents_page">%1$s · 第%2$d頁</string>
+    <string name="viewer_retry">重試</string>
+    <string name="document_renderer_stopped">文件閱讀器已停止。重新開啟檔案即可從上次儲存的位置繼續閱讀。</string>
 </resources>

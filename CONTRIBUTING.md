@@ -14,6 +14,10 @@ Thank you for improving Readwide.
 ./gradlew assembleDebug
 ```
 
+See the [setup guide](ANDROID_STUDIO_SETUP_FOR_BEGINNERS.md) for the pinned SDK,
+NDK and CMake requirements, and [release build guide](RELEASE_BUILD.md) for release
+assembly and optional verification.
+
 ## Project rules
 
 - Keep Android source under `app/src/main/`.
@@ -30,7 +34,7 @@ Thank you for improving Readwide.
 - Keep reader state, bookmarks, folder shortcuts, and file actions safe and predictable.
 - Folder shortcut removal must remove only the shortcut entry, never the folder or its files.
 - Viewer activities should continue using single-viewer reuse behavior where appropriate.
-- Cache cleanup must only affect generated/disposable cache data. It must never delete bookmarks, reading history, saved reading position, folder shortcuts, or user documents.
+- Cache cleanup must only affect generated/disposable cache data. It must never delete bookmarks, reading history, saved reading position, folder shortcuts, or original documents.
 - Preserve Korean/Unicode text handling when touching decoding or rendering code.
 - Test TXT, PDF, EPUB, and Word paths when changing shared file-opening logic.
 - Test both PDF horizontal slide mode and vertical continuous mode when touching PDF gestures or rendering.
@@ -43,13 +47,17 @@ Thank you for improving Readwide.
 
 When behavior changes, update the relevant docs:
 
-- `README.md` for user-visible features and build instructions.
+- `README.md` for visible features and build instructions.
 - `CHANGELOG.md` for release changes.
 - `PATCHNOTES.md` for subsystem-grouped implementation details of the final release.
 - Organize all documentation by feature or subsystem, not numbered work sessions. State the current implementation and its limits directly; preserve genuine older release records and distinguish test evidence from pending checks.
+- Use direct project language. Do not include chat instructions, personal attributions of build results, conversation summaries, or sample-request/reply histories in public documentation. Describe sample files as test fixtures; use feature-focused wording rather than role labels. Preserve original third-party notices and exact API identifiers.
+- Follow the 1.0.17/1.0.18 format for each release-document family: dated version sections with subsystem bullets and a final release boundary in the changelog/patch notes; a version title, feature sections, privacy/dependencies and installation in GitHub release notes; subsystem details, resource/release changes and a validation boundary in development notes. Keep detailed verification status in the supporting development/release documents.
+- Keep license reports in their existing identity, runtime dependencies, test dependencies, build tooling, bundled notices and repository-checklist structure. Place additional component details under the appropriate section; retain SPDX and store-metadata formats. Reference and build guides keep their topic-specific structure rather than adopting a release-note template.
 - Keep each release's license report/SBOM identity, store changelogs and build/support pointers consistent without claiming unreported validation.
 - `PRIVACY.md` for data, permissions, TXT display-rule storage, or file-writing behavior.
 - `GITHUB_UPLOAD_NOTES.md` for packaging/upload workflow changes.
+- `docs/README.md` when adding or relocating documents. Keep current guides, historical release records and component provenance separate; do not present old test results as current verification.
 
 ## Drawer gesture changes
 

@@ -598,8 +598,8 @@ final class ReaderChromeController {
         // Keep vertical placement independent from the Android status-bar inset.
         // The TextView is already one reader-row taller, so bottom gravity moves
         // the page indicator down while preserving stable TXT pagination.
-        boolean rtl = ViewCompat.getLayoutDirection(activity.readerPageStatus)
-                == ViewCompat.LAYOUT_DIRECTION_RTL;
+        boolean rtl = activity.readerPageStatus.getLayoutDirection()
+                == View.LAYOUT_DIRECTION_RTL;
         int overlayStart = rtl ? overlaySideInsetRight : overlaySideInsetLeft;
         int overlayEnd = rtl ? overlaySideInsetLeft : overlaySideInsetRight;
         activity.readerPageStatus.setPaddingRelative(

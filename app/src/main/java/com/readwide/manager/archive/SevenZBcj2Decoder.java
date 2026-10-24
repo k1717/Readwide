@@ -61,6 +61,8 @@ final class SevenZBcj2Decoder {
                 if (count < 0) throw new EOFException("Truncated BCJ2 output");
                 offset += count;
             }
+            // Also initialize and validate the control stream for empty output.
+            if (decoded.read() != -1) throw new IOException("BCJ2 output exceeds declared size");
             return result;
         }
     }
@@ -97,7 +99,16 @@ final class SevenZBcj2Decoder {
 
         @Override public int read() throws IOException {
             checkOpen();
-            try { return readByte(); }
+            try {
+                int value = readByte();
+                // The published BCJ2 finish condition requires a zero range code
+                // after the declared output is complete. Check before returning
+                // the last byte: callers need not request a separate EOF read.
+                if (position == size && code != 0) {
+                    throw new SevenZBcj2ArchiveReader.IntegrityException("7z BCJ2 range coder did not finish");
+                }
+                return value;
+            }
             catch (IOException error) { failure = error; throw error; }
         }
 

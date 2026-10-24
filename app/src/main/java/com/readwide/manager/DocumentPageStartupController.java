@@ -53,6 +53,8 @@ final class DocumentPageStartupController {
     }
 
     void onNewIntent(@NonNull android.content.Intent intent) {
+        if (TtsPlaybackBridge.isNotificationReturnTo(activity, intent,
+                DocumentPageActivity.EXTRA_FILE_PATH)) return;
         activity.saveOutgoingDocumentReadingState();
         activity.setIntent(intent);
         activity.loadFromIntent(intent);
@@ -194,10 +196,17 @@ final class DocumentPageStartupController {
                     ViewGroup.LayoutParams.MATCH_PARENT, stableTop, epub && stableTop > 0);
             setSystemBarScrim(bottomScrim, android.view.Gravity.BOTTOM,
                     ViewGroup.LayoutParams.MATCH_PARENT, stableBottom, epub && stableBottom > 0);
-            setSystemBarScrim(startScrim, android.view.Gravity.START,
-                    stableLeft, ViewGroup.LayoutParams.MATCH_PARENT, epub && stableLeft > 0);
-            setSystemBarScrim(endScrim, android.view.Gravity.END,
-                    stableRight, ViewGroup.LayoutParams.MATCH_PARENT, epub && stableRight > 0);
+            // Insets are physical left/right edges, not locale-relative start/end.
+            // The FrameLayout root already reserves the cutout. Its children
+            // start inside that padding, so only the remaining bar width belongs
+            // here; painting the full inset again would cover the safe body.
+            setSystemBarScrim(startScrim, android.view.Gravity.LEFT,
+                    extraLeft, ViewGroup.LayoutParams.MATCH_PARENT, epub && extraLeft > 0);
+            setSystemBarScrim(endScrim, android.view.Gravity.RIGHT,
+                    extraRight, ViewGroup.LayoutParams.MATCH_PARENT, epub && extraRight > 0);
+            androidx.core.graphics.Insets navigation = insets.getInsetsIgnoringVisibility(
+                    androidx.core.view.WindowInsetsCompat.Type.navigationBars());
+            activity.updateDocumentNavigationBarEdge(navigation.left > 0 || navigation.right > 0);
             return insets;
         });
         androidx.core.view.ViewCompat.requestApplyInsets(content);

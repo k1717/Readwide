@@ -1,7 +1,5 @@
 # Readwide 1.0.20
 
-Release date: 2026-10-11.
-
 Readwide 1.0.20 improves large-TXT reading, adds configurable TXT Contents, expands archive decoding, and strengthens viewer restoration and local backup recovery.
 
 ## TXT page counting and navigation
@@ -92,10 +90,9 @@ Readwide 1.0.20 improves large-TXT reading, adds configurable TXT Contents, expa
 
 - Version name: `1.0.20`
 - Version code: `10020`
-- Release date: `2026-10-11`
 - Source license: Apache License 2.0
 - Source: https://github.com/k1717/Readwide
 - APK releases: https://github.com/k1717/Readwide/releases
 - Public APK filename: `Readwide_1.0.20.apk`. Local build filenames may differ.
 - With the same project release key, this version updates the GitHub 1.0.19 build in place.
-- The local release build completed successfully on 2026-10-11. Subsequent system-bar/WebView changes have static review only. See [verification status](CURRENT_SOURCE_STATUS_1_0_20.md) and [remaining runtime checks](RELEASE_READINESS_1_0_20.md); earlier results do not establish complete compatibility or current performance.
+- The local release build completed successfully. Subsequent system-bar/WebView changes have static review only. See [verification status](CURRENT_SOURCE_STATUS_1_0_20.md) and [remaining runtime checks](RELEASE_READINESS_1_0_20.md); earlier results do not establish complete compatibility or current performance.

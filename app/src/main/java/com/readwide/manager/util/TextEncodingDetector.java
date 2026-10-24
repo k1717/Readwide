@@ -1191,6 +1191,10 @@ final class TextEncodingDetector {
         return decodeBestEffort(data, encoding);
     }
 
+    static String readTextFromStream(InputStream input, String encoding) throws IOException {
+        return decodeBestEffort(readAllBytes(input), encoding);
+    }
+
     /**
      * Read a text file into decoded chunks.
      * For correctness with variable-width encodings, decode once and split by Java chars.

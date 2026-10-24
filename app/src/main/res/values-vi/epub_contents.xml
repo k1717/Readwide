@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_footnote">Chú thích</string>
+    <string name="epub_return_to_text">Quay lại nội dung</string>
+    <string name="epub_contents_fallback">Không tìm thấy mục lục có thể đọc; các phần được hiển thị theo thứ tự đọc.</string>
+    <string name="epub_contents_empty">Không có mục phù hợp.</string>
+</resources>

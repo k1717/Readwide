@@ -38,6 +38,21 @@ public class SettingsPreferenceStateInstrumentedTest {
         });
     }
 
+    @Test public void epubChoicesUseClickableTextFieldsInsteadOfPlatformDropdowns() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            View root = LayoutInflater.from(context()).inflate(R.layout.activity_settings, null, false);
+            for (int id : new int[]{R.id.epub_line_height_value, R.id.epub_text_alignment_value}) {
+                View value = root.findViewById(id);
+                assertTrue(value instanceof android.widget.TextView);
+                assertFalse(value instanceof Spinner);
+                assertTrue(value.isClickable());
+                assertTrue(value.isFocusable());
+                assertEquals(Math.round(48 * value.getResources().getDisplayMetrics().density),
+                        value.getLayoutParams().height);
+            }
+        });
+    }
+
     private int checkControls(View view) {
         if (view instanceof Switch || view instanceof Spinner || view instanceof SeekBar) {
             assertFalse(view.isSaveFromParentEnabled());

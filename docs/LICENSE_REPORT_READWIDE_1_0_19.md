@@ -37,7 +37,7 @@ This edition updates AppCompat, ConstraintLayout, SwipeRefreshLayout, hwplib and
 | `kr.dogfoot:hwpxlib:1.0.9` | HWPX text extraction backend | Apache-2.0 |
 | `com.tom-roush:pdfbox-android:2.0.27.0` | PDF text extraction with glyph positions for in-document find, and per-page plain text for PDF read-aloud (rendering still uses the platform PdfRenderer) | Apache-2.0 |
 
-## Native wrapper dependency
+### Native wrapper dependency
 
 | Maven coordinate | Purpose | Declared license |
 | --- | --- | --- |

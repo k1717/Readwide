@@ -101,8 +101,10 @@ final class AlzVolumeResolver {
         for (int i = 0; i < files.size(); i++) {
             checkpoint();
             File file = files.get(i);
-            try (RandomAccessFile input = new RandomAccessFile(file, "r")) {
+            SplitVolumeInput.SourceState source = SplitVolumeInput.SourceState.capture(file);
+            try (RandomAccessFile input = new RandomAccessFile(source.file, "r")) {
                 long size = input.length();
+                source.requireUnchanged(size);
                 boolean header = size >= 4 && readInt(input) == HEADER;
                 boolean framed = false;
                 int tail = 0;
@@ -115,7 +117,7 @@ final class AlzVolumeResolver {
                 }
                 if (files.size() == 1) {
                     if (framed && tail == MORE) throw new IOException("Missing ALZ continuation after " + file.getName());
-                    segments.add(new SplitVolumeInput.Segment(file, 0, size));
+                    segments.add(new SplitVolumeInput.Segment(source, 0, size));
                 } else if (i == 0 || header) {
                     if (!header || !framed || size < 24) {
                         throw new IOException("Invalid ALZ split framing: " + file.getName());
@@ -126,12 +128,14 @@ final class AlzVolumeResolver {
                     // Retain the final trailer, including its comment size.
                     // Removing only intermediate framing leaves payload offsets
                     // unchanged and lets the parser validate container completion.
-                    segments.add(new SplitVolumeInput.Segment(file, start, size - start - (last ? 0 : 16)));
+                    segments.add(new SplitVolumeInput.Segment(source, start, size - start - (last ? 0 : 16)));
                     retainedFinalTrailer = last;
                 } else {
                     // Retain the existing unframed continuation compatibility path.
-                    segments.add(new SplitVolumeInput.Segment(file, 0, size));
+                    segments.add(new SplitVolumeInput.Segment(source, 0, size));
                 }
+                checkpoint();
+                source.requireUnchanged(input.length());
             }
         }
         return new VolumeSet(files, segments, retainedFinalTrailer);

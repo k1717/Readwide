@@ -179,11 +179,12 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     private PrefsManager prefs;
     private ImageDialogStyleController dialogStyle;
+    private Dialog pageJumpDialog;
     private FrameLayout rootView;
     private ZoomImageView imageView;
     private Toolbar toolbar;
     private ImageReaderSliderController sliderController;
-    private TextView statusText;
+    private ViewerErrorPanel imageErrorPanel;
     private String filePath;
     private String fileUri;
     private String sourceArchivePath;
@@ -535,6 +536,7 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (pageJumpDialog != null) pageJumpDialog.dismiss();
         destroyed = true;
         if (restorePasswordDialog != null) {
             restorePasswordDialog.dismiss();
@@ -1075,16 +1077,8 @@ public class ImageReaderActivity extends AppCompatActivity {
         // while preparing/opening the image viewer, so the viewer itself stays
         // QuickPic-like: plain image canvas, no internal spinner overlay.
 
-        statusText = new TextView(this);
-        statusText.setTextColor(Color.WHITE);
-        statusText.setTextSize(15f);
-        statusText.setGravity(Gravity.CENTER);
-        statusText.setPadding(dpToPx(24), dpToPx(16), dpToPx(24), dpToPx(16));
-        statusText.setVisibility(View.GONE);
-        root.addView(statusText, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER));
+        imageErrorPanel = new ViewerErrorPanel(this, dialogStyle.bgColor(), Color.WHITE);
+        imageErrorPanel.attachTo(root);
 
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()
@@ -1170,8 +1164,10 @@ public class ImageReaderActivity extends AppCompatActivity {
         updateRotationMenuTitle(newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE);
         applyImageSystemBarVisibility();
         if (rootView != null) ViewCompat.requestApplyInsets(rootView);
+        if (pageJumpDialog != null && pageJumpDialog.isShowing()) layoutImagePageJumpDialog(pageJumpDialog);
         if (imageView != null) {
             imageView.post(() -> {
+                if (destroyed || imageView == null) return;
                 refreshArchiveSpreadPresentation();
                 ensureArchiveSpreadCompanionReady();
                 imageView.configureBaseMatrix();
@@ -1238,7 +1234,7 @@ public class ImageReaderActivity extends AppCompatActivity {
     private void toggleChrome() {
         chromeVisible = !chromeVisible;
         if (toolbar != null) toolbar.setVisibility(chromeVisible ? View.VISIBLE : View.GONE);
-        if (sliderController != null) sliderController.update(currentIndex, imagePaths.size(), chromeVisible);
+        updateImageSliderState();
         applyImageSystemBarVisibility();
     }
 
@@ -1257,7 +1253,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         if (imagePaths.size() > 1) {
             int visibleEnd = ArchiveImageSpreadMath.visibleEndIndex(
                     currentIndex, imagePaths.size(), archiveSpreadVisible);
-            String page = archiveSpreadVisible
+            String page = visibleEnd > currentIndex
                     ? String.format(Locale.getDefault(), "%d–%d / %d",
                     currentIndex + 1, visibleEnd + 1, imagePaths.size())
                     : String.format(Locale.getDefault(), "%d / %d",
@@ -1270,7 +1266,89 @@ public class ImageReaderActivity extends AppCompatActivity {
     }
 
     private void updateImageSliderState() {
-        if (sliderController != null) sliderController.update(currentIndex, imagePaths.size(), chromeVisible);
+        if (sliderController != null) sliderController.update(currentIndex, imagePaths.size(), chromeVisible, archiveSpreadVisible);
+    }
+
+    void showImagePageJumpDialog() {
+        if (destroyed || isFinishing() || archiveSourceChanged.get() || restoringArchiveSequence
+                || !TextUtils.isEmpty(sequenceHandoffToken) || imagePaths.size() <= 1
+                || (pageJumpDialog != null && pageJumpDialog.isShowing())) return;
+        final int sequence = imageSequenceGeneration.get();
+        Dialog dialog = dialogStyle.makeDialog();
+        pageJumpDialog = dialog;
+        LinearLayout box = dialogStyle.makeBox();
+        box.addView(dialogStyle.makeTitle(getString(R.string.enter_page_number)));
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input.setSingleLine(true);
+        input.setText(String.valueOf(currentIndex + 1));
+        input.selectAll();
+        input.setTextColor(dialogStyle.textColor());
+        input.setHintTextColor(dialogStyle.subTextColor());
+        input.setHint("1–" + imagePaths.size());
+        input.setContentDescription(getString(R.string.enter_page_number) + " (1–" + imagePaths.size() + ")");
+        input.setPadding(dpToPx(14), 0, dpToPx(14), 0);
+        GradientDrawable inputBg = new GradientDrawable();
+        inputBg.setColor(dialogStyle.panelColor());
+        inputBg.setCornerRadius(dpToPx(12));
+        input.setBackground(inputBg);
+        LinearLayout.LayoutParams inputLayout = new LinearLayout.LayoutParams(-1, dpToPx(48));
+        // Match the action surfaces' 4 dp outer insets; leave 10 dp between fills.
+        inputLayout.setMargins(dpToPx(4), 0, dpToPx(4), dpToPx(6));
+        box.addView(input, inputLayout);
+        TextView go = dialogStyle.makeButton(getString(R.string.go), dialogStyle.textColor());
+        TextView cancel = dialogStyle.makeButton(getString(R.string.cancel), dialogStyle.subTextColor());
+        for (TextView button : new TextView[]{cancel, go}) {
+            GradientDrawable surface = new GradientDrawable();
+            surface.setColor(dialogStyle.panelColor());
+            surface.setCornerRadius(dpToPx(10));
+            button.setBackground(new android.graphics.drawable.InsetDrawable(surface, dpToPx(4)));
+            button.setFocusable(true);
+        }
+        LinearLayout actions = new LinearLayout(this);
+        actions.addView(cancel, new LinearLayout.LayoutParams(0, dpToPx(48), 1f));
+        actions.addView(go, new LinearLayout.LayoutParams(0, dpToPx(48), 1f));
+        box.addView(actions);
+        Runnable jump = () -> {
+            if (destroyed || archiveSourceChanged.get() || restoringArchiveSequence
+                    || sequence != imageSequenceGeneration.get()) { dialog.dismiss(); return; }
+            int target = -1;
+            try { target = Integer.parseInt(input.getText().toString().trim()); }
+            catch (NumberFormatException ignored) { }
+            if (target < 1 || target > imagePaths.size()) {
+                input.setError(getString(R.string.invalid_page_number));
+                return;
+            }
+            dialog.dismiss();
+            showImageAtIndex(target - 1);
+        };
+        go.setOnClickListener(v -> jump.run());
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        input.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_GO);
+        input.setOnEditorActionListener((v, action, event) -> {
+            if (action != android.view.inputmethod.EditorInfo.IME_ACTION_GO) return false;
+            jump.run();
+            return true;
+        });
+        dialog.setOnDismissListener(d -> { if (pageJumpDialog == dialog) pageJumpDialog = null; });
+        dialog.setContentView(box);
+        input.requestFocus();
+        if (dialog.getWindow() != null) AdaptiveDialogLayoutHelper.setResizeSoftInputMode(
+                dialog.getWindow(), WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+        dialog.show();
+        layoutImagePageJumpDialog(dialog);
+    }
+
+    private void layoutImagePageJumpDialog(Dialog dialog) {
+        dialogStyle.setDialogWidth(dialog);
+        Window jumpWindow = dialog.getWindow();
+        if (jumpWindow != null) {
+            // Keep this input popup near the keyboard without moving other image dialogs.
+            WindowManager.LayoutParams placement = jumpWindow.getAttributes();
+            placement.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+            placement.y = dpToPx(12);
+            jumpWindow.setAttributes(placement);
+        }
     }
 
     private String getDisplayName() {
@@ -2623,10 +2701,20 @@ public class ImageReaderActivity extends AppCompatActivity {
     }
 
     private void setLoading(boolean loading, @Nullable String message) {
-        if (statusText == null) return;
-        statusText.setText(message == null ? "" : message);
-        statusText.setVisibility(!loading && !TextUtils.isEmpty(message) ? View.VISIBLE : View.GONE);
-        if (!loading && !TextUtils.isEmpty(message)) statusText.bringToFront();
+        if (imageErrorPanel == null) return;
+        if (loading || TextUtils.isEmpty(message)) {
+            imageErrorPanel.hide();
+            return;
+        }
+        final int generation = imageLoadGeneration;
+        final int sequence = imageSequenceGeneration.get();
+        // Changed archives require reopening from the list, never a stale-entry retry.
+        Runnable retry = archiveSourceChanged.get() || restoringArchiveSequence
+                || !TextUtils.isEmpty(sequenceHandoffToken) ? null : () -> {
+            if (!destroyed && generation == imageLoadGeneration
+                    && sequence == imageSequenceGeneration.get()) loadImageAsync();
+        };
+        imageErrorPanel.show(message, retry, this::finish);
     }
 
     private void persistArchiveImageProgress() {
@@ -3256,23 +3344,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             if (parent == null) return;
             File newFile = new File(parent, newName);
             if (FileSystemOps.renameInPlace(file, newName)) {
-                filePath = newFile.getAbsolutePath();
-                int renamedIndex = ImageSequenceState.applyRename(
-                        imagePaths,
-                        sourceDisplayNames,
-                        file.getAbsolutePath(),
-                        filePath,
-                        newFile.getName());
-                currentIndex = ImageSequenceNavigationMath.clampIndex(
-                        renamedIndex >= 0 ? renamedIndex : currentIndex,
-                        imagePaths.size());
-                invalidateImageSequenceWork(false);
-                if (displayedImageIndex == currentIndex
-                        && TextUtils.equals(displayedImagePath, file.getAbsolutePath())) {
-                    displayedImagePath = filePath;
-                }
-                if (TextUtils.equals(acceptedImagePath, file.getAbsolutePath())) acceptedImagePath = filePath;
-                updateToolbarTitle();
+                applyRenamedLocalImage(file, newFile);
                 ShortToast.show(this, R.string.renamed);
                 dialog.dismiss();
             } else {
@@ -3296,6 +3368,25 @@ public class ImageReaderActivity extends AppCompatActivity {
         });
         dialog.show();
         dialogStyle.setDialogWidth(dialog);
+    }
+
+    private void applyRenamedLocalImage(@NonNull File oldFile, @NonNull File newFile) {
+        filePath = newFile.getAbsolutePath();
+        int renamedIndex = ImageSequenceState.applyRename(
+                imagePaths, sourceDisplayNames, oldFile.getAbsolutePath(), filePath, newFile.getName());
+        currentIndex = ImageSequenceNavigationMath.clampIndex(
+                renamedIndex >= 0 ? renamedIndex : currentIndex, imagePaths.size());
+        invalidateImageSequenceWork(false);
+        if (displayedImageIndex == currentIndex
+                && TextUtils.equals(displayedImagePath, oldFile.getAbsolutePath())) {
+            displayedImagePath = filePath;
+        }
+        if (TextUtils.equals(acceptedImagePath, oldFile.getAbsolutePath())) acceptedImagePath = filePath;
+        updateToolbarTitle();
+        // Renaming also invalidates an unfinished decode for this page. The
+        // retained surface may still belong to the previous page; resume the
+        // requested image without replacing a healthy bitmap/drawable or zoom.
+        if (!hasUsableCurrentSurface()) restoreMissingImageSurface();
     }
 
     private void showDeleteConfirmDialog() {

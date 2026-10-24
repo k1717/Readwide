@@ -12,6 +12,7 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 
 import com.readwide.manager.util.ImageSequenceNavigationMath;
+import com.readwide.manager.util.ArchiveImageSpreadMath;
 import com.readwide.manager.util.PrefsManager;
 
 import java.util.Locale;
@@ -57,6 +58,11 @@ final class ImageReaderSliderController {
         imageSliderLabel.setGravity(Gravity.CENTER);
         imageSliderLabel.setSingleLine(true);
         imageSliderLabel.setTranslationY(activity.dpToPx(2));
+        imageSliderLabel.setMinHeight(activity.dpToPx(44));
+        imageSliderLabel.setFocusable(true);
+        imageSliderLabel.setOnClickListener(v -> {
+            if (!userTracking && latestItemCount > 1) activity.showImagePageJumpDialog();
+        });
         sliderBar.addView(imageSliderLabel, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -74,7 +80,12 @@ final class ImageReaderSliderController {
         sliderBar.addView(imageSlider, sliderLp);
         imageSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (fromUser) updateLabel(progressToIndex(progress, latestItemCount), latestItemCount);
+                if (!fromUser) return;
+                int target = progressToIndex(progress, latestItemCount);
+                updateLabel(target, latestItemCount);
+                // TalkBack/keyboard changes do not call onStopTrackingTouch.
+                // Keep expensive image loading deferred only during a touch drag.
+                if (!userTracking && latestItemCount > 0) listener.onSliderTargetSelected(target);
             }
 
             @Override public void onStartTrackingTouch(SeekBar seekBar) {
@@ -114,6 +125,10 @@ final class ImageReaderSliderController {
     }
 
     void update(int currentIndex, int itemCount, boolean chromeVisible) {
+        update(currentIndex, itemCount, chromeVisible, false);
+    }
+
+    void update(int currentIndex, int itemCount, boolean chromeVisible, boolean spreadVisible) {
         if (sliderBar == null || imageSlider == null || imageSliderLabel == null) return;
         latestItemCount = Math.max(0, itemCount);
         boolean hasSequence = itemCount > 1;
@@ -128,7 +143,7 @@ final class ImageReaderSliderController {
         int safeIndex = ImageSequenceNavigationMath.clampIndex(currentIndex, itemCount);
         int visualProgress = indexToProgress(safeIndex, itemCount);
         if (imageSlider.getProgress() != visualProgress) imageSlider.setProgress(visualProgress);
-        updateLabel(safeIndex, itemCount);
+        updateLabel(safeIndex, itemCount, spreadVisible);
     }
 
     private int progressToIndex(int progress, int itemCount) {
@@ -147,13 +162,22 @@ final class ImageReaderSliderController {
     }
 
     private void updateLabel(int index, int itemCount) {
+        updateLabel(index, itemCount, false);
+    }
+
+    private void updateLabel(int index, int itemCount, boolean spreadVisible) {
         if (imageSliderLabel == null) return;
         if (itemCount <= 1) {
             imageSliderLabel.setText("");
             return;
         }
         int safeIndex = ImageSequenceNavigationMath.clampIndex(index, itemCount);
-        imageSliderLabel.setText(String.format(Locale.getDefault(), "%d / %d", safeIndex + 1, itemCount));
+        int end = ArchiveImageSpreadMath.visibleEndIndex(safeIndex, itemCount, spreadVisible);
+        String label = end > safeIndex
+                ? String.format(Locale.getDefault(), "%d–%d / %d", safeIndex + 1, end + 1, itemCount)
+                : String.format(Locale.getDefault(), "%d / %d", safeIndex + 1, itemCount);
+        imageSliderLabel.setText(label);
+        imageSliderLabel.setContentDescription(activity.getString(R.string.enter_page_number) + ", " + label);
     }
 
     private void tintImageSlider(@NonNull SeekBar seekBar) {

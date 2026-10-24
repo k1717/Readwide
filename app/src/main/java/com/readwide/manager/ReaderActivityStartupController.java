@@ -4,6 +4,7 @@ import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.Toast;
 
 import androidx.activity.OnBackPressedCallback;
@@ -81,6 +82,8 @@ final class ReaderActivityStartupController {
     }
 
     void onNewIntent(@NonNull android.content.Intent intent) {
+        if (TtsPlaybackBridge.isNotificationReturnTo(activity, intent,
+                ReaderActivity.EXTRA_FILE_PATH)) return;
         // Save the previous file's state first (a background trim has already
         // saved it and made this a no-op in that case), then drop every
         // transient restore artifact - pending trim, released-memory flag,
@@ -100,7 +103,16 @@ final class ReaderActivityStartupController {
         activity.loadFileFromIntent(intent);
     }
 
-    private void configureWindow() {
+    void configureWindow() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            // DEFAULT can letterbox a punch-hole screen when the status bar is
+            // hidden on Android 9-14. Keep the same window frame in both modes;
+            // the existing reader chrome still owns its fixed body padding.
+            WindowManager.LayoutParams attributes = activity.getWindow().getAttributes();
+            attributes.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            activity.getWindow().setAttributes(attributes);
+        }
         WindowCompat.setDecorFitsSystemWindows(activity.getWindow(), false);
         activity.getWindow().setStatusBarColor(Color.BLACK);
         WindowInsetsControllerCompat controller =

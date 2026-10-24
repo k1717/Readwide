@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_section">Раздел</string>
+    <string name="epub_section_progress">Раздел %1$s / %2$d</string>
+    <string name="epub_section_move">Перейти к разделу</string>
+    <string name="epub_section_hint">Считаются разделы книги, а не экранные страницы или печатные номера страниц.</string>
+    <string name="epub_section_range_error">Введите номер раздела от 1 до %1$d.</string>
+    <string name="epub_bookmarks_status">Все закладки: %1$d файлов / %2$d закладок\nСейчас: раздел %3$d / %4$d</string>
+</resources>

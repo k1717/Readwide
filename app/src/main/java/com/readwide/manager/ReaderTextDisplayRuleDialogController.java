@@ -22,10 +22,12 @@ import com.readwide.manager.util.TextDisplayRule;
 import com.readwide.manager.util.TextDisplayRuleManager;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -37,9 +39,13 @@ import android.system.ErrnoException;
 import android.system.Os;
 
 import com.readwide.manager.util.FileUtils;
+import com.readwide.manager.util.FileMutationGuard;
+import com.readwide.manager.util.FileTreeWalk;
 
 final class ReaderTextDisplayRuleDialogController {
     private static final int TXT_TOOLBAR_POPUP_Y_DP = 74;
+    private static final java.util.concurrent.atomic.AtomicBoolean ACTUAL_FILE_EDIT_RUNNING =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     private final ReaderActivity activity;
 
@@ -837,20 +843,38 @@ final class ReaderTextDisplayRuleDialogController {
             return;
         }
 
-        Toast.makeText(appContext, R.string.txt_display_rules_actual_file_applying, Toast.LENGTH_SHORT).show();
-        new Thread(() -> {
+        if (!ACTUAL_FILE_EDIT_RUNNING.compareAndSet(false, true)) {
+            Toast.makeText(appContext, R.string.txt_display_rules_actual_file_applying, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            Toast.makeText(appContext, R.string.txt_display_rules_actual_file_applying, Toast.LENGTH_SHORT).show();
+            new Thread(() -> {
             try {
-                String encoding = FileUtils.detectEncoding(sourceFile);
-                String originalText = FileUtils.readTextFile(sourceFile, encoding);
+                final FileMutationGuard sourceGuard = FileMutationGuard.capture(sourceFile);
+                File outputFile = editOriginal ? sourceFile : makeActualRuleCopyFile(appContext, sourceFile);
+                final FileMutationGuard outputGuard = editOriginal ? sourceGuard
+                        : captureExistingOutput(outputFile);
+                String encoding;
+                String originalText;
+                try (FileInputStream input = new FileInputStream(sourceFile)) {
+                    sourceGuard.verifyOpened(input);
+                    // Keep the existing adaptive file encoding detector, then bind
+                    // decoding to the descriptor whose identity was captured.
+                    encoding = FileUtils.detectEncoding(sourceFile);
+                    sourceGuard.verifyOpened(input);
+                    originalText = FileUtils.readTextFromStream(input, encoding);
+                    sourceGuard.verifyOpened(input);
+                }
                 String fixedText = TextDisplayRuleManager.apply(originalText, activeRules);
+                sourceGuard.recheck();
                 if (originalText.equals(fixedText)) {
                     mainHandler.post(() -> Toast.makeText(
                             appContext, R.string.txt_display_rules_actual_file_no_changes, Toast.LENGTH_SHORT).show());
                     return;
                 }
 
-                File outputFile = editOriginal ? sourceFile : makeActualRuleCopyFile(appContext, sourceFile);
-                writeTextWithEncodingSafely(outputFile, fixedText, encoding);
+                writeTextWithEncodingSafely(outputFile, fixedText, encoding, sourceGuard, outputGuard);
                 if (editOriginal) {
                     markOriginalTxtFilePhysicallyModified(appContext, outputFile);
                 }
@@ -859,20 +883,31 @@ final class ReaderTextDisplayRuleDialogController {
                         ? appContext.getString(R.string.txt_display_rules_actual_file_original_done)
                         : appContext.getString(R.string.txt_display_rules_actual_file_copy_done, outputFile.getName());
                 mainHandler.post(() -> Toast.makeText(appContext, successMessage, Toast.LENGTH_LONG).show());
-            } catch (OutOfMemoryError oom) {
-                mainHandler.post(() -> Toast.makeText(appContext,
+            } catch (OutOfMemoryError | StackOverflowError exhausted) {
+                try { mainHandler.post(() -> Toast.makeText(appContext,
                         appContext.getString(R.string.txt_display_rules_actual_file_failed,
                                 appContext.getString(R.string.txt_display_rules_actual_file_too_large_runtime)),
                         Toast.LENGTH_LONG).show());
+                } catch (RuntimeException | OutOfMemoryError | StackOverflowError unavailable) {
+                    // Failure reporting must not retain the exclusive edit slot.
+                }
             } catch (Exception e) {
                 String m = e.getMessage();
                 if (m == null || m.trim().isEmpty()) m = e.getClass().getSimpleName();
                 final String finalMessage = m;
-                mainHandler.post(() -> Toast.makeText(appContext,
+                try { mainHandler.post(() -> Toast.makeText(appContext,
                         appContext.getString(R.string.txt_display_rules_actual_file_failed, finalMessage),
                         Toast.LENGTH_LONG).show());
+                } catch (RuntimeException | OutOfMemoryError | StackOverflowError unavailable) {
+                }
+            } finally {
+                ACTUAL_FILE_EDIT_RUNNING.set(false);
             }
-        }, "txt-display-rules-actual-file").start();
+            }, "txt-display-rules-actual-file").start();
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError unavailable) {
+            ACTUAL_FILE_EDIT_RUNNING.set(false);
+            ShortToast.show(activity, R.string.file_operation_failed);
+        }
     }
 
     private static void markOriginalTxtFilePhysicallyModified(@NonNull Context context, @NonNull File file) {
@@ -899,7 +934,9 @@ final class ReaderTextDisplayRuleDialogController {
         return new File(parent, base + "_edited" + ext);
     }
 
-    private static void writeTextWithEncodingSafely(@NonNull File outputFile, @NonNull String text, String encoding)
+    static void writeTextWithEncodingSafely(@NonNull File outputFile, @NonNull String text, String encoding,
+                                            @Nullable FileMutationGuard sourceGuard,
+                                            @Nullable FileMutationGuard outputGuard)
             throws IOException {
         Charset charset;
         try {
@@ -918,20 +955,26 @@ final class ReaderTextDisplayRuleDialogController {
             throw new IOException("Cannot resolve output folder");
         }
 
+        requireCurrentEditTargets(sourceGuard, outputGuard, target);
         File temp = File.createTempFile(target.getName() + ".", ".tmp", parent);
         boolean moved = false;
-        try (FileOutputStream fos = new FileOutputStream(temp, false);
-             OutputStreamWriter writer = new OutputStreamWriter(fos, charset)) {
-            writer.write(text);
-            writer.flush();
-            fos.getFD().sync();
-        }
-
         try {
+            // Abort instead of silently replacing characters unavailable in the
+            // source encoding. Cleanup also owns failures while writing/closing.
+            try (FileOutputStream fos = new FileOutputStream(temp, false);
+                 OutputStreamWriter writer = new OutputStreamWriter(fos, charset.newEncoder()
+                         .onMalformedInput(CodingErrorAction.REPORT)
+                         .onUnmappableCharacter(CodingErrorAction.REPORT))) {
+                writer.write(text);
+                writer.flush();
+                fos.getFD().sync();
+            }
+            requireCurrentEditTargets(sourceGuard, outputGuard, target);
             try {
                 Os.rename(temp.getAbsolutePath(), target.getAbsolutePath());
                 moved = true;
             } catch (ErrnoException errno) {
+                requireCurrentEditTargets(sourceGuard, outputGuard, target);
                 if (temp.renameTo(target)) {
                     moved = true;
                 } else {
@@ -943,6 +986,23 @@ final class ReaderTextDisplayRuleDialogController {
                 //noinspection ResultOfMethodCallIgnored
                 temp.delete();
             }
+        }
+    }
+
+    @Nullable
+    static FileMutationGuard captureExistingOutput(File output) throws IOException {
+        return FileTreeWalk.kind(output) == FileTreeWalk.Kind.MISSING
+                ? null : FileMutationGuard.capture(output);
+    }
+
+    private static void requireCurrentEditTargets(@Nullable FileMutationGuard sourceGuard,
+                                                   @Nullable FileMutationGuard outputGuard, File target)
+            throws IOException {
+        if (sourceGuard != null) sourceGuard.recheck();
+        if (outputGuard != null) {
+            outputGuard.recheck();
+        } else if (FileTreeWalk.kind(target) != FileTreeWalk.Kind.MISSING) {
+            throw new IOException("Output file appeared while applying text rules");
         }
     }
 }

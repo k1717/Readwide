@@ -1,7 +1,7 @@
 # LZHAM 7z integration — Readwide 1.0.20
 
-Source checkpoint: 2026-10-10; release date: 2026-10-11. The local release build
-completed successfully on 2026-10-11. Native runtime validation remains separate.
+The local release build completed successfully. Native runtime validation remains
+separate.
 
 ## Implemented scope
 

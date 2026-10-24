@@ -27,6 +27,35 @@ public class LhaSplitFramingTest {
         assertThrows(IOException.class, () -> LhaSplitFraming.validate(file(entry(0, 4))));
     }
 
+    @Test public void walksStoredPm0Level0AlongsideExistingLhaMembers() throws Exception {
+        byte[] stored = entry(0, 4), empty = entry(0, 0);
+        stored[3] = 'p'; stored[4] = 'm';
+        empty[3] = 'p'; empty[4] = 'm';
+        LhaSplitFraming.validate(file(join(stored, empty, entry(0, 7), new byte[]{0})));
+    }
+
+    @Test public void rejectsOtherPmarcMethodsLevelsAndMismatchedStoredSizes() throws Exception {
+        for (int method : new int[]{'1', '2', 'x'}) {
+            byte[] value = entry(0, 4); value[3] = 'p'; value[4] = 'm'; value[5] = (byte) method;
+            assertThrows(IOException.class, () -> LhaSplitFraming.validate(file(join(value, new byte[]{0}))));
+        }
+        for (int level : new int[]{1, 2, 3}) {
+            byte[] value = entry(level, 4); value[3] = 'p'; value[4] = 'm';
+            assertThrows(IOException.class, () -> LhaSplitFraming.validate(file(join(value, new byte[]{0}))));
+        }
+        byte[] wrongSize = entry(0, 4); wrongSize[3] = 'p'; wrongSize[4] = 'm';
+        put(wrongSize, 11, 3, 4);
+        assertThrows(IOException.class, () -> LhaSplitFraming.validate(file(join(wrongSize, new byte[]{0}))));
+    }
+
+    @Test public void pm0RequiresItsCrcFieldAndCompleteSplitFraming() throws Exception {
+        byte[] value = entry(0, 0); value[3] = 'p'; value[4] = 'm';
+        byte[] crcFree = Arrays.copyOf(value, value.length - 2); crcFree[0] -= 2;
+        assertThrows(IOException.class, () -> LhaSplitFraming.validate(file(join(crcFree, new byte[]{0}))));
+        assertThrows(IOException.class, () -> LhaSplitFraming.validate(file(value)));
+        assertThrows(IOException.class, () -> LhaSplitFraming.validate(file(join(value, new byte[]{0}, value))));
+    }
+
     @Test public void rejectsIndependentArchivesAndOtherTrailingBytes() throws Exception {
         byte[] complete = join(entry(0, 4), new byte[]{0});
         assertThrows(IOException.class, () -> LhaSplitFraming.validate(file(join(complete, complete))));

@@ -1,5 +1,6 @@
 package com.readwide.manager;
 
+import android.app.ActivityOptions;
 import android.content.Intent;
 
 import androidx.annotation.NonNull;
@@ -213,8 +214,8 @@ final class MainArchiveImageOpenController {
         intent.putExtra(ImageReaderActivity.EXTRA_SOURCE_ARCHIVE_PATH, archiveFile.getAbsolutePath());
         intent.putExtra(ImageReaderActivity.EXTRA_ALLOW_FILE_OPS, false);
         try {
-            activity.startActivity(intent);
-            activity.overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
+            activity.startActivity(intent, ActivityOptions.makeCustomAnimation(activity,
+                    R.anim.image_viewer_enter, R.anim.image_viewer_hold).toBundle());
             activity.finishIfReturnToViewerMode();
         } catch (RuntimeException e) {
             ImageSequenceHandoffStore.discard(token);

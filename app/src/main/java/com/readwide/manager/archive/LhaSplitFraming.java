@@ -26,17 +26,22 @@ final class LhaSplitFraming {
                 requireRange(position, fixed.length, size);
                 input.seek(position);
                 input.readFully(fixed);
-                if (fixed[2] != '-' || fixed[3] != 'l' || fixed[6] != '-') {
+                boolean pm0 = fixed[2] == '-' && fixed[3] == 'p' && fixed[4] == 'm'
+                        && fixed[5] == '0' && fixed[6] == '-' && fixed[20] == 0;
+                if (!pm0 && (fixed[2] != '-' || fixed[3] != 'l' || fixed[6] != '-')) {
                     throw new IOException("Invalid LHA split archive header");
                 }
                 int level = fixed[20] & 255;
                 int sizeWidth = level == 3 ? 4 : 2;
                 long headerSize, packed = unsigned(fixed, 7, 4), extendedStart = -1;
+                if (pm0 && packed != unsigned(fixed, 11, 4)) {
+                    throw new IOException("Invalid PMarc stored entry size");
+                }
                 if (level == 0 || level == 1) {
                     headerSize = first + 2;
                     int minimum = (level == 0 ? 24 : 27) + (fixed[21] & 255);
                     // Old level-0 headers may omit the two-byte data CRC entirely.
-                    if (headerSize < minimum && !(level == 0 && headerSize == minimum - 2)) {
+                    if (headerSize < minimum && !(level == 0 && !pm0 && headerSize == minimum - 2)) {
                         throw new IOException("Invalid LHA base header size");
                     }
                     if (level == 1) extendedStart = position + headerSize - 2;

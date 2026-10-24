@@ -26,6 +26,43 @@ public class ReaderLineJumpCacheInstrumentedTest {
         runJump(false, true, 0, 1);
     }
 
+    @Test public void rejectedSubmissionReleasesPendingSwitchAndLoading() {
+        assertSubmissionFailure(new java.util.concurrent.RejectedExecutionException("synthetic rejection"));
+    }
+
+    @Test public void workerStartupAllocationFailureReleasesPendingSwitchAndLoading() {
+        assertSubmissionFailure(new OutOfMemoryError("synthetic startup"));
+    }
+
+    private static void assertSubmissionFailure(Throwable failure) {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            JumpActivity a = new JumpActivity();
+            try {
+                a.filePath = "/line-cache.txt";
+                a.largeTextEstimateActive = true;
+                a.fileContent = "a\nb";
+                a.largeTextPartitionExecutor.setThreadFactory(task -> {
+                    if (failure instanceof Error error) throw error;
+                    throw (RuntimeException) failure;
+                });
+                new ReaderLargeTextPartitionNavigator(a).switchToDisplayLine(2);
+                assertFalse(a.largeTextPartitionSwitchState.isInProgress());
+                assertFalse(a.largeTextPartitionExecutor.hasForegroundWork());
+                assertFalse(a.loading);
+                assertEquals(2, a.largeTextPartitionSwitchGeneration.get());
+                assertNull(a.applied);
+                assertEquals("a\nb", a.fileContent);
+            } finally {
+                a.activityDestroyed = true;
+                a.handler.removeCallbacksAndMessages(null);
+                a.executor.shutdownNow();
+                a.largeTextPartitionExecutor.shutdownNow();
+                a.largeTextSearchExecutor.shutdownNow();
+                a.largeTextSearchCountExecutor.shutdownNow();
+            }
+        });
+    }
+
     private static void runJump(boolean cached, boolean expanded, int atLineReads, int fullReads) throws Exception {
         JumpActivity[] holder = new JumpActivity[1];
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
@@ -64,15 +101,17 @@ public class ReaderLineJumpCacheInstrumentedTest {
     }
 
     private static final class JumpActivity extends ReaderActivity {
+        JumpActivity() { attachBaseContext(InstrumentationRegistry.getInstrumentation().getTargetContext()); }
         final CountDownLatch landed = new CountDownLatch(1);
+        boolean loading;
         int lineScans, atLineReads, fullReads, target;
         LargeTextLinePartitionResult result, applied;
         @Override boolean ensureLoadedTextCurrent() { return true; }
         @Override int getDisplayedCurrentPageNumber() { return 1; }
         @Override int getDisplayedTotalPageCount() { return 1; }
         @Override void cancelLargeTextBoundaryHandoffs() { }
-        @Override void showLoadingWindowForPartitionJump(int generation) { }
-        @Override void hideLoadingWindowForPartitionJumpIfCurrent(boolean hide, int generation) { }
+        @Override void showLoadingWindowForPartitionJump(int generation) { loading = true; }
+        @Override void hideLoadingWindowForPartitionJumpIfCurrent(boolean hide, int generation) { if (hide) loading = false; }
         @Override int resolveLargeTextCharPositionForLine(File file, int line, BooleanSupplier keepReading) {
             lineScans++;
             return 2;

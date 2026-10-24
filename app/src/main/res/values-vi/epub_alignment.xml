@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">Căn chỉnh đoạn văn</string>
+    <string name="epub_alignment_book">Mặc định của sách</string>
+    <string name="epub_alignment_start">Căn theo đầu dòng</string>
+    <string name="epub_alignment_justify">Căn đều hai bên</string>
+    <string name="epub_text_alignment_hint">Dành cho văn bản EPUB có bố cục linh hoạt. Đầu dòng ở bên trái với LTR và bên phải với RTL. Các kiểu căn giữa hoặc căn phải được chỉ định rõ vẫn được giữ nguyên.</string>
+</resources>

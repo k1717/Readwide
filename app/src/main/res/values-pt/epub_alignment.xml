@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">Alinhamento dos parágrafos</string>
+    <string name="epub_alignment_book">Padrão do livro</string>
+    <string name="epub_alignment_start">No início da linha</string>
+    <string name="epub_alignment_justify">Justificado</string>
+    <string name="epub_text_alignment_hint">Para texto EPUB com disposição adaptável. O início fica à esquerda em LTR e à direita em RTL. Estilos explicitamente centralizados ou alinhados à direita são preservados.</string>
+</resources>

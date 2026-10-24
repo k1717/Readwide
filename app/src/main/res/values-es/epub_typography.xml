@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_size">Tamaño del texto EPUB: %1$d%%</string>
+    <string name="epub_line_height">Interlineado</string>
+    <string name="epub_typography_hint">Solo para EPUB. La opción del libro conserva su interlineado original. Las páginas de diseño fijo, basadas en imágenes o con texto vertical mantienen la disposición de sus párrafos.</string>
+    <string name="epub_paragraph_layout_kept">No se puede cambiar el formato de los párrafos en esta página. Se conserva el diseño del libro.</string>
+</resources>

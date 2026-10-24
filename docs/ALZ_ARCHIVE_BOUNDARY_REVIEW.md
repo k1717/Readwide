@@ -214,7 +214,7 @@ before producing an APK. A subsequent release build completed successfully on
 
 These host checks do not execute real Commons BZip2 decoding, the complete EGG/7z
 dispatcher, JNI or Android storage/UI paths. Current EGG LEA/encrypted-solid scope
-is described in [archive boundaries](ARCHIVE_DECODE_BOUNDARIES_1_0_20.md), not inferred
+is described in [current archive support notes](ARCHIVE_BOUNDARY_SUPPORT_NOTES.md), not inferred
 from this earlier ALZ validation. Producer/device checks remain separate; do not
 disable integrity checks to accommodate unsupported inputs.
 

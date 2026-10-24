@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="epub_text_alignment">段落对齐</string>
+    <string name="epub_alignment_book">书籍默认</string>
+    <string name="epub_alignment_start">行首对齐（左对齐）</string>
+    <string name="epub_alignment_justify">两端对齐</string>
+    <string name="epub_text_alignment_hint">适用于可重排的 EPUB 正文。行首在从左向右的文本中为左侧，在从右向左的文本中为右侧。保留明确指定的居中和右对齐样式。</string>
+</resources>

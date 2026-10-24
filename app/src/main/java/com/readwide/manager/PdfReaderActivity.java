@@ -138,6 +138,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     private final Runnable continuousScrollSaveRunnable = this::saveContinuousReadingStateIfActive;
     ProgressBar progressBar;
     TextView pageStatus;
+    private ViewerErrorPanel pdfErrorPanel;
     SeekBar pdfPageSeekBar;
     boolean pdfPageSeekBarUserTracking = false;
     TextView prevButton;
@@ -634,6 +635,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     }
 
     private void renderContinuousPages() {
+        if (pdfErrorPanel != null) pdfErrorPanel.hide();
         if (!ensureContinuousPagesConfigured()) return;
         progressBar.setVisibility(View.GONE);
         updatePageStatus();
@@ -1736,15 +1738,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         resolveReaderThemeColors();
         int statusBg = pdfChromeVisible ? readerToolbarBg : readerBg;
         int navBg = pdfChromeVisible ? readerPanel : readerBg;
-        getWindow().setStatusBarColor(statusBg);
-        getWindow().setNavigationBarColor(navBg);
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            getWindow().setNavigationBarDividerColor(navBg);
-        }
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            getWindow().setNavigationBarContrastEnforced(false);
-            getWindow().setStatusBarContrastEnforced(false);
-        }
+        com.readwide.manager.util.EdgeToEdgeUtil.setSystemBarColors(getWindow(), statusBg, navBg);
+        com.readwide.manager.util.EdgeToEdgeUtil.setReaderBarContrast(getWindow(), navBg);
         androidx.core.view.WindowInsetsControllerCompat controller =
                 androidx.core.view.WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
         if (controller != null) {
@@ -1971,6 +1966,11 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 if (nextButton != null) {
                     nextButton.setEnabled(com.readwide.manager.util.SpreadMath.canTurn(
                             safe, 1, total, spread));
+                }
+                // Accessibility/keyboard changes have no touch-stop callback.
+                // Dragging still previews here and commits only on release.
+                if (!pdfPageSeekBarUserTracking && pageCount > 0) {
+                    goToPage(safe, Integer.compare(safe, currentPage));
                 }
             }
 
@@ -2222,8 +2222,8 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             refreshPdfSlideModeDialogRow(slideModeRowRef[0]);
         });
 
-        addDialogAction(box, getString(R.string.zoom_out), () -> setZoomSmooth(Math.max(0.55f, zoom - 0.2f)));
-        addDialogAction(box, getString(R.string.zoom_in), () -> setZoomSmooth(Math.min(4.5f, zoom + 0.2f)));
+        addDialogAction(box, getString(R.string.zoom_out), () -> changeZoomFromMenu(-0.2f));
+        addDialogAction(box, getString(R.string.zoom_in), () -> changeZoomFromMenu(0.2f));
         addDialogAction(box, getString(R.string.reset_zoom), this::resetZoomToOriginal);
         if (pdfSupportsTts()) {
             addDialogAction(box, getString(R.string.tts_title), () -> {
@@ -2321,7 +2321,21 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     }
 
 
+    private void changeZoomFromMenu(float step) {
+        if (pdfPageMatrixView != null && pdfPageMatrixView.getVisibility() == View.VISIBLE
+                && !verticalPageSlideMode) {
+            pdfPageMatrixView.changeZoomFromControls(step);
+            return;
+        }
+        setZoomSmooth(Math.max(0.55f, Math.min(4.5f, zoom + step)));
+    }
+
     private void resetZoomToOriginal() {
+        if (pdfPageMatrixView != null && pdfPageMatrixView.getVisibility() == View.VISIBLE
+                && !verticalPageSlideMode) {
+            pdfPageMatrixView.resetZoomFromControls();
+            return;
+        }
         setZoomSmooth(1.0f);
     }
 
@@ -2898,6 +2912,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
 
     void loadPdfFromIntent(@Nullable Bundle savedInstanceState) {
         if (activityDestroyed) return;
+        if (pdfErrorPanel != null) pdfErrorPanel.hide();
         final int loadGeneration = ++pdfDocumentLoadGeneration;
         resetPdfDocumentScopedState();
         updateLoadingIndicatorTheme();
@@ -3065,9 +3080,19 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         if (activityDestroyed) return;
         progressBar.setVisibility(View.GONE);
         String message = getString(R.string.error_prefix) + (e.getMessage() != null ? e.getMessage() : e.toString());
-        if (pageStatus != null) pageStatus.setText(message);
-        if (pdfTopPageStatus != null) pdfTopPageStatus.setText(message);
-        ShortToast.show(this, message);
+        updatePageStatus();
+        if (pdfErrorPanel == null) {
+            pdfErrorPanel = new ViewerErrorPanel(this, readerBg, readerFg);
+            pdfErrorPanel.attachTo((android.widget.FrameLayout) findViewById(R.id.pdf_viewport));
+        }
+        final int documentGeneration = pdfDocumentLoadGeneration;
+        final int failedRender = renderGeneration;
+        pdfErrorPanel.show(message, () -> {
+            if (activityDestroyed || documentGeneration != pdfDocumentLoadGeneration
+                    || failedRender != renderGeneration) return;
+            if (pdfRenderer != null && pageCount > 0) renderCurrentPage(true);
+            else loadPdfFromIntent();
+        }, this::finish);
     }
 
     private int clampPage(int page) {
@@ -3643,6 +3668,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     }
 
     private void renderCurrentPage(boolean showLoadingIndicator) {
+        if (pdfErrorPanel != null) pdfErrorPanel.hide();
         stopPdfViewportFling();
         if (verticalPageSlideMode) {
             cancelPendingPdfViewportRender();
@@ -4007,18 +4033,21 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
     }
 
     /** Caller must hold rendererLock. */
-    private Bitmap renderPdfPageBitmapLocked(PdfRenderer renderer, int pageIndex, int width, int height) {
+    static Bitmap renderPdfPageBitmapLocked(PdfRenderer renderer, int pageIndex, int width, int height) {
         Bitmap pageBitmap = Bitmap.createBitmap(
                 Math.max(1, width), Math.max(1, height), Bitmap.Config.ARGB_8888);
-        pageBitmap.eraseColor(Color.WHITE);
-        PdfRenderer.Page page = renderer.openPage(pageIndex);
         boolean rendered = false;
         try {
-            page.render(pageBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+            pageBitmap.eraseColor(Color.WHITE);
+            try (PdfRenderer.Page page = renderer.openPage(pageIndex)) {
+                page.render(pageBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+            }
+            // Transfer ownership only after rendering AND native-page cleanup.
+            // Open/clear/close failures otherwise strand a large temporary bitmap
+            // until GC, since the caller never received it to recycle.
             rendered = true;
             return pageBitmap;
         } finally {
-            page.close();
             if (!rendered && !pageBitmap.isRecycled()) pageBitmap.recycle();
         }
     }

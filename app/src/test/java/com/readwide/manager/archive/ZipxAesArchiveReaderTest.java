@@ -49,6 +49,16 @@ public class ZipxAesArchiveReaderTest {
     @Test public void concatenatedAesBzipStreamsDecodeCompletely() throws Exception {
         runSuccessMatrix(buildAesZipx("bzip-concat.zipx",12,false,0,BzipArchiveCompatibilityTest.concatenated(CONTENT)));
     }
+    @Test public void concatenatedAesBzipCrossesSplitVolume() throws Exception {
+        byte[] packed = BzipArchiveCompatibilityTest.concatenated(CONTENT);
+        File archive = buildAesZipx("bzip-concat-split.zipx", 12, false, 0, packed);
+        int central = findSignature(Files.readAllBytes(archive.toPath()), 0x02014b50);
+        // splitZipx prefixes four bytes; exclude the final ten-byte AES MAC.
+        int encryptedStart = 4 + central - 10 - packed.length;
+        int cut = encryptedStart + packed.length / 2;
+        assertTrue(cut > encryptedStart && cut < 4 + central - 10);
+        splitSuccess(splitZipx(archive, cut), "folder/page.txt", PASSWORD);
+    }
     @Test public void concatenatedTraditionalBzipCrossesSplitAndDescriptor() throws Exception {
         File archive=traditionalArchive(12,true,PASSWORD,BzipArchiveCompatibilityTest.concatenated(CONTENT));
         splitSuccess(splitZipx(archive,20),"traditional.bin",PASSWORD);

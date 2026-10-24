@@ -503,7 +503,7 @@ large-text utils + prefs):
   the canonical `getStableStatusOffTopPaddingPx` / stable-bottom-padding
   invariants (already present in 1.0.12, comments included), the 1.18f line
   height formula, and every exact-index input file. Combined with the cursor
-  equivalence proofs, an upgrading user's page counts do not change.
+  equivalence proofs, page counts after an upgrade do not change.
 - The comparison identified eleven changed files:
   the forward-cursor set (reader, read controller, collapser state ctor,
   rules memo/version, lifecycle close - engine-equivalence proven), the

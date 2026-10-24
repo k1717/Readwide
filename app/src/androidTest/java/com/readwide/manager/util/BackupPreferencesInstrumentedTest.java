@@ -51,6 +51,193 @@ public class BackupPreferencesInstrumentedTest {
         return new JSONObject().put("values", new JSONObject().put(key,
                 new JSONObject().put("type", type).put("value", value)));
     }
+
+    @Test public void epubAlignmentRoundTripsIndependentlyOfTxtAlignment() throws Exception {
+        PrefsManager preferences = manager(store);
+        assertEquals(EpubTextAlignment.BOOK_DEFAULT, preferences.getEpubTextAlignment());
+        preferences.setTextAlignment(PrefsManager.TEXT_ALIGN_CENTER);
+        for (int mode : new int[]{EpubTextAlignment.START, EpubTextAlignment.JUSTIFY}) {
+            preferences.setEpubTextAlignment(mode);
+            JSONObject exported = preferences.exportSettingsToJson();
+            preferences.setEpubTextAlignment(EpubTextAlignment.BOOK_DEFAULT);
+            preferences.importSettingsFromJson(exported, false);
+            assertEquals(mode, preferences.getEpubTextAlignment());
+            assertEquals(PrefsManager.TEXT_ALIGN_CENTER, preferences.getTextAlignment());
+        }
+    }
+
+    @Test public void epubAlignmentResetAndOldReplacementBackupUseBookDefault() throws Exception {
+        PrefsManager preferences = manager(store);
+        preferences.setEpubTextAlignment(EpubTextAlignment.JUSTIFY);
+        preferences.setEpubFontSize(28f);
+        preferences.setEpubLineHeight(4);
+        int nightMode = androidx.appcompat.app.AppCompatDelegate.getDefaultNightMode();
+        androidx.core.os.LocaleListCompat locales = androidx.appcompat.app.AppCompatDelegate.getApplicationLocales();
+        try {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                try { preferences.resetReaderAndAppSettings(); }
+                catch (IOException failure) { throw new AssertionError(failure); }
+            });
+        } finally {
+            // Reset also applies these process-wide settings; do not leak them to other tests.
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(nightMode);
+                androidx.appcompat.app.AppCompatDelegate.setApplicationLocales(locales);
+            });
+        }
+        assertEquals(EpubTextAlignment.BOOK_DEFAULT, preferences.getEpubTextAlignment());
+        assertEquals(EpubTypography.DEFAULT_FONT_SIZE, preferences.getEpubFontSize(), 0f);
+        assertEquals(0, preferences.getEpubLineHeight());
+        preferences.setEpubTextAlignment(EpubTextAlignment.START);
+        preferences.importSettingsFromJson(setting("marker", "string", "old backup"), true);
+        assertEquals(EpubTextAlignment.START, preferences.getEpubTextAlignment());
+        preferences.importSettingsFromJson(setting("marker", "string", "old backup"), false);
+        assertEquals(EpubTextAlignment.BOOK_DEFAULT, preferences.getEpubTextAlignment());
+    }
+
+    @Test public void malformedEpubAlignmentTypeIsRejectedBeforePreferenceChanges() throws Exception {
+        store.edit().putString("marker", "keep").commit();
+        Map<String, ?> before = store.getAll();
+        try {
+            manager(store).importSettingsFromJson(setting("epub_text_alignment", "string", "justify"), false);
+            fail("Expected validation error");
+        } catch (org.json.JSONException expected) { assertEquals(before, store.getAll()); }
+    }
+
+    @Test public void failedResetCommitRestoresValuesAndDoesNotApplyLocaleOrTheme() throws Exception {
+        store.edit().putFloat("font_size", 29f).putFloat("line_spacing", 1.7f)
+                .putBoolean("show_status_bar", true).putInt("dark_mode", PrefsManager.DARK_MODE_DARK_NAVY)
+                .putInt("language_mode", PrefsManager.LANGUAGE_KOREAN).putString("font_family", "serif")
+                .putString("folder_shortcuts", "/Books").putString("lock_pin", "test-only-pin")
+                .putBoolean("lock_enabled", true).putString("auto_text_encoding::book", "UTF-8")
+                .commit();
+        Map<String, ?> before = store.getAll();
+        PrefsManager preferences = manager(resetCommitFailures(1, null));
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            int nightMode = androidx.appcompat.app.AppCompatDelegate.getDefaultNightMode();
+            androidx.core.os.LocaleListCompat locales =
+                    androidx.appcompat.app.AppCompatDelegate.getApplicationLocales();
+            try { preferences.resetReaderAndAppSettings(); fail("Expected reset commit error"); }
+            catch (IOException expected) { assertEquals(before, store.getAll()); }
+            assertEquals(nightMode, androidx.appcompat.app.AppCompatDelegate.getDefaultNightMode());
+            assertEquals(locales, androidx.appcompat.app.AppCompatDelegate.getApplicationLocales());
+        });
+        assertFalse("absent reset values stay absent", store.contains("epub_line_height"));
+    }
+
+    @Test public void resetRollbackLeavesUnrelatedNewValuesAlone() throws Exception {
+        store.edit().putFloat("font_size", 25f).putString("folder_shortcuts", "/Before")
+                .putString("marker", "old").commit();
+        PrefsManager preferences = manager(resetCommitFailures(1, () ->
+                store.edit().putString("folder_shortcuts", "/Updated")
+                        .putString("marker", "new").putString("auto_text_encoding::book", "UTF-16LE").commit()));
+        try { preferences.resetReaderAndAppSettings(); fail("Expected reset commit error"); }
+        catch (IOException expected) { assertEquals(25f, preferences.getFontSize(), 0f); }
+        assertEquals("/Updated", store.getString("folder_shortcuts", null));
+        assertEquals("new", store.getString("marker", null));
+        assertEquals("UTF-16LE", store.getString("auto_text_encoding::book", null));
+    }
+
+    @Test public void resetAlsoReportsRollbackCommitFailure() throws Exception {
+        store.edit().putFloat("font_size", 25f).commit();
+        PrefsManager preferences = manager(resetCommitFailures(2, null));
+        try { preferences.resetReaderAndAppSettings(); fail("Expected rollback error"); }
+        catch (IOException expected) {
+            assertTrue(expected.getMessage().contains("restoring previous settings also failed"));
+            assertNotNull(expected.getCause());
+            assertEquals(1, expected.getCause().getSuppressed().length);
+        }
+    }
+
+    private SharedPreferences resetCommitFailures(int failures, Runnable afterFirstCommit) {
+        java.util.concurrent.atomic.AtomicInteger commits = new java.util.concurrent.atomic.AtomicInteger();
+        return (SharedPreferences) Proxy.newProxyInstance(SharedPreferences.class.getClassLoader(),
+                new Class<?>[]{SharedPreferences.class}, (proxy, method, args) -> {
+                    if (!method.getName().equals("edit")) return method.invoke(store, args);
+                    SharedPreferences.Editor editor = store.edit();
+                    return Proxy.newProxyInstance(SharedPreferences.Editor.class.getClassLoader(),
+                            new Class<?>[]{SharedPreferences.Editor.class}, (editorProxy, editMethod, editArgs) -> {
+                                Object result = editMethod.invoke(editor, editArgs);
+                                if (editMethod.getName().equals("commit")) {
+                                    int attempt = commits.incrementAndGet();
+                                    if (attempt == 1 && afterFirstCommit != null) afterFirstCommit.run();
+                                    // Simulate the important failure mode: memory was
+                                    // already changed even though commit reports false.
+                                    if (attempt <= failures) return false;
+                                }
+                                return result instanceof SharedPreferences.Editor ? editorProxy : result;
+                            });
+                });
+    }
+
+    @Test public void unknownEpubAlignmentCannotBecomeCssOrAnInvalidSpinnerPosition() throws Exception {
+        PrefsManager preferences = manager(store);
+        preferences.setEpubTextAlignment(-1);
+        assertEquals(EpubTextAlignment.BOOK_DEFAULT, preferences.getEpubTextAlignment());
+        preferences.importSettingsFromJson(setting("epub_text_alignment", "int", Integer.MAX_VALUE), false);
+        assertEquals(EpubTextAlignment.BOOK_DEFAULT, preferences.getEpubTextAlignment());
+    }
+    @Test public void epubSizeMigratesBeforeTxtChangesAndThenStaysIndependent() throws Exception {
+        store.edit().putFloat("font_size", 28f).commit();
+        PrefsManager preferences = manager(store);
+        preferences.setFontSize(20f); // TXT is changed before EPUB is opened.
+        assertEquals(28f, preferences.getEpubFontSize(), 0f);
+        preferences.setEpubFontSize(22f);
+        assertEquals(20f, preferences.getFontSize(), 0f);
+        assertEquals(22f, manager(store).getEpubFontSize(), 0f);
+    }
+
+    @Test public void epubTypographyRoundTripsWithoutChangingTxtSpacing() throws Exception {
+        PrefsManager preferences = manager(store);
+        preferences.setFontSize(20f);
+        preferences.setLineSpacing(1.7f);
+        preferences.setEpubFontSize(24f);
+        preferences.setEpubLineHeight(4);
+        JSONObject backup = preferences.exportSettingsToJson();
+        preferences.setEpubFontSize(16f);
+        preferences.setEpubLineHeight(0);
+        preferences.importSettingsFromJson(backup, false);
+        assertEquals(24f, preferences.getEpubFontSize(), 0f);
+        assertEquals(4, preferences.getEpubLineHeight());
+        assertEquals(20f, preferences.getFontSize(), 0f);
+        assertEquals(1.7f, preferences.getLineSpacing(), 0f);
+    }
+
+    @Test public void oldBackupReplacementMigratesItsSizeAndMergeRetainsExistingEpubSize() throws Exception {
+        store.edit().putFloat("font_size", 28f).commit();
+        PrefsManager preferences = manager(store);
+        JSONObject legacy = setting("font_size", "float", 20f);
+        preferences.importSettingsFromJson(legacy, true);
+        assertEquals(28f, preferences.getEpubFontSize(), 0f);
+        preferences.setEpubLineHeight(5);
+        preferences.importSettingsFromJson(legacy, false);
+        assertEquals(20f, preferences.getEpubFontSize(), 0f);
+        assertEquals(0, preferences.getEpubLineHeight());
+        preferences.importSettingsFromJson(setting("marker", "string", "old defaults"), false);
+        assertEquals(EpubTypography.DEFAULT_FONT_SIZE, preferences.getEpubFontSize(), 0f);
+    }
+
+    @Test public void exportingBeforeFirstEpubOpenCapturesLegacySize() throws Exception {
+        store.edit().putFloat("font_size", 26f).commit();
+        JSONObject backup = manager(store).exportSettingsToJson();
+        assertEquals(26.0, backup.getJSONObject("values").getJSONObject("epub_font_size").getDouble("value"), 0.0);
+    }
+
+    @Test public void invalidEpubTypographyBackupIsRejectedWithoutMutation() throws Exception {
+        store.edit().putFloat("epub_font_size", 24f).putInt("epub_line_height", 3).commit();
+        Map<String, ?> before = store.getAll();
+        JSONObject[] invalid = {
+                setting("epub_font_size", "int", 20), setting("epub_font_size", "float", 0f),
+                setting("epub_font_size", "float", 49f), setting("epub_font_size", "float", Double.MAX_VALUE),
+                setting("epub_line_height", "string", "1.5"), setting("epub_line_height", "int", -1),
+                setting("epub_line_height", "int", 6)
+        };
+        for (JSONObject incoming : invalid) {
+            try { manager(store).importSettingsFromJson(incoming, false); fail("Expected validation error"); }
+            catch (org.json.JSONException expected) { assertEquals(before, store.getAll()); }
+        }
+    }
+
     private static String rules(String replacement) throws Exception {
         TextDisplayRule rule = new TextDisplayRule();
         rule.findText = "cat"; rule.replacementText = replacement;

@@ -347,9 +347,202 @@ public class FileSystemOpsTest {
         };
         File destination = new File(tempFolder.getRoot(), "moved");
         assertTrue(FileSystemOps.move(source, destination, false, new FileOperationProgress("move", null)));
-        assertEquals(3, lists.get()); // inventory + copy + delete, no separate byte scan
+        assertEquals(2, lists.get()); // inventory + copy; removal uses only the copied entries
         assertText(new File(destination, "file"), "data");
         assertFalse(source.exists());
+    }
+
+    @Test public void fallbackMoveNeverDeletesChildAddedAfterCopySnapshot() throws Exception {
+        File source = tempFolder.newFolder("source");
+        File destination = tempFolder.newFolder("destination"); // Force staged overwrite, not rename.
+        writeText(new File(source, "copied.txt"), "copied");
+        File late = new File(source, "late.txt");
+        boolean[] added = {false};
+        FileOperationProgress progress = new FileOperationProgress("move", null);
+        progress.setListener(snapshot -> {
+            if (snapshot.doneBytes > 0 && !added[0]) {
+                added[0] = true;
+                try {
+                    writeText(late, "not part of the copy");
+                } catch (Exception failure) {
+                    throw new AssertionError(failure);
+                }
+            }
+        });
+
+        assertFalse(FileSystemOps.move(source, destination, true, progress));
+        assertTrue(added[0]);
+        assertText(late, "not part of the copy");
+        assertText(new File(source, "copied.txt"), "copied");
+        assertFalse(new File(destination, "late.txt").exists());
+        assertText(new File(destination, "copied.txt"), "copied");
+        assertNoTransactions();
+    }
+
+    @Test public void fallbackMoveKeepsSourceModifiedAfterStaging() throws Exception {
+        File source = tempFolder.newFile("source.txt");
+        writeText(source, "original");
+        long originalModified = source.lastModified();
+        File actualDestination = tempFolder.newFile("destination.txt");
+        writeText(actualDestination, "previous");
+        File destination = new File(actualDestination.getPath()) {
+            @Override public boolean renameTo(File backup) {
+                boolean renamed = super.renameTo(backup);
+                if (renamed) {
+                    try {
+                        writeText(source, "modified"); // Same length, but newer in-place contents.
+                        assertTrue(source.setLastModified(originalModified + 60_000L));
+                    } catch (Exception failure) {
+                        throw new AssertionError(failure);
+                    }
+                }
+                return renamed;
+            }
+        };
+
+        assertFalse(FileSystemOps.move(source, destination, true));
+        assertText(source, "modified");
+        assertText(actualDestination, "original");
+        assertNoTransactions();
+    }
+
+    @Test public void fallbackMoveKeepsReplacementAtCopiedSourcePath() throws Exception {
+        File source = tempFolder.newFile("source.txt");
+        writeText(source, "original");
+        long originalModified = source.lastModified();
+        File retired = new File(tempFolder.getRoot(), "original-retained.txt");
+        File actualDestination = tempFolder.newFile("destination.txt");
+        File destination = new File(actualDestination.getPath()) {
+            @Override public boolean renameTo(File backup) {
+                boolean renamed = super.renameTo(backup);
+                if (renamed) {
+                    try {
+                        assertTrue(source.renameTo(retired));
+                        writeText(source, "replaced");
+                        assertTrue(source.setLastModified(originalModified));
+                    } catch (Exception failure) {
+                        throw new AssertionError(failure);
+                    }
+                }
+                return renamed;
+            }
+        };
+
+        assertFalse(FileSystemOps.move(source, destination, true));
+        assertText(source, "replaced");
+        assertText(retired, "original");
+        assertText(actualDestination, "original");
+        assertNoTransactions();
+    }
+
+    @Test public void copyRejectsSameLengthRewriteDuringFinalProgressCallback() throws Exception {
+        File source = tempFolder.newFile("source.txt");
+        File destination = tempFolder.newFile("destination.txt");
+        writeText(source, "original");
+        writeText(destination, "previous");
+        long modified = source.lastModified();
+        boolean[] changed = {false};
+        FileOperationProgress progress = new FileOperationProgress("copy", null);
+        progress.setListener(snapshot -> {
+            if (snapshot.doneBytes > 0 && !changed[0]) {
+                changed[0] = true;
+                try {
+                    writeText(source, "modified");
+                    assertTrue(source.setLastModified(modified + 60_000L));
+                } catch (Exception failure) { throw new AssertionError(failure); }
+            }
+        });
+        assertFalse(FileSystemOps.copy(source, destination, true, progress));
+        assertTrue(changed[0]);
+        assertText(source, "modified");
+        assertText(destination, "previous");
+        assertNoTransactions();
+    }
+
+    @Test public void copyRejectsRewriteFromFileStartCallbackBeforeOpeningStream() throws Exception {
+        File source = tempFolder.newFile("source.txt");
+        File destination = tempFolder.newFile("destination.txt");
+        writeText(source, "original");
+        writeText(destination, "previous");
+        long modified = source.lastModified();
+        boolean[] changed = {false};
+        FileOperationProgress progress = new FileOperationProgress("copy", null);
+        progress.setListener(snapshot -> {
+            if (snapshot.detail.equals(source.getName()) && !changed[0]) {
+                changed[0] = true;
+                try {
+                    writeText(source, "modified");
+                    assertTrue(source.setLastModified(modified + 60_000L));
+                } catch (Exception failure) { throw new AssertionError(failure); }
+            }
+        });
+        assertFalse(FileSystemOps.copy(source, destination, true, progress));
+        assertTrue(changed[0]);
+        assertText(source, "modified");
+        assertText(destination, "previous");
+        assertNoTransactions();
+    }
+
+    @Test public void fallbackMoveKeepsSameMillisecondSourceEditAfterStaging() throws Exception {
+        File source = tempFolder.newFile("source.txt");
+        writeText(source, "original");
+        java.nio.file.attribute.FileTime original = java.nio.file.attribute.FileTime.fromMillis(1_700_000_000_000L);
+        Files.setLastModifiedTime(source.toPath(), original);
+        java.nio.file.attribute.FileTime changed = java.nio.file.attribute.FileTime.from(
+                original.toMillis() * 1_000_000L + 100_000L, java.util.concurrent.TimeUnit.NANOSECONDS);
+        Files.setLastModifiedTime(source.toPath(), changed);
+        Assume.assumeTrue("Requires sub-millisecond modification times",
+                !Files.getLastModifiedTime(source.toPath()).equals(original)
+                        && source.lastModified() == original.toMillis());
+        Files.setLastModifiedTime(source.toPath(), original);
+        File actualDestination = tempFolder.newFile("destination.txt");
+        File destination = new File(actualDestination.getPath()) {
+            @Override public boolean renameTo(File backup) {
+                boolean moved = super.renameTo(backup);
+                if (moved) {
+                    try {
+                        writeText(source, "modified");
+                        Files.setLastModifiedTime(source.toPath(), changed);
+                    } catch (Exception failure) { throw new AssertionError(failure); }
+                }
+                return moved;
+            }
+        };
+        assertFalse(FileSystemOps.move(source, destination, true));
+        assertText(source, "modified");
+        assertText(actualDestination, "original");
+        assertNoTransactions();
+    }
+
+    @Test public void fallbackMoveRechecksEachSourceAfterEarlierDeletionCallback() throws Exception {
+        File actualSource = tempFolder.newFolder("source");
+        File first = new File(actualSource, "first.txt");
+        File second = new File(actualSource, "second.txt");
+        writeText(first, "original");
+        writeText(second, "second");
+        long modified = first.lastModified();
+        File secondWithCallback = new File(second.getPath()) {
+            @Override public boolean delete() {
+                boolean removed = super.delete();
+                if (removed) {
+                    try {
+                        writeText(first, "modified");
+                        assertTrue(first.setLastModified(modified + 60_000L));
+                    } catch (Exception failure) { throw new AssertionError(failure); }
+                }
+                return removed;
+            }
+        };
+        File source = new File(actualSource.getPath()) {
+            @Override public File[] listFiles() { return new File[]{first, secondWithCallback}; }
+        };
+        File destination = tempFolder.newFolder("destination");
+        assertFalse(FileSystemOps.move(source, destination, true));
+        assertText(first, "modified");
+        assertFalse(second.exists());
+        assertText(new File(destination, "first.txt"), "original");
+        assertText(new File(destination, "second.txt"), "second");
+        assertNoTransactions();
     }
 
     private static void writeBytes(File file, int size) throws Exception {

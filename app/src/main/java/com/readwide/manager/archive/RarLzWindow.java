@@ -29,6 +29,12 @@ final class RarLzWindow {
     }
 
     RarLzWindow(byte[] sharedWindow, int initialPosition, int retained, RarDecodedOutput out) {
+        this(sharedWindow, initialPosition, retained, 0, out);
+    }
+
+    /** Resume within a file without rebasing VM offsets or copying the raw dictionary. */
+    RarLzWindow(byte[] sharedWindow, int initialPosition, int retained, long alreadyWritten,
+                RarDecodedOutput out) {
         if (sharedWindow == null || sharedWindow.length <= 0
                 || (sharedWindow.length & (sharedWindow.length - 1)) != 0) {
             throw new IllegalArgumentException("RAR LZ window size must be a power of two");
@@ -36,6 +42,8 @@ final class RarLzWindow {
         this.window = sharedWindow;
         maximumHistoryCapacity = sharedWindow.length;
         if (retained < 0 || retained > sharedWindow.length) throw new IllegalArgumentException("RAR history length");
+        if (alreadyWritten < 0) throw new IllegalArgumentException("RAR output position");
+        written = alreadyWritten;
         this.retained = retained;
         this.position = initialPosition & (sharedWindow.length - 1);
         this.out = out != null ? out : new RarOutputStreamDecodedOutput(new ByteArrayOutputStream());

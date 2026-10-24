@@ -1,5 +1,6 @@
 package com.readwide.manager;
 
+import android.app.ActivityOptions;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.Intent;
@@ -152,8 +153,8 @@ final class MainImageOpenController {
                     ImageSequenceHandoffStore.discard(handoffToken);
                     return;
                 }
-                activity.startActivity(intent);
-                activity.overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
+                activity.startActivity(intent, ActivityOptions.makeCustomAnimation(activity,
+                        R.anim.image_viewer_enter, R.anim.image_viewer_hold).toBundle());
                 activity.finishIfReturnToViewerMode();
             } catch (RuntimeException e) {
                 ImageSequenceHandoffStore.discard(handoffToken);
