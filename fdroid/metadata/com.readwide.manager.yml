@@ -113,7 +113,7 @@ Builds:
 
   - versionName: 1.0.21
     versionCode: 10021
-    commit: 7dd36fc7f152f6f8424deb02973b05059cb0c130
+    commit: cc55568c6b37378b23e3914011c07f0f6737eb44
     subdir: app
     gradle:
       - yes
