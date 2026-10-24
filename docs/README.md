@@ -15,7 +15,7 @@ current support limits, and release readiness lists outstanding verification.
 - [Project overview](../README.md), [changelog](../CHANGELOG.md) and [patch notes](../PATCHNOTES.md).
 - [1.0.21 release notes](GITHUB_RELEASE_NOTES_READWIDE_1_0_21.md), [development changes](DEV_CHANGES_1_0_21.md), [source status](CURRENT_SOURCE_STATUS_1_0_21.md) and [release readiness](RELEASE_READINESS_1_0_21.md).
 - [Code map](CODE_MAP.md), [Android Studio setup](../ANDROID_STUDIO_SETUP_FOR_BEGINNERS.md), [build notes](../BUILD_FIX_NOTES.md) and [contributing](../CONTRIBUTING.md).
-- [Release build](../RELEASE_BUILD.md), [GitHub upload](../GITHUB_UPLOAD_NOTES.md) and [F-Droid submission](FDROID_SUBMISSION.md).
+- [Release build](../RELEASE_BUILD.md) and [F-Droid submission](FDROID_SUBMISSION.md).
 - [Privacy](../PRIVACY.md), [project license](../LICENSE), [notice](../NOTICE) and [third-party notices](../THIRD_PARTY_NOTICES.md).
 - [FOSS status](FOSS_STATUS.md), [1.0.21 license report](LICENSE_REPORT_READWIDE_1_0_21.md), [source/direct-dependency SBOM](SBOM_READWIDE_1_0_21.spdx.json) and [asset provenance](ASSET_PROVENANCE.md).
 - [Store descriptions and changelogs](../fastlane/metadata/android) and [historical F-Droid metadata](../fdroid/metadata/com.readwide.manager.yml). The latter stops at 1.0.19; it is not a current upstream submission file.
