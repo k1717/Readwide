@@ -9,11 +9,19 @@ fi
 
 FIXTURE_DIR="$1"
 OUT_DIR="${2:-build/reports/rar-fixtures}"
-mkdir -p "$OUT_DIR"
+if [[ ! -d "$FIXTURE_DIR" ]]; then
+  echo "Fixture directory does not exist: $FIXTURE_DIR" >&2
+  exit 2
+fi
+FIXTURE_DIR="$(cd -- "$FIXTURE_DIR" && pwd -P)"
+mkdir -p -- "$OUT_DIR"
+OUT_DIR="$(cd -- "$OUT_DIR" && pwd -P)"
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
-./gradlew testDebugUnitTest \
+"$PROJECT_DIR/gradlew" --project-dir "$PROJECT_DIR" testDebugUnitTest \
   --tests 'com.readwide.manager.archive.ExternalArchiveFixtureSmokeTest.rarFixtureMatrixReport_generatesExtractionSmokeMarkdown' \
   -Dtextview.externalArchiveFixtureDir="$FIXTURE_DIR" \
   -Dtextview.rarFixtureReportOutDir="$OUT_DIR"
 
-echo "RAR fixture reports written to: $OUT_DIR"
+echo "Fixture test task completed. Report directory: $OUT_DIR"
+echo "Check the test results for skipped fixtures; a skipped fixture does not establish coverage."

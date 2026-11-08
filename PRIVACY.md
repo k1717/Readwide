@@ -30,6 +30,7 @@ The app may store local data needed for reading and file-browser behavior:
 
 - recent files and recent folders;
 - manually added folder shortcuts;
+- registered Storage Access Framework folder URIs, their display labels and the last selected folder;
 - reading positions;
 - bookmarks and bookmark labels;
 - per-file TXT Contents detection options, custom patterns, manually added headings and hidden-heading records;
@@ -65,7 +66,7 @@ defines this voice requirement in the [Voice API](https://developer.android.com/
 
 ## Folder shortcuts and file paths
 
-Folder shortcuts and recent-file records may store local path strings selected or opened in the app. They are used only for app navigation, restoring reading state, and showing faster drawer/recent entries. Removing a shortcut or recent entry removes the app metadata; it does not delete the underlying folder or file.
+Folder shortcuts and recent-file records may store local path strings selected or opened in the app. They are used only for app navigation, restoring reading state, and showing faster drawer/recent entries. Removing a shortcut or recent entry removes the app metadata; it does not delete the underlying folder or file. Registered provider folders are separate: they store content-provider URIs and labels, not translated filesystem paths. Their access can be revoked in Settings as described under File permissions.
 
 ## Archive browsing and extraction
 
@@ -93,7 +94,7 @@ Some file types that Readwide does not render internally, such as video and audi
 
 For these flows, Readwide grants the chosen external app temporary read access to the selected file URI through Android `FileProvider`. Readwide does not upload the file itself. The receiving app decides what it does with the file after it is explicitly selected.
 
-Readwide also intentionally accepts inbound open requests: it registers an exported `ACTION_VIEW` intent filter, including the `BROWSABLE` category, so a document can be opened in Readwide from a browser, messenger, file manager, or document provider. When a file is opened this way through a `content://` URI, Readwide copies it into an app-private cache (`opened_files`) before rendering. That copy applies display-name sanitization, a canonical-path containment check so the cached file cannot escape the cache directory, a per-file copy limit of 2 GB, and cache pruning before and after the copy (the just-opened file is preserved so a legitimate large document can still be read). The source file is read locally; nothing is uploaded.
+Readwide also intentionally accepts inbound open requests: it registers an exported `ACTION_VIEW` intent filter, including the `BROWSABLE` category, so a document can be opened in Readwide from a browser, messenger, file manager, or document provider. When a file is opened this way through a `content://` URI, Readwide copies it into an app-private cache (`opened_files`) before rendering. That copy applies display-name sanitization, a canonical-path containment check so the cached file cannot escape the cache directory, a per-file copy limit of 2 GB, and cache pruning before and after the copy (the just-opened file is preserved so a legitimate large document can still be read). Readwide reads through the document provider and does not upload the file; a cloud-backed provider may fetch it using its own network access.
 
 ## APK installation behavior
 
@@ -114,6 +115,8 @@ Its records retain their original file/content identity; moving a document to a
 different path or changing its contents can prevent those records from applying.
 Import does not copy documents, remap arbitrary file paths or grant storage access
 on a different device. Older backups without TXT Contents data remain accepted.
+Registered-folder URIs, their labels and Android's persisted access grants are
+not included in this JSON backup. Register those folders again on a new installation.
 
 Imported reader font files are stored only in app-private storage (see "Data stored locally") and are not included in the JSON backup. The backup may record the selected font name, but not the font file itself or the imported-font list, so an imported font must be re-imported after reinstalling the app or switching distribution channels.
 
@@ -133,7 +136,13 @@ If no mail app is available, the app copies the contact address to the clipboard
 
 The app requests storage access so it can open local documents selected in the app and act as a local file browser. On Android versions that require scoped-storage handling, the app may request broader storage access for file-browser behavior. These permissions are for local file access; they are not paired with an app network upload path.
 
-As a compatibility alternative, a folder can be selected through Android's Storage Access Framework. Android grants Readwide access only to that selected provider tree, and Readwide persists the grant so the folder remains available after restart. The stored value is a local content-provider URI and display label; it is not transmitted. Choosing this path is sufficient for the read-oriented SAF browser and avoids repeat broad-storage permission prompts.
+Settings > Security and folder permissions > Folder access manages folders selected through Android's Storage Access Framework. Each registration stores a provider URI and display label locally; the last selection is stored separately. Adding a folder retains earlier registrations. Android's persisted grant permits access after restart while that grant and provider remain available. Readwide requests read/write access, but also accepts a read-only grant.
+
+The authorized-folder browser supports opening, copying, moving, renaming, deleting and creating folders where the grant and provider allow the operation. Registering a folder does not perform or retry a file operation, and a SAF grant does not give the raw-path browser extra filesystem permissions. Use the authorized-folder browser for those operations.
+
+Revoke access removes the registration and releases that tree grant without deleting its files. Revocation is blocked while the folder is in use; a failed release retains its registration. Another authorized parent folder or broad storage permission may still allow access to the same files. Folder shortcuts and already copied files are not erased by revocation.
+
+Document providers run separately from Readwide. A selected cloud-backed provider may fetch or sync files using its own network permissions, including after an explicit copy, edit or deletion. Its own data handling applies even though Readwide has no `INTERNET` permission or upload backend.
 
 ## Broad file access and FileProvider scope
 
@@ -146,7 +155,7 @@ The `FileProvider` path configuration includes app-private files/cache, external
 Disposable TXT page/index cache bookkeeping, temporary archive-entry extraction
 data, and locally extracted EPUB media-overlay audio are generated only under app
 cache storage. Cache cleanup must not remove bookmarks, reading history, saved
-reading position, folder shortcuts, durable TXT Contents options/manual/hidden
+reading position, folder shortcuts, registered-folder permissions, durable TXT Contents options/manual/hidden
 entries, annotations, or original documents.
 
 

@@ -87,7 +87,10 @@ public class SevenZPpmdStreamingTest {
         for (int size = 0; size < 5; size++) {
             try (InputStream decoded = SevenZPpmd7Decoder.decodeStream(
                     new ByteArrayInputStream(new byte[size]), PROPERTIES, 1)) {
-                try { decoded.read(); fail(); } catch (java.io.EOFException expected) { }
+                IOException failure = assertThrows(SevenZBcj2ArchiveReader.IntegrityException.class,
+                        () -> decoded.read());
+                assertEquals("Truncated 7z PPMd range stream", failure.getMessage());
+                assertSame(failure, assertThrows(IOException.class, () -> decoded.read()));
             }
         }
     }

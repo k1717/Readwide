@@ -11,9 +11,35 @@ final class OwnedDeflateInputStream extends InflaterInputStream {
     private final FileOperationProgress progress;
     private boolean released;
     private Throwable failure;
-    OwnedDeflateInputStream(InputStream source) { this(source, null); }
-    OwnedDeflateInputStream(InputStream source, FileOperationProgress progress) {
-        super(java.util.Objects.requireNonNull(source, "source"), new Inflater(true), 64 * 1024);
+    interface Factory {
+        OwnedDeflateInputStream create(InputStream source, Inflater inflater, FileOperationProgress progress);
+    }
+
+    static OwnedDeflateInputStream open(InputStream source) { return open(source, null); }
+
+    static OwnedDeflateInputStream open(InputStream source, FileOperationProgress progress) {
+        return create(source, progress, OwnedDeflateInputStream::new);
+    }
+
+    static OwnedDeflateInputStream create(InputStream source, FileOperationProgress progress, Factory factory) {
+        java.util.Objects.requireNonNull(source, "source");
+        java.util.Objects.requireNonNull(factory, "factory");
+        Inflater inflater = new Inflater(true);
+        try {
+            return java.util.Objects.requireNonNull(factory.create(source, inflater, progress), "stream");
+        } catch (RuntimeException | Error failure) {
+            // The superclass can fail while allocating its buffers. The caller
+            // still owns source until construction succeeds; only release our inflater.
+            try { inflater.end(); }
+            catch (RuntimeException | Error closeError) {
+                if (closeError != failure) failure.addSuppressed(closeError);
+            }
+            throw failure;
+        }
+    }
+
+    private OwnedDeflateInputStream(InputStream source, Inflater inflater, FileOperationProgress progress) {
+        super(source, inflater, 64 * 1024);
         this.progress = progress;
     }
     @Override public int read(byte[] buffer, int offset, int length) throws IOException {

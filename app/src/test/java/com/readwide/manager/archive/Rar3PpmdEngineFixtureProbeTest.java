@@ -382,7 +382,7 @@ public class Rar3PpmdEngineFixtureProbeTest {
         IOException failure = org.junit.Assert.assertThrows(IOException.class,
                 () -> Rar3PpmdSolidArchiveExtractor.tryExtractArchivePpmdSolid(
                         entries, target, null, null, null));
-        assertEquals("Cannot create output directory", failure.getMessage());
+        assertEquals("Archive file/directory output collision: occupied", failure.getMessage());
         org.junit.Assert.assertArrayEquals(new byte[]{42}, Files.readAllBytes(occupied.toPath()));
         assertTrue(!new File(target, "testfile.png").exists());
     }
@@ -561,10 +561,7 @@ public class Rar3PpmdEngineFixtureProbeTest {
     @Test
     public void corruptPrimerCrcRejectsBytesAndRetiresReader() throws Exception {
         File fixture = writeEmbeddedFixture();
-        // Change the stored first-file CRC only; RAR4 header CRC is advisory in the existing parser.
-        try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(fixture, "rw")) {
-            file.seek(0x24); int value = file.read(); file.seek(0x24); file.write(value ^ 1);
-        }
+        corruptFirstPayloadCrc(fixture);
         File spool = temp.newFolder("crc-spool");
         try (ArchiveSupport.ForwardArchiveReader reader =
                      Rar3PpmdSolidArchiveExtractor.openForwardReader(fixture, spool, false)) {
@@ -580,9 +577,7 @@ public class Rar3PpmdEngineFixtureProbeTest {
     @Test
     public void skippedCorruptPrimerCannotReachNextSolidImage() throws Exception {
         File fixture = writeEmbeddedFixture();
-        try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(fixture, "rw")) {
-            file.seek(0x24); int value = file.read(); file.seek(0x24); file.write(value ^ 1);
-        }
+        corruptFirstPayloadCrc(fixture);
         File spool = temp.newFolder("bad-discard-spool");
         try (ArchiveSupport.ForwardArchiveReader reader =
                      Rar3PpmdSolidArchiveExtractor.openForwardReader(fixture, spool, false)) {
@@ -590,6 +585,23 @@ public class Rar3PpmdEngineFixtureProbeTest {
             try { reader.nextEntry(); fail("Advancing must verify unread primer"); }
             catch (IOException expected) { assertTrue(expected.getMessage().contains("CRC")); }
             assertEquals(0, spool.list().length);
+        }
+    }
+
+    private static void corruptFirstPayloadCrc(File fixture) throws Exception {
+        try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(fixture, "rw")) {
+            file.seek(0x24); int value = file.read(); file.seek(0x24); file.write(value ^ 1);
+            // Keep the header valid so these tests still exercise decoded payload verification.
+            file.seek(0x19);
+            int headerSize = file.readUnsignedByte() | (file.readUnsignedByte() << 8);
+            byte[] checked = new byte[headerSize - 2];
+            file.seek(0x16);
+            file.readFully(checked);
+            CRC32 headerCrc = new CRC32();
+            headerCrc.update(checked);
+            file.seek(0x14);
+            file.write((int) headerCrc.getValue() & 0xff);
+            file.write((int) (headerCrc.getValue() >>> 8) & 0xff);
         }
     }
 
@@ -621,6 +633,10 @@ public class Rar3PpmdEngineFixtureProbeTest {
         File spool = temp.newFolder("scope-spool");
         for (int flags : new int[]{1, 2, 4}) { // RAR4 split-before, split-after, encrypted file flags.
             byte[] changed = original.clone(); changed[0x17] |= flags;
+            CRC32 headerCrc = new CRC32();
+            headerCrc.update(changed, 0x16, 44 - 2);
+            changed[0x14] = (byte) headerCrc.getValue();
+            changed[0x15] = (byte) (headerCrc.getValue() >>> 8);
             Files.write(fixture.toPath(), changed);
             try (ArchiveSupport.ForwardArchiveReader reader =
                          Rar3PpmdSolidArchiveExtractor.openForwardReader(fixture, spool, false)) {
@@ -709,7 +725,7 @@ public class Rar3PpmdEngineFixtureProbeTest {
             decoder.decodeEntry(new java.io.ByteArrayInputStream(cbr, 0xc0, 0xb6), JPG_SIZE,
                     new java.io.ByteArrayOutputStream());
             fail("Failed state must not be reused");
-        } catch (IOException expected) { assertTrue(expected.getMessage().contains("continuation")); }
+        } catch (IOException expected) { assertTrue(expected.getMessage().contains("retired after failure or close")); }
     }
 
     @Test
@@ -729,7 +745,7 @@ public class Rar3PpmdEngineFixtureProbeTest {
             IOException next=org.junit.Assert.assertThrows(IOException.class,()->
                     decoder.decodeEntry(new java.io.ByteArrayInputStream(cbr,0xc0,0xb6),JPG_SIZE,
                             new java.io.ByteArrayOutputStream()));
-            assertTrue(next.getMessage().contains("continuation"));
+            assertTrue(next.getMessage().contains("retired after failure or close"));
         }
     }
 

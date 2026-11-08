@@ -29,6 +29,7 @@ import android.view.KeyEvent;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
@@ -63,7 +64,9 @@ import com.readwide.manager.image.ArchiveImageSpreadDrawable;
 import com.readwide.manager.util.ArchiveImageSpreadMath;
 import com.readwide.manager.util.ArchiveViewerTimeoutPolicy;
 import com.readwide.manager.util.ArchiveImageSpreadNavigator;
-import com.readwide.manager.util.FileSystemOps;
+import com.readwide.manager.util.FileDeletionPlan;
+import com.readwide.manager.util.FileRenamePlan;
+import com.readwide.manager.util.FileMutationGuard;
 import com.readwide.manager.util.ImageSequenceNavigationMath;
 import com.readwide.manager.util.ImageSequenceState;
 import com.readwide.manager.util.ImageExportName;
@@ -179,11 +182,17 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     private PrefsManager prefs;
     private ImageDialogStyleController dialogStyle;
+    private SettingsFolderAccessController folderAccessController;
+    private final ImageFileAccessRecoveryController fileAccessRecovery =
+            new ImageFileAccessRecoveryController();
     private Dialog pageJumpDialog;
     private FrameLayout rootView;
     private ZoomImageView imageView;
     private Toolbar toolbar;
     private ImageReaderSliderController sliderController;
+    private View imageSliderPanel;
+    private final ViewTreeObserver.OnGlobalLayoutListener imageViewportLayoutListener =
+            this::updateImageViewport;
     private ViewerErrorPanel imageErrorPanel;
     private String filePath;
     private String fileUri;
@@ -293,6 +302,7 @@ public class ImageReaderActivity extends AppCompatActivity {
         }
         super.onCreate(savedInstanceState);
         dialogStyle = new ImageDialogStyleController(this);
+        folderAccessController = new SettingsFolderAccessController(this);
         overridePendingTransition(R.anim.image_viewer_enter, R.anim.image_viewer_hold);
         ViewerRegistry.activate(this);
 
@@ -423,6 +433,7 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        fileAccessRecovery.dismiss();
         super.onPause();
         // Persist the latest reading position now. When returning to the main
         // screen the parent activity's onResume (which reloads the recent list)
@@ -536,8 +547,12 @@ public class ImageReaderActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        fileAccessRecovery.dismiss();
         if (pageJumpDialog != null) pageJumpDialog.dismiss();
         destroyed = true;
+        if (rootView != null && rootView.getViewTreeObserver().isAlive()) {
+            rootView.getViewTreeObserver().removeOnGlobalLayoutListener(imageViewportLayoutListener);
+        }
         if (restorePasswordDialog != null) {
             restorePasswordDialog.dismiss();
             restorePasswordDialog = null;
@@ -1005,8 +1020,8 @@ public class ImageReaderActivity extends AppCompatActivity {
         imageView = new ZoomImageView(this);
         imageView.setBackgroundColor(Color.BLACK);
         imageView.setCallbacks(new ZoomImageView.Callbacks() {
-            @Override public void onSingleTap(float normalizedX) { handleImageSingleTap(normalizedX); }
-            @Override public boolean shouldHandleTapImmediately(float normalizedX) { return isImageSideTapPageTurn(normalizedX); }
+            @Override public void onSingleTap(float x, float y) { handleImageSingleTap(x, y); }
+            @Override public boolean shouldHandleTapImmediately(float x, float y) { return isImageSideTapPageTurn(x, y); }
             @Override public void onSwipeLeft() { showAdjacentImage(imageSwipeDelta(true)); }
             @Override public void onSwipeRight() { showAdjacentImage(imageSwipeDelta(false)); }
             @Override public void onZoomRequested() {
@@ -1019,12 +1034,10 @@ public class ImageReaderActivity extends AppCompatActivity {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
 
-        toolbar = new Toolbar(this);
+        toolbar = (Toolbar) getLayoutInflater().inflate(R.layout.image_reader_toolbar, root, false);
         toolbar.setBackgroundColor(Color.argb(230, 0, 0, 0));
-        // Consume taps on the bar (outside its icons/menu) so they do not fall
-        // through to the image view behind it and page the sequence. The image view
-        // now extends under this bar (its top strip is padding, not a margin); when
-        // the bar is hidden it is GONE and those taps reach the image.
+        // Toolbar gaps must not trigger image navigation. Hidden controls release
+        // their space to the full-screen image touch surface.
         toolbar.setClickable(true);
         toolbar.setTitleTextColor(Color.WHITE);
         toolbar.setSubtitleTextColor(Color.rgb(210, 210, 210));
@@ -1067,7 +1080,8 @@ public class ImageReaderActivity extends AppCompatActivity {
 
         sliderController = new ImageReaderSliderController(this, this::showImageAtIndex);
         sliderController.setSliderDirection(currentImageSliderDirection());
-        root.addView(sliderController.createView(imagePaths.size()), new FrameLayout.LayoutParams(
+        imageSliderPanel = sliderController.createView(imagePaths.size());
+        root.addView(imageSliderPanel, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM));
@@ -1088,9 +1102,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             systemRightInset = Math.max(0, bars.right);
             systemBottomInset = Math.max(0, bars.bottom);
 
-            // Insets belong only to the overlay controls. The image canvas remains
-            // full-screen and stable, so showing/hiding chrome cannot change its
-            // fit matrix or make the page jump vertically.
+            // The viewport follows the measured controls after these insets are laid out.
             toolbar.setPadding(systemLeftInset, systemTopInset, systemRightInset, 0);
             ViewGroup.LayoutParams raw = toolbar.getLayoutParams();
             if (raw != null) {
@@ -1105,6 +1117,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             }
             return insets;
         });
+        root.getViewTreeObserver().addOnGlobalLayoutListener(imageViewportLayoutListener);
         applyImageSystemBarVisibility();
         ViewCompat.requestApplyInsets(root);
         updateToolbarTitle();
@@ -1208,12 +1221,12 @@ public class ImageReaderActivity extends AppCompatActivity {
         return action == KeyEvent.ACTION_UP;
     }
 
-    private void handleImageSingleTap(float normalizedX) {
+    private void handleImageSingleTap(float normalizedX, float normalizedY) {
         if (!isImageTapPagingEnabled() || imagePaths.size() <= 1) {
             toggleChrome();
             return;
         }
-        int delta = imageTapPageDelta(normalizedX);
+        int delta = imageTapPageDelta(normalizedX, normalizedY);
         if (delta == 0) {
             toggleChrome();
         } else {
@@ -1221,14 +1234,16 @@ public class ImageReaderActivity extends AppCompatActivity {
         }
     }
 
-    private boolean isImageSideTapPageTurn(float normalizedX) {
+    private boolean isImageSideTapPageTurn(float normalizedX, float normalizedY) {
         return isImageTapPagingEnabled()
                 && imagePaths.size() > 1
-                && imageTapPageDelta(normalizedX) != 0;
+                && imageTapPageDelta(normalizedX, normalizedY) != 0;
     }
 
-    private int imageTapPageDelta(float normalizedX) {
-        return ImageSequenceNavigationMath.visualTapZoneDelta(normalizedX, isImageMirrorMode());
+    private int imageTapPageDelta(float normalizedX, float normalizedY) {
+        com.readwide.manager.util.TapZoneProfile profile = prefs.getViewerTapZones(
+                com.readwide.manager.util.TapZoneProfile.Viewer.IMAGE);
+        return ImageSequenceNavigationMath.visualTapZoneDelta(normalizedX, normalizedY, profile, isImageMirrorMode());
     }
 
     private void toggleChrome() {
@@ -1236,6 +1251,23 @@ public class ImageReaderActivity extends AppCompatActivity {
         if (toolbar != null) toolbar.setVisibility(chromeVisible ? View.VISIBLE : View.GONE);
         updateImageSliderState();
         applyImageSystemBarVisibility();
+    }
+
+    private void updateImageViewport() {
+        if (destroyed || imageView == null || rootView == null) return;
+        if (!chromeVisible) {
+            imageView.setViewportInsets(0, 0, 0, 0);
+            return;
+        }
+        int top = systemTopInset;
+        if (toolbar != null && toolbar.getVisibility() == View.VISIBLE) {
+            top = Math.max(top, toolbar.getBottom());
+        }
+        int bottom = systemBottomInset;
+        if (imageSliderPanel != null && imageSliderPanel.getVisibility() == View.VISIBLE) {
+            bottom = Math.max(bottom, rootView.getHeight() - imageSliderPanel.getTop());
+        }
+        imageView.setViewportInsets(systemLeftInset, top, systemRightInset, bottom);
     }
 
     private void applyImageSystemBarVisibility() {
@@ -3311,7 +3343,17 @@ public class ImageReaderActivity extends AppCompatActivity {
     private void showRenameDialog() {
         if (!canModifyCurrentLocalFile()) { showOpsUnavailableToast(); return; }
         File file = new File(filePath);
+        final FileRenamePlan renamePlan;
+        try {
+            renamePlan = FileRenamePlan.capture(file);
+            if (renamePlan.isDirectory()) throw new java.io.IOException("Image changed to a directory");
+        } catch (java.io.IOException | SecurityException unavailable) {
+            ShortToast.show(this, R.string.rename_failed);
+            return;
+        }
         Dialog dialog = dialogStyle.makeDialog();
+        ImageFileAccessRecoveryController.Scope scope = fileAccessRecovery.own(
+                dialog, () -> isCurrentRawImage(file), renamePlan::isUnchanged);
         LinearLayout box = dialogStyle.makeBox();
         box.addView(dialogStyle.makeTitle(getString(R.string.rename)));
 
@@ -3338,17 +3380,21 @@ public class ImageReaderActivity extends AppCompatActivity {
         box.addView(cancel, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
 
         rename.setOnClickListener(v -> {
+            if (!fileAccessRecovery.ownsVisible(scope, dialog)) return;
             String newName = input.getText().toString().trim();
             if (newName.isEmpty()) return;
             File parent = file.getParentFile();
             if (parent == null) return;
             File newFile = new File(parent, newName);
-            if (FileSystemOps.renameInPlace(file, newName)) {
+            if (renamePlan.rename(newName)) {
                 applyRenamedLocalImage(file, newFile);
                 ShortToast.show(this, R.string.renamed);
                 dialog.dismiss();
             } else {
                 ShortToast.show(this, R.string.rename_failed);
+                if (ImageFileAccessRecoveryController.canOfferRename(file, newName)) {
+                    showImageFileAccessOffer(scope);
+                }
             }
         });
         cancel.setOnClickListener(v -> dialog.dismiss());
@@ -3362,6 +3408,7 @@ public class ImageReaderActivity extends AppCompatActivity {
             }
             input.requestFocus();
             input.postDelayed(() -> {
+                if (!fileAccessRecovery.ownsVisible(scope, dialog)) return;
                 InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
                 if (imm != null) imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
             }, 120);
@@ -3392,7 +3439,25 @@ public class ImageReaderActivity extends AppCompatActivity {
     private void showDeleteConfirmDialog() {
         if (!canModifyCurrentLocalFile()) { showOpsUnavailableToast(); return; }
         File file = new File(filePath);
+        final FileDeletionPlan deletionPlan;
+        final FileMutationGuard sourceGuard;
+        try {
+            deletionPlan = FileDeletionPlan.captureSingleFile(file);
+            sourceGuard = FileMutationGuard.capture(file);
+        } catch (java.io.IOException | SecurityException unavailable) {
+            ShortToast.show(this, R.string.delete_failed);
+            return;
+        }
         Dialog dialog = dialogStyle.makeDialog();
+        ImageFileAccessRecoveryController.Scope scope = fileAccessRecovery.own(
+                dialog, () -> isCurrentRawImage(file), () -> {
+                    try {
+                        sourceGuard.recheck();
+                        return true;
+                    } catch (java.io.IOException | SecurityException changed) {
+                        return false;
+                    }
+                });
         LinearLayout box = dialogStyle.makeBox();
         int danger = Color.rgb(255, 125, 125);
         box.addView(dialogStyle.makeTitle(getString(R.string.delete)));
@@ -3408,8 +3473,10 @@ public class ImageReaderActivity extends AppCompatActivity {
         box.addView(delete, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
         box.addView(cancel, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
         delete.setOnClickListener(v -> {
+            if (!fileAccessRecovery.ownsVisible(scope, dialog)) return;
             String oldPath = file.getAbsolutePath();
-            if (file.delete()) {
+            FileDeletionPlan.Result deletion = deletionPlan.delete(null, null);
+            if (deletion == FileDeletionPlan.Result.DELETED) {
                 ImageSequenceState.RemoveResult result = ImageSequenceState.removePath(
                         imagePaths,
                         sourceDisplayNames,
@@ -3430,11 +3497,47 @@ public class ImageReaderActivity extends AppCompatActivity {
                     loadImageAsync();
                 }
             } else {
-                ShortToast.show(this, R.string.delete_failed);
+                ShortToast.show(this, deletion == FileDeletionPlan.Result.CHANGED
+                        ? R.string.raw_delete_changed : R.string.delete_failed);
+                if (deletion == FileDeletionPlan.Result.FAILED) showImageFileAccessOffer(scope);
             }
         });
         cancel.setOnClickListener(v -> dialog.dismiss());
         dialog.setContentView(box);
+        dialog.show();
+        dialogStyle.setDialogWidth(dialog);
+    }
+
+    private boolean isCurrentRawImage(File selected) {
+        return !destroyed && !isFinishing() && !isDestroyed() && canModifyCurrentLocalFile()
+                && ImageFileAccessRecoveryController.isRawSource(
+                        allowFileOps, filePath, fileUri, sourceArchivePath, selected);
+    }
+
+    private void showImageFileAccessOffer(ImageFileAccessRecoveryController.Scope scope) {
+        if (!fileAccessRecovery.isCurrent(scope)) return;
+        Dialog dialog = dialogStyle.makeDialog();
+        LinearLayout box = dialogStyle.makeBox();
+        box.addView(dialogStyle.makeTitle(getString(R.string.saf_folder_access)));
+        TextView message = new TextView(this);
+        message.setText(R.string.image_file_access_message);
+        message.setTextColor(dialogStyle.textColor());
+        message.setTextSize(16f);
+        message.setPadding(dpToPx(8), 0, dpToPx(8), dpToPx(12));
+        box.addView(message, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        TextView choose = dialogStyle.makeButton(getString(R.string.saf_folder_access),
+                dialogStyle.textColor());
+        TextView cancel = dialogStyle.makeButton(getString(R.string.cancel), dialogStyle.subTextColor());
+        box.addView(choose, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
+        box.addView(cancel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dpToPx(48)));
+        choose.setOnClickListener(v -> fileAccessRecovery.accept(scope,
+                () -> folderAccessController.open(true)));
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        dialog.setContentView(box);
+        if (!fileAccessRecovery.replaceWithOffer(scope, dialog)) return;
         dialog.show();
         dialogStyle.setDialogWidth(dialog);
     }

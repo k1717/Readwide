@@ -1181,9 +1181,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
                 usableHeight,
                 true,
                 true,
-                prefs.getTapZoneMode(),
-                prefs.getTapLeadingZonePercent(),
-                prefs.getTapTrailingZonePercent());
+                prefs.getViewerTapZones(com.readwide.manager.util.TapZoneProfile.Viewer.PDF));
     }
 
     private boolean handlePdfTapPaging(@NonNull MotionEvent event) {
@@ -3500,9 +3498,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
         if (w <= 0 || h <= 0 || x < 0 || y < 0 || x > w || y > h) return false;
         int action = TapZoneMath.actionForTap(
                 x, y, w, h, true, true,
-                prefs.getTapZoneMode(),
-                prefs.getTapLeadingZonePercent(),
-                prefs.getTapTrailingZonePercent());
+                prefs.getViewerTapZones(com.readwide.manager.util.TapZoneProfile.Viewer.PDF));
         return action == TapZoneMath.ACTION_PREVIOUS || action == TapZoneMath.ACTION_NEXT;
     }
 
@@ -3519,9 +3515,7 @@ public class PdfReaderActivity extends AppCompatActivity implements TtsHost, Rea
             if (w > 0 && h > 0 && x >= 0 && y >= 0 && x <= w && y <= h) {
                 int action = TapZoneMath.actionForTap(
                         x, y, w, h, true, true,
-                        prefs.getTapZoneMode(),
-                        prefs.getTapLeadingZonePercent(),
-                        prefs.getTapTrailingZonePercent());
+                        prefs.getViewerTapZones(com.readwide.manager.util.TapZoneProfile.Viewer.PDF));
                 if (action == TapZoneMath.ACTION_PREVIOUS) {
                     turnPdfDisplayPageBy(-1);
                     return;

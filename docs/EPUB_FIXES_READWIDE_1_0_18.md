@@ -71,9 +71,9 @@ background and repeated transient-focus loss, manual-pause behavior,
 hash-collision cache names, corrupted same-size cache content, changed CRCs,
 and metadata read boundaries.
 
-The maintainer reported a successful 1.0.18 build before the later timeout-field
-and translation changes; those follow-ups are not covered. Unit-test and device
-results have not been reported; see [release readiness](RELEASE_READINESS_1_0_18.md).
+An earlier 1.0.18 build was reported successful. It predates the timeout-field
+and translation changes, which still need verification. Unit-test and device
+results have not been reported; see the [1.0.18 validation record](DEV_CHANGES_1_0_18.md#validation-boundary).
 Static checks do not establish runtime correctness. Device validation should
 exercise background/focus changes during prepare/seek, paused page changes,
 percent-bearing chapter/image/audio names, and large EPUB loading.

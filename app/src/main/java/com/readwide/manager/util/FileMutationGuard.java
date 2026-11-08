@@ -46,6 +46,16 @@ public final class FileMutationGuard {
         }
     }
 
+    void recheckAt(File candidate, boolean renamedEntry) throws IOException {
+        Stamp current = readPath(candidate);
+        if (!original.matchesContent(current)
+                || (!renamedEntry && !Objects.equals(original.changed, current.changed))
+                || (Build.VERSION.SDK_INT > 0 && Build.VERSION.SDK_INT < 27
+                    && legacyModifiedMillis != candidate.lastModified())) {
+            throw new IOException("Moved backup changed: " + candidate);
+        }
+    }
+
     public void verifyOpened(FileInputStream input) throws IOException {
         if (Build.VERSION.SDK_INT != 0) {
             try {
@@ -95,8 +105,11 @@ public final class FileMutationGuard {
             this.changed = changed;
         }
         boolean matches(Stamp other) {
+            return matchesContent(other) && Objects.equals(changed, other.changed);
+        }
+        boolean matchesContent(Stamp other) {
             return bytes == other.bytes && Objects.equals(identity, other.identity)
-                    && Objects.equals(modified, other.modified) && Objects.equals(changed, other.changed);
+                    && Objects.equals(modified, other.modified);
         }
     }
 

@@ -98,16 +98,25 @@ final class AzoDecoder {
     @NonNull
     private static byte[] decodeRawBlock(@NonNull byte[] data, int expectedSize,
                                          @Nullable FileOperationProgress progress) throws IOException {
+        return decodeRawBlock(data, 0, data.length, expectedSize, progress);
+    }
+
+    @NonNull
+    private static byte[] decodeRawBlock(@NonNull byte[] data, int offset, int length, int expectedSize,
+                                         @Nullable FileOperationProgress progress) throws IOException {
         ArchiveCancellation.checkpoint(progress);
+        if ((offset | length) < 0 || length > data.length - offset) {
+            throw unsupported("Invalid AZO compressed block range");
+        }
         if (expectedSize < 0) {
             throw unsupported("AZO raw block output size is outside decoder limits");
         }
-        if (expectedSize == data.length) return Arrays.copyOf(data, data.length);
+        if (expectedSize == length) return Arrays.copyOfRange(data, offset, offset + length);
         if (expectedSize == 0) {
-            if (data.length == 0) return new byte[0];
+            if (length == 0) return new byte[0];
             throw unsupported("AZO raw block has data for zero-size output");
         }
-        RawBlockDecoder decoder = new RawBlockDecoder(data, expectedSize, progress);
+        RawBlockDecoder decoder = new RawBlockDecoder(data, offset, length, expectedSize, progress);
         return decoder.decode();
     }
 
@@ -194,9 +203,10 @@ final class AzoDecoder {
                 }
                 readPos += comp;
             } else {
-                byte[] compressed = Arrays.copyOfRange(input, readPos, readPos + comp);
+                // The arithmetic reader is confined to this block's packed range.
+                int packedOffset = readPos;
                 readPos += comp;
-                byte[] plain = decodeRawBlock(compressed, uncomp, progress);
+                byte[] plain = decodeRawBlock(input, packedOffset, comp, uncomp, progress);
                 System.arraycopy(plain, 0, output, outputPos, uncomp);
             }
             if (x86Filter) applyX86Filter(output, outputPos, uncomp, progress);
@@ -257,12 +267,13 @@ final class AzoDecoder {
 
     private static final class RawBlockDecoder {
         private static final int HISTORY_LEN_SHORT = 2;
-        private static final int HISTORY_LEN_POS = 16;
         private static final int SHORT_HISTORY_BIT_LEN = 1;
-        private static final int LONG_HISTORY_BIT_LEN = 4;
+        private static final int LONG_HISTORY_BIT_LEN = 7;
+        private static final int HISTORY_LEN_POS = 1 << LONG_HISTORY_BIT_LEN;
         private static final int DIST_INDEX_BIT_LEN = 7;
 
         private final byte[] input;
+        private final int inputOffset, inputLength;
         private final byte[] output;
         @Nullable private final FileOperationProgress progress;
         private final ArithDecoder arith = new ArithDecoder();
@@ -286,14 +297,21 @@ final class AzoDecoder {
 
         RawBlockDecoder(@NonNull byte[] input, int outputSize,
                         @Nullable FileOperationProgress progress) {
+            this(input, 0, input.length, outputSize, progress);
+        }
+
+        RawBlockDecoder(@NonNull byte[] input, int inputOffset, int inputLength, int outputSize,
+                        @Nullable FileOperationProgress progress) {
             this.input = input;
+            this.inputOffset = inputOffset;
+            this.inputLength = inputLength;
             this.output = new byte[outputSize];
             this.progress = progress;
         }
 
         @NonNull
         byte[] decode() throws IOException {
-            arith.init(input);
+            arith.init(input, inputOffset, inputLength);
             literal.init();
             lenProb.init();
             probMatch.init();
@@ -597,6 +615,7 @@ final class AzoDecoder {
         private static final long SECOND_MASK = 0x40000000L;
         private byte[] buffer;
         private int cursor;
+        private int inputEnd;
         private int currentByte;
         private int remainingBits;
         private boolean readError;
@@ -604,9 +623,13 @@ final class AzoDecoder {
         private long low;
         private long high;
 
-        void init(@NonNull byte[] input) {
+        void init(@NonNull byte[] input, int offset, int length) throws IOException {
+            if ((offset | length) < 0 || length > input.length - offset) {
+                throw unsupported("Invalid AZO arithmetic input range");
+            }
             buffer = input;
-            cursor = 0;
+            cursor = offset;
+            inputEnd = offset + length;
             currentByte = 0;
             remainingBits = 0;
             readError = false;
@@ -725,7 +748,7 @@ final class AzoDecoder {
 
         private int readCodeBit() {
             if (remainingBits == 0) {
-                if (cursor < buffer.length) {
+                if (cursor < inputEnd) {
                     currentByte = buffer[cursor++] & 0xff;
                     remainingBits = 8;
                 } else {

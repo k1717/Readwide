@@ -152,7 +152,7 @@ final class SevenZCoderRegistry {
             return (inputs, password) -> SevenZPpmd7Decoder.decodeStream(inputs[0], props, size);
         });
         add(entries, "040108", "Deflate", 1, false, Kind.ADDITIONAL,
-                noProperties("Deflate", OwnedDeflateInputStream::new));
+                noProperties("Deflate", OwnedDeflateInputStream::open));
         add(entries, "040109", "Deflate64", 1, false, Kind.ADDITIONAL, noProperties("Deflate64", Deflate64CompressorInputStream::new));
         // Folder input is bounded. Decode every stream, not just a valid prefix.
         add(entries, "040202", "BZip2", 1, true, Kind.ADDITIONAL,

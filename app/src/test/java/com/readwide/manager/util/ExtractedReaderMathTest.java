@@ -13,7 +13,7 @@ import java.util.Random;
 
 public class ExtractedReaderMathTest {
     @Test
-    public void largeTextAnchorMath_matchesOriginalLogic() {
+    public void largeTextAnchorMath_matchesOriginalExceptShortRowBackwardCorrection() {
         Random random = new Random(0x545652L);
         for (int round = 0; round < 5000; round++) {
             ArrayList<CustomReaderView.PageTextAnchor> anchors = randomAnchors(random);
@@ -26,7 +26,15 @@ public class ExtractedReaderMathTest {
                         LargeTextAnchorMath.findExactPageForChar(anchors, charPosition));
                 assertEquals(refFindAnchorIndexAtOrBefore(anchors, charPosition),
                         LargeTextAnchorMath.findAnchorIndexAtOrBefore(anchors, charPosition));
-                assertEquals(refFindTapTargetAnchorIndex(anchors, currentAbs, direction),
+                int expectedTap = refFindTapTargetAnchorIndex(anchors, currentAbs, direction);
+                int owner = refFindAnchorIndexAtOrBefore(anchors, Math.max(0, currentAbs));
+                if (direction < 0 && owner >= 0) {
+                    int offset = Math.max(0, currentAbs) - Math.max(0, anchors.get(owner).charPosition);
+                    // Keep the frozen oracle below; only the known 1..8-character
+                    // backward dead zone differs from the extracted implementation.
+                    if (offset > 0 && offset <= 8) expectedTap = owner;
+                }
+                assertEquals(expectedTap,
                         LargeTextAnchorMath.findTapTargetAnchorIndex(anchors, currentAbs, direction));
             }
         }
@@ -66,7 +74,8 @@ public class ExtractedReaderMathTest {
 
         assertEquals(1, LargeTextAnchorMath.findTapTargetAnchorIndex(anchors, 99, +1));
         assertEquals(1, LargeTextAnchorMath.findTapTargetAnchorIndex(anchors, 109, -1));
-        assertEquals(0, LargeTextAnchorMath.findTapTargetAnchorIndex(anchors, 108, -1));
+        assertEquals(1, LargeTextAnchorMath.findTapTargetAnchorIndex(anchors, 108, -1));
+        assertEquals(0, LargeTextAnchorMath.findTapTargetAnchorIndex(anchors, 100, -1));
     }
 
     @Test

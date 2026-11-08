@@ -122,8 +122,8 @@ No UnRAR source was used for this change.
   `app/src/main/assets/open_source_licenses/rardecode_bsd2.txt`. No Go runtime or
   UnRAR implementation is bundled. This new adaptation is separate from the older
   RAR5 checksum algorithm reference described above.
-- EGG LEA producer fixtures are CC0 test-only resources, with upstream URLs and
-  decoded-byte SHA-256 values in `app/src/test/resources/archives/egg-lea/README.md`.
+- EGG AES/LEA/ZipCrypto fixtures are CC0 test-only resources, with upstream URLs,
+  archive sizes and observed methods in `app/src/test/resources/archives/egg-lea/README.md`.
 
 ## Native LZ5/Lizard source subset
 

@@ -1,16 +1,16 @@
 # Public release build checklist
 
-This file is the practical build and verification checklist for Readwide 1.0.21.
+This file is the practical build and verification checklist for Readwide 1.0.22.
 
 ## Version metadata
 
 ```text
 applicationId com.readwide.manager
-versionCode 10021
-versionName 1.0.21
+versionCode 10022
+versionName 1.0.22
 ```
 
-The application ID has been `com.readwide.manager` since 1.0.4. 1.0.6 switched to a new release signing key (the `readwide` alias); 1.0.21 keeps that key, so it installs in place over 1.0.20 through 1.0.6. Updating from 1.0.4/1.0.5 (signed with the previous `textview`-alias key) still requires uninstalling the old version, installing 1.0.21, and migrating data with the in-app JSON backup export/import. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
+The application ID has been `com.readwide.manager` since 1.0.4. Version 1.0.6 switched to the project release key (the `readwide` alias). A 1.0.22 APK signed with that same key installs over 1.0.21 through 1.0.6. For 1.0.4/1.0.5 or another signing key, export an in-app JSON backup before uninstalling, then install 1.0.22 and import the backup. The key alias or version name alone does not establish signing compatibility. Earlier builds using `com.textview.reader` install as a separate app because the applicationId differs.
 
 ## Keystore policy
 
@@ -69,7 +69,7 @@ Keep these files with source and binary release materials:
 - `docs/LICENSE_REPORT_READWIDE_1_0_21.md`
 - `docs/SBOM_READWIDE_1_0_21.spdx.json`
 
-The 1.0.21 reports retain the dependency pins declared by the 1.0.20 source. They cover direct dependencies and bundled source; a resolved transitive report is still needed for submission.
+The 1.0.21 reports remain the inherited dependency baseline for 1.0.22, not a new artifact inventory. They cover direct dependencies and bundled source; final-version inventories and a resolved transitive report are still needed for submission.
 
 All source-controlled notice assets in `app/src/main/assets/open_source_licenses/`
 must remain in the APK, not only the libarchive/ZIPX notices. The inventory and
@@ -77,7 +77,7 @@ component obligations are recorded in [third-party notices](THIRD_PARTY_NOTICES.
 
 ## APK verification
 
-Publish the verified signed APK as `Readwide_1.0.21.apk`. Local build output names may differ.
+Publish the verified signed APK as `Readwide_1.0.22.apk`. Local build output names may differ.
 
 ```bash
 APK=app/build/outputs/apk/release/app-release.apk
@@ -151,8 +151,8 @@ the build tooling's own dependency/distribution verification.
 
 Before opening an F-Droid Data merge request:
 
-1. Publish a final Git tag, e.g. `v1.0.21`.
-2. Start from current fdroiddata upstream. The checked-in historical mirror stops at 1.0.19 and must not replace upstream metadata. Add only the version actually submitted and pin it to the final tag's full 40-character commit hash.
+1. Publish a final Git tag, e.g. `v1.0.22`.
+2. Start from current fdroiddata upstream. The checked-in historical mirror stops at 1.0.21 and must not replace upstream metadata. Add only the version actually submitted and pin it to the final tag's full 40-character commit hash.
 3. Keep the verified official Gradle 9.4.1 wrapper; F-Droid checks known wrapper hashes, so no `rm` rule is needed.
 4. Confirm a no-private-keystore `assembleRelease` build works.
 5. Keep RAR and HWP/HWPX support wording conservative.
@@ -183,7 +183,7 @@ On PowerShell, set `$env:TEXTVIEW_EXTERNAL_ARCHIVE_FIXTURE_DIR` before starting
 `.\gradlew.bat testDebugUnitTest`. A shell-local variable is not inherited by
 Gradle; missing fixture configuration makes these optional tests skip.
 
-The [release readiness record](docs/RELEASE_READINESS_1_0_21.md) distinguishes
+The [release readiness record](docs/RELEASE_READINESS_1_0_22.md) distinguishes
 completed checks from outstanding verification. Verify source ZIP inventory, CRC
 and executable modes separately from APK identity/signature and runtime checks;
 none substitutes for the others.

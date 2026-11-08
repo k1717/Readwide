@@ -56,7 +56,6 @@ When behavior changes, update the relevant docs:
 - Keep license reports in their existing identity, runtime dependencies, test dependencies, build tooling, bundled notices and repository-checklist structure. Place additional component details under the appropriate section; retain SPDX and store-metadata formats. Reference and build guides keep their topic-specific structure rather than adopting a release-note template.
 - Keep each release's license report/SBOM identity, store changelogs and build/support pointers consistent without claiming unreported validation.
 - `PRIVACY.md` for data, permissions, TXT display-rule storage, or file-writing behavior.
-- `GITHUB_UPLOAD_NOTES.md` for packaging/upload workflow changes.
 - `docs/README.md` when adding or relocating documents. Keep current guides, historical release records and component provenance separate; do not present old test results as current verification.
 
 ## Drawer gesture changes

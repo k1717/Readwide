@@ -427,42 +427,50 @@ public class CustomReaderView extends View implements com.readwide.manager.TtsTe
     private void requestSearchHighlights(int from, int to) {
         if (highlightText == text && searchQuery.equals(highlightQuery)
                 && searchOptions.equalsOptions(highlightOptions) && from == highlightFrom && to == highlightTo) return;
-        if (highlightWorker == null) {
-            highlightPreparation = new HighlightPreparation();
-            highlightWorker = new java.util.concurrent.ThreadPoolExecutor(
-                1, 1, 10, java.util.concurrent.TimeUnit.SECONDS,
-                new java.util.concurrent.ArrayBlockingQueue<>(1),
-                new java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy());
-        }
-        highlightWorker.allowCoreThreadTimeOut(true);
         if (highlightTask != null) highlightTask.cancel(true);
         final int generation = ++highlightGeneration;
         final String snapshot = text, query = searchQuery;
         final SearchOptions options = searchOptions;
-        final HighlightPreparation preparation = highlightPreparation;
         highlightText = snapshot; highlightQuery = query; highlightOptions = options;
         highlightFrom = from; highlightTo = to;
         readySearchHighlights = java.util.Collections.emptyList();
-        highlightTask = highlightWorker.submit(() -> {
-            if (preparation.text != snapshot || !query.equals(preparation.query)
-                    || !options.equalsOptions(preparation.options)) {
-                SearchMatcher matcher = SearchMatcher.compile(query, options);
-                preparation.matches = matcher == null ? null : matcher.prepareText(snapshot);
-                preparation.text = snapshot; preparation.query = query; preparation.options = options;
+        try {
+            if (highlightWorker == null) {
+                highlightPreparation = new HighlightPreparation();
+                highlightWorker = new java.util.concurrent.ThreadPoolExecutor(
+                    1, 1, 10, java.util.concurrent.TimeUnit.SECONDS,
+                    new java.util.concurrent.ArrayBlockingQueue<>(1),
+                    new java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy());
             }
-            java.util.List<int[]> hits = new java.util.ArrayList<>();
-            if (preparation.matches != null) preparation.matches.forEachInRange(from, to, (start, end) -> {
-                if (Thread.currentThread().isInterrupted()) return false;
-                hits.add(new int[] {start, end}); return true;
+            highlightWorker.allowCoreThreadTimeOut(true);
+            final HighlightPreparation preparation = highlightPreparation;
+            highlightTask = com.readwide.manager.util.TaskSubmission.submit(highlightWorker, () -> {
+                if (preparation.text != snapshot || !query.equals(preparation.query)
+                        || !options.equalsOptions(preparation.options)) {
+                    SearchMatcher matcher = SearchMatcher.compile(query, options);
+                    preparation.matches = matcher == null ? null : matcher.prepareText(snapshot);
+                    preparation.text = snapshot; preparation.query = query; preparation.options = options;
+                }
+                java.util.List<int[]> hits = new java.util.ArrayList<>();
+                if (preparation.matches != null) preparation.matches.forEachInRange(from, to, (start, end) -> {
+                    if (Thread.currentThread().isInterrupted()) return false;
+                    hits.add(new int[] {start, end}); return true;
+                });
+                if (Thread.currentThread().isInterrupted()) return;
+                post(() -> {
+                    if (generation != highlightGeneration || text != snapshot || !query.equals(searchQuery)
+                            || !options.equalsOptions(searchOptions)) return;
+                    readySearchHighlights = hits;
+                    invalidate();
+                });
             });
-            if (Thread.currentThread().isInterrupted()) return;
-            post(() -> {
-                if (generation != highlightGeneration || text != snapshot || !query.equals(searchQuery)
-                        || !options.equalsOptions(searchOptions)) return;
-                readySearchHighlights = hits;
-                invalidate();
-            });
-        });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            if (generation == highlightGeneration) {
+                ++highlightGeneration;
+                highlightTask = null;
+                // Retry when the text/query/range changes, not on every draw under pressure.
+            }
+        }
     }
 
     @Override protected void onDetachedFromWindow() {

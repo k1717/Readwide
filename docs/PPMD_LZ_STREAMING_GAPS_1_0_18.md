@@ -1,16 +1,18 @@
 # PPMd/LZ and 7z gap reduction — 1.0.18 — implementation history
 
-> Later batch twenty-two adds scoped mixed RAR dispatch, streaming LZ output,
+> Later changes add scoped mixed RAR dispatch, streaming LZ output,
 > checked plain solid admission and additional special-7z coders. See
-> [current scope](RAR_MIXED_AND_7Z_CODERS_1_0_18.md). The original stage below
-> is historical. Current build success is maintainer-reported; remaining tests
-> and device checks are tracked in [release readiness](RELEASE_READINESS_1_0_18.md).
+> [the later 1.0.18 RAR scope](DEV_CHANGES_1_0_18.md#rar3rar4-streaming-mixed-modes-and-standard-filters)
+> and [special-7z scope](DEV_CHANGES_1_0_18.md#streaming-and-split-special-7z-decoding).
+> The original stage below is historical. An earlier 1.0.18 build was reported
+> successful; the [validation record](DEV_CHANGES_1_0_18.md#validation-boundary)
+> distinguishes it from subsequent unverified changes.
 
-Archive batch twenty. Source changes only: no build, tests, benchmark or device
-verification was run. This is not complete mixed-mode RAR or complete 7z support.
+These source changes were not built, tested, benchmarked or verified on a device.
+Mixed-mode RAR and 7z support remained incomplete at this stage.
 
-Subsequent batch twenty-one adds standard split special-coder forwarding; see
-[the scoped adapter and unexecuted checks](SEVENZ_SPLIT_FORWARD_1_0_18.md).
+Subsequent changes add standard split special-coder forwarding; see
+[the 1.0.18 special-7z summary](DEV_CHANGES_1_0_18.md#streaming-and-split-special-7z-decoding).
 
 ## 7z PPMd: streaming input and output
 

@@ -52,6 +52,81 @@ public class BackupPreferencesInstrumentedTest {
                 new JSONObject().put("type", type).put("value", value)));
     }
 
+    @Test public void legacyTapProfilesFollowTxtExceptImages() throws Exception {
+        PrefsManager preferences = manager(store);
+        preferences.setTapZoneMode(PrefsManager.TAP_ZONE_VERTICAL);
+        preferences.setTapZonePercents(20, 40);
+        for (TapZoneProfile.Viewer viewer : TapZoneProfile.Viewer.values()) {
+            TapZoneProfile value = preferences.getViewerTapZones(viewer);
+            if (viewer == TapZoneProfile.Viewer.IMAGE) {
+                assertFalse(preferences.usesTxtTapZones(viewer));
+                assertEquals(1, value.mode);
+                assertEquals(33, value.leading);
+                assertEquals(33, value.trailing);
+            } else {
+                assertEquals(0, value.mode);
+                assertEquals(20, value.leading);
+                assertEquals(40, value.trailing);
+            }
+        }
+    }
+
+    @Test public void firstSeparateChoiceCopiesEffectiveValuesAndRetainsThem() throws Exception {
+        PrefsManager preferences = manager(store);
+        TapZoneProfile.Viewer viewer = TapZoneProfile.Viewer.PDF;
+        preferences.setTapZonePercents(20, 45);
+        preferences.setUsesTxtTapZones(viewer, false);
+        assertEquals(20, preferences.getViewerTapZones(viewer).leading);
+        preferences.setViewerTapZones(viewer, new TapZoneProfile(0, 25, 40));
+        preferences.setUsesTxtTapZones(viewer, true);
+        preferences.setTapZonePercents(40, 20);
+        assertEquals(40, preferences.getViewerTapZones(viewer).leading);
+        preferences.setUsesTxtTapZones(viewer, false);
+        assertEquals(25, preferences.getViewerTapZones(viewer).leading);
+        assertEquals(0, preferences.getViewerTapZones(viewer).mode);
+        assertEquals(40, preferences.getViewerTapZones(TapZoneProfile.Viewer.EPUB).leading);
+    }
+
+    @Test public void imageFollowTxtRoundTripRetainsItsOriginalCustomZones() throws Exception {
+        PrefsManager preferences = manager(store);
+        TapZoneProfile.Viewer viewer = TapZoneProfile.Viewer.IMAGE;
+        preferences.setTapZonePercents(20, 45);
+        preferences.setUsesTxtTapZones(viewer, true);
+        assertEquals(20, preferences.getViewerTapZones(viewer).leading);
+        preferences.setUsesTxtTapZones(viewer, false);
+        assertEquals(33, preferences.getViewerTapZones(viewer).leading);
+        assertEquals(33, preferences.getViewerTapZones(viewer).trailing);
+    }
+
+    @Test public void tapProfilesRoundTripAndResetWithoutChangingBookmarksOrLock() throws Exception {
+        PrefsManager preferences = manager(store);
+        TapZoneProfile.Viewer viewer = TapZoneProfile.Viewer.EPUB;
+        preferences.setUsesTxtTapZones(viewer, false);
+        preferences.setViewerTapZones(viewer, new TapZoneProfile(0, 10, 60));
+        preferences.setViewerTapPagingEnabled(viewer, false);
+        preferences.setViewerTapPagingEnabled(TapZoneProfile.Viewer.IMAGE, true);
+        store.edit().putString("bookmark_fixture", "untouched").putBoolean("lock_enabled", true).commit();
+        JSONObject backup = preferences.exportSettingsToJson();
+        preferences.resetReaderAndAppSettings();
+        assertTrue(preferences.usesTxtTapZones(viewer));
+        assertFalse(preferences.getImageTapPagingEnabled());
+        assertEquals("untouched", store.getString("bookmark_fixture", ""));
+        assertTrue(store.getBoolean("lock_enabled", false));
+        preferences.importSettingsFromJson(backup, false);
+        assertFalse(preferences.usesTxtTapZones(viewer));
+        assertEquals(10, preferences.getViewerTapZones(viewer).leading);
+        assertEquals(0, preferences.getViewerTapZones(viewer).mode);
+        assertFalse(preferences.getViewerTapPagingEnabled(viewer));
+        assertTrue(preferences.getViewerTapPagingEnabled(TapZoneProfile.Viewer.IMAGE));
+    }
+
+    @Test public void tapProfileImportRejectsWrongTypesBeforeWriting() throws Exception {
+        PrefsManager preferences = manager(store);
+        String key = TapZoneProfile.key(TapZoneProfile.Viewer.PDF, "use_txt");
+        try { preferences.importSettingsFromJson(setting(key, "string", "false"), false); fail(); }
+        catch (org.json.JSONException expected) { assertFalse(store.contains(key)); }
+    }
+
     @Test public void epubAlignmentRoundTripsIndependentlyOfTxtAlignment() throws Exception {
         PrefsManager preferences = manager(store);
         assertEquals(EpubTextAlignment.BOOK_DEFAULT, preferences.getEpubTextAlignment());
@@ -147,6 +222,85 @@ public class BackupPreferencesInstrumentedTest {
             assertNotNull(expected.getCause());
             assertEquals(1, expected.getCause().getSuppressed().length);
         }
+    }
+
+    @Test public void resetResourceFailureRestoresOnlyResetKeysAndPreservesErrorIdentity() throws Exception {
+        for (Error failure : new Error[]{new OutOfMemoryError("reset allocation"), new StackOverflowError("reset stack")}) {
+            store.edit().putFloat("font_size", 25f).putString("folder_shortcuts", "/Before")
+                    .putString("lock_pin", "test-only-pin").putBoolean("lock_enabled", true).commit();
+            int night = androidx.appcompat.app.AppCompatDelegate.getDefaultNightMode();
+            androidx.core.os.LocaleListCompat locales = androidx.appcompat.app.AppCompatDelegate.getApplicationLocales();
+            PrefsManager preferences = manager(commitErrors(failure, null, () ->
+                    store.edit().putString("folder_shortcuts", "/Updated").commit()));
+            try { preferences.resetReaderAndAppSettings(); fail("Expected resource failure"); }
+            catch (OutOfMemoryError | StackOverflowError expected) { assertSame(failure, expected); }
+            assertEquals(25f, preferences.getFontSize(), 0f);
+            assertEquals("/Updated", store.getString("folder_shortcuts", null));
+            assertEquals("test-only-pin", store.getString("lock_pin", null));
+            assertTrue(store.getBoolean("lock_enabled", false));
+            assertEquals(night, androidx.appcompat.app.AppCompatDelegate.getDefaultNightMode());
+            assertEquals(locales, androidx.appcompat.app.AppCompatDelegate.getApplicationLocales());
+        }
+    }
+
+    @Test public void importResourceFailureRestoresOriginalPreferences() throws Exception {
+        for (Error failure : new Error[]{new OutOfMemoryError("import allocation"), new StackOverflowError("import stack")}) {
+            store.edit().putFloat("font_size", 25f).putString("marker", "keep").commit();
+            Map<String, ?> before = store.getAll();
+            PrefsManager preferences = manager(commitErrors(failure, null, null));
+            try { preferences.importSettingsFromJson(setting("font_size", "float", 18f), false); fail(); }
+            catch (OutOfMemoryError | StackOverflowError expected) { assertSame(failure, expected); }
+            assertEquals(before, store.getAll());
+        }
+    }
+
+    @Test public void resourceFailureDuringRollbackDoesNotMaskOriginalOrSelfSuppress() throws Exception {
+        for (boolean reset : new boolean[]{true, false}) {
+            for (boolean same : new boolean[]{true, false}) {
+                Error failure = new OutOfMemoryError("first commit");
+                Error rollback = same ? failure : new StackOverflowError("rollback commit");
+                store.edit().putFloat("font_size", 25f).commit();
+                PrefsManager preferences = manager(commitErrors(failure, rollback, null));
+                try {
+                    if (reset) preferences.resetReaderAndAppSettings();
+                    else preferences.importSettingsFromJson(setting("font_size", "float", 18f), false);
+                    fail("Expected original resource failure");
+                } catch (OutOfMemoryError expected) {
+                    assertSame(failure, expected);
+                    assertEquals(same ? 0 : 1, expected.getSuppressed().length);
+                    if (!same) assertSame(rollback, expected.getSuppressed()[0]);
+                }
+            }
+        }
+    }
+
+    @Test public void resetDoesNotContainUnrelatedFatalErrors() throws Exception {
+        AssertionError failure = new AssertionError("non-resource failure");
+        PrefsManager preferences = manager(commitErrors(failure, null, null));
+        try { preferences.resetReaderAndAppSettings(); fail("Expected fatal failure"); }
+        catch (AssertionError expected) { assertSame(failure, expected); }
+    }
+
+    private SharedPreferences commitErrors(Error first, Error second, Runnable afterFirst) {
+        java.util.concurrent.atomic.AtomicInteger commits = new java.util.concurrent.atomic.AtomicInteger();
+        return (SharedPreferences) Proxy.newProxyInstance(SharedPreferences.class.getClassLoader(),
+                new Class<?>[]{SharedPreferences.class}, (proxy, method, args) -> {
+                    if (!method.getName().equals("edit")) return method.invoke(store, args);
+                    SharedPreferences.Editor editor = store.edit();
+                    return Proxy.newProxyInstance(SharedPreferences.Editor.class.getClassLoader(),
+                            new Class<?>[]{SharedPreferences.Editor.class}, (editorProxy, editMethod, editArgs) -> {
+                                Object result = editMethod.invoke(editor, editArgs);
+                                if (editMethod.getName().equals("commit")) {
+                                    int attempt = commits.incrementAndGet();
+                                    if (attempt == 1) {
+                                        if (afterFirst != null) afterFirst.run();
+                                        throw first;
+                                    }
+                                    if (attempt == 2 && second != null) throw second;
+                                }
+                                return result instanceof SharedPreferences.Editor ? editorProxy : result;
+                            });
+                });
     }
 
     private SharedPreferences resetCommitFailures(int failures, Runnable afterFirstCommit) {

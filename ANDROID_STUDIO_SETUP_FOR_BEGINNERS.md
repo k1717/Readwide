@@ -52,7 +52,7 @@ app/build/outputs/apk/debug/app-debug.apk
 
 After the app installs:
 
-1. Choose a folder with the document picker or grant broad storage access for the raw-path file browser. These are separate access routes; a folder grant does not authorize every file operation.
+1. Open **Settings > Security and folder permissions > Folder access** and add a folder through the system picker, or grant broad storage access for the raw-path file browser. These are separate routes: a registered folder's grant applies to the authorized-folder browser, not raw filesystem operations. Open a saved folder from that list; revoke access there only when it is no longer in use.
 2. Open a `.txt` file.
 3. Drag-scroll normally.
 4. Use the TXT bottom toolbar: Find, Page, Bookmarks, Contents, Notes and More. Toolbar order is configurable; additional actions can be under More.

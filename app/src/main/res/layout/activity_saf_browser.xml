@@ -27,6 +27,16 @@
         android:paddingBottom="5dp"
         android:textSize="12sp" />
 
+    <TextView
+        android:id="@+id/saf_browser_hint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
+        android:text="@string/saf_file_actions_hint"
+        android:textSize="12sp" />
+
     <FrameLayout
         android:id="@+id/saf_browser_content"
         android:layout_width="match_parent"

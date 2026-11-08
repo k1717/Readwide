@@ -102,16 +102,19 @@ public class Rar4SplitHeaderScanTest {
 
     private static void header(ByteArrayOutputStream out, int type, int flags, byte[] data)
             throws IOException {
-        // Source CRC is advisory in these scanners; rewritten CRCs are tested elsewhere.
-        out.write(0);
-        out.write(0);
-        out.write(type);
-        out.write(flags & 255);
-        out.write(flags >>> 8);
+        ByteArrayOutputStream checked = new ByteArrayOutputStream();
+        checked.write(type);
+        checked.write(flags & 255);
+        checked.write(flags >>> 8);
         int size = data.length + 7;
-        out.write(size & 255);
-        out.write(size >>> 8);
-        out.write(data);
+        checked.write(size & 255);
+        checked.write(size >>> 8);
+        checked.write(data);
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        crc.update(checked.toByteArray());
+        out.write((int) crc.getValue() & 255);
+        out.write((int) (crc.getValue() >>> 8) & 255);
+        out.write(checked.toByteArray());
     }
 
     private static final class Fixture {

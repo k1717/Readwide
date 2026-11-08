@@ -1,24 +1,30 @@
 package com.readwide.manager.archive;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
 
 public class ExternalArchiveFixtureSmokeTest {
     private static final char[] PASSWORD = "password".toCharArray();
@@ -84,86 +90,28 @@ public class ExternalArchiveFixtureSmokeTest {
         assertFalse(ArchiveSupport.listEntries(rar3, null).isEmpty());
         assertFalse(ArchiveSupport.listEntries(rar5Solid, null).isEmpty());
 
-        File storedPng = tempFolder.newFile("rar-cbr-stored.png");
-        assertTrue(ArchiveSupport.extractSingleEntry(rar5Cbr, "testfile.png", storedPng, null));
-        assertTrue(storedPng.isFile());
-        assertTrue(Files.size(storedPng.toPath()) > 0L);
+        assertKnownRarEntryExtracts(rar5Cbr, "testfile.png", "rar-cbr-stored.png",
+                87L, 0xafb0ac62L);
+        assertKnownRarEntryExtracts(rar5Cbr, "testfile.jpg", "rar5-cbr-compressed.jpg",
+                220L, 0xda70b16cL);
+        assertKnownRarEntryExtracts(rar5Solid, "testfile.txt", "rar5-solid.txt",
+                12L, 0x6ec18ffeL);
 
-        File compressedJpg = tempFolder.newFile("rar5-cbr-compressed.jpg");
-        ArchiveSupport.ExtractionResult rar5Compressed = ArchiveSupport.extractSingleEntryDetailed(
-                rar5Cbr,
-                "testfile.jpg",
-                compressedJpg,
-                null);
-        if (RarLibarchiveFallback.isAvailable()) {
-            assertTrue("RAR5 compressed extraction failed with libarchive backend: "
-                            + rar5Compressed.failure + " " + rar5Compressed.detail,
-                    rar5Compressed.success);
-            assertTrue(compressedJpg.isFile());
-            assertTrue(Files.size(compressedJpg.toPath()) > 0L);
-        } else {
-            assertFalse(rar5Compressed.success);
-            assertEquals(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, rar5Compressed.failure);
-            assertFalse(compressedJpg.exists());
-        }
-
-        File rar5SolidText = tempFolder.newFile("rar5-solid.txt");
-        ArchiveSupport.ExtractionResult rar5SolidResult = ArchiveSupport.extractSingleEntryDetailed(
-                rar5Solid,
-                "testfile.txt",
-                rar5SolidText,
-                null);
-        if (RarLibarchiveFallback.isAvailable()) {
-            assertTrue("RAR5 solid extraction failed with libarchive backend: "
-                            + rar5SolidResult.failure + " " + rar5SolidResult.detail,
-                    rar5SolidResult.success);
-            assertTrue(rar5SolidText.isFile());
-            assertTrue(Files.size(rar5SolidText.toPath()) > 0L);
-        } else {
-            assertEquals(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, rar5SolidResult.failure);
-            assertFalse(rar5SolidText.exists());
-        }
-
-        File rar3Text = tempFolder.newFile("rar3-compressed.txt");
-        ArchiveSupport.ExtractionResult rar3Compressed = ArchiveSupport.extractSingleEntryDetailed(
-                rar3,
-                "testfile.txt",
-                rar3Text,
-                null);
-        if (RarLibarchiveFallback.isAvailable()) {
-            assertTrue("RAR3 compressed extraction failed with libarchive backend: "
-                            + rar3Compressed.failure + " " + rar3Compressed.detail,
-                    rar3Compressed.success);
-            assertTrue(rar3Text.isFile());
-            assertTrue(Files.size(rar3Text.toPath()) > 0L);
-        } else {
-            assertFalse(rar3Compressed.success);
-            assertEquals(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, rar3Compressed.failure);
-            assertFalse(rar3Text.exists());
-        }
+        byte[] expectedText = "Testing 123\n".getBytes(StandardCharsets.UTF_8);
+        File rar3Text = assertKnownRarEntryExtracts(rar3, "testfile.txt", "rar3-compressed.txt",
+                12L, 0x6ec18ffeL);
+        assertArrayEquals(expectedText, Files.readAllBytes(rar3Text.toPath()));
 
         File rar3Solid = new File(build, "testfile.rar3.solid.rar");
-        File rar3SolidText = tempFolder.newFile("rar3-solid.txt");
-        ArchiveSupport.ExtractionResult rar3SolidResult = ArchiveSupport.extractSingleEntryDetailed(
-                rar3Solid,
-                "testfile.txt",
-                rar3SolidText,
-                null);
-        if (RarLibarchiveFallback.isAvailable()) {
-            assertTrue("RAR3 solid extraction failed with libarchive backend: "
-                            + rar3SolidResult.failure + " " + rar3SolidResult.detail,
-                    rar3SolidResult.success);
-            assertTrue(rar3SolidText.isFile());
-            assertTrue(Files.size(rar3SolidText.toPath()) > 0L);
-        } else {
-            assertFalse(rar3SolidResult.success);
-            assertEquals(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, rar3SolidResult.failure);
-            assertFalse(rar3SolidText.exists());
-        }
+        File rar3SolidText = assertKnownRarEntryExtracts(rar3Solid, "testfile.txt", "rar3-solid.txt",
+                12L, 0x6ec18ffeL);
+        assertArrayEquals(expectedText, Files.readAllBytes(rar3SolidText.toPath()));
 
         File rar3SolidCbr = new File(build, "testfile.rar3.solid.cbr");
-        assertRar3SolidCbrImageExtractionIsStrict(rar3SolidCbr, "testfile.png", "rar3-solid-cbr.png");
-        assertRar3SolidCbrImageExtractionIsStrict(rar3SolidCbr, "testfile.jpg", "rar3-solid-cbr.jpg");
+        assertKnownRarEntryExtracts(rar3SolidCbr, "testfile.png", "rar3-solid-cbr.png",
+                87L, 0xafb0ac62L);
+        assertKnownRarEntryExtracts(rar3SolidCbr, "testfile.jpg", "rar3-solid-cbr.jpg",
+                220L, 0xda70b16cL);
     }
 
     @Test
@@ -190,6 +138,29 @@ public class ExternalArchiveFixtureSmokeTest {
         assertRarSfxEntryCount(new File(build, "testfile.rar3.dos_sfx.exe"), 2, "testfile.txt");
         assertRarSfxEntryCount(new File(build, "testfile.rar3.wincon.sfx.exe"), 2, "testfile.txt");
         assertRarSfxEntryCount(new File(build, "testfile.rar3.wingui.sfx.exe"), 2, "testfile.txt");
+    }
+
+    @Test
+    public void rarFixtureBundleRejectsParentTraversalBeforeCreatingOutput() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(bytes)) {
+            zip.putNextEntry(new ZipEntry(
+                    "rar-test-files-master/build/../../../escaped-fixture/nested.txt"));
+            zip.write("unexpected output".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+        File bundle = tempFolder.newFile("unsafe-fixtures.zip");
+        Files.write(bundle.toPath(), bytes.toByteArray());
+        File outside = new File(tempFolder.getRoot(), "escaped-fixture");
+        assertFalse(outside.exists());
+
+        try {
+            extractRarFixtures(bundle);
+            fail("Fixture entry outside the extraction directory must be rejected");
+        } catch (IOException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("escapes"));
+        }
+        assertFalse("Rejected fixture must not create outside directories", outside.exists());
     }
 
     @Test
@@ -425,9 +396,11 @@ public class ExternalArchiveFixtureSmokeTest {
     }
 
 
-    private void assertRar3SolidCbrImageExtractionIsStrict(File archive,
-                                                          String entryName,
-                                                          String outputName) throws Exception {
+    private File assertKnownRarEntryExtracts(File archive,
+                                           String entryName,
+                                           String outputName,
+                                           long expectedSize,
+                                           long expectedCrc) throws Exception {
         File out = tempFolder.newFile(outputName);
         assertTrue(out.delete());
         ArchiveSupport.ExtractionResult result = ArchiveSupport.extractSingleEntryDetailed(
@@ -435,14 +408,15 @@ public class ExternalArchiveFixtureSmokeTest {
                 entryName,
                 out,
                 null);
-        if (result.success) {
-            assertTrue(out.isFile());
-            assertTrue(Files.size(out.toPath()) > 0L);
-        } else {
-            assertEquals(ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE, result.failure);
-            assertFalse("failed RAR3 solid CBR extraction must not leave a partial/fallback image for "
-                    + entryName, out.exists());
-        }
+        assertTrue("Extraction failed for " + archive.getName() + " entry " + entryName
+                        + ": " + result.failure + " " + result.detail,
+                result.success);
+        assertTrue(out.isFile());
+        assertEquals(expectedSize, Files.size(out.toPath()));
+        CRC32 crc = new CRC32();
+        crc.update(Files.readAllBytes(out.toPath()));
+        assertEquals(expectedCrc, crc.getValue());
+        return out;
     }
 
     private void assertRarEntryCount(File archive, int expectedCount, String firstPath) throws Exception {
@@ -461,6 +435,7 @@ public class ExternalArchiveFixtureSmokeTest {
 
     private File extractRarFixtures(File bundle) throws Exception {
         File target = tempFolder.newFolder("rar-fixtures");
+        java.nio.file.Path targetPath = target.getCanonicalFile().toPath();
         boolean found = false;
         try (ZipFile zip = new ZipFile(bundle)) {
             Enumeration<? extends ZipEntry> entries = zip.entries();
@@ -469,7 +444,10 @@ public class ExternalArchiveFixtureSmokeTest {
                 String name = entry.getName();
                 if (entry.isDirectory() || !name.startsWith("rar-test-files-master/build/")) continue;
                 found = true;
-                File out = new File(target, name);
+                File out = new File(target, name).getCanonicalFile();
+                if (!out.toPath().startsWith(targetPath) || out.toPath().equals(targetPath)) {
+                    throw new IOException("Fixture entry escapes extraction directory: " + name);
+                }
                 File parent = out.getParentFile();
                 assertNotNull(parent);
                 assertTrue(parent.exists() || parent.mkdirs());

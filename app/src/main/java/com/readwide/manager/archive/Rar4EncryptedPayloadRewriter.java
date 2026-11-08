@@ -10,7 +10,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.util.Arrays;
-import java.util.zip.CRC32;
 
 /**
  * Builds a temporary visible-header RAR4 stream with file-data encryption removed.
@@ -64,7 +63,7 @@ final class Rar4EncryptedPayloadRewriter {
                     checkpoint(progress);
                     long headerStart = in.getFilePointer();
                     if (in.length() - headerStart < 7) break;
-                    int ignoredCrc = readUInt16LE(in);
+                    int headerCrc = readUInt16LE(in);
                     int type = in.readUnsignedByte();
                     int flags = readUInt16LE(in);
                     int headerSize = readUInt16LE(in);
@@ -73,6 +72,7 @@ final class Rar4EncryptedPayloadRewriter {
                     }
                     byte[] headerData = new byte[headerSize - 7];
                     in.readFully(headerData);
+                    Rar4HeaderChecksum.verify(headerCrc, type, flags, headerData);
 
                     long dataSize = dataSizeForHeader(type, flags, headerData);
                     if (dataSize < 0 || dataSize > in.length() - in.getFilePointer()) {
@@ -85,7 +85,7 @@ final class Rar4EncryptedPayloadRewriter {
                         writeDecryptedPayload(in, dataSize, password, rewritten.block, out, progress);
                         sawEncryptedFile = true;
                     } else {
-                        writeOriginalHeader(out, ignoredCrc, type, flags, headerData);
+                        writeOriginalHeader(out, headerCrc, type, flags, headerData);
                         copyBytes(in, out, dataSize, copyBuffer, progress);
                     }
                     if (type == RAR4_HEADER_END) break;
@@ -185,6 +185,7 @@ final class Rar4EncryptedPayloadRewriter {
             FileBlock block = parseFileBlock(flags, headerData);
             return block.packedSize;
         }
+        if (type == 0x7a) return Rar4BlockSize.packedSize(flags, headerData, 0);
         if ((flags & RAR4_LONG_BLOCK) != 0) {
             if (headerData.length < 4) throw new IOException("Invalid RAR4 long block");
             return uint32(headerData, 0);
@@ -223,14 +224,7 @@ final class Rar4EncryptedPayloadRewriter {
                                         int flags,
                                         @NonNull byte[] headerData) throws IOException {
         int size = 7 + headerData.length;
-        CRC32 crc32 = new CRC32();
-        crc32.update(type & 0xff);
-        crc32.update(flags & 0xff);
-        crc32.update((flags >>> 8) & 0xff);
-        crc32.update(size & 0xff);
-        crc32.update((size >>> 8) & 0xff);
-        crc32.update(headerData, 0, headerData.length);
-        writeUInt16LE(out, (int) crc32.getValue() & 0xffff);
+        writeUInt16LE(out, Rar4HeaderChecksum.calculate(type, flags, headerData));
         out.write(type & 0xff);
         writeUInt16LE(out, flags);
         writeUInt16LE(out, size);

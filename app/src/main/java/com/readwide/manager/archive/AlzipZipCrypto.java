@@ -15,6 +15,10 @@ final class AlzipZipCrypto {
     private static final int[] CRC_TABLE = buildCrcTable();
     private final int[] keys = new int[3];
 
+    static final class PasswordException extends IOException {
+        PasswordException(String message) { super(message); }
+    }
+
     AlzipZipCrypto(@NonNull char[] password) {
         keys[0] = 305419896;
         keys[1] = 591751049;
@@ -82,7 +86,7 @@ final class AlzipZipCrypto {
                     }
                 }
             }
-            if (count == 0) throw new IOException("Invalid ALZ/EGG ZipCrypto password");
+            if (count == 0) throw new PasswordException("Invalid ALZ/EGG ZipCrypto password");
             if (count == 1 || verifier == null) return selected = candidates[0];
             for (int i = 0; i < count; i++) {
                 AlzipZipCrypto probe = new AlzipZipCrypto(candidates[i]);
@@ -92,7 +96,7 @@ final class AlzipZipCrypto {
                     probe.destroy();
                 }
             }
-            throw new IOException("ALZ/EGG ZipCrypto password encodings do not match decoded payload");
+            throw new PasswordException("ALZ/EGG ZipCrypto password encodings do not match decoded payload");
         } finally {
             for (AlzipZipCrypto candidate : candidates) {
                 if (candidate != null && candidate != selected) candidate.destroy();

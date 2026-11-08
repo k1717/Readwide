@@ -1,6 +1,6 @@
 # Readwide
 
-Readwide is a local-first Android reader and file browser for TXT, Markdown, PDF, EPUB, Word-family documents, HWP/HWPX, images, comic archives, and common archive workflows.
+Readwide is an Android app for reading local TXT, Markdown, PDF, EPUB, Word-family documents, HWP/HWPX, images and comic archives. It also browses files and creates or extracts supported archives.
 
 [![Latest release](https://img.shields.io/github/v/release/k1717/Readwide?label=latest)](https://github.com/k1717/Readwide/releases)
 [![Downloads](https://img.shields.io/github/downloads/k1717/Readwide/total?label=downloads)](https://github.com/k1717/Readwide/releases)
@@ -11,51 +11,38 @@ signing key. To migrate from 1.0.4/1.0.5 or the older `com.textview.reader` app,
 transfer bookmarks, reading positions, themes and settings through JSON backup
 export/import.
 
-- Current source version: **1.0.21**
-- Release document date: **2026-10-24**
-- Status: **GitHub upload package prepared**; APK verification is recorded separately in [release readiness](docs/RELEASE_READINESS_1_0_21.md)
-- Android metadata: `versionCode 10021`, `versionName "1.0.21"`
+- Current source version: **1.0.22**
+- Verification: see [current source status](docs/CURRENT_SOURCE_STATUS_1_0_22.md) and [release readiness](docs/RELEASE_READINESS_1_0_22.md). Source-package checks do not validate an APK.
+- Android metadata: `versionCode 10022`, `versionName "1.0.22"`
 - License for first-party source: **Apache License 2.0**
 - Source repository: `https://github.com/k1717/Readwide`
 - Release page: `https://github.com/k1717/Readwide/releases`
 
-## What's new in 1.0.21
+## Changes in 1.0.22
 
-- Choose independent EPUB text size, Book default or 120–200% line spacing, and book/start-aligned/justified paragraphs. Settings and More share backed-up preferences and rounded controls; protected book formatting and fixed/vertical-layout restrictions remain.
-- Open searchable EPUB 3/NCX contents near the current section and marked notes in a rounded text popup. Missing contents use the section list; closing a note leaves the reading position unchanged.
-- EPUB counters show numeric section ranges, with progress such as `3 (42%) / 20` for ready, scrollable, horizontal single-pane text. These are document sections, not screen pages.
-- Keep EPUB navigation, position captures, overlapping scripts and ZIP-resource work tied to the active document and pane. Stale callbacks cannot replace newer reading state.
-- Open TXT Contents near the current heading, fold detailed search conditions without resetting them, and recover failed Contents/partition submissions. The Galaxy S20 hidden-status-bar cutout correction awaits device confirmation.
-- Add image page-number entry and rounded PDF/image failure cards with safe retry. Improve PDF menu zoom/reset, accessible sliders, short-window layouts and unfinished image-load recovery.
-- Check note/highlight storage, settings-reset results and backup rollback; keep failed edits retryable. Physical TXT edits and copy/move operations retain source checks and original-file protection, without claiming atomicity against external writers.
-- Resolve storage-provider metadata off the main thread, recognize supported MIME-only document opens, correct stale Markdown counts after shrinkage and preserve live sessions on read-aloud notification return.
-- Use 13sp Pinned folders/Recently read headings with unchanged boxes. Clear Recent selection on search/type changes or confirmed history clearing, not ordinary refreshes.
-- Improve RAR admission, stored-solid splits, PPMd↔LZ switching and checked solid-state lifetime. Preserve short Huffman tails and retire failed sessions; VM boundary extensions remain scoped and producer validation is pending.
-- Read checked prefixed 7z content under recognized archive filenames. Reject malformed encoded headers and PPMd integrity failures, verify unreferenced folders before bulk output, and honor cancellation during packed-padding checks.
-- Add streaming ALZ method-3 (Obfuscated Deflate) decoding with the existing ZipCrypto/split, size/CRC and rollback guards. Reuse decoder-local tables and batch stored/repeated data without changing format rules; producer validation remains pending.
-- Handle bounded EGG SKIP/block-header extras and strengthen source-change, password-candidate and output-cleanup checks across EGG/ALZ/7z. Encrypted EGG filenames remain unsupported.
-- Reuse forward image-read scratch, release exhausted decoders and reduce redundant 7z seeks, EGG checksum work and RAR table allocations. Runtime speed is unmeasured.
-- Add CRC-bearing level-0 PMarc stored PM0 and `.pma` recognition; PM1/PM2 remain excluded.
-- Keep exact TXT paging, partitions, existing bookmarks, dependency versions, permissions and signing configuration unchanged.
+- Manage registered folders in Settings > Security and folder permissions > Folder access. Browse and perform supported file operations through Android's storage provider, including shared internal storage and detected SD/USB volumes.
+- Protect original files and existing destinations when transfers fail or sources change. Keep provider operations through rotation, offer permission recovery after eligible failures, and avoid sidebar refresh flicker.
+- Fit images between visible controls without decoding them again. Preserve short-image placement, tighten panel spacing, and allow previous/next taps in the bottom panel's empty app area.
+- Recover failed TXT index and load/search requests. Protect unreadable bookmark and reading-position stores from replacement, while keeping page calculations, partitions and existing bookmark coordinates.
+- Choose per-viewer tap zones or follow TXT. Regroup settings, use compact two-line tap/folder rows, and show the installed version beside App information.
+- Correct EGG AZO history decoding and encryption-header lengths, RAR header integrity/framing and archive source/cleanup handling. Scoped host comparisons passed; encrypted EGG filenames and some complex producer combinations remain outside verified support.
 
 See [Changelog](CHANGELOG.md), [Patch Notes](PATCHNOTES.md) and the
-[GitHub release notes](docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_21.md).
-Implementation details are in the [development notes](docs/DEV_CHANGES_1_0_21.md)
-and [code map](docs/CODE_MAP.md). Source-package checks do not replace build or
-runtime verification; see [current source status](docs/CURRENT_SOURCE_STATUS_1_0_21.md).
+[GitHub release notes](docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_22.md).
+Implementation details are in the [development notes](docs/DEV_CHANGES_1_0_22.md)
+and [code map](docs/CODE_MAP.md). Build and runtime verification are separate from
+source-package checks; see [current source status](docs/CURRENT_SOURCE_STATUS_1_0_22.md).
 
 ## Local-first privacy baseline
-
-The default build is designed for local files.
 
 - No `INTERNET` permission in the default manifest.
 - No ads, analytics, account system, Firebase, Google Play Services dependency, telemetry, cloud sync, or in-app network update checker.
 - Android Auto Backup is disabled with `android:allowBackup="false"`.
-- Broad storage access is requested for the full raw-path local file manager. When raw directory enumeration is unavailable, the same **Internal Storage** entry can instead use a persisted Storage Access Framework folder grant to browse and read a selected tree without broad/raw storage permission.
+- The raw-path file manager requests broad storage access. Folder access uses persisted Storage Access Framework grants for selected directories without that permission. Provider browsing and file operations require the corresponding read/write grant and provider capabilities; they do not bypass Android's restrictions.
 - Opening or sharing a file with another app uses Android's explicitly initiated intent / `FileProvider` flow; Readwide does not upload the file itself.
 - Read-aloud sends spoken text to the installed Android TTS engine. A network-required voice can use the engine's online service; its data handling is separate from Readwide. Choose an offline voice for local synthesis.
 - Files opened *into* Readwide from another app (browser, messenger, file manager, document provider) via `ACTION_VIEW`/`BROWSABLE` are copied into an app-private cache with filename sanitization, a canonical-path containment check, a 2 GB per-file copy limit, and cache pruning; JSON backup import is capped at 256 MB.
-- Imported reader fonts are copied into app-private storage and are not part of the JSON backup; the backup can record the selected font name but not the font file itself, so an imported font must be re-imported after a reinstall or distribution-channel switch.
+- Imported reader fonts are stored in app-private storage. JSON backups record the selected font name, not the font file. Re-import fonts after a reinstall or distribution-channel switch.
 
 See `PRIVACY.md` for the full local-data and cache policy.
 
@@ -90,8 +77,8 @@ See `PRIVACY.md` for the full local-data and cache policy.
 
 ## Format support summary
 
-Support is read-only unless a creation/editing path is explicitly offered. A codec
-being present does not establish every encryption, split, solid or filter combination.
+Support is read-only unless a creation or editing option is available. A bundled
+codec does not guarantee every encryption, split, solid or filter combination.
 See the [archive boundary baseline](docs/ARCHIVE_DECODE_BOUNDARIES_1_0_20.md) and
 [1.0.21 additions](docs/DEV_CHANGES_1_0_21.md#archive-compatibility) for exact codec
 profiles, unsupported cases and storage requirements.
@@ -112,9 +99,9 @@ profiles, unsupported cases and storage requirements.
 | CAB | Single and scoped linked-set read-only paths; compressed-multipart producer/device validation remains separate. |
 | LHA/LZH/PMA | Stored LH0/LZ4 and CRC-bearing level-0 PM0, compressed LH4–LH7 and scoped LHA/LZH Amiga byte splits. PM1/PM2, other legacy methods and general multi-disc semantics remain excluded. |
 
-Fixed archive extraction/preview payload caps are removed. Available-space protection,
-format/array representability and device-memory limits remain; unlimited decoding
-capacity and measured universal speedups are not claimed.
+Archive extraction and preview no longer impose fixed payload caps. Free-space
+checks, format/array limits and device memory still limit decoding. No universal
+speedup has been measured.
 
 ## Quick filter buttons
 
@@ -135,13 +122,13 @@ The same image extension set is also what the image viewer opens (including imag
 
 ## FOSS / F-Droid preparation
 
-Readwide 1.0.21 retains the existing FOSS-oriented source and dependency layout. For publication or repository submission, use the immutable tagged commit and the submission guidance below.
+Readwide 1.0.22 keeps the existing FOSS source and dependency layout. Use the immutable tagged commit and the guidance below for publication or repository submission.
 
 - First-party code is Apache-2.0.
 - The default build does not bundle Junrar or RARLAB UnRAR-license code.
 - HWP/HWPX support uses Apache-2.0 Java libraries.
 - `THIRD_PARTY_NOTICES.md`, `docs/FOSS_STATUS.md`, license reports, and the source dependency SBOM are included.
-- The checked-in F-Droid metadata file is a historical mirror through 1.0.19, not a submission-ready copy. Start from current upstream metadata and add 1.0.21 only after the final tag exists, pinning it to the immutable 40-character release commit hash.
+- Checked-in F-Droid metadata mirrors releases through 1.0.21 and needs updating before submission. Start from current upstream metadata. Add 1.0.22 after the final tag exists and pin it to the immutable 40-character release commit hash.
 
 F-Droid-facing notes are in `docs/FDROID_SUBMISSION.md`.
 
@@ -171,12 +158,11 @@ Release signing is conditional. If the `READWIDE_*` (or legacy `TEXTVIEW_*`) sig
 - [Documentation index](docs/README.md) — current guides, format references, component provenance and historical release records.
 - `CHANGELOG.md` — public changelog.
 - `PATCHNOTES.md` — detailed public release notes.
-- `GITHUB_UPLOAD_NOTES.md` — GitHub upload checklist.
-- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_21.md` — copy-ready GitHub release notes (per-version notes back through 1.0.2 are retained alongside).
+- `docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_22.md` — GitHub release notes for 1.0.22 (per-version notes back through 1.0.2 are retained alongside).
 - `docs/FDROID_SUBMISSION.md` — F-Droid submission notes.
 - `docs/EPUB_COMPATIBILITY_AUDIT_1_0_16.md` — historical 1.0.16 off-device audit of 45 IDPF EPUB 3 samples; not validation of the current viewer.
 - `docs/TXT_SEARCH_USAGE.md` — reader find-in-page options for TXT and WebView document readers (case sensitive, whole word, regular expression).
 - `docs/FOSS_STATUS.md` — FOSS boundary and caveats.
-- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — historical archive compatibility baseline and support-label glossary; use this README and current release notes for 1.0.21 support claims.
+- `docs/ARCHIVE_SUPPORT_MATRIX_READWIDE_1_0_2.md` — historical archive compatibility baseline and support-label glossary; use this README and current source status for current support boundaries.
 - `docs/HWP_SUPPORT_STATUS_READWIDE_1_0_2.md` — HWP/HWPX scope and license notes; its legacy `.doc` remarks are historical because `.doc` gained a basic read-only path in 1.0.11.
-- [1.0.21 license report](docs/LICENSE_REPORT_READWIDE_1_0_21.md) and [source/direct-dependency SBOM](docs/SBOM_READWIDE_1_0_21.spdx.json) — current source identity and unchanged dependency pins; not a resolved transitive audit.
+- [1.0.21 license report](docs/LICENSE_REPORT_READWIDE_1_0_21.md) and [source/direct-dependency SBOM](docs/SBOM_READWIDE_1_0_21.spdx.json) — inherited dependency baseline, not a 1.0.22 artifact inventory or resolved transitive audit.

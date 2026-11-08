@@ -20,7 +20,7 @@ import java.util.Set;
  * This controller intentionally has no Android UI dependency. MainActivity owns
  * dialogs, toasts, navigation, bookmark rebinding, and visible-list refreshes.
  * Queue selection and busy flags belong to the UI thread. Workers receive a
- * captured PendingItem and use only its immutable source/copy fields; they must
+ * captured PendingItem and use its immutable source snapshot and copy mode; they must
  * not resolve the active queue selection again after submission.
  */
 public final class FileClipboardController {
@@ -51,12 +51,15 @@ public final class FileClipboardController {
         private final long id;
         private final File source;
         private final boolean copy;
+        private final SourceSnapshot sourceSnapshot;
         private boolean inProgress;
 
-        private PendingItem(long id, @NonNull File source, boolean copy) {
+        private PendingItem(long id, @NonNull File source, boolean copy,
+                            @NonNull SourceSnapshot sourceSnapshot) {
             this.id = id;
             this.source = source;
             this.copy = copy;
+            this.sourceSnapshot = sourceSnapshot;
         }
 
         public long getId() {
@@ -120,9 +123,16 @@ public final class FileClipboardController {
 
     @NonNull
     public StartResult start(@NonNull File source, boolean copy) {
-        if (isInProgress() || !isValidSource(source)) return StartResult.INVALID_SOURCE;
+        if (isInProgress()) return StartResult.INVALID_SOURCE;
+        SourceSnapshot sourceSnapshot;
+        try {
+            sourceSnapshot = SourceSnapshot.capture(source);
+        } catch (IOException | SecurityException unavailable) {
+            ArchiveCancellation.restoreIfCancelled(unavailable, null);
+            return StartResult.INVALID_SOURCE;
+        }
         removeDuplicatePending(source, copy);
-        PendingItem item = new PendingItem(nextId++, source, copy);
+        PendingItem item = new PendingItem(nextId++, source, copy, sourceSnapshot);
         pendingItems.add(0, item);
         activeItem = item;
         return StartResult.STARTED;
@@ -230,7 +240,8 @@ public final class FileClipboardController {
     }
 
     public boolean canOverwrite(@Nullable PendingItem item, @NonNull File target) {
-        return item != null && FileSystemOps.canTransfer(item.source, target, true);
+        return item != null && item.sourceSnapshot.isCurrent()
+                && FileSystemOps.canTransfer(item.source, target, true);
     }
 
     @NonNull
@@ -245,7 +256,7 @@ public final class FileClipboardController {
             return new PastePlan(PasteStatus.NO_SOURCE, null, destinationDir, null);
         }
         File source = item.source;
-        if (!isValidSource(source)) {
+        if (!item.sourceSnapshot.isCurrent()) {
             return new PastePlan(PasteStatus.SOURCE_UNAVAILABLE, source, destinationDir, null);
         }
         if (destinationDir == null || !destinationDir.exists()
@@ -303,10 +314,41 @@ public final class FileClipboardController {
                                     @Nullable FileOperationProgress progress,
                                     boolean assignTotalBytes,
                                     @Nullable FileTreeProgressTracker tracker) {
-        if (item == null || !isValidSource(item.source)) return false;
-        return item.copy
-                ? FileSystemOps.copy(item.source, destination, overwrite, progress, assignTotalBytes, tracker)
-                : FileSystemOps.move(item.source, destination, overwrite, progress, assignTotalBytes, tracker);
+        return performOperationWithResult(item, destination, overwrite, progress, assignTotalBytes, tracker)
+                == FileSystemOps.TransferResult.COMPLETED;
+    }
+
+    @NonNull
+    public FileSystemOps.TransferResult performOperationWithResult(@Nullable PendingItem item,
+                                                                  @NonNull File destination,
+                                                                  boolean overwrite,
+                                                                  @Nullable FileOperationProgress progress,
+                                                                  boolean assignTotalBytes,
+                                                                  @Nullable FileTreeProgressTracker tracker) {
+        return performOperationWithResult(item, destination, overwrite, progress, assignTotalBytes, tracker, null);
+    }
+
+    @NonNull
+    public FileSystemOps.TransferResult performOperationWithResult(@Nullable PendingItem item,
+                                                                   @NonNull File destination,
+                                                                   boolean overwrite,
+                                                                   @Nullable FileOperationProgress progress,
+                                                                   boolean assignTotalBytes,
+                                                                   @Nullable FileTreeProgressTracker tracker,
+                                                                   @Nullable FileSystemOps.OverwriteTarget approval) {
+        if (item == null || (progress != null && !progress.checkpoint())
+                || !item.sourceSnapshot.isCurrent()) return FileSystemOps.TransferResult.FAILED;
+        FileSystemOps.SourceCheck check = () -> {
+            item.sourceSnapshot.recheck();
+            if (approval != null) approval.recheck(destination);
+        };
+        if (!item.copy) {
+            return FileSystemOps.moveWithResult(item.source, destination, overwrite,
+                    progress, assignTotalBytes, tracker, check);
+        }
+        return FileSystemOps.copyWithSourceCheck(item.source, destination, overwrite,
+                progress, assignTotalBytes, tracker, check)
+                ? FileSystemOps.TransferResult.COMPLETED : FileSystemOps.TransferResult.FAILED;
     }
 
     @Nullable
@@ -353,7 +395,43 @@ public final class FileClipboardController {
         }
     }
 
-    private boolean isValidSource(@NonNull File file) {
-        return file.exists() && (file.isFile() || file.isDirectory());
+    private static final class SourceSnapshot {
+        private final FileTreeWalk.Entry root;
+        private final FileMutationGuard fileGuard;
+
+        private SourceSnapshot(FileTreeWalk.Entry root) throws IOException {
+            this.root = root;
+            if ((root.kind != FileTreeWalk.Kind.FILE && root.kind != FileTreeWalk.Kind.DIRECTORY)
+                    || root.identity == null) {
+                throw new IOException("Cannot identify selected source");
+            }
+            fileGuard = root.kind == FileTreeWalk.Kind.FILE ? FileMutationGuard.capture(root.file) : null;
+            recheck();
+        }
+
+        static SourceSnapshot capture(File source) throws IOException {
+            FileTreeWalk.Entry[] root = {null};
+            FileTreeWalk.walk(source, () -> true, entry -> {
+                root[0] = entry;
+                return false; // Selection binds the root without traversing a folder on the UI thread.
+            });
+            if (root[0] == null) throw new IOException("Cannot inspect selected source");
+            return new SourceSnapshot(root[0]);
+        }
+
+        private void recheck() throws IOException {
+            root.recheck();
+            if (fileGuard != null) fileGuard.recheck();
+        }
+
+        boolean isCurrent() {
+            try {
+                recheck();
+                return true;
+            } catch (IOException | SecurityException changed) {
+                ArchiveCancellation.restoreIfCancelled(changed, null);
+                return false;
+            }
+        }
     }
 }

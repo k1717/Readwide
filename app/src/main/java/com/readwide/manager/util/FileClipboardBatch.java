@@ -21,6 +21,7 @@ public final class FileClipboardBatch {
     private final File destinationDirectory;
     private final FileOperationProgress progress;
     private final List<Transfer> completed = new ArrayList<>();
+    private final List<Transfer> sourceRemaining = new ArrayList<>();
 
     public FileClipboardBatch(@NonNull FileClipboardController clipboard,
                               @NonNull List<FileClipboardController.PendingItem> items,
@@ -58,8 +59,12 @@ public final class FileClipboardBatch {
                     progress.setFolder(displayName(transfer.sourceWasDirectory ? destination : destinationDirectory));
                     progress.setFolderProgress(index + 1, eligible.size());
                 }
-                if (clipboard.performOperation(item, destination, false, progress, false, tracker)) {
+                FileSystemOps.TransferResult result = clipboard.performOperationWithResult(
+                        item, destination, false, progress, false, tracker);
+                if (result == FileSystemOps.TransferResult.COMPLETED) {
                     completed.add(transfer);
+                } else if (result == FileSystemOps.TransferResult.COPIED_SOURCE_REMAINS) {
+                    sourceRemaining.add(transfer);
                 }
             }
         } catch (RuntimeException failure) {
@@ -94,6 +99,11 @@ public final class FileClipboardBatch {
     @NonNull
     public List<Transfer> completedTransfers() {
         return Collections.unmodifiableList(new ArrayList<>(completed));
+    }
+
+    @NonNull
+    public List<Transfer> sourceRemainingTransfers() {
+        return Collections.unmodifiableList(new ArrayList<>(sourceRemaining));
     }
 
     public int totalCount() { return items.size(); }

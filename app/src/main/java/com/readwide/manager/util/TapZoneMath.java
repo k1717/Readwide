@@ -7,6 +7,12 @@ public final class TapZoneMath {
 
     private TapZoneMath() {}
 
+    public static int actionForTap(float x, float y, int width, int height,
+                                   boolean hasContent, boolean enabled, TapZoneProfile profile) {
+        return actionForTap(x, y, width, height, hasContent, enabled,
+                profile.mode, profile.leading, profile.trailing);
+    }
+
     public static int actionForTap(float x,
                                    float y,
                                    int width,

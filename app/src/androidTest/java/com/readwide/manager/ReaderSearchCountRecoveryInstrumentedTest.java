@@ -13,7 +13,9 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.StringReader;
+import java.util.ArrayDeque;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -33,6 +35,37 @@ public class ReaderSearchCountRecoveryInstrumentedTest {
 
     @Test public void regexStackFailureKeepsTotalUnknownAndAllowsRetry() throws Exception {
         assertCountFailureRecovers(new StackOverflowError("synthetic regex stack"));
+    }
+
+    @Test public void retainedStartupFailureClearsOnlyItsTicketAndAllowsRetry() throws Exception {
+        for (Throwable failure : new Throwable[] {new RejectedExecutionException("rejected"),
+                new OutOfMemoryError("startup allocation"), new StackOverflowError("startup stack")}) {
+            AtomicInteger opens = new AtomicInteger();
+            ArrayDeque<Runnable> queue = new ArrayDeque<>();
+            Fixture fixture = createFixture(file -> { opens.incrementAndGet(); return matchingReader(); });
+            try {
+                onMain(() -> {
+                    fixture.controller.startLargeTextSearchTotalCountInBackground(QUERY, fixture.status, task -> {
+                        queue.add(task);
+                        if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+                        throw (Error) failure;
+                    });
+                    assertFalse(fixture.inFlight());
+                    assertEquals(-1, fixture.controller.getCachedLargeTextSearchTotal(QUERY));
+                    assertEquals("1 / …", fixture.status.getText().toString());
+                    fixture.controller.startLargeTextSearchTotalCountInBackground(QUERY, fixture.status, queue::add);
+                    assertTrue(fixture.inFlight());
+                });
+                queue.remove().run();
+                onMain(() -> { assertTrue(fixture.inFlight()); assertEquals(0, opens.get()); });
+                queue.remove().run();
+                onMain(() -> {
+                    assertFalse(fixture.inFlight());
+                    assertEquals(1, opens.get());
+                    assertEquals(1, fixture.controller.getCachedLargeTextSearchTotal(QUERY));
+                });
+            } finally { fixture.close(); }
+        }
     }
 
     private static void assertCountFailureRecovers(Error failure) throws Exception {

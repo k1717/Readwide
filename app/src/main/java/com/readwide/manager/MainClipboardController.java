@@ -15,6 +15,8 @@ import com.readwide.manager.archive.ArchiveCancellation;
 import com.readwide.manager.util.FileClipboardBatch;
 import com.readwide.manager.util.FileClipboardController;
 import com.readwide.manager.util.FileOperationProgress;
+import com.readwide.manager.util.FileSystemOps;
+import com.readwide.manager.util.TaskSubmission;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -24,6 +26,7 @@ import java.util.List;
 
 final class MainClipboardController {
     private final MainActivity activity;
+    private boolean preparingOverwrite;
 
     MainClipboardController(@NonNull MainActivity activity) {
         this.activity = activity;
@@ -83,7 +86,9 @@ final class MainClipboardController {
                 activity.refreshVisibleFileListAfterFileSystemChange();
                 return;
             case DESTINATION_UNAVAILABLE:
-                ShortToast.show(activity, R.string.file_move_destination_unavailable);
+                if (!activity.offerSafFileOperationAccess(Collections.singletonList(plan.getDestinationDir()))) {
+                    ShortToast.show(activity, R.string.file_move_destination_unavailable);
+                }
                 return;
             case CUT_SAME_FOLDER:
                 ShortToast.show(activity, source != null && source.isDirectory() ? R.string.folder_move_same_folder : R.string.file_move_same_folder);
@@ -109,7 +114,9 @@ final class MainClipboardController {
         File destinationDir = activity.currentDirectory;
         if (destinationDir == null || !destinationDir.exists()
                 || !destinationDir.isDirectory() || !destinationDir.canWrite()) {
-            ShortToast.show(activity, R.string.file_move_destination_unavailable);
+            if (!activity.offerSafFileOperationAccess(Collections.singletonList(destinationDir))) {
+                ShortToast.show(activity, R.string.file_move_destination_unavailable);
+            }
             return;
         }
         ArrayList<FileClipboardController.PendingItem> items =
@@ -144,6 +151,37 @@ final class MainClipboardController {
     private void showClipboardTargetExistsDialog(@NonNull FileClipboardController.PendingItem item,
                                                 @NonNull File destinationDir,
                                                 @NonNull File existingTarget) {
+        if (!canStart(item) || preparingOverwrite) return;
+        if (!activity.fileClipboardController.canOverwrite(item, existingTarget)) {
+            showClipboardTargetExistsDialog(item, destinationDir, existingTarget, null);
+            return;
+        }
+        preparingOverwrite = true;
+        try {
+            TaskSubmission.submit(activity.folderValidationExecutor, () -> {
+                FileSystemOps.OverwriteTarget captured = null;
+                try {
+                    captured = FileSystemOps.captureOverwriteTarget(existingTarget);
+                } catch (java.io.IOException | RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                    ArchiveCancellation.restoreIfCancelled(failure, null);
+                }
+                final FileSystemOps.OverwriteTarget approval = captured;
+                activity.runOnUiThread(() -> {
+                    preparingOverwrite = false;
+                    if (!canStart(item) || activity.isFinishing() || activity.isDestroyed()) return;
+                    showClipboardTargetExistsDialog(item, destinationDir, existingTarget, approval);
+                });
+            });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            preparingOverwrite = false;
+            ShortToast.show(activity, R.string.file_operation_failed);
+        }
+    }
+
+    private void showClipboardTargetExistsDialog(@NonNull FileClipboardController.PendingItem item,
+                                                @NonNull File destinationDir,
+                                                @NonNull File existingTarget,
+                                                FileSystemOps.OverwriteTarget approval) {
         if (!canStart(item)) return;
         File source = item.getSource();
 
@@ -193,10 +231,10 @@ final class MainClipboardController {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
         final android.app.Dialog[] ref = new android.app.Dialog[1];
-        if (activity.fileClipboardController.canOverwrite(item, existingTarget)) {
+        if (approval != null && activity.fileClipboardController.canOverwrite(item, existingTarget)) {
             activity.addFileOpsRow(box, activity.getString(R.string.overwrite), fg, panel, () -> {
                 if (ref[0] != null) ref[0].dismiss();
-                continuePendingClipboardOperation(item, destinationDir, existingTarget, true);
+                continuePendingClipboardOperation(item, destinationDir, existingTarget, true, approval);
             });
         }
         activity.addFileOpsRow(box, activity.getString(R.string.create_copy), fg, panel, () -> {
@@ -240,6 +278,14 @@ final class MainClipboardController {
                                                    @NonNull File destinationDir,
                                                    @NonNull File destination,
                                                    boolean overwrite) {
+        continuePendingClipboardOperation(item, destinationDir, destination, overwrite, null);
+    }
+
+    private void continuePendingClipboardOperation(@NonNull FileClipboardController.PendingItem item,
+                                                   @NonNull File destinationDir,
+                                                   @NonNull File destination,
+                                                   boolean overwrite,
+                                                   FileSystemOps.OverwriteTarget approval) {
         if (!canStart(item)) return;
         FileClipboardBatch.Transfer transfer = new FileClipboardBatch.Transfer(item, destination);
         List<FileClipboardController.PendingItem> claimed = Collections.singletonList(item);
@@ -251,13 +297,14 @@ final class MainClipboardController {
         progress.setFolder(destinationDir.getName().isEmpty() ? destinationDir.getAbsolutePath() : destinationDir.getName());
 
         boolean accepted = activity.executeFolderBackgroundTask(() -> {
-            boolean done = false;
+            FileSystemOps.TransferResult result = FileSystemOps.TransferResult.FAILED;
             try {
-                done = activity.fileClipboardController.performOperation(item, destination, overwrite, progress, true);
+                result = activity.fileClipboardController.performOperationWithResult(
+                        item, destination, overwrite, progress, true, null, approval);
             } catch (RuntimeException failure) {
                 ArchiveCancellation.restoreIfCancelled(failure, progress);
             } finally {
-                final boolean completed = done;
+                final FileSystemOps.TransferResult completed = result;
                 // Independent of search-handler teardown: shared claims and
                 // committed metadata must still be settled after screen closure.
                 activity.runOnUiThread(() -> finishSinglePaste(transfer, destinationDir, progress, completed));
@@ -267,11 +314,13 @@ final class MainClipboardController {
     }
 
     private void finishSinglePaste(FileClipboardBatch.Transfer transfer, File destinationDir,
-                                   FileOperationProgress progress, boolean completed) {
+                                   FileOperationProgress progress, FileSystemOps.TransferResult result) {
+        boolean completed = result == FileSystemOps.TransferResult.COMPLETED;
+        boolean sourceRemaining = result == FileSystemOps.TransferResult.COPIED_SOURCE_REMAINS;
         finishClipboardClaim(Collections.singletonList(transfer.item), progress);
-        if (completed) {
+        if (completed || sourceRemaining) {
             activity.fileClipboardController.clearAfterSuccess(transfer.item);
-            updateMovedReferences(transfer);
+            if (completed) updateMovedReferences(transfer);
             if (activity.prefs != null) activity.prefs.addRecentFolder(destinationDir.getAbsolutePath());
         }
         if (activity.activityDestroyed) return;
@@ -279,9 +328,17 @@ final class MainClipboardController {
         // A failed move can still leave a committed copy or partially retained
         // source, so the visible listing must reflect both completion outcomes.
         activity.refreshVisibleFileListAfterFileSystemChange();
+        if (sourceRemaining) {
+            showSourceRemainingWarning(activity.getString(R.string.file_move_source_remaining_message,
+                    transfer.destination.getAbsolutePath()));
+            return;
+        }
         if (!completed) {
             ShortToast.show(activity, progress.isCancelled() ? R.string.file_operation_cancelled
                     : transfer.item.isCopy() ? R.string.file_copy_failed : R.string.file_move_failed);
+            if (!progress.isCancelled()) {
+                activity.offerSafFileOperationAccess(java.util.Arrays.asList(transfer.source, transfer.destination));
+            }
             return;
         }
         ShortToast.show(activity, transfer.item.isCopy() ? R.string.file_copied : R.string.file_moved);
@@ -314,18 +371,25 @@ final class MainClipboardController {
                                   File destinationDir, FileOperationProgress progress) {
         finishClipboardClaim(claimed, progress);
         List<FileClipboardBatch.Transfer> completed = batch.completedTransfers();
-        List<FileClipboardController.PendingItem> completedItems = new ArrayList<>(completed.size());
+        List<FileClipboardBatch.Transfer> sourceRemaining = batch.sourceRemainingTransfers();
+        List<FileClipboardController.PendingItem> completedItems = new ArrayList<>(
+                completed.size() + sourceRemaining.size());
         for (FileClipboardBatch.Transfer transfer : completed) completedItems.add(transfer.item);
-        // Failed or blocked items are not successful no-ops. Keep them available
-        // for a different destination or retry instead of silently discarding them.
+        for (FileClipboardBatch.Transfer transfer : sourceRemaining) completedItems.add(transfer.item);
+        // A partial move must not retry from a depleted source and replace its
+        // complete destination. Only failures before commit remain retryable.
         activity.fileClipboardController.clearAfterSuccess(completedItems);
         for (FileClipboardBatch.Transfer transfer : completed) updateMovedReferences(transfer);
-        if (activity.prefs != null && !completed.isEmpty()) {
+        if (activity.prefs != null && (!completed.isEmpty() || !sourceRemaining.isEmpty())) {
             activity.prefs.addRecentFolder(destinationDir.getAbsolutePath());
         }
         if (activity.activityDestroyed) return;
         activity.refreshVisibleFileListAfterFileSystemChange();
         activity.updateMainOverflowButtonVisibility();
+        if (!sourceRemaining.isEmpty()) {
+            showSourceRemainingWarning(activity.getString(R.string.file_move_source_remaining_batch,
+                    sourceRemaining.size()));
+        }
         if (progress.isCancelled()) {
             ShortToast.show(activity, R.string.file_operation_cancelled);
             return;
@@ -333,6 +397,22 @@ final class MainClipboardController {
         ShortToast.show(activity, activity.getString(
                 completed.size() == batch.totalCount() ? R.string.file_batch_operation_done : R.string.file_batch_operation_partial,
                 completed.size(), batch.totalCount()));
+        if (sourceRemaining.isEmpty() && completed.size() < batch.totalCount()) {
+            HashSet<FileClipboardController.PendingItem> settled = new HashSet<>(completedItems);
+            List<File> failedPaths = new ArrayList<>();
+            for (FileClipboardController.PendingItem item : claimed) {
+                if (!settled.contains(item)) failedPaths.add(item.getSource());
+            }
+            if (!failedPaths.isEmpty()) {
+                failedPaths.add(destinationDir);
+                activity.offerSafFileOperationAccess(failedPaths);
+            }
+        }
+    }
+
+    private void showSourceRemainingWarning(String message) {
+        activity.showSimpleConfirmDialog(activity.getString(R.string.file_move_source_remaining_title),
+                message, activity.getString(android.R.string.ok), () -> { });
     }
 
     private void finishClipboardClaim(List<FileClipboardController.PendingItem> items, FileOperationProgress progress) {

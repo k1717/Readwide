@@ -33,7 +33,7 @@ public class DeflateTokenCancellationTest {
             }
             @Override public void close() { closes[0]++; }
         };
-        OwnedDeflateInputStream decoder = new OwnedDeflateInputStream(source, progress);
+        OwnedDeflateInputStream decoder = OwnedDeflateInputStream.open(source, progress);
         try {
             assertEquals(0, decoder.read(new byte[1], 1, 0));
             assertEquals(0, decoder.skip(0));
@@ -59,7 +59,7 @@ public class DeflateTokenCancellationTest {
                     reads[0]++; return super.read(bytes, offset, length);
                 }
             };
-            try (InputStream decoder = new OwnedDeflateInputStream(source, progress)) {
+            try (InputStream decoder = OwnedDeflateInputStream.open(source, progress)) {
                 assertEquals(plain[0] & 255, decoder.read());
                 int readsBeforeCancel = reads[0];
                 progress.cancel();
@@ -95,7 +95,7 @@ public class DeflateTokenCancellationTest {
                     return count;
                 }
             };
-            try (InputStream decoder = new OwnedDeflateInputStream(source, progress)) {
+            try (InputStream decoder = OwnedDeflateInputStream.open(source, progress)) {
                 byte[] output = {91};
                 InterruptedIOException failure = assertThrows(InterruptedIOException.class, () -> decoder.read(output));
                 assertArrayEquals(new byte[]{91}, output);
@@ -104,7 +104,7 @@ public class DeflateTokenCancellationTest {
                 assertEquals(0, progress.snapshot().doneBytes);
             }
         }
-        try (InputStream decoder = new OwnedDeflateInputStream(new ByteArrayInputStream(packed.toByteArray()), token())) {
+        try (InputStream decoder = OwnedDeflateInputStream.open(new ByteArrayInputStream(packed.toByteArray()), token())) {
             assertEquals(42, decoder.read()); assertEquals(-1, decoder.read());
         }
     }
@@ -122,7 +122,7 @@ public class DeflateTokenCancellationTest {
                     throw (Error) original;
                 }
             };
-            try (InputStream decoder = new OwnedDeflateInputStream(source, progress)) {
+            try (InputStream decoder = OwnedDeflateInputStream.open(source, progress)) {
                 assertSame(original, assertThrows(Throwable.class, decoder::read));
                 assertSame(original, assertThrows(Throwable.class, decoder::read));
                 assertSame(original, assertThrows(Throwable.class, decoder::available));
@@ -139,7 +139,7 @@ public class DeflateTokenCancellationTest {
                     progress.cancel(); return count;
                 }
             };
-            try (InputStream decoder = new OwnedDeflateInputStream(source, progress)) {
+            try (InputStream decoder = OwnedDeflateInputStream.open(source, progress)) {
                 IOException failure = assertThrows(IOException.class, decoder::read);
                 assertFalse(failure instanceof InterruptedIOException);
                 assertEquals(count == -1, failure instanceof java.io.EOFException);
@@ -157,7 +157,7 @@ public class DeflateTokenCancellationTest {
                         return super.read(bytes, offset, Math.min(length, chunk));
                     }
                 };
-                try (InputStream decoder = new OwnedDeflateInputStream(source, progress)) {
+                try (InputStream decoder = OwnedDeflateInputStream.open(source, progress)) {
                     assertEquals(plain[0] & 255, decoder.read());
                     assertEquals(19, decoder.skip(19));
                     assertArrayEquals(Arrays.copyOfRange(plain, 20, plain.length), decoder.readAllBytes());
@@ -173,7 +173,7 @@ public class DeflateTokenCancellationTest {
 
     @Test public void cancellationAtEofRemainsTerminal() throws Exception {
         FileOperationProgress progress = token();
-        try (InputStream decoder = new OwnedDeflateInputStream(
+        try (InputStream decoder = OwnedDeflateInputStream.open(
                 new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{42})), progress)) {
             assertEquals(42, decoder.read()); assertEquals(-1, decoder.read());
             progress.cancel();

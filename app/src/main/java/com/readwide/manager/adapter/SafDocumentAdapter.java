@@ -29,6 +29,7 @@ public final class SafDocumentAdapter
 
     public interface Listener {
         void onEntryClick(@NonNull SafDocumentEntry entry);
+        void onEntryLongClick(@NonNull SafDocumentEntry entry);
     }
 
     private final List<SafDocumentEntry> entries = new ArrayList<>();
@@ -85,6 +86,12 @@ public final class SafDocumentAdapter
             itemView.setOnClickListener(v -> {
                 SafDocumentEntry entry = bound;
                 if (entry != null) listener.onEntryClick(entry);
+            });
+            itemView.setOnLongClickListener(v -> {
+                SafDocumentEntry entry = bound;
+                if (entry == null) return false;
+                listener.onEntryLongClick(entry);
+                return true;
             });
         }
 

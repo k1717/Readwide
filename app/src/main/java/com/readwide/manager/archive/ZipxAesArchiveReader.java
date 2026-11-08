@@ -928,7 +928,7 @@ final class ZipxAesArchiveReader {
                 return decrypted;
             case METHOD_DEFLATE:
                 // Raw ZIP deflate streams may require one trailing zero byte.
-                return new OwnedDeflateInputStream(
+                return OwnedDeflateInputStream.open(
                         new SequenceInputStream(
                                 decrypted, new ByteArrayInputStream(new byte[] {0})));
             case METHOD_DEFLATE64:

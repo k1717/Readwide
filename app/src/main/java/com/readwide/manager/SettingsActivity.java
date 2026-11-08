@@ -66,6 +66,7 @@ public class SettingsActivity extends AppCompatActivity {
     private ThemeManager themeManager;
     private SettingsCollapsibleSectionController collapsibleSections;
     private SettingsReaderControlsController readerControls;
+    private SettingsFolderAccessController folderAccess;
     private SettingsBackupViewModel backupModel;
     private android.app.Dialog backupBusyDialog;
     private android.app.Dialog backupConfirmDialog;
@@ -123,10 +124,13 @@ public class SettingsActivity extends AppCompatActivity {
         setupDarkMode();
         setupCustomMainThemeColors();
         setupReaderControls();
+        new SettingsTapZonesController(this).bind(findViewById(R.id.btn_tap_zones));
         setupButtonOrderSettings();
         setupTextDisplayRules();
         setupCollapseBlankLines();
         setupLock();
+        folderAccess = new SettingsFolderAccessController(this);
+        folderAccess.bind(findViewById(R.id.settings_folder_access));
         setupExportImport();
         setupResetSettings();
         setupTheme();
@@ -179,7 +183,15 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
 
+    static void bindAppInformation(TextView header) {
+        if (header == null) return;
+        header.setText(header.getContext().getString(R.string.settings_app_info_version_format,
+                header.getContext().getString(R.string.settings_section_app_info),
+                BuildConfig.VERSION_NAME));
+    }
+
     private void setupUpdateLink() {
+        bindAppInformation(findViewById(R.id.section_header_updates));
         TextView updateLink = findViewById(R.id.update_release_link);
         if (updateLink == null) return;
 
@@ -508,13 +520,9 @@ public class SettingsActivity extends AppCompatActivity {
             }
 
         // Page Overlap spinner: no weird boxed field. Blend into background.
-        Spinner overlapSpinner = findViewById(R.id.spinner_overlap_lines);
-        Spinner tapZoneSpinner = findViewById(R.id.spinner_tap_zone_mode);
-        Spinner largeTxtModeSpinner = findViewById(R.id.spinner_large_txt_partition_mode);
         Spinner epubDirectionSpinner = findViewById(R.id.spinner_epub_page_direction);
         Spinner textAlignSpinner = findViewById(R.id.spinner_text_alignment);
-        Spinner[] spinners = new Spinner[]{overlapSpinner, tapZoneSpinner, largeTxtModeSpinner,
-                epubDirectionSpinner, textAlignSpinner};
+        Spinner[] spinners = new Spinner[]{epubDirectionSpinner, textAlignSpinner};
         for (Spinner spinner : spinners) {
             if (spinner == null) continue;
             spinner.setBackgroundColor(bg);
@@ -547,12 +555,19 @@ public class SettingsActivity extends AppCompatActivity {
         if (epubTop != null) epubTop.setTextColor(sub);
         TextView epubBottom = findViewById(R.id.epub_bottom_spacing_label);
         if (epubBottom != null) epubBottom.setTextColor(sub);
-        TextView ratio = findViewById(R.id.tap_zone_ratio_label);
-        if (ratio != null) ratio.setTextColor(sub);
-        TextView leading = findViewById(R.id.tap_zone_leading_label);
-        if (leading != null) leading.setTextColor(sub);
-        TextView trailing = findViewById(R.id.tap_zone_trailing_label);
-        if (trailing != null) trailing.setTextColor(sub);
+    }
+
+    void styleSettingsDialogControls(View root) {
+        boolean dark = isDarkUi();
+        boolean navy = prefs != null && prefs.isDarkNavyMode();
+        int checked = prefs != null ? prefs.getMainControlColor(this) : dialogTextColor();
+        int thumb = navy ? Color.rgb(116, 143, 178) : (dark ? Color.rgb(145, 145, 145) : Color.rgb(170, 170, 170));
+        int track = navy ? Color.rgb(34, 53, 78) : (dark ? Color.rgb(70, 70, 70) : Color.rgb(210, 210, 210));
+        int checkedTrack = navy ? Color.rgb(55, 82, 115) : (dark ? Color.rgb(95, 95, 95) : Color.rgb(180, 180, 180));
+        applyReadableColorsRecursive(root, dialogTextColor(), dialogSubTextColor(), dialogPanelBackgroundColor(),
+                twoState(checked, thumb), twoState(checked, thumb), twoState(checkedTrack, track),
+                ColorStateList.valueOf(checked), ColorStateList.valueOf(dialogOutlineColor()),
+                ColorStateList.valueOf(dialogOutlineColor()), ColorStateList.valueOf(Color.TRANSPARENT));
     }
 
     private void applyReadableColorsRecursive(
@@ -721,8 +736,11 @@ public class SettingsActivity extends AppCompatActivity {
         reset.setOnClickListener(v -> {
             try {
                 prefs.resetReaderAndAppSettings();
-            } catch (java.io.IOException | RuntimeException failure) {
-                android.util.Log.e("SettingsActivity", "Could not reset settings", failure);
+            } catch (java.io.IOException | RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                try { android.util.Log.e("SettingsActivity", "Could not reset settings", failure); }
+                catch (RuntimeException | OutOfMemoryError | StackOverflowError unavailable) {
+                    // Logging must not prevent failure feedback or close the editor.
+                }
                 ShortToast.show(this, R.string.file_operation_failed);
                 return;
             }
@@ -988,15 +1006,7 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     void showRoundedSettingsDialog(android.app.Dialog dialog, LinearLayout panel, boolean compactWidth, float compactWidthFraction, int compactMinWidthDp) {
-        ScrollView adaptiveScroll = new ScrollView(this);
-        adaptiveScroll.setFillViewport(false);
-        adaptiveScroll.setClipChildren(true);
-        adaptiveScroll.setClipToPadding(true);
-        adaptiveScroll.setVerticalScrollBarEnabled(false);
-        adaptiveScroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
-        adaptiveScroll.addView(panel, new ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.WRAP_CONTENT));
+        ScrollView adaptiveScroll = createSettingsDialogScroll(panel);
         dialog.setContentView(adaptiveScroll);
         prepareRoundedSettingsDialogWindow(dialog, true, compactWidth, compactWidthFraction, compactMinWidthDp);
         dialog.setOnShowListener(d -> {
@@ -1009,6 +1019,26 @@ public class SettingsActivity extends AppCompatActivity {
         });
         dialog.show();
         prepareRoundedSettingsDialogWindow(dialog, false, compactWidth, compactWidthFraction, compactMinWidthDp);
+    }
+
+    void replaceRoundedSettingsDialogContent(android.app.Dialog dialog, LinearLayout panel) {
+        // Keep the visible window and dim layer; each page starts with fresh scroll bounds.
+        ScrollView adaptiveScroll = createSettingsDialogScroll(panel);
+        dialog.setContentView(adaptiveScroll);
+        applyAdaptiveSettingsDialogMaxHeight(adaptiveScroll);
+    }
+
+    private ScrollView createSettingsDialogScroll(LinearLayout panel) {
+        ScrollView adaptiveScroll = new ScrollView(this);
+        adaptiveScroll.setFillViewport(false);
+        adaptiveScroll.setClipChildren(true);
+        adaptiveScroll.setClipToPadding(true);
+        adaptiveScroll.setVerticalScrollBarEnabled(false);
+        adaptiveScroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        adaptiveScroll.addView(panel, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT));
+        return adaptiveScroll;
     }
 
     private void applyAdaptiveSettingsDialogMaxHeight(@NonNull View adaptiveView) {
@@ -1156,7 +1186,7 @@ public class SettingsActivity extends AppCompatActivity {
         return makeSettingsDialogButton(label, text, bg, outline, false);
     }
 
-    private MaterialButton makeSettingsDialogButtonNoShade(String label, int text, int outline) {
+    MaterialButton makeSettingsDialogButtonNoShade(String label, int text, int outline) {
         return makeSettingsDialogButton(label, text, dialogActionButtonBackgroundColor(), outline, true);
     }
 
@@ -1198,7 +1228,7 @@ public class SettingsActivity extends AppCompatActivity {
         return button;
     }
 
-    private int dialogPanelBackgroundColor() {
+    int dialogPanelBackgroundColor() {
         if (prefs != null) return prefs.getMainBgColor(this);
         return isDarkUi() ? Color.rgb(16, 16, 16) : Color.rgb(255, 255, 255);
     }

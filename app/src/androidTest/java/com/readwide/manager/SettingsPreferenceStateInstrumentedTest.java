@@ -34,6 +34,8 @@ public class SettingsPreferenceStateInstrumentedTest {
             SettingsPreferenceViewState.useStoredValues(root);
             assertTrue(root.isSaveFromParentEnabled());
             assertTrue(root.findViewById(R.id.settings_scroll).isSaveFromParentEnabled());
+            assertFalse(root.findViewById(R.id.input_archive_viewer_background_timeout).isSaveFromParentEnabled());
+            assertTrue(root.findViewById(R.id.main_custom_bg_hex).isSaveFromParentEnabled());
             assertTrue(checkControls(root) > 20);
         });
     }
@@ -50,6 +52,66 @@ public class SettingsPreferenceStateInstrumentedTest {
                 assertEquals(Math.round(48 * value.getResources().getDisplayMetrics().density),
                         value.getLayoutParams().height);
             }
+        });
+    }
+
+    @Test public void backupCardsUseCompactMarginsWithoutChangingButtonSizing() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            View root = LayoutInflater.from(context()).inflate(R.layout.activity_settings, null, false);
+            View help = root.findViewById(R.id.settings_backup_help);
+            View export = root.findViewById(R.id.btn_export);
+            View imported = root.findViewById(R.id.btn_import);
+            View reset = root.findViewById(R.id.btn_reset_settings);
+            float density = root.getResources().getDisplayMetrics().density;
+            LinearLayout.LayoutParams helpParams = (LinearLayout.LayoutParams) help.getLayoutParams();
+            LinearLayout.LayoutParams exportParams = (LinearLayout.LayoutParams) export.getLayoutParams();
+            LinearLayout.LayoutParams importParams = (LinearLayout.LayoutParams) imported.getLayoutParams();
+            LinearLayout.LayoutParams resetParams = (LinearLayout.LayoutParams) reset.getLayoutParams();
+            assertEquals(Math.round(8 * density), helpParams.bottomMargin);
+            assertEquals(Math.round(8 * density), resetParams.topMargin);
+            assertEquals(Math.round(4 * density), exportParams.getMarginEnd());
+            assertEquals(Math.round(4 * density), importParams.getMarginStart());
+            assertEquals(Math.round(24 * density), resetParams.bottomMargin);
+            assertSame(export.getParent(), imported.getParent());
+            LinearLayout actions = (LinearLayout) export.getParent();
+            assertEquals(LinearLayout.HORIZONTAL, actions.getOrientation());
+            assertEquals(2, actions.getChildCount());
+            assertSame(export, actions.getChildAt(0));
+            assertSame(imported, actions.getChildAt(1));
+            assertEquals(0, exportParams.width);
+            assertEquals(0, importParams.width);
+            assertEquals(1f, exportParams.weight, 0f);
+            assertEquals(1f, importParams.weight, 0f);
+            for (View button : new View[]{help, export, imported, reset}) {
+                assertTrue(button instanceof com.google.android.material.button.MaterialButton);
+                assertEquals(ViewGroup.LayoutParams.WRAP_CONTENT, button.getLayoutParams().height);
+            }
+        });
+    }
+
+    @Test public void appInformationShowsBuildVersionOnceWithCompactUpdateGap() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            View root = LayoutInflater.from(context()).inflate(R.layout.activity_settings, null, false);
+            android.widget.TextView header = root.findViewById(R.id.section_header_updates);
+            View update = root.findViewById(R.id.update_release_link);
+            SettingsActivity.bindAppInformation(header);
+            String expected = root.getContext().getString(R.string.settings_app_info_version_format,
+                    root.getContext().getString(R.string.settings_section_app_info), BuildConfig.VERSION_NAME);
+            assertEquals(expected, header.getText().toString());
+            SettingsActivity.bindAppInformation(header);
+            assertEquals(expected, header.getText().toString());
+            assertTrue(header.getText().toString().contains(BuildConfig.VERSION_NAME));
+            LinearLayout.LayoutParams headerParams = (LinearLayout.LayoutParams) header.getLayoutParams();
+            LinearLayout.LayoutParams updateParams = (LinearLayout.LayoutParams) update.getLayoutParams();
+            assertEquals(Math.round(8 * root.getResources().getDisplayMetrics().density),
+                    headerParams.bottomMargin + updateParams.topMargin);
+            assertEquals(ViewGroup.LayoutParams.WRAP_CONTENT, headerParams.height);
+            assertSame(header.getParent(), update.getParent());
+            LinearLayout container = (LinearLayout) header.getParent();
+            assertSame(update, container.getChildAt(container.indexOfChild(header) + 1));
+            assertTrue(update.isClickable());
+            assertTrue(update.isFocusable());
+            SettingsActivity.bindAppInformation(null);
         });
     }
 
@@ -84,7 +146,36 @@ public class SettingsPreferenceStateInstrumentedTest {
         EditText draft = new EditText(context);
         draft.setId(104);
         root.addView(draft);
+        EditText timeout = new EditText(context);
+        timeout.setId(R.id.input_archive_viewer_background_timeout);
+        root.addView(timeout);
         return root;
+    }
+
+    @Test public void staleTimeoutSnapshotCannotReplaceStoredResetOrImportValue() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            LinearLayout old = controls(context());
+            ((EditText) old.findViewById(R.id.input_archive_viewer_background_timeout)).setText("30");
+            ((EditText) old.findViewById(104)).setText("#123456");
+            SparseArray<Parcelable> saved = new SparseArray<>();
+            old.saveHierarchyState(saved); // Includes old snapshots that saved this field.
+            for (String stored : new String[]{"0", "90"}) {
+                LinearLayout current = controls(context());
+                SettingsPreferenceViewState.useStoredValues(current);
+                EditText timeout = current.findViewById(R.id.input_archive_viewer_background_timeout);
+                timeout.setText(stored);
+                int[] writes = {0};
+                timeout.addTextChangedListener(new android.text.TextWatcher() {
+                    @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                    @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                    @Override public void afterTextChanged(android.text.Editable text) { writes[0]++; }
+                });
+                current.restoreHierarchyState(saved);
+                assertEquals(stored, timeout.getText().toString());
+                assertEquals(0, writes[0]);
+                assertEquals("#123456", ((EditText) current.findViewById(104)).getText().toString());
+            }
+        });
     }
 
     @Test public void oldHierarchyCannotUndoNewChoicesButKeepsTextDraft() {

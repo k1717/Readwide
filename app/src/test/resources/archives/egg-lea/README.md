@@ -1,4 +1,4 @@
-# EGG LEA regression fixtures
+# EGG encrypted regression fixtures
 
 These base64 files encode the unmodified EGG samples in
 https://github.com/alkegi/unegg/tree/9929009ca4d010e8cd88bb796f7a1868162026d4/tests/data.
@@ -7,12 +7,24 @@ https://creativecommons.org/publicdomain/zero/1.0/ . The upstream dedication is 
 https://github.com/alkegi/unegg/blob/9929009ca4d010e8cd88bb796f7a1868162026d4/tests/data/README.md.
 Password: `test1234` (public fixture password, not an application credential).
 
-The accompanying test sources are not yet compiled or executed in Readwide.
+The focused host tests compile and decode these samples with Readwide 1.0.22.
+Selected/bulk extraction checks decoded sizes and CRCs; wrong-password and
+changed-authentication-footer tests reach the crypto checks and preserve output.
 These are test-only resources and are not packaged into the production APK.
-SHA-256 below applies to the decoded EGG bytes, not the text encoding.
 
-| Fixture | Bytes | SHA-256 |
+| Fixture | Archive bytes | Observed encryption |
 | --- | ---: | --- |
-| lea128.egg | 32231 | `0aebac96df81dc0a44c7dd4f62444c8c08cafd7ed47e75408b9a6d028304d410` |
-| lea256.egg | 32303 | `9c9881ee49a0263d02aa60589b25bed302d944232b603302b8f56b37af598d69` |
-| enc_lea_bzip2.egg | 266 | `9dd2441d93fcbd9ad7facf396fcede61b523c2b4d21d7c6bebb6c4faac3a9ee5` |
+| lea128.egg | 32231 | LEA-128, method 5 |
+| lea256.egg | 32303 | LEA-256, method 6 |
+| enc_lea_bzip2.egg | 266 | AES-256, method 2, with BZip2 |
+| enc_zip20.egg | 867 | ZipCrypto, method 0, BZip2/Deflate members |
+| oversized_encrypt_zip20.egg | 164 | ZipCrypto, method 0, Deflate member |
+
+The `enc_lea_bzip2.egg` filename is retained from upstream; its encryption method is AES, not
+LEA. Its ENCRYPT field declares 36 bytes but contains the complete 29-byte
+method/salt/verifier/footer payload followed by END. The declared count includes
+the seven-byte extra-field prefix. The two ZipCrypto samples similarly declare
+24 bytes for a complete 17-byte method/check-data/CRC payload. Both now match
+Bandizip's extracted filenames and bytes through Readwide's selected and bulk paths.
+All five samples have unencrypted filename fields, so these
+fixtures do not exercise encrypted filenames or encrypted split-solid production.

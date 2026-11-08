@@ -115,7 +115,7 @@ final class RarVolumeChainResolution {
 
     @NonNull
     IOException incompleteChainException() {
-        return new IOException("RAR split volume chain is incomplete: " + diagnostic);
+        return new RarArchiveReader.IntegrityException("RAR split volume chain is incomplete: " + diagnostic);
     }
 
     @NonNull

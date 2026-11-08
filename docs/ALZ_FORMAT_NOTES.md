@@ -22,14 +22,29 @@ incorporated. Unknown methods still fail without replacing existing output.
 Method-3 synthetic sources cover plain/encrypted/split paths, but no new producer
 fixture, decoder execution or device validation is claimed.
 
+Recorded 1.0.22 host checks include 17 `AlzEggSourceHandoffTest` cases and 14
+`AlzipZipCryptoTest` cases. The saved ALZip split sample also has 34 passing checks
+and 16 filename/path mismatches: its Unicode name bytes were already lost during
+production. These results do not validate the method-3 decoder or every ALZ
+regression class. See [current validation scope](ARCHIVE_BOUNDARY_SUPPORT_NOTES.md#release-boundary).
+Execution labels in the older implementation sections below describe those
+checkpoints unless a later result is stated explicitly.
+
 ## Layout
+
+Directory attributes and trailing-slash names require a zero unpacked size.
+Contradictory entries fail during index construction, before bulk extraction can
+skip their payload checks or write an earlier member. Empty regular files and
+directories remain valid; packed size alone is not rejected. Plain/encrypted/split
+regression sources for this check are uncompiled and unexecuted.
 
 Physical length and modification time are captured before header/trailer reads,
 checked after parsing and carried into `SplitVolumeInput` segment adoption. An
 observable change between framing validation and reader creation is rejected,
 including changes only to an omitted continuation header or intermediate trailer.
 Single files and raw continuations carry the same baseline; payload trimming and
-final-trailer retention are unchanged. Handoff regression sources are uncompiled/unrun.
+final-trailer retention are unchanged. The shared handoff class has the recorded
+host coverage above; source metadata still cannot lock external writers.
 
 After parsing and before file acceptance, ALZ checks existence, physical length
 and modification time for every captured volume, including an already-open handle
@@ -221,8 +236,8 @@ producer fixtures and runtime regression validation remain outstanding.
 The streaming adapter reuses private one-byte scratch for scalar reads rather
 than allocating on every call. Bulk reads, key updates and split-input ownership
 are unchanged. Close clears both scratch and key state even when source closure
-fails. Focused regression sources cover mixed reads and cleanup; they are
-uncompiled/unrun and do not establish a measured performance improvement.
+fails. `AlzipZipCryptoTest` passed its 14 host cases, including mixed reads,
+scratch ownership and cleanup. These checks do not establish a measured performance improvement.
 
 Classic PKWARE keystream keyed from the password bytes. The 12 check bytes
 decrypt first; `plain[11]` must equal the CRC's top byte (or 0 when the

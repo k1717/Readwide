@@ -3,6 +3,7 @@ package com.readwide.manager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.os.Build;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.LinearLayout;
@@ -24,7 +25,7 @@ final class ImageReaderSliderController {
 
     private final ImageReaderActivity activity;
     private final Listener listener;
-    private LinearLayout sliderBar;
+    private ImageReaderSliderLayout sliderBar;
     private SeekBar imageSlider;
     private TextView imageSliderLabel;
     private int leftInset;
@@ -41,15 +42,10 @@ final class ImageReaderSliderController {
 
     @NonNull
     View createView(int itemCount) {
-        sliderBar = new LinearLayout(activity);
+        sliderBar = new ImageReaderSliderLayout(activity);
         sliderBar.setOrientation(LinearLayout.VERTICAL);
         sliderBar.setGravity(Gravity.CENTER);
         sliderBar.setBackgroundColor(Color.argb(210, 0, 0, 0));
-        // Consume taps that land on the bar (outside the seek thumb) so they do not
-        // fall through to the image view behind it and page the sequence. The image
-        // view now extends under this bar (its bottom strip is padding, not a
-        // margin); when the bar is hidden it is GONE and those taps reach the image.
-        sliderBar.setClickable(true);
         applySystemInsets(0, 0, 0);
 
         imageSliderLabel = new TextView(activity);
@@ -57,15 +53,23 @@ final class ImageReaderSliderController {
         imageSliderLabel.setTextSize(13f);
         imageSliderLabel.setGravity(Gravity.CENTER);
         imageSliderLabel.setSingleLine(true);
+        imageSliderLabel.setEllipsize(TextUtils.TruncateAt.END);
+        imageSliderLabel.setMinHeight(activity.dpToPx(36));
         imageSliderLabel.setTranslationY(activity.dpToPx(2));
-        imageSliderLabel.setMinHeight(activity.dpToPx(44));
         imageSliderLabel.setFocusable(true);
         imageSliderLabel.setOnClickListener(v -> {
             if (!userTracking && latestItemCount > 1) activity.showImagePageJumpDialog();
         });
-        sliderBar.addView(imageSliderLabel, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
+        LinearLayout labelRow = new LinearLayout(activity);
+        labelRow.setOrientation(LinearLayout.HORIZONTAL);
+        labelRow.setGravity(Gravity.CENTER_VERTICAL);
+        // Only the middle third opens page selection; the sides retain image tap paging.
+        labelRow.addView(new View(activity), new LinearLayout.LayoutParams(0, 1, 1f));
+        labelRow.addView(imageSliderLabel, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        labelRow.addView(new View(activity), new LinearLayout.LayoutParams(0, 1, 1f));
+        sliderBar.addView(labelRow, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         imageSlider = new SeekBar(activity);
         imageSlider.setMax(Math.max(0, itemCount - 1));
@@ -76,8 +80,9 @@ final class ImageReaderSliderController {
                 activity.dpToPx(38));
         // Pull the slider up toward the page-count label so the gap between them is
         // tighter (the seek bar reserves empty vertical space above its thumb).
-        sliderLp.topMargin = -activity.dpToPx(6);
+        sliderLp.topMargin = -activity.dpToPx(10);
         sliderBar.addView(imageSlider, sliderLp);
+        sliderBar.setTouchTargets(imageSliderLabel, imageSlider);
         imageSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 if (!fromUser) return;
@@ -110,9 +115,10 @@ final class ImageReaderSliderController {
         rightInset = Math.max(0, right);
         bottomInset = Math.max(0, bottom);
         if (sliderBar == null) return;
+        sliderBar.setSystemInsets(leftInset, rightInset, bottomInset);
         sliderBar.setPadding(
                 activity.dpToPx(24) + leftInset,
-                activity.dpToPx(8),
+                0,
                 activity.dpToPx(24) + rightInset,
                 activity.dpToPx(10) + bottomInset);
     }

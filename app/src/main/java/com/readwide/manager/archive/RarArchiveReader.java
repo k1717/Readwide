@@ -89,6 +89,7 @@ final class RarArchiveReader {
                 throw e;
             } catch (IOException | SecurityException e) {
                 ArchiveCancellation.rethrowIfCancelled(e, null);
+                if (e instanceof IntegrityException) throw (IntegrityException) e;
                 libarchiveFailure = asIOException(e);
             }
         }
@@ -135,6 +136,7 @@ final class RarArchiveReader {
             throw e;
         } catch (IOException e) {
             ArchiveCancellation.rethrowIfCancelled(e, null);
+            if (e instanceof IntegrityException) throw e;
             List<ArchiveSupport.EntryInfo> headerDecrypted = RarHeaderEncryptedArchiveSupport.tryListEntries(archive, password);
             if (headerDecrypted != null) return headerDecrypted;
             RarHeaderEncryptionDetector.throwIfHeaderEncryptedNeedsUnsupportedPath(
@@ -248,6 +250,7 @@ final class RarArchiveReader {
             throw e;
         } catch (IOException e) {
             ArchiveCancellation.rethrowIfCancelled(e, progress);
+            if (e instanceof IntegrityException) throw e;
             if (RarHeaderEncryptedArchiveSupport.tryExtractArchive(
                     archive, targetDir, password, progress, entryProgress)) {
                 return true;
@@ -374,6 +377,7 @@ final class RarArchiveReader {
             throw e;
         } catch (IOException e) {
             ArchiveCancellation.rethrowIfCancelled(e, null);
+            if (e instanceof IntegrityException) throw e;
             if (RarHeaderEncryptedArchiveSupport.tryExtractSingleEntry(
                     archive, normalized, outFile, password, null)) {
                 return true;
@@ -518,7 +522,7 @@ final class RarArchiveReader {
         while (raf.getFilePointer() < raf.length()) {
             long headerStart = raf.getFilePointer();
             if (raf.length() - headerStart < 7) break;
-            readUInt16LE(raf); // Header CRC. RAR4 CRC coverage varies by block kind; treat it as advisory for now.
+            int headerCrc = readUInt16LE(raf);
             int type = raf.readUnsignedByte();
             int flags = readUInt16LE(raf);
             int headerSize = readUInt16LE(raf);
@@ -528,12 +532,21 @@ final class RarArchiveReader {
 
             byte[] headerData = new byte[headerSize - 7];
             raf.readFully(headerData);
+            try {
+                Rar4HeaderChecksum.verify(headerCrc, type, flags, headerData);
+            } catch (IOException invalidHeader) {
+                scan.failure = invalidHeader;
+                break;
+            }
             long dataSize = 0L;
             if (type == RAR4_HEADER_FILE) {
                 // Physical framing is independent of whether the name is safe to
                 // expose. Never mistake an omitted member's payload for a header.
-                dataSize = readRar4PackedSize(flags, headerData);
+                dataSize = Rar4BlockSize.packedSize(flags, headerData, 0);
                 fileBlocks.add(new Rar4FileBlock(headerStart + headerSize, flags, headerData));
+            } else if (type == 0x7a) {
+                // Service blocks share FILE's high packed-size field but are not entries.
+                dataSize = Rar4BlockSize.packedSize(flags, headerData, 0);
             } else if (type == RAR4_HEADER_MAIN && (flags & RAR4_MAIN_PASSWORD) != 0) {
                 if (password != null && password.length > 0) {
                     throw new UnsupportedRarFeatureException("Encrypted RAR4 headers are not supported yet");
@@ -590,15 +603,6 @@ final class RarArchiveReader {
             }
         }
         return result;
-    }
-
-    private static long readRar4PackedSize(int flags, @NonNull byte[] headerData) throws IOException {
-        int minimumSize = (flags & RAR4_FILE_LARGE) != 0 ? 33 : 25;
-        if (headerData.length < minimumSize) throw new IOException("Truncated RAR4 file header");
-        long packed = uint32FromBytes(headerData, 0);
-        if ((flags & RAR4_FILE_LARGE) != 0) packed |= uint32FromBytes(headerData, 25) << 32;
-        if (packed < 0L) throw new IOException("RAR4 packed size exceeds the supported numeric range");
-        return packed;
     }
 
     /** RAR4 FILE header captured during the walk for corpus-aware name decoding. */
@@ -707,7 +711,7 @@ final class RarArchiveReader {
                 if (entry != null) result.add(entry);
             }
             long next = block.dataOffset + block.dataSize;
-            if (next < block.dataOffset || next > raf.length()) throw new IOException("Invalid RAR data size");
+            if (next < block.dataOffset || next > raf.length()) throw new IntegrityException("Invalid RAR data size");
             raf.seek(next);
             if (block.type == HEADER_END) break;
         }
@@ -790,17 +794,14 @@ final class RarArchiveReader {
 
         long headerCrc = (first[0] & 0xffL) | ((first[1] & 0xffL) << 8)
                 | ((first[2] & 0xffL) << 16) | ((first[3] & 0xffL) << 24);
-        long headerSize = 0L;
-        int vintLen = 0;
-        int shift = 0;
-        while (true) {
-            if (4 + vintLen >= first.length) throw new IOException("Invalid RAR5 encrypted header size");
-            int b = first[4 + vintLen] & 0xff;
-            vintLen++;
-            headerSize |= (long) (b & 0x7f) << shift;
-            if ((b & 0x80) == 0) break;
-            shift += 7;
+        ByteCursor sizeCursor = new ByteCursor(first, 4, first.length);
+        final long headerSize;
+        try {
+            headerSize = sizeCursor.readVInt();
+        } catch (IOException invalidSize) {
+            throw rar5EncryptedHeaderFailure();
         }
+        int vintLen = sizeCursor.position() - 4;
         if (headerSize < 0 || headerSize > 2L * 1024L * 1024L) {
             throw rar5EncryptedHeaderFailure();
         }
@@ -1479,9 +1480,10 @@ final class RarArchiveReader {
             throw new UnsupportedRarFeatureException("Encrypted RAR data is not AES block aligned");
         }
         if (entry.rarVersion < 5 && encryption.isRar4Aes()) {
-            if (!RarFeatureClassifier.isRar3Or4StoredMethod(entry.method) || entry.solid || entry.splitBefore || entry.splitAfter) {
+            // Stored bytes do not use compressed history, even with the solid flag.
+            if (!RarFeatureClassifier.isRar3Or4StoredMethod(entry.method) || entry.splitBefore || entry.splitAfter) {
                 throw new UnsupportedRarFeatureException(
-                        "RAR3/RAR4 encrypted compressed, solid, or split payloads are not supported yet");
+                        "RAR3/RAR4 encrypted compressed or split payloads require their dedicated decoder");
             }
             extractRar4EncryptedStoredPayload(raf, entry, outFile, password, encryption, progress);
             return null;
@@ -1599,6 +1601,7 @@ final class RarArchiveReader {
         int count = 0;
         while (count < encoded.length) {
             int b = raf.readUnsignedByte();
+            checkVIntByte(b, count);
             encoded[count++] = (byte) b;
             value |= (long) (b & 0x7f) << shift;
             if ((b & 0x80) == 0) {
@@ -1609,6 +1612,13 @@ final class RarArchiveReader {
             shift += 7;
         }
         throw new IOException("RAR vint is too long");
+    }
+
+    private static void checkVIntByte(int value, int index) throws IOException {
+        // RAR5 permits padded encodings, but byte ten has only one data bit left.
+        if (index == 9 && (value & 0xfe) != 0) {
+            throw new IOException((value & 0x80) != 0 ? "RAR vint is too long" : "RAR vint overflow");
+        }
     }
 
     private static int safeExtraStart(int headerLength, long extraSize) throws IOException {
@@ -1995,6 +2005,11 @@ final class RarArchiveReader {
         }
     }
 
+    /** Missing volumes and physical payload bounds cannot be repaired by another decoder. */
+    static final class IntegrityException extends IOException {
+        IntegrityException(@NonNull String message) { super(message); }
+    }
+
     static final class UnsupportedRarFeatureException extends ArchiveSupport.UnsupportedArchiveFeatureException {
         UnsupportedRarFeatureException(@NonNull String message) {
             super(message);
@@ -2047,6 +2062,7 @@ final class RarArchiveReader {
             int shift = 0;
             for (int i = 0; i < 10; i++) {
                 int b = readUnsignedByte();
+                checkVIntByte(b, i);
                 value |= (long) (b & 0x7f) << shift;
                 if ((b & 0x80) == 0) return value;
                 shift += 7;

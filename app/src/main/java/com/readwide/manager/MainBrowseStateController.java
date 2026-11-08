@@ -175,6 +175,8 @@ final class MainBrowseStateController {
     }
 
     void markLoadStarted(@Nullable File directory) {
+        // A validation of the previous list cannot restart this newer load.
+        validationGeneration.incrementAndGet();
         currentFolderFullyLoaded = false;
         currentLoadedPath = directory != null ? directory.getAbsolutePath() : null;
         currentLoadedSignature = null;
@@ -394,10 +396,16 @@ final class MainBrowseStateController {
             // folder restores so a burst of them does not pile redundant full scans
             // onto the validation executor.
             if (generation != validationGeneration.get()) return;
-            String actualSignature = captureFolderSignature(directory);
+            String actualSignature;
+            try {
+                actualSignature = captureFolderSignature(directory);
+            } catch (RuntimeException | OutOfMemoryError | StackOverflowError unavailable) {
+                actualSignature = null;
+            }
+            final String checkedSignature = actualSignature;
             activity.fileSearchHandler.post(() -> {
                 if (activity.activityDestroyed || generation != validationGeneration.get()) return;
-                if (actualSignature != null && actualSignature.equals(expectedSignature)) return;
+                if (checkedSignature != null && checkedSignature.equals(expectedSignature)) return;
                 remove(directory);
                 if (activity.currentDirectory == null || !directoryPath.equals(activity.currentDirectory.getAbsolutePath())) return;
                 if (activity.homeMode || activity.searchMode) return;

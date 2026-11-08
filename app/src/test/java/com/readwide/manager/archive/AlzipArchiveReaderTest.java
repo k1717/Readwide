@@ -1365,6 +1365,104 @@ public class AlzipArchiveReaderTest {
         assertEquals("hello alz", new String(Files.readAllBytes(out.toPath()), StandardCharsets.UTF_8));
     }
 
+    @Test public void nonemptyDirectoryAttributesAndNameSuffixesRejectBeforeOutput() throws Exception {
+        for (int variant = 0; variant < 3; variant++) {
+            File archive = directoryPayloadArchive(variant, new byte[]{1, 2, 3}, 0, false);
+            assertDirectoryPayloadRejected(archive, null);
+        }
+    }
+
+    @Test public void encryptedDirectoryPayloadIsRejectedWithoutPasswordSelection() throws Exception {
+        for (int variant = 0; variant < 3; variant++) {
+            File archive = directoryPayloadArchive(variant, new byte[]{1, 2, 3}, 2, true);
+            for (char[] password : new char[][]{null, "wrong".toCharArray(), "pw".toCharArray()}) {
+                assertDirectoryPayloadRejected(archive, password);
+            }
+        }
+    }
+
+    @Test public void splitDirectoryPayloadRejectsMetadataAndEncryptionHeaderCuts() throws Exception {
+        for (int variant = 0; variant < 3; variant++) {
+            File archive = directoryPayloadArchive(variant, new byte[]{1, 2, 3}, 0, true);
+            byte[] bytes = framedAlzBytes(archive);
+            int nameLength = (bytes[12] & 0xff) | ((bytes[13] & 0xff) << 8);
+            for (int cut : new int[]{14, 33, 35 + nameLength + 6, bytes.length - 17}) {
+                File continuation = splitWithFinalTail(bytes, cut);
+                File first = new File(continuation.getParentFile(), "split.alz");
+                assertDirectoryPayloadRejected(first, "pw".toCharArray());
+                assertDirectoryPayloadRejected(continuation, null);
+            }
+        }
+    }
+
+    @Test public void laterDirectoryPayloadCannotPublishOrReplaceEarlierFile() throws Exception {
+        for (boolean encrypted : new boolean[]{false, true}) {
+            for (int variant = 0; variant < 3; variant++) {
+                File archive = buildAlzArchive("first.bin", new byte[]{7}, 0, false, null);
+                appendLocalEntries(archive, directoryPayloadArchive(variant, new byte[]{1}, 0, encrypted));
+                assertDirectoryPayloadRejected(archive, "pw".toCharArray());
+                byte[] bytes = framedAlzBytes(archive);
+                assertDirectoryPayloadRejected(splitWithFinalTail(bytes, bytes.length - 17), "pw".toCharArray());
+            }
+        }
+    }
+
+    @Test public void zeroSizeDirectoriesAndEmptyFilesKeepTheirExistingForms() throws Exception {
+        File archive = buildAlzArchiveWithDirectoryEntry("docs", "docs/readme.txt", new byte[]{7});
+        appendLocalEntries(archive, buildAlzArchive("empty-stored", new byte[0], 0, false, null));
+        appendLocalEntries(archive, buildAlzArchive("empty-deflate", new byte[0], 2, true, "pw".toCharArray()));
+        List<ArchiveSupport.EntryInfo> entries = AlzipArchiveReader.listEntries(archive, null);
+        assertEquals(4, entries.size());
+        File directory = tempFolder.newFolder();
+        assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, "pw".toCharArray()));
+        assertTrue(new File(directory, "docs").isDirectory());
+        assertArrayEquals(new byte[]{7}, Files.readAllBytes(new File(directory, "docs/readme.txt").toPath()));
+        for (String name : new String[]{"empty-stored", "empty-deflate"}) {
+            assertTrue(new File(directory, name).isFile());
+            assertEquals(0L, new File(directory, name).length());
+            File selected = tempFolder.newFile();
+            assertTrue(AlzipArchiveReader.extractSingleEntry(archive, name, selected, "pw".toCharArray()));
+            assertEquals(0L, selected.length());
+        }
+        for (int variant = 0; variant < 3; variant++) {
+            File encodedEmpty = directoryPayloadArchive(variant, new byte[0], 2, false);
+            List<ArchiveSupport.EntryInfo> emptyEntries = AlzipArchiveReader.listEntries(encodedEmpty, null);
+            assertEquals(1, emptyEntries.size());
+            assertTrue(emptyEntries.get(0).directory);
+            File target = tempFolder.newFolder();
+            assertTrue(AlzipArchiveReader.extractArchiveIntoDirectory(encodedEmpty, target, null));
+            assertTrue(new File(target, "data.bin").isDirectory());
+        }
+    }
+
+    private File directoryPayloadArchive(int variant, byte[] payload, int method, boolean encrypted) throws Exception {
+        String name = variant == 1 ? "data.bin/" : variant == 2 ? "data.bin\\" : "data.bin";
+        File archive = buildAlzArchive(name, payload, method, encrypted, "pw".toCharArray());
+        if (variant == 0) {
+            byte[] bytes = Files.readAllBytes(archive.toPath());
+            bytes[14] |= 0x10;
+            Files.write(archive.toPath(), bytes);
+        }
+        return archive;
+    }
+
+    private void assertDirectoryPayloadRejected(File archive, char[] password) throws Exception {
+        IOException failure = assertThrows(IOException.class, () -> AlzipArchiveReader.listEntries(archive, password));
+        assertEquals("ALZ directory entry has nonzero data size", failure.getMessage());
+        File output = tempFolder.newFile();
+        Files.write(output.toPath(), new byte[]{42});
+        assertThrows(IOException.class, () -> AlzipArchiveReader.extractSingleEntry(archive, "first.bin", output, password));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+        File directory = tempFolder.newFolder(), existing = new File(directory, "first.bin");
+        Files.write(existing.toPath(), new byte[]{42});
+        assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(archive, directory, password));
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(existing.toPath()));
+        assertEquals(1, directory.list().length);
+        File absent = new File(tempFolder.newFolder(), "output");
+        assertThrows(IOException.class, () -> AlzipArchiveReader.extractArchiveIntoDirectory(archive, absent, password));
+        assertFalse(absent.exists());
+    }
+
     @Test
     public void listEntries_malformedEggFailsExplicitly() throws Exception {
         try {

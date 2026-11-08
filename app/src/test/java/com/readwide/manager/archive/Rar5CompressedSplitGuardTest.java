@@ -356,7 +356,7 @@ public class Rar5CompressedSplitGuardTest {
         java.io.IOException failure = org.junit.Assert.assertThrows(java.io.IOException.class,
                 () -> Rar5CompressedArchiveExtractor.tryExtractArchive(
                         Arrays.asList(directory, compressed), target, null, null, null));
-        org.junit.Assert.assertEquals("Cannot create output directory", failure.getMessage());
+        org.junit.Assert.assertEquals("Archive file/directory output collision: occupied", failure.getMessage());
         org.junit.Assert.assertArrayEquals(new byte[]{42}, java.nio.file.Files.readAllBytes(occupied.toPath()));
         assertFalse(new File(target, "image.bin").exists());
     }

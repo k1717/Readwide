@@ -1298,9 +1298,7 @@ public class DocumentPageActivity extends AppCompatActivity implements TtsHost, 
                 h,
                 true,
                 true,
-                prefs.getTapZoneMode(),
-                prefs.getTapLeadingZonePercent(),
-                prefs.getTapTrailingZonePercent());
+                prefs.getViewerTapZones(com.readwide.manager.util.TapZoneProfile.forDocument(docType)));
         if ("EPUB".equals(docType)
                 && prefs.getEpubPageDirection() == PrefsManager.EPUB_PAGE_DIRECTION_RTL) {
             if (action == TapZoneMath.ACTION_PREVIOUS) return TapZoneMath.ACTION_NEXT;

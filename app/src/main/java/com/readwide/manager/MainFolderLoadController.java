@@ -12,6 +12,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.readwide.manager.util.FileSortUtils;
 import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.PrefsManager;
+import com.readwide.manager.util.TaskSubmission;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -69,7 +70,7 @@ final class MainFolderLoadController {
 
         prepareBrowseTarget(targetDir, sortMode, true);
 
-        submitPriorityFolderLoad(() -> {
+        submitPriorityFolderLoad(targetDir, sortMode, loadGeneration, () -> {
             // Clear any interrupt inherited from a just-cancelled previous load so this
             // load's own sort cancellation check (isInterrupted) starts from a clean
             // state; this load is cancelled later via its own Future, not this flag.
@@ -142,7 +143,7 @@ final class MainFolderLoadController {
 
         prepareBrowseTarget(targetDir, sortMode, false);
 
-        submitPriorityFolderLoad(() -> {
+        submitPriorityFolderLoad(targetDir, sortMode, loadGeneration, () -> {
             // Clear any interrupt inherited from a just-cancelled previous load.
             Thread.interrupted();
             final java.util.List<com.readwide.manager.model.FileListItem> items = new ArrayList<>();
@@ -302,23 +303,30 @@ final class MainFolderLoadController {
         if (clearList) activity.scrollListToTop(activity.fileRecyclerView);
     }
 
-    private void submitPriorityFolderLoad(@NonNull Runnable task) {
-        synchronized (executorLock) {
-            // Coalesce onto the single I/O worker without creating a new executor
-            // (which would let an interrupted-but-uninterruptible listFiles()/stat keep
-            // running in parallel with the new scan). Clear any queued load and
-            // interrupt the in-flight one via Future.cancel(true): its directory walk
-            // bails on the bumped generation (checked every entry) and its sort bails
-            // on the thread interrupt flag (checked every 1024 keys), so the stale load
-            // unwinds promptly and the new load runs next on the same thread. The new
-            // task clears any inherited interrupt at its start (see loadDirectory /
-            // refreshCurrentDirectoryWithoutClearing), so it does not depend on the
-            // executor's between-task interrupt handling.
-            executor.getQueue().clear();
-            if (currentFolderLoadFuture != null) {
-                currentFolderLoadFuture.cancel(true);
+    private void submitPriorityFolderLoad(@NonNull File targetDir, int sortMode,
+                                         int loadGeneration, @NonNull Runnable task) {
+        final Runnable failed = () ->
+                applyDirectoryLoadFailure(targetDir, sortMode, loadGeneration, false);
+        try {
+            synchronized (executorLock) {
+                // Keep one I/O worker even if a stale filesystem call ignores interruption.
+                // A rejected queued task must be cancelled before another request can run it.
+                executor.getQueue().clear();
+                if (currentFolderLoadFuture != null) {
+                    currentFolderLoadFuture.cancel(true);
+                }
+                currentFolderLoadFuture = TaskSubmission.submit(executor, () -> {
+                    try {
+                        task.run();
+                    } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                        Log.w(STORAGE_LOG_TAG, "Folder load failed", failure);
+                        activity.fileSearchHandler.post(failed);
+                    }
+                });
             }
-            currentFolderLoadFuture = executor.submit(task);
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            Log.w(STORAGE_LOG_TAG, "Folder load could not start", failure);
+            failed.run();
         }
     }
 
@@ -412,8 +420,15 @@ final class MainFolderLoadController {
     }
 
     private void applyDirectoryAccessDenied(@NonNull File targetDir, int sortMode, int loadGeneration) {
+        applyDirectoryLoadFailure(targetDir, sortMode, loadGeneration, true);
+    }
+
+    private void applyDirectoryLoadFailure(@NonNull File targetDir, int sortMode,
+                                          int loadGeneration, boolean offerFolderAccess) {
         if (isCancelled(loadGeneration)) return;
         if (!targetDir.equals(activity.currentDirectory)) return;
+        activity.markCurrentBrowseFolderLoadFailed(targetDir);
+        if (activity.fileSearchProgress != null) activity.fileSearchProgress.setVisibility(View.GONE);
         if (activity.fileAdapter != null) {
             activity.fileAdapter.setShowFilePath(false);
             activity.fileAdapter.setSortModeSilently(sortMode);
@@ -423,9 +438,7 @@ final class MainFolderLoadController {
         if (activity.emptyText != null) {
             activity.emptyText.setText(activity.getString(R.string.containing_folder_unavailable));
         }
-        activity.markCurrentBrowseFolderLoadFailed(targetDir);
-        if (activity.fileSearchProgress != null) activity.fileSearchProgress.setVisibility(View.GONE);
-        activity.offerSafFolderFallback();
+        if (offerFolderAccess) activity.offerSafFolderFallback();
     }
 
     private void applyRefreshDirectory(@NonNull File targetDir,

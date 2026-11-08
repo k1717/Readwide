@@ -13,15 +13,19 @@ import androidx.core.graphics.drawable.DrawableCompat;
 import com.readwide.manager.adapter.FileAdapter;
 import com.readwide.manager.archive.ArchiveCancellation;
 import com.readwide.manager.util.FileClipboardController;
+import com.readwide.manager.util.FileDeletionPlan;
 import com.readwide.manager.util.FileOperationProgress;
-import com.readwide.manager.util.FileSystemOps;
 import com.readwide.manager.util.FileTreeProgressTracker;
+import com.readwide.manager.util.TaskSubmission;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 final class MainSelectionModeController {
     private final MainActivity activity;
+    private boolean preparingDelete;
 
     MainSelectionModeController(@NonNull MainActivity activity) {
         this.activity = activity;
@@ -217,11 +221,37 @@ final class MainSelectionModeController {
     }
 
     void showSelectedDeleteConfirm() {
+        if (activity.activityDestroyed || preparingDelete) return;
         ArrayList<File> selected = getSelectedFilesSnapshot();
         if (selected.isEmpty()) {
             exitFileSelectionMode(true);
             return;
         }
+        preparingDelete = true;
+        try {
+            TaskSubmission.submit(activity.folderValidationExecutor, () -> {
+                Map<File, FileDeletionPlan> plans = new LinkedHashMap<>();
+                try {
+                    for (File file : selected) plans.put(file, FileDeletionPlan.capture(file));
+                } catch (java.io.IOException | RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                    ArchiveCancellation.restoreIfCancelled(failure, null);
+                }
+                activity.runOnUiThread(() -> {
+                    preparingDelete = false;
+                    if (activity.activityDestroyed || activity.isFinishing()) return;
+                    if (plans.size() == selected.size()) showSelectedDeleteConfirm(selected, plans);
+                    else if (!activity.offerSafDeleteAccess(selected)) {
+                        ShortToast.show(activity, R.string.selected_files_delete_failed);
+                    }
+                });
+            });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            preparingDelete = false;
+            ShortToast.show(activity, R.string.selected_files_delete_failed);
+        }
+    }
+
+    private void showSelectedDeleteConfirm(ArrayList<File> selected, Map<File, FileDeletionPlan> plans) {
         String message = activity.getString(R.string.delete_selected_files_confirm, selected.size());
         int folderCount = countSelectedFolders(selected);
         if (folderCount > 0) {
@@ -232,7 +262,7 @@ final class MainSelectionModeController {
                 activity.getString(R.string.delete),
                 message,
                 activity.getString(R.string.delete),
-                () -> deleteSelectedFiles(selected));
+                () -> deleteSelectedFiles(selected, plans));
     }
 
     private int countSelectedFolders(@NonNull ArrayList<File> selected) {
@@ -251,7 +281,8 @@ final class MainSelectionModeController {
         return count;
     }
 
-    private void deleteSelectedFiles(@NonNull ArrayList<File> selected) {
+    private void deleteSelectedFiles(@NonNull ArrayList<File> selected,
+                                     @NonNull Map<File, FileDeletionPlan> plans) {
         if (activity.activityDestroyed || selected.isEmpty()) return;
         // The delete worker uses a snapshot of the selected files, so the UI no
         // longer needs to remain in multi-select mode after the user confirms.
@@ -271,20 +302,28 @@ final class MainSelectionModeController {
         }
         boolean accepted = activity.executeFolderBackgroundTask(() -> {
             int deletedCount = 0;
+            boolean changed = false;
+            ArrayList<File> failedItems = new ArrayList<>(selected);
             try {
                 FileTreeProgressTracker treeProgress = FileTreeProgressTracker.create(progress, selected);
                 progress.setTotalBytes(treeProgress.totalBytes());
                 for (File file : selected) {
                     if (!treeProgress.isReady() || !progress.checkpoint()) break;
-                    if (file == null || !file.exists()) continue;
+                    if (file == null) continue;
                     String path = file.getAbsolutePath();
-                    boolean wasDirectory = file.isDirectory();
-                    if (FileSystemOps.delete(file, progress, false, treeProgress)) {
+                    FileDeletionPlan plan = plans.get(file);
+                    FileDeletionPlan.Result result = plan == null ? FileDeletionPlan.Result.FAILED
+                            : plan.delete(progress, treeProgress);
+                    if (result == FileDeletionPlan.Result.DELETED) {
                         deletedCount++;
+                        failedItems.remove(file);
                         // These are synchronized/persistent metadata updates, not
                         // view operations. Keep bulk writes off the UI thread.
                         if (activity.bookmarkManager != null) activity.bookmarkManager.deleteReadingState(path);
-                        activity.cleanupNavigationStateAfterDelete(path, wasDirectory);
+                        activity.cleanupNavigationStateAfterDelete(path, plan.isDirectory());
+                    } else if (result == FileDeletionPlan.Result.CHANGED) {
+                        changed = true;
+                        failedItems.remove(file);
                     }
                     if (progress.isCancelled()) break;
                 }
@@ -292,6 +331,7 @@ final class MainSelectionModeController {
                 ArchiveCancellation.restoreIfCancelled(failure, progress);
             } finally {
                 final int finalDeletedCount = deletedCount;
+                final boolean changedItems = changed;
                 activity.runOnUiThread(() -> {
                     activity.finishFileOperationProgress(progress);
                     if (activity.activityDestroyed) return;
@@ -301,9 +341,11 @@ final class MainSelectionModeController {
                         return;
                     }
                     activity.refreshVisibleFileListAfterFileSystemChange();
-                    ShortToast.show(activity, finalDeletedCount > 0
+                    ShortToast.show(activity, changedItems ? activity.getString(R.string.raw_delete_changed)
+                                    : finalDeletedCount > 0
                                     ? activity.getString(R.string.selected_files_deleted, finalDeletedCount)
                                     : activity.getString(R.string.selected_files_delete_failed));
+                    activity.offerSafDeleteAccess(failedItems);
                 });
             }
         });

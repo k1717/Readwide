@@ -1,5 +1,53 @@
 # Changelog
 
+## Readwide 1.0.22 - 2026-11-08
+
+### TXT navigation and saved data
+
+- Release failed exact-page index and load/search requests so later requests can retry. Ignore queued or late work from failed requests.
+- Return to the current page start on a backward tap after a blank or short row, matching normal TXT behavior.
+- Preserve bookmark and reading-position stores after read or parse failures. Require complete stores before edits, backup export or import.
+- Cancel rejected backup tasks before startup and keep a running import's lock through commit or rollback.
+
+### Settings and backup recovery
+
+- Group reading controls, button order, files/archives, security/folder permissions and backup/reset by purpose. View settings groups text size, TXT/EPUB layout and reader display; detailed help opens separately.
+- Add per-viewer tap zones that follow TXT or retain independent orientation and proportions. Include the choices in backup/reset while keeping existing defaults.
+- Use aligned, compact two-line tap-profile rows and left-aligned folder entries. Tighten backup-control spacing and show the installed version beside App information, with a smaller gap before the update link.
+- Keep saved timeout values after reset/import and screen recreation. Attempt rollback on failed preference changes and leave failed reset confirmation open.
+- Show EPUB custom-font discovery failures while retaining built-in choices and allowing retry.
+
+### Storage access and file operations
+
+- Manage registered folders under Settings > Security and folder permissions > Folder access. Add, open or revoke individual grants without deleting files; earlier registrations remain available.
+- Add provider-backed copy, move, rename, delete and new-folder actions. Offer folder authorization after eligible failures on internal shared storage and detected SD/USB volumes, without replaying the failed operation.
+- Recheck selected sources, copied bytes, destination contents and provider capabilities. Preserve remaining originals, changed backups and uncertain outputs when a transfer cannot be safely completed.
+- Retain provider operations through rotation and keep folder grants while they are in use. Reject stale dialog callbacks, changed overwrite targets and incomplete provider metadata.
+- Detect additional mounted SD/USB volumes, refresh discovery on return and avoid sidebar rebuilds for unchanged content.
+- Complete failed folder loads, reject obsolete results and cancel superseded provider queries. Retry reloads the listing without repeating file operations.
+
+### Image controls
+
+- Fit images between visible controls without decoding them again. Preserve zoom and short-image vertical position where the visible bounds allow.
+- Tighten filename, page-counter and slider spacing while retaining system insets.
+- Allow previous/next taps through empty bottom-panel app space and limit page selection to the centered label. Slider dragging remains separate.
+
+### Archive handling
+
+- Validate RAR3/RAR4 header CRC boundaries, read each encrypted header's salt, retain full-width service sizes and reject overflowing RAR5 integers.
+- Preserve password requests and distinguish missing volumes or truncated payloads from unsupported decoding. Allow checked unsplit AES-stored solid members and skip stored data without temporary decoded files.
+- Correct EGG encryption-header lengths and AZO's seven-bit history index. Six public AZO samples now match Bandizip's names and bytes, including four that previously failed.
+- Report rejected EGG/ALZ ZipCrypto passwords through password retry and reject nonempty directory payloads without changing valid EGG solid ownership.
+- Reuse checked supplemental 7z headers, buffer packed checksum reads and avoid a redundant AZO input copy. Close split input and allocated inflater resources after construction failures.
+- Recheck original source volumes before decoder retry and output acceptance. Stop ZIP creation on detectable source edits while preserving existing destinations.
+- Correct fixture/report path handling and failure reporting; skipped samples remain separate from passed checks.
+
+### Release boundary
+
+- Version `1.0.22 / 10022` keeps exact page boundaries and counts, partition behavior, half-visible-row selection, existing bookmark coordinates, dependency versions and signing configuration.
+- Scoped host comparisons cover retained RAR, EGG, ALZ and 7z samples. They do not establish complete encrypted/split/solid/VM compatibility, a current APK build or device validation.
+- See [release notes](docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_22.md), [development changes](docs/DEV_CHANGES_1_0_22.md), [source status](docs/CURRENT_SOURCE_STATUS_1_0_22.md) and [release readiness](docs/RELEASE_READINESS_1_0_22.md) for behavior, implementation details, open findings and outstanding checks.
+
 ## Readwide 1.0.21 - 2026-10-24
 
 ### EPUB typography and progress

@@ -1,11 +1,11 @@
-# Readwide 1.0.21 Build / Release Notes
+# Readwide 1.0.22 Build / Release Notes
 
-This file records source-build notes for **Readwide 1.0.21**.
+This file records source-build notes for **Readwide 1.0.22**.
 
 ## Version metadata
 
-- Android metadata is `versionCode 10021`, `versionName "1.0.21"`.
-- The Android package/application ID has been `com.readwide.manager` since 1.0.4. 1.0.21 keeps the `readwide` release signing key introduced in 1.0.6, so it updates in place over 1.0.20 through 1.0.6. Updating from 1.0.4/1.0.5 (previous key) still requires uninstalling first, installing 1.0.21, then migrating data with the in-app JSON backup export/import, because of the 1.0.6 signing-key change. Earlier builds using `com.textview.reader` likewise install as a separate app.
+- Android metadata is `versionCode 10022`, `versionName "1.0.22"`.
+- The Android package/application ID has been `com.readwide.manager` since 1.0.4. A 1.0.22 APK signed with the `readwide` key introduced in 1.0.6 updates in place over same-key versions 1.0.21 through 1.0.6. For 1.0.4/1.0.5 or another signing key, export an in-app JSON backup before uninstalling, then install 1.0.22 and import the backup. Earlier builds using `com.textview.reader` install as a separate app. Signing compatibility depends on the APK's actual key, not its version name.
 - The default source package is Junrar-free, UnRAR-license-fallback-free, analytics-free, ads-free, and does not request the `INTERNET` permission.
 
 ## Stale removed-source cleanup
@@ -46,7 +46,7 @@ This package removes the deprecated AGP compatibility toggles that previously pr
 - ZIP/CBZ uses Zip4j as the primary path, with Apache Commons Compress fallback for non-encrypted methods where bundled codecs can read them.
 - 7z/CB7 uses scoped first-party coder/stream routes alongside Commons Compress and native fallback; it is not a Commons-only feature list. TAR-family routes use Commons Compress and native filters as applicable, including bundled Android Zstandard. See [current archive support notes](docs/ARCHIVE_BOUNDARY_SUPPORT_NOTES.md).
 - ALZ/EGG are limited first-party extraction paths with documented method boundaries.
-- RAR/CBR is read/extract only: libarchive remains primary for common compressed cases; first-party Java supplies scoped stored, PPMd/mixed-LZ and RAR5-container streaming paths. The 3.8.9 backend and Java follow-ups do not imply complete RAR support; see [release notes](docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_21.md).
+- RAR/CBR is read/extract only: libarchive remains primary for common compressed cases; first-party Java supplies scoped stored, PPMd/mixed-LZ and RAR5-container streaming paths. The 3.8.9 backend and Java follow-ups do not imply complete RAR support; see [release notes](docs/GITHUB_RELEASE_NOTES_READWIDE_1_0_22.md).
 - CAB and LHA/LZH/PMA have read-only native routes. Linked CAB sets additionally use the scoped source-built libmspack decoder; LHA PM0 is limited to CRC-bearing level-0 stored entries, not PM1/PM2. Creation, password and universal multi-volume support are not claimed.
 - No manual `libarchive.so`, Junrar dependency, or optional local decoder jar is required. The checked-in libarchive-android 3.8.9 source module is compiled by Gradle and requires Android NDK 29.0.14206865 plus CMake 3.22.1.
 
@@ -59,8 +59,8 @@ Release APK packaging filters Android native ABIs to `armeabi-v7a` and `arm64-v8
 ## FOSS / F-Droid build boundary
 
 - The default source package contains no optional decoder jar under `app/libs`.
-- Release signing is conditional, so source-build review can run `assembleRelease` without a private developer keystore.
-- The 1.0.21 F-Droid build entry must declare `ndk: 29.0.14206865` and `buildjni: no`; Gradle/CMake performs the JNI build.
+- Release signing is conditional, so source-build review can run `assembleRelease` without a private signing keystore.
+- The 1.0.22 F-Droid build entry must declare `ndk: 29.0.14206865` and `buildjni: no`; Gradle/CMake performs the JNI build.
 - The vendored libarchive path `third_party/libarchive-android/library/src/main/jni/external/libarchive/build/cmake/` contains upstream CMake source modules despite its `build` directory name. `.gitignore` and source-ZIP filtering must retain it; omitting it makes CMake fail before native compilation.
-- `fdroid/metadata/com.readwide.manager.yml` is a historical local mirror. For an F-Droid merge request, start from current fdroiddata upstream and add only the 1.0.21 release, pinned to the final 40-character release commit hash.
+- `fdroid/metadata/com.readwide.manager.yml` is a historical local mirror through 1.0.21. For an F-Droid merge request, start from current fdroiddata upstream and add only the 1.0.22 release after its final tag exists, pinned to the final 40-character release commit hash.
 - If any local jar or native binary is added later, re-audit that custom build before describing it as FOSS.

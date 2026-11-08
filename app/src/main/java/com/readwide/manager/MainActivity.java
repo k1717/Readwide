@@ -475,14 +475,12 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     private final ActivityResultLauncher<Uri> safTreeLauncher =
             registerForActivityResult(new ActivityResultContracts.OpenDocumentTree(), uri -> {
                 if (uri == null) return;
-                if (!SafStorageAccess.takePersistableTreeGrant(this, uri)) {
+                if (!SafStorageAccess.selectTree(this, uri)) {
                     Log.w(STORAGE_LOG_TAG,
                             "The selected SAF tree did not grant persistable read access");
                     ShortToast.show(this, R.string.containing_folder_unavailable);
                     return;
                 }
-                SafStorageAccess.releasePreviousGrantIfDifferent(this, uri);
-                SafStorageAccess.rememberTree(this, uri);
                 rebuildDrawerStorageEntries();
                 launchSafBrowser(uri);
             });
@@ -575,6 +573,7 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     protected void onResume() {
         super.onResume();
         activityDestroyed = false;
+        cachedSdCards = null;
         if (awaitingUnlock) return;
         if (drawerLayout != null) {
             drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED, GravityCompat.START);
@@ -1223,7 +1222,8 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
                 showHomeMode();
                 break;
             case DrawerEntry.ACTION_INTERNAL: {
-                Uri providerTree = SafStorageAccess.getUsableTree(this);
+                Uri providerTree = isProviderStoragePrimary()
+                        ? SafStorageAccess.getUsableTree(this) : null;
                 if (providerTree != null) {
                     launchSafBrowser(providerTree);
                     break;
@@ -1246,6 +1246,10 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     boolean handleDrawerEntryLongClick(@NonNull DrawerEntry entry) {
+        if (entry.getActionType() == DrawerEntry.ACTION_EXTERNAL_SD) {
+            launchSafFolderAccess(true);
+            return true;
+        }
         if (entry.getActionType() == DrawerEntry.ACTION_INTERNAL
                 && isProviderStoragePrimary()) {
             launchSafFolderAccess(true);
@@ -1297,7 +1301,35 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
         if (chooseAgain) {
             initial = SafStorageAccess.getRememberedTree(this);
         }
-        safTreeLauncher.launch(initial);
+        try {
+            safTreeLauncher.launch(initial);
+        } catch (RuntimeException unavailable) {
+            ShortToast.show(this, R.string.containing_folder_unavailable);
+        }
+    }
+
+    boolean offerSafDeleteAccess(@NonNull java.util.List<File> failedItems) {
+        if (activityDestroyed || isFinishing() || isDestroyed()) return false;
+        if (!hasSharedStorageItem(failedItems)) return false;
+        showSimpleConfirmDialog(getString(R.string.delete_failed),
+                getString(R.string.saf_delete_access_message),
+                getString(R.string.saf_choose_folder), () -> launchSafFolderAccess(true));
+        return true;
+    }
+
+    boolean offerSafFileOperationAccess(@NonNull java.util.List<File> failedItems) {
+        if (activityDestroyed || isFinishing() || isDestroyed()) return false;
+        if (!hasSharedStorageItem(failedItems)) return false;
+        showSimpleConfirmDialog(getString(R.string.file_operation_failed),
+                getString(R.string.saf_transfer_access_message),
+                getString(R.string.saf_choose_folder), () -> launchSafFolderAccess(true));
+        return true;
+    }
+
+    private boolean hasSharedStorageItem(@NonNull java.util.List<File> items) {
+        cachedSdCards = null;
+        return com.readwide.manager.util.SharedStoragePaths.containsAny(
+                Environment.getExternalStorageDirectory(), detectExternalSdCards(), items);
     }
 
     private void launchSafBrowser(@NonNull Uri treeUri) {
@@ -1317,7 +1349,8 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
     }
 
     boolean isProviderStoragePrimary() {
-        return SafStorageAccess.getUsableTree(this) != null;
+        return !hasRawStorageBrowserAuthorization()
+                && SafStorageAccess.getUsableTree(this) != null;
     }
 
     boolean hasRawStorageBrowserAuthorization() {
@@ -1825,11 +1858,8 @@ public class MainActivity extends AppCompatActivity implements FileAdapter.OnFil
 
     void checkPermissionsAndInit() {
         Log.i(STORAGE_LOG_TAG, "Checking file-browser access; " + storageAccessDiagnosticSummary(null));
-        // A persisted SAF tree is a complete read path that does not require
-        // READ_EXTERNAL_STORAGE or MANAGE_EXTERNAL_STORAGE. Once the user has
-        // chosen this compatibility path, do not force the raw-storage permission
-        // screen again on later starts. The one Internal Storage drawer route
-        // becomes provider-backed until the persisted grant is replaced/revoked.
+        // A persisted tree can open documents without broad storage permission.
+        // Keep authorized raw shortcuts when a separate SD folder grant exists.
         if (SafStorageAccess.getUsableTree(this) != null) {
             Log.i(STORAGE_LOG_TAG, "Using persisted SAF tree access");
             onPermissionsGranted();

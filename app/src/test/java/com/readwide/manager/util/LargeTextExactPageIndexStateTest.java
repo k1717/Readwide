@@ -13,6 +13,67 @@ import org.junit.Test;
 import java.util.ArrayList;
 
 public class LargeTextExactPageIndexStateTest {
+    @Test public void failedSubmissionRetiresQueuedWorkAndAllowsSameSignatureRetry() {
+        LargeTextExactPageIndexState state = new LargeTextExactPageIndexState();
+        int rejected = state.beginBuild("same");
+        assertTrue(state.failCurrentBuild(rejected, "same", "submission failed"));
+        assertFalse(state.isCheckingCache());
+        assertTrue(state.isFailed());
+        assertEquals("submission failed", state.failureReason());
+        assertFalse(state.isGenerationCurrent(rejected));
+        assertFalse(state.beginCalculation(rejected, "same"));
+        assertFalse(state.completeCurrent(rejected, "same", anchors(0, 10), false, "").current);
+
+        int retry = state.beginBuild("same");
+        assertTrue(retry > rejected);
+        assertFalse(state.isFailed());
+        assertTrue(state.isCheckingCache());
+        assertTrue(state.completeCurrent(retry, "same", anchors(0, 100), false, "").ready);
+        assertEquals(2, state.readyPageCount());
+    }
+
+    @Test public void lateFailureCannotRetireReplacementOrAlreadyCompletedIndex() {
+        LargeTextExactPageIndexState state = new LargeTextExactPageIndexState();
+        int old = state.beginBuild("old");
+        int replacement = state.beginBuild("new");
+        assertFalse(state.failCurrentBuild(old, "old", "late failure"));
+        assertFalse(state.failCurrentBuild(replacement, "wrong", "wrong signature"));
+        assertTrue(state.isCheckingCache());
+        assertTrue(state.completeCurrent(replacement, "new", anchors(0, 100), false, "").ready);
+        assertFalse(state.failCurrentBuild(replacement, "new", "already delivered"));
+        assertTrue(state.isGenerationCurrent(replacement));
+        assertFalse(state.isFailed());
+        assertEquals(2, state.readyPageCount());
+    }
+
+    @Test public void failedCompletionAfterCalculationCanBeRetriedOnlyOnce() {
+        LargeTextExactPageIndexState state = new LargeTextExactPageIndexState();
+        int generation = state.beginBuild("layout");
+        assertTrue(state.beginCalculation(generation, "layout"));
+        assertTrue(state.failCurrentBuild(generation, "layout", "completion unavailable"));
+        assertFalse(state.failCurrentBuild(generation, "layout", "duplicate failure"));
+        assertEquals("completion unavailable", state.failureReason());
+        assertFalse(state.isReady());
+        assertTrue(state.beginBuild("layout") > generation);
+    }
+
+    @Test public void queuedBackwardTapsSnapToShortRowPageBeforeMovingFurtherBack() {
+        LargeTextExactPageIndexState state = new LargeTextExactPageIndexState();
+        int generation = state.beginBuild("layout");
+        state.completeCurrent(generation, "layout", anchors(0, 100, 200), false, "");
+        LargeTextExactPageIndexState.TapTarget first = state.tapTargetIfUsable("layout", 101, -1);
+        assertNotNull(first);
+        assertNotNull(first.anchor);
+        assertEquals(2, first.page);
+        assertEquals(100, first.anchor.charPosition);
+        LargeTextExactPageIndexState.TapTarget second =
+                state.tapTargetIfUsable("layout", first.anchor.charPosition, -1);
+        assertNotNull(second);
+        assertEquals(1, second.page);
+        assertEquals(1, state.tapTargetIfUsable("layout", 101, -2).page);
+        assertEquals(3, state.readyPageCount());
+    }
+
     @Test public void contentsLookupRequiresCurrentExactLayoutWithoutMutatingIt() {
         LargeTextExactPageIndexState state = new LargeTextExactPageIndexState();
         int generation = state.beginBuild("layout");

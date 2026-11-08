@@ -85,12 +85,12 @@ public class Rar4EncryptedPayloadRewriterTest {
     }
 
     private static byte[] rar4Header(int type, int flags, byte[] body) throws Exception {
-        return bytes(
-                uint16(0),
+        byte[] checked = bytes(
                 new byte[] {(byte) type},
                 uint16(flags),
                 uint16(7 + body.length),
                 body);
+        return bytes(uint16((int) crc32(checked)), checked);
     }
 
     private static long crc32(byte[] data) {

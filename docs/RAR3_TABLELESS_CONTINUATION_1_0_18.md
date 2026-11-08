@@ -1,18 +1,20 @@
 # RAR3/RAR4 classic-LZ table continuation — 1.0.18 — implementation history
 
-> Later batch twenty-two adds scoped mixed RAR dispatch, streaming LZ output,
+> Later changes add scoped mixed RAR dispatch, streaming LZ output,
 > checked plain solid admission and additional special-7z coders. See
-> [current scope](RAR_MIXED_AND_7Z_CODERS_1_0_18.md). The original stage below
-> is historical. Current build success is maintainer-reported; remaining tests
-> and device checks are tracked in [release readiness](RELEASE_READINESS_1_0_18.md).
+> [the later 1.0.18 RAR scope](DEV_CHANGES_1_0_18.md#rar3rar4-streaming-mixed-modes-and-standard-filters)
+> and [special-7z scope](DEV_CHANGES_1_0_18.md#streaming-and-split-special-7z-decoding).
+> The original stage below is historical. An earlier 1.0.18 build was reported
+> successful; the [validation record](DEV_CHANGES_1_0_18.md#validation-boundary)
+> distinguishes it from subsequent unverified changes.
 
-Archive batch nineteen, source-only. This changes the diagnostic solid sequence,
-not the production admission gate: libarchive remains primary, and the limited
-first-party classic-LZ fallback still requires a non-solid candidate.
+These source-only changes affect the diagnostic solid sequence. Production
+admission is unchanged: libarchive remains primary, and the limited first-party
+classic-LZ fallback still requires a non-solid candidate.
 Bulk extraction also uses this context infrastructure but resets it for each
 admitted independent entry; this does not admit solid archives into production.
 
-Later batch twenty streams classic-LZ packed input and corrects older PPMd
+Later changes stream classic-LZ packed input and correct older PPMd
 control state, but not mixed-mode dispatch or LZ output buffering; see
 [subsequent streaming changes](PPMD_LZ_STREAMING_GAPS_1_0_18.md).
 
@@ -47,7 +49,7 @@ not enable this new handoff. Trailing controls before EOF need further work.
 Mixed PPMd/LZ dispatch, general solid classic-LZ admission, classic-LZ input/output
 streaming, cross-entry filter scheduling and custom VM execution remain gaps.
 No archive-size cap, dependency, encryption algorithm or production fallback
-ordering was changed. No user-visible compatibility expansion is assured yet.
+ordering was changed. No additional production compatibility is established yet.
 
 ## Verification and provenance
 

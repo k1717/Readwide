@@ -22,18 +22,18 @@ public class RarVmFilterPipelineTest {
     }
 
     @Test
-    public void nonStandaloneFilterRemainsPreciseFirstPartyGap() throws Exception {
+    public void deltaDiagnosticPlanRequiresDecodedVmState() throws Exception {
         RarFilteredOutputBuffer output = new RarFilteredOutputBuffer(new ByteArrayOutputStream());
         RarVmFilterPipeline pipeline = new RarVmFilterPipeline(output);
 
         try {
             pipeline.queueStandaloneFilter(filterAt(0, RarVmFilter.StandardFilter.DELTA), 5, 0);
         } catch (RarArchiveReader.UnsupportedRarFeatureException expected) {
-            assertTrue(expected.getMessage().contains("VM filters"));
+            assertTrue(expected.getMessage().contains("diagnostic helper has no custom VM state"));
             assertTrue(expected.getMessage().contains("Delta"));
             return;
         }
-        throw new AssertionError("Delta VM filter must remain a precise first-party gap");
+        throw new AssertionError("Delta diagnostic plan must reject missing VM state");
     }
 
     private static RarVmFilter filterAt(long outputOffset,

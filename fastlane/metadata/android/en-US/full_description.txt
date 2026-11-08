@@ -6,10 +6,16 @@ TXT keeps an exact source-page reader model; Markdown uses a rendered WebView vi
 
 EPUB offers independent text size, spacing and alignment controls, searchable contents and marked-footnote text popups for supported books. Ready horizontal single-pane sections can show within-section progress; this is not an exact whole-book page count. Fixed-layout, image and vertical sections retain layout restrictions.
 
+Tap zones for document and image viewers can follow TXT or use their own proportions and horizontal/vertical orientation. Image display fits around visible controls without changing the decoded image.
+
+Settings > Security and folder permissions > Folder access keeps a list of authorized folders. Add folders from internal storage, SD cards or USB drives through Android's picker, open a registered folder or revoke its grant without deleting files. The provider and granted permissions determine which copy, move, rename, delete and new-folder actions are available. Permission changes do not automatically retry a failed operation.
+
 The default build does not request INTERNET permission and does not include ads, analytics, telemetry SDKs, Firebase, Google Play Services, an account system, cloud sync, an in-app update checker, or a developer-operated upload backend. Android Auto Backup is disabled. Broad file access is used for local file browsing and management of selected folders and files. Files opened into Readwide from other apps are copied into an app-private cache with filename sanitization, a path check, and a 2 GB per-file limit, and JSON backup import is capped at 256 MB.
 
 Read-aloud passes spoken text to the installed Android speech engine. A network-required voice can use that engine's online service; choose an offline voice for local synthesis. The engine's own data handling applies.
 
 JSON backups include reading metadata and durable TXT Contents options/manual/hidden entries, not document files, imported fonts or storage permissions. Path/content-bound records may not apply after moving or changing a document.
+
+Registered-folder locations are also excluded from JSON backups. A selected cloud-backed document provider may fetch or sync files using its own network permissions; that provider's data handling applies separately.
 
 Readwide uses the Android applicationId com.readwide.manager; older TextView Reader builds used com.textview.reader and install as a separate app. The F-Droid build is signed by F-Droid and does not update in place over Readwide APKs from GitHub, which use a different signing key. To switch builds, export a JSON backup from the old one, install the new one, then import the backup to restore bookmarks, reading positions, themes, and settings.

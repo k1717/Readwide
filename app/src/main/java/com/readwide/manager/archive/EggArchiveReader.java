@@ -1203,6 +1203,7 @@ final class EggArchiveReader {
             int offset = filenameOffset(entry.rawNameGpb);
             if (payload.length > offset) corpus.observe(payload, offset, payload.length - offset);
         }
+        boolean solidArchive = isSolid(entries);
         for (EggEntry entry : entries) {
             indexCheckpoint();
             byte[] payload = entry.rawNamePayload;
@@ -1212,6 +1213,15 @@ final class EggArchiveReader {
             entry.directory |= entry.path.endsWith("/");
             if (entry.directory && entry.uncompressedSize != 0) {
                 throw new IOException("EGG directory has file data");
+            }
+            if (entry.directory && !solidArchive) {
+                // Solid directory headers can own blocks shared by other entries.
+                for (EggBlock block : entry.blocks) {
+                    indexCheckpoint();
+                    if (block.uncompSize != 0) {
+                        throw new IOException("Non-solid EGG directory has block data");
+                    }
+                }
             }
             entry.rawNamePayload = null;
         }
@@ -1398,6 +1408,10 @@ final class EggArchiveReader {
         }
         long payloadStart = in.getFilePointer();
         long payloadEnd = checkedPayloadEnd(payloadStart, size, len);
+        if (fieldSig == MAGIC_ENCRYPT) {
+            payloadEnd = encryptionPayloadEnd(in, gpb, size, payloadEnd, len);
+            size = payloadEnd - payloadStart;
+        }
 
         if (fieldSig == MAGIC_FILENAME) {
             if (entry.rawNamePayload != null) throw new IOException("Duplicate EGG filename field");
@@ -1462,6 +1476,49 @@ final class EggArchiveReader {
         // Remaining length-delimited metadata is skipped.
 
         in.seek(payloadEnd);
+    }
+
+    private static long encryptionPayloadEnd(SplitVolumeInput in, int flags, long size,
+                                              long declaredEnd, long len) throws IOException {
+        long start = in.getFilePointer();
+        if (size == 0) return declaredEnd;
+        try {
+            int method = in.readUnsignedByte();
+            int fixedSize;
+            if (method == ENC_ZIPCRYPTO) fixedSize = 17;
+            else if (isAuthenticatedEncryption(method)) fixedSize = 1 + authenticatedKeyBits(method) / 16 + 2 + 10;
+            else return declaredEnd;
+            int prefixSize = (flags & 1) == 0 ? 7 : 9;
+            if (size != fixedSize + prefixSize) return declaredEnd;
+            long fixedEnd = checkedPayloadEnd(start, fixedSize, len);
+            if (len - fixedEnd < 4) return declaredEnd;
+            in.seek(fixedEnd);
+            if (readUInt32LE(in) != MAGIC_END) return declaredEnd;
+            // Some producers include the extra-field prefix in this size.
+            // A valid declared tail still wins, including opaque padded fields.
+            return hasFileHeaderTail(in, declaredEnd, len) ? declaredEnd : fixedEnd;
+        } finally {
+            in.seek(start);
+        }
+    }
+
+    private static boolean hasFileHeaderTail(SplitVolumeInput in, long offset, long len)
+            throws IOException {
+        in.seek(offset);
+        while (len - in.getFilePointer() >= 4) {
+            indexCheckpoint();
+            int sig = readUInt32LE(in);
+            if (sig == MAGIC_END || sig == MAGIC_BLOCK) return true;
+            if (len - in.getFilePointer() < 1) return false;
+            int flags = in.readUnsignedByte();
+            int sizeBytes = (flags & 1) == 0 ? 2 : 4;
+            if (len - in.getFilePointer() < sizeBytes) return false;
+            long size = sizeBytes == 2 ? readUInt16LE(in) : readUInt32LE(in) & 0xffffffffL;
+            long start = in.getFilePointer();
+            if (size > len - start) return false;
+            in.seek(start + size);
+        }
+        return false;
     }
 
     /** Validate declared metadata/payload windows without overflowing end-offset arithmetic. */
@@ -1801,7 +1858,7 @@ final class EggArchiveReader {
                                                 @Nullable FileOperationProgress progress) throws IOException {
         switch (block.method) {
             case COMP_STORE: return input;
-            case COMP_DEFLATE: return new OwnedDeflateInputStream(input, progress);
+            case COMP_DEFLATE: return OwnedDeflateInputStream.open(input, progress);
             case COMP_BZIP: return new ArchiveBzip2InputStream(input, progress);
             case COMP_LZMA: return openLzmaBlock(input, block, progress);
             case COMP_AZO:

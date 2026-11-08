@@ -10,9 +10,11 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -24,6 +26,45 @@ import java.util.UUID;
 public final class FileSystemOps {
 
     private static final int COPY_BUFFER_BYTES = 1024 * 64;
+
+    public enum TransferResult {
+        FAILED,
+        COMPLETED,
+        COPIED_SOURCE_REMAINS
+    }
+
+    interface SourceCheck {
+        void recheck() throws IOException;
+    }
+
+    public static final class OverwriteTarget {
+        private final File target;
+        private final DestinationParent parent;
+        private final DestinationSnapshot snapshot;
+
+        private OverwriteTarget(File target, DestinationParent parent,
+                                DestinationSnapshot snapshot) {
+            this.target = target.getAbsoluteFile();
+            this.parent = parent;
+            this.snapshot = snapshot;
+        }
+
+        public void recheck(File destination) throws IOException {
+            if (!target.equals(destination.getAbsoluteFile())) throw new IOException("Overwrite target changed");
+            parent.recheck();
+            snapshot.recheck(null);
+            parent.recheck();
+        }
+    }
+
+    public static OverwriteTarget captureOverwriteTarget(File target) throws IOException {
+        DestinationParent parent = DestinationParent.capture(target);
+        if (!FileTreeWalk.existsNoFollow(target)) throw new IOException("Overwrite target disappeared");
+        OverwriteTarget approval = new OverwriteTarget(target, parent,
+                DestinationSnapshot.capture(target, null));
+        approval.recheck(target);
+        return approval;
+    }
 
     private FileSystemOps() {
     }
@@ -65,7 +106,7 @@ public final class FileSystemOps {
         }
     }
 
-    private static boolean isSingleEntryName(String name) {
+    public static boolean isSingleEntryName(@NonNull String name) {
         return !name.isEmpty() && !name.equals(".") && !name.equals("..")
                 && name.indexOf('/') < 0 && name.indexOf('\\') < 0 && name.indexOf('\0') < 0;
     }
@@ -133,21 +174,46 @@ public final class FileSystemOps {
                                @Nullable FileOperationProgress progress,
                                boolean assignTotalBytes,
                                @Nullable FileTreeProgressTracker tracker) {
-        if (!canTransfer(source, destination, overwrite)
-                || (progress != null && !progress.checkpoint())) return false;
+        return moveWithResult(source, destination, overwrite, progress, assignTotalBytes, tracker)
+                == TransferResult.COMPLETED;
+    }
+
+    @NonNull
+    public static TransferResult moveWithResult(@NonNull File source,
+                                                @NonNull File destination,
+                                                boolean overwrite,
+                                                @Nullable FileOperationProgress progress,
+                                                boolean assignTotalBytes,
+                                                @Nullable FileTreeProgressTracker tracker) {
+        return moveWithResult(source, destination, overwrite, progress, assignTotalBytes, tracker, null);
+    }
+
+    static TransferResult moveWithResult(@NonNull File source, @NonNull File destination,
+                                         boolean overwrite, @Nullable FileOperationProgress progress,
+                                         boolean assignTotalBytes, @Nullable FileTreeProgressTracker tracker,
+                                         @Nullable SourceCheck sourceCheck) {
+        if (!canTransfer(source, destination, overwrite)) return TransferResult.FAILED;
+        DestinationParent destinationParent;
+        try { destinationParent = DestinationParent.capture(destination); }
+        catch (IOException | SecurityException unavailable) { return TransferResult.FAILED; }
+        if (progress != null && !progress.checkpoint()) return TransferResult.FAILED;
 
         if (progress != null) {
             if (tracker == null) tracker = FileTreeProgressTracker.create(progress, source);
-            if (!tracker.isReady()) return false;
+            if (!tracker.isReady()) return TransferResult.FAILED;
             if (assignTotalBytes) progress.setTotalBytes(tracker.totalBytes());
-            if (!progress.checkpoint()) return false;
+            if (!progress.checkpoint()) return TransferResult.FAILED;
         }
 
         try {
+            if (sourceCheck != null) sourceCheck.recheck();
+            destinationParent.recheck();
+            if (!canTransfer(source, destination, overwrite)) return TransferResult.FAILED;
             if (!FileTreeWalk.existsNoFollow(destination) && source.renameTo(destination)) {
                 // The rename is the commit point. Late cancellation must not turn
                 // a successful move into failure and lose its metadata updates.
-                return finishCommittedMove(source, tracker, progress, assignTotalBytes);
+                finishCommittedMove(source, tracker, progress, assignTotalBytes);
+                return TransferResult.COMPLETED;
             }
         } catch (IOException | SecurityException ignored) {
         }
@@ -155,15 +221,24 @@ public final class FileSystemOps {
         // Only the entries actually copied belong to the removal phase. A fresh
         // recursive delete would also erase files added while copying a folder.
         List<CopiedSourceEntry> copiedSources = new ArrayList<>();
-        boolean copied = stageAndCommit(source, destination, overwrite, progress, tracker, copiedSources);
-        if (!copied) return false;
+        CommittedDestination copiedDestination = new CommittedDestination(destination, destinationParent);
+        boolean copied = stageAndCommit(source, destination, overwrite, progress, tracker,
+                copiedSources, sourceCheck, destinationParent, copiedDestination);
+        if (!copied) return TransferResult.FAILED;
 
-        // The replacement is committed. A late cancellation keeps the source
-        // too; never remove it after a cancelled or incomplete staging copy.
-        if (progress != null && !progress.checkpoint()) return false;
-
-        boolean deleted = deleteCopiedSources(copiedSources, progress);
-        return deleted && finishCommittedMove(source, null, progress, assignTotalBytes);
+        try {
+            // A committed destination may contain the only copy of leaves already
+            // removed from the source. Never offer this as an ordinary overwrite retry.
+            if (progress != null && !progress.checkpoint()) return TransferResult.COPIED_SOURCE_REMAINS;
+            if (!deleteCopiedSources(copiedSources, copiedDestination, progress)) {
+                return TransferResult.COPIED_SOURCE_REMAINS;
+            }
+            finishCommittedMove(source, null, progress, assignTotalBytes);
+            return TransferResult.COMPLETED;
+        } catch (RuntimeException reportingFailure) {
+            ArchiveCancellation.restoreIfCancelled(reportingFailure, progress);
+            return TransferResult.COPIED_SOURCE_REMAINS;
+        }
     }
 
     private static boolean finishCommittedMove(File source, FileTreeProgressTracker tracker,
@@ -206,15 +281,26 @@ public final class FileSystemOps {
                                @Nullable FileOperationProgress progress,
                                boolean assignTotalBytes,
                                @Nullable FileTreeProgressTracker tracker) {
-        if (!canTransfer(source, destination, overwrite)
-                || (progress != null && !progress.checkpoint())) return false;
+        return copyWithSourceCheck(source, destination, overwrite, progress, assignTotalBytes, tracker, null);
+    }
+
+    static boolean copyWithSourceCheck(@NonNull File source, @NonNull File destination,
+                                       boolean overwrite, @Nullable FileOperationProgress progress,
+                                       boolean assignTotalBytes, @Nullable FileTreeProgressTracker tracker,
+                                       @Nullable SourceCheck sourceCheck) {
+        if (!canTransfer(source, destination, overwrite)) return false;
+        DestinationParent destinationParent;
+        try { destinationParent = DestinationParent.capture(destination); }
+        catch (IOException | SecurityException unavailable) { return false; }
+        if (progress != null && !progress.checkpoint()) return false;
         if (progress != null) {
             if (tracker == null) tracker = FileTreeProgressTracker.create(progress, source);
             if (!tracker.isReady()) return false;
             if (assignTotalBytes) progress.setTotalBytes(tracker.totalBytes());
             if (!progress.checkpoint()) return false;
         }
-        return stageAndCommit(source, destination, overwrite, progress, tracker, null);
+        return stageAndCommit(source, destination, overwrite, progress, tracker,
+                null, sourceCheck, destinationParent, null);
     }
 
     /** Reject either containment direction before creating or replacing anything. */
@@ -237,7 +323,9 @@ public final class FileSystemOps {
 
     private static boolean stageAndCommit(File source, File destination, boolean overwrite,
                                           FileOperationProgress progress, FileTreeProgressTracker tracker,
-                                          List<CopiedSourceEntry> copiedSources) {
+                                          List<CopiedSourceEntry> copiedSources, SourceCheck sourceCheck,
+                                          DestinationParent destinationParent,
+                                          CommittedDestination copiedDestination) {
         File parent = destination.getAbsoluteFile().getParentFile();
         File transaction = new File(parent, ".rwtransfer_" + UUID.randomUUID());
         File staged = new File(transaction, "replacement");
@@ -245,13 +333,29 @@ public final class FileSystemOps {
         boolean ownsTransaction = false;
         boolean backedUp = false;
         boolean committed = false;
+        DestinationSnapshot destinationSnapshot = null;
+        File transactionLocation = null;
+        FileTreeWalk.Entry transactionEntry = null;
         try {
+            destinationParent.recheck();
+            destinationSnapshot = DestinationSnapshot.capture(destination, progress);
             if (progress != null && !progress.checkpoint()) return false;
+            if (sourceCheck != null) sourceCheck.recheck();
+            destinationParent.recheck();
+            if (!canTransfer(source, destination, overwrite)) return false;
             if (!transaction.mkdir()) return false;
             ownsTransaction = true;
+            transactionLocation = transaction.getCanonicalFile();
+            transactionEntry = captureEntry(transaction);
             boolean copied = copyTree(source, staged, progress, tracker, copiedSources);
             if (!copied || (progress != null && !progress.checkpoint())) return false;
+            if (copiedDestination != null) copiedDestination.capture(staged, progress);
+            if (sourceCheck != null) sourceCheck.recheck();
+            destinationParent.recheck();
             if (!canTransfer(source, destination, overwrite)) return false;
+            destinationSnapshot.recheck(progress);
+            destinationParent.recheck();
+            transactionEntry.recheck();
 
             // Only rename after all streams have closed and staging succeeded.
             // Cancellation is intentionally not observed between these renames:
@@ -266,7 +370,7 @@ public final class FileSystemOps {
         } catch (IOException | SecurityException ignored) {
             return false;
         } finally {
-            if (ownsTransaction) {
+            if (ownsTransaction && ownsTransferDirectory(destinationParent, transactionEntry)) {
                 if (backedUp && !committed) {
                     // If rollback itself is denied, preserve previous in the
                     // transaction directory for recovery; never clean it away.
@@ -275,10 +379,217 @@ public final class FileSystemOps {
                     } catch (IOException | SecurityException ignored) { }
                 }
                 delete(staged);
-                if (committed) delete(previous);
+                if (committed && backedUp && destinationSnapshot != null) {
+                    destinationSnapshot.deleteBackup(previous, transactionLocation);
+                }
                 // Nonrecursive: a failed rollback/cleanup retains the backup.
                 try { transaction.delete(); } catch (SecurityException ignored) { }
             }
+        }
+    }
+
+    private static FileTreeWalk.Entry captureEntry(File file) throws IOException {
+        FileTreeWalk.Entry[] captured = {null};
+        FileTreeWalk.walk(file, () -> true, entry -> {
+            captured[0] = entry;
+            return false;
+        });
+        if (captured[0] == null) throw new IOException("Cannot inspect transfer path");
+        return captured[0];
+    }
+
+    private static boolean ownsTransferDirectory(DestinationParent parent, FileTreeWalk.Entry transaction) {
+        try {
+            if (transaction == null) return false;
+            parent.recheck();
+            transaction.recheck();
+            return transaction.kind == FileTreeWalk.Kind.DIRECTORY;
+        } catch (IOException | SecurityException changed) {
+            return false;
+        }
+    }
+
+    private static final class DestinationParent {
+        private final File path;
+        private final File canonical;
+        private final FileTreeWalk.Entry entry;
+
+        private DestinationParent(File path, File canonical, FileTreeWalk.Entry entry) {
+            this.path = path;
+            this.canonical = canonical;
+            this.entry = entry;
+        }
+
+        static DestinationParent capture(File destination) throws IOException {
+            File path = destination.getAbsoluteFile().getParentFile();
+            if (path == null) throw new IOException("Destination has no parent");
+            File canonical = path.getCanonicalFile();
+            FileTreeWalk.Entry entry = captureEntry(canonical);
+            if (entry.kind != FileTreeWalk.Kind.DIRECTORY) throw new IOException("Destination parent unavailable");
+            DestinationParent parent = new DestinationParent(path, canonical, entry);
+            parent.recheck();
+            return parent;
+        }
+
+        void recheck() throws IOException {
+            if (!canonical.equals(path.getCanonicalFile())) throw new IOException("Destination parent changed");
+            entry.recheck();
+        }
+    }
+
+    private static final class DestinationSnapshot {
+        private final List<DestinationEntry> entries = new ArrayList<>();
+
+        static DestinationSnapshot capture(File destination, FileOperationProgress progress) throws IOException {
+            DestinationSnapshot snapshot = new DestinationSnapshot();
+            boolean complete = FileTreeWalk.walk(destination,
+                    () -> !Thread.currentThread().isInterrupted()
+                            && (progress == null || progress.checkpoint()), entry -> {
+                        snapshot.entries.add(new DestinationEntry(entry));
+                        return true;
+                    });
+            if (!complete || snapshot.entries.isEmpty()) throw new IOException("Cannot inspect overwrite destination");
+            snapshot.recheck(progress);
+            return snapshot;
+        }
+
+        void recheck(FileOperationProgress progress) throws IOException {
+            for (DestinationEntry entry : entries) {
+                if (Thread.currentThread().isInterrupted()
+                        || (progress != null && !progress.checkpoint())) {
+                    throw new java.io.InterruptedIOException("Overwrite cancelled");
+                }
+                entry.recheck();
+            }
+        }
+
+        void deleteBackup(File root, File transactionLocation) {
+            try {
+                if (transactionLocation == null) return;
+                File expectedRoot = new File(transactionLocation, root.getName());
+                for (DestinationEntry entry : entries) entry.recheckAt(root, expectedRoot, true);
+                for (int i = entries.size() - 1; i >= 0; i--) {
+                    // New children never become cleanup targets. A changed backup
+                    // stays in the transaction directory for recovery.
+                    entries.get(0).recheckAt(root, expectedRoot, false);
+                    DestinationEntry entry = entries.get(i);
+                    entry.recheckAt(root, expectedRoot, false);
+                    if (!entry.relocated(root).delete()) return;
+                }
+            } catch (IOException | SecurityException changed) {
+                // The replacement is committed; preserve the uncertain backup.
+            }
+        }
+    }
+
+    private static final class CommittedDestination {
+        private final File root;
+        private final File expectedRoot;
+        private final DestinationParent parent;
+        private final Map<String, DestinationEntry> entries = new HashMap<>();
+        private DestinationSnapshot snapshot;
+
+        CommittedDestination(File root, DestinationParent parent) {
+            this.root = root;
+            this.parent = parent;
+            expectedRoot = new File(parent.canonical, root.getName());
+        }
+
+        void capture(File staged, FileOperationProgress progress) throws IOException {
+            snapshot = DestinationSnapshot.capture(staged, progress);
+            for (DestinationEntry entry : snapshot.entries) entries.put(entry.entry.relative, entry);
+        }
+
+        void recheckAll(FileOperationProgress progress) throws IOException {
+            if (snapshot == null) throw new IOException("Copied destination was not captured");
+            parent.recheck();
+            for (DestinationEntry entry : snapshot.entries) {
+                if (progress != null && !progress.checkpoint()) {
+                    throw new java.io.InterruptedIOException("Move cancelled");
+                }
+                parent.recheck();
+                entry.recheckAt(root, expectedRoot, true);
+            }
+            parent.recheck();
+        }
+
+        void recheck(String relative) throws IOException {
+            DestinationEntry rootEntry = entries.get("");
+            DestinationEntry entry = entries.get(relative);
+            if (rootEntry == null || entry == null) throw new IOException("Copied destination is incomplete");
+            parent.recheck();
+            rootEntry.recheckAt(root, expectedRoot, false);
+            entry.recheckAt(root, expectedRoot, true);
+            parent.recheck();
+        }
+    }
+
+    private static final class DestinationEntry {
+        private final FileTreeWalk.Entry entry;
+        private final FileMutationGuard fileGuard;
+        private final String[] children;
+
+        DestinationEntry(FileTreeWalk.Entry entry) throws IOException {
+            this.entry = entry;
+            if (entry.kind != FileTreeWalk.Kind.MISSING && entry.identity == null) {
+                throw new IOException("Cannot identify overwrite destination");
+            }
+            fileGuard = entry.kind == FileTreeWalk.Kind.FILE
+                    ? FileMutationGuard.capture(entry.file) : null;
+            children = entry.kind == FileTreeWalk.Kind.DIRECTORY ? sortedChildren(entry.file) : null;
+            recheck();
+        }
+
+        void recheck() throws IOException {
+            entry.recheck();
+            if (fileGuard != null) fileGuard.recheck();
+            if (children != null && !Arrays.equals(children, sortedChildren(entry.file))) {
+                throw new IOException("Overwrite destination children changed");
+            }
+            entry.recheck();
+        }
+
+        File relocated(File root) {
+            return entry.relative.isEmpty() ? root : new File(root, entry.relative);
+        }
+
+        void recheckAt(File root, File expectedRoot, boolean checkChildren) throws IOException {
+            File candidate = relocated(root);
+            File expectedParent = relocated(expectedRoot).getAbsoluteFile().getParentFile();
+            checkParent(candidate, expectedParent);
+            FileTreeWalk.Entry[] current = {null};
+            FileTreeWalk.walk(candidate, () -> true, item -> {
+                current[0] = item;
+                return false;
+            });
+            if (current[0] == null || current[0].kind != entry.kind
+                    || !Objects.equals(current[0].identity, entry.identity)) {
+                throw new IOException("Overwrite backup replaced");
+            }
+            if (fileGuard != null) {
+                // Renaming the root changes its ctime; child file stamps do not change.
+                fileGuard.recheckAt(candidate, entry.relative.isEmpty());
+            }
+            if (checkChildren && children != null
+                    && !Arrays.equals(children, sortedChildren(candidate))) {
+                throw new IOException("Overwrite backup children changed");
+            }
+            current[0].recheck();
+            checkParent(candidate, expectedParent);
+        }
+
+        private static void checkParent(File candidate, File expectedParent) throws IOException {
+            File parent = candidate.getAbsoluteFile().getParentFile();
+            if (parent == null || !parent.getCanonicalFile().equals(expectedParent)) {
+                throw new IOException("Overwrite backup parent changed");
+            }
+        }
+
+        private static String[] sortedChildren(File directory) throws IOException {
+            String[] names = directory.list();
+            if (names == null) throw new IOException("Cannot list overwrite destination");
+            Arrays.sort(names);
+            return names;
         }
     }
 
@@ -423,8 +734,10 @@ public final class FileSystemOps {
     }
 
     private static boolean deleteCopiedSources(List<CopiedSourceEntry> copiedSources,
+                                                CommittedDestination copiedDestination,
                                                 FileOperationProgress progress) {
         try {
+            copiedDestination.recheckAll(progress);
             Map<File, Integer> copiedChildCounts = new HashMap<>();
             for (CopiedSourceEntry copied : copiedSources) {
                 File parent = copied.entry.file.getAbsoluteFile().getParentFile();
@@ -446,6 +759,9 @@ public final class FileSystemOps {
             for (int i = copiedSources.size() - 1; i >= 0; i--) {
                 if (progress != null && !progress.checkpoint()) return false;
                 CopiedSourceEntry copied = copiedSources.get(i);
+                // A pause or volume detach can invalidate a previously committed copy.
+                // Check only its matching output here; the full tree was checked above.
+                copiedDestination.recheck(copied.entry.relative);
                 copied.recheck();
                 if (!copied.entry.file.delete()) return false;
             }
@@ -506,6 +822,9 @@ public final class FileSystemOps {
                 if (progress != null && !progress.checkpoint()) {
                     cancelled = true;
                     break;
+                }
+                if (read > expectedBytes - writtenBytes) {
+                    throw new IOException("Source grew during copy");
                 }
                 out.write(buffer, 0, read);
                 writtenBytes += read;

@@ -6,19 +6,14 @@ import androidx.annotation.Nullable;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.util.zip.CRC32;
 
 /**
- * Detects RAR archives whose headers are encrypted before the normal entry parser can see
- * file blocks.
+ * Detects encrypted RAR headers before entry parsing.
  *
- * <p>This helper only detects the encrypted-header mode. RAR3/RAR4 header block decryption lives in
- * {@link Rar4HeaderEncryptedArchiveRewriter}; RAR5 header encryption ({@code -hp}) is decrypted
- * first party inside {@code RarArchiveReader.readRar5Entries} (the bundled libarchive backend cannot
- * decrypt RAR5 headers - it reports "Encryption is not supported", verified against a real WinRAR
- * 7.00 {@code -hp} file - so first party is the only path). With that in place a RAR5 archive only
- * reaches this detector when header decryption itself failed after a correct password check, which
- * indicates a parser gap rather than a missing capability. Keeping detection separate prevents
- * password-required checks from depending on successful entry parsing.</p>
+ * <p>RAR3/RAR4 headers are decrypted by {@link Rar4HeaderEncryptedArchiveRewriter};
+ * RAR5 headers are decrypted inside {@code RarArchiveReader.readRar5Entries}.
+ * This probe does not verify passwords or decrypt headers.</p>
  */
 final class RarHeaderEncryptionDetector {
     private static final int RAR4_HEADER_MAIN = 0x73;
@@ -51,10 +46,6 @@ final class RarHeaderEncryptionDetector {
 
     /**
      * @return 4 or 5 for the first volume whose headers are encrypted, or 0 if none is.
-     *     Lets callers phrase the failure precisely: RAR4 {@code -hp} has a first-party
-     *     header rewriter, while RAR5 {@code -hp} has a first-party header decryptor in
-     *     {@code RarArchiveReader}. Reaching this detector with a password therefore means
-     *     the corresponding first-party parser failed; libarchive cannot decrypt RAR5 headers.
      */
     static int headerEncryptedRarVersion(@NonNull File archive) throws IOException {
         for (File volume : RarArchiveLocator.collectVolumes(archive)) {
@@ -82,7 +73,7 @@ final class RarHeaderEncryptionDetector {
         }
         String message = version == 5
                 ? "RAR5 header-encrypted (-hp) archive could not be read: the first-party header "
-                    + "decryptor accepted the password but could not parse the decrypted headers, and the "
+                    + "parser could not read the headers, and the "
                     + "bundled libarchive backend cannot decrypt RAR5 headers at all"
                 : "RAR4 header-encrypted (-hp) archive could not be handled by the first-party header rewriter or libarchive";
         if (backendFailure != null && backendFailure.getMessage() != null && !backendFailure.getMessage().isEmpty()) {
@@ -97,23 +88,39 @@ final class RarHeaderEncryptionDetector {
         while (raf.getFilePointer() < raf.length()) {
             long headerStart = raf.getFilePointer();
             if (raf.length() - headerStart < 7) return false;
-            readUInt16LE(raf); // CRC.
+            int headerCrc = readUInt16LE(raf);
             int type = raf.readUnsignedByte();
             int flags = readUInt16LE(raf);
             int headerSize = readUInt16LE(raf);
             if (headerSize < 7 || headerStart + headerSize > raf.length()) return false;
-            if (type == RAR4_HEADER_MAIN && (flags & RAR4_MAIN_PASSWORD) != 0) return true;
+            if (type == RAR4_HEADER_MAIN && (flags & RAR4_MAIN_PASSWORD) != 0) {
+                byte[] body = new byte[headerSize - 7];
+                raf.readFully(body);
+                try {
+                    Rar4HeaderChecksum.verify(headerCrc, type, flags, body);
+                } catch (IOException invalidHeader) {
+                    return false;
+                }
+                return true;
+            }
             long dataSize = 0L;
-            if ((flags & RAR4_LONG_BLOCK) != 0) {
+            if (type == 0x74 || type == 0x7a) {
+                int fixedSize = (flags & 0x0100) != 0 ? 33 : 25;
+                if (headerSize - 7 < fixedSize) return false;
+                byte[] fixed = new byte[fixedSize];
+                raf.readFully(fixed);
+                try {
+                    dataSize = Rar4BlockSize.packedSize(flags, fixed, 0);
+                } catch (IOException invalidSize) {
+                    return false;
+                }
+            } else if ((flags & RAR4_LONG_BLOCK) != 0) {
                 if (headerSize - 7 < 4) return false;
                 dataSize = readUInt32LE(raf);
-                raf.seek(headerStart + headerSize);
-            } else {
-                raf.seek(headerStart + headerSize);
             }
-            long next = headerStart + headerSize + dataSize;
-            if (next < headerStart || next > raf.length()) return false;
-            raf.seek(next);
+            long dataOffset = headerStart + headerSize;
+            if (dataSize < 0L || dataSize > raf.length() - dataOffset) return false;
+            raf.seek(dataOffset + dataSize);
             if (type == RAR4_HEADER_END) return false;
         }
         return false;
@@ -123,21 +130,26 @@ final class RarHeaderEncryptionDetector {
         while (raf.getFilePointer() < raf.length()) {
             long headerStart = raf.getFilePointer();
             if (raf.length() - headerStart < 5) return false;
-            skipUInt32LE(raf); // Header CRC.
+            long headerCrc = readUInt32LE(raf);
             VInt headerSize = readVInt(raf);
             if (headerSize.value < 0 || headerSize.value > 2L * 1024L * 1024L) return false;
             if (headerSize.value > raf.length() - raf.getFilePointer()) return false;
             byte[] headerData = new byte[(int) headerSize.value];
             raf.readFully(headerData);
+            CRC32 crc = new CRC32();
+            crc.update(headerSize.encoded);
+            crc.update(headerData);
+            if (crc.getValue() != headerCrc) return false;
             ByteCursor cursor = new ByteCursor(headerData);
-            int type = (int) cursor.readVInt();
+            long type = cursor.readVInt();
             long flags = cursor.readVInt();
-            if (type == RAR5_HEADER_ENCRYPTION) return true;
-            if ((flags & RAR5_HEADER_FLAG_EXTRA) != 0) cursor.readVInt();
+            long extraSize = (flags & RAR5_HEADER_FLAG_EXTRA) != 0 ? cursor.readVInt() : 0L;
             long dataSize = (flags & RAR5_HEADER_FLAG_DATA) != 0 ? cursor.readVInt() : 0L;
-            long next = raf.getFilePointer() + dataSize;
-            if (next < raf.getFilePointer() || next > raf.length()) return false;
-            raf.seek(next);
+            if (extraSize < 0L || extraSize > headerData.length - cursor.position) return false;
+            long dataOffset = raf.getFilePointer();
+            if (dataSize < 0L || dataSize > raf.length() - dataOffset) return false;
+            if (type == RAR5_HEADER_ENCRYPTION) return true;
+            raf.seek(dataOffset + dataSize);
             if (type == RAR5_HEADER_FILE || type == RAR5_HEADER_END) return false;
         }
         return false;
@@ -157,10 +169,6 @@ final class RarHeaderEncryptionDetector {
         return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
     }
 
-    private static void skipUInt32LE(@NonNull RandomAccessFile in) throws IOException {
-        in.skipBytes(4);
-    }
-
     @NonNull
     private static VInt readVInt(@NonNull RandomAccessFile in) throws IOException {
         long value = 0L;
@@ -169,6 +177,7 @@ final class RarHeaderEncryptionDetector {
         int count = 0;
         while (count < encoded.length) {
             int b = in.readUnsignedByte();
+            checkVIntByte(b, count);
             encoded[count++] = (byte) b;
             value |= (long) (b & 0x7f) << shift;
             if ((b & 0x80) == 0) {
@@ -181,9 +190,16 @@ final class RarHeaderEncryptionDetector {
         throw new IOException("Invalid RAR vint");
     }
 
+    private static void checkVIntByte(int value, int index) throws IOException {
+        // Padded encodings are valid; byte ten has only one data bit left.
+        if (index == 9 && (value & 0xfe) != 0) {
+            throw new IOException((value & 0x80) != 0 ? "RAR vint is too long" : "RAR vint overflow");
+        }
+    }
+
     private static final class VInt {
         final long value;
-        @SuppressWarnings("unused") final byte[] encoded;
+        final byte[] encoded;
 
         VInt(long value, @NonNull byte[] encoded) {
             this.value = value;
@@ -205,6 +221,7 @@ final class RarHeaderEncryptionDetector {
             for (int i = 0; i < 10; i++) {
                 if (position >= data.length) throw new IOException("Unexpected EOF in RAR header");
                 int b = data[position++] & 0xff;
+                checkVIntByte(b, i);
                 value |= (long) (b & 0x7f) << shift;
                 if ((b & 0x80) == 0) return value;
                 shift += 7;

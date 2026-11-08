@@ -10,7 +10,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.util.List;
-import java.util.zip.CRC32;
 
 /**
  * Rebuilds a plain RAR3/RAR4 split file entry as a temporary single-volume RAR4 archive.
@@ -86,7 +85,7 @@ final class Rar4SplitPayloadRewriter {
                 Rar4EncryptedPayloadRewriter.checkpoint(progress);
                 long headerStart = in.getFilePointer();
                 if (in.length() - headerStart < 7) break;
-                readUInt16LE(in); // source CRC is advisory; rewritten header CRC is recalculated.
+                int headerCrc = readUInt16LE(in);
                 int type = in.readUnsignedByte();
                 int flags = readUInt16LE(in);
                 int headerSize = readUInt16LE(in);
@@ -95,6 +94,7 @@ final class Rar4SplitPayloadRewriter {
                 }
                 byte[] headerData = new byte[headerSize - 7];
                 in.readFully(headerData);
+                Rar4HeaderChecksum.verify(headerCrc, type, flags, headerData);
                 long currentDataOffset = headerStart + headerSize;
                 long dataSize = type == RAR4_HEADER_FILE
                         ? parseFileBlock(flags, headerData).packedSize
@@ -199,14 +199,7 @@ final class Rar4SplitPayloadRewriter {
                                         int flags,
                                         @NonNull byte[] headerData) throws IOException {
         int size = 7 + headerData.length;
-        CRC32 crc32 = new CRC32();
-        crc32.update(type & 0xff);
-        crc32.update(flags & 0xff);
-        crc32.update((flags >>> 8) & 0xff);
-        crc32.update(size & 0xff);
-        crc32.update((size >>> 8) & 0xff);
-        crc32.update(headerData, 0, headerData.length);
-        writeUInt16LE(out, (int) crc32.getValue() & 0xffff);
+        writeUInt16LE(out, Rar4HeaderChecksum.calculate(type, flags, headerData));
         out.write(type & 0xff);
         writeUInt16LE(out, flags);
         writeUInt16LE(out, size);

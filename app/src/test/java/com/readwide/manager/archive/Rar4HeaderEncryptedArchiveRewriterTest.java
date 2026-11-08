@@ -111,6 +111,7 @@ public class Rar4HeaderEncryptedArchiveRewriterTest {
             out.write(salt);
             out.write(encryptedFileHeader);
             out.write(encryptedPayload);
+            out.write(salt);
             out.write(encryptedEndHeader);
         }
         return archive;
@@ -121,16 +122,20 @@ public class Rar4HeaderEncryptedArchiveRewriterTest {
         File archive = compressedArchive(password, new byte[]{'A','B'});
         File spool = tempFolder.newFolder("spool");
         int originalCount = tempFolder.getRoot().list().length;
+        File headerCopy;
         try (ArchiveSupport.ForwardArchiveReader reader = Rar3PpmdSolidArchiveExtractor.openForwardReader(
                 archive, password, spool, true)) {
             assertNotNull(reader);
-            assertTrue(tempFolder.getRoot().list().length > originalCount);
+            headerCopy = ownedHeaderCopy(reader);
+            assertTrue(headerCopy.isFile());
+            assertFalse(archive.equals(headerCopy));
             assertNotNull(reader.nextEntry());
             byte[] bytes = new byte[8];
             assertEquals(2, reader.read(bytes));
             assertArrayEquals(new byte[]{'A','B'}, Arrays.copyOf(bytes, 2));
             assertNull(reader.nextEntry());
         }
+        assertFalse(headerCopy.exists());
         assertEquals(originalCount, tempFolder.getRoot().list().length);
         assertEquals(0, spool.list().length);
         assertTrue(archive.isFile());
@@ -144,7 +149,10 @@ public class Rar4HeaderEncryptedArchiveRewriterTest {
         ArchiveSupport.ForwardArchiveReader reader = RarHeaderEncryptedArchiveSupport.openForwardReader(
                 archive, password, spool, true);
         assertNotNull(reader);
+        File headerCopy = ownedHeaderCopy(reader);
+        assertTrue(headerCopy.isFile());
         reader.close(); reader.close();
+        assertFalse(headerCopy.exists());
         assertThrows(IOException.class, () -> reader.nextEntry());
         assertEquals(originalCount, tempFolder.getRoot().list().length);
         assertTrue(archive.isFile());
@@ -158,10 +166,13 @@ public class Rar4HeaderEncryptedArchiveRewriterTest {
         try (ArchiveSupport.ForwardArchiveReader reader = RarHeaderEncryptedArchiveSupport.openForwardReader(
                 archive, password, spool, true)) {
             assertNotNull(reader);
+            File headerCopy = ownedHeaderCopy(reader);
+            assertTrue(headerCopy.isFile());
             reader.nextEntry();
             byte[] bytes = {42,42};
             assertThrows(IOException.class, () -> reader.read(bytes));
             assertArrayEquals(new byte[]{42,42}, bytes);
+            assertFalse(headerCopy.exists());
             assertEquals(originalCount, tempFolder.getRoot().list().length);
             assertEquals(0, spool.list().length);
         }
@@ -192,9 +203,12 @@ public class Rar4HeaderEncryptedArchiveRewriterTest {
         int originalCount = tempFolder.getRoot().list().length;
         try (ArchiveSupport.ForwardArchiveReader reader = RarHeaderEncryptedArchiveSupport.openForwardReader(
                 archive, password, spool, true)) {
+            File headerCopy = ownedHeaderCopy(reader);
+            assertTrue(headerCopy.isFile());
             reader.nextEntry();
             assertThrows(IOException.class, () -> reader.drainCurrentEntry(1));
             assertThrows(IOException.class, () -> reader.nextEntry());
+            assertFalse(headerCopy.exists());
             assertEquals(originalCount, tempFolder.getRoot().list().length);
         }
     }
@@ -220,6 +234,16 @@ public class Rar4HeaderEncryptedArchiveRewriterTest {
     private File compressedArchive(char[] password, byte[] expected) throws Exception {
         return buildHeaderEncryptedArchive("selected.bin", expected,
                 Rar3FirstPartyArchiveExtractorTest.independentLzFixture(), 0x33, password);
+    }
+
+    private static File ownedHeaderCopy(ArchiveSupport.ForwardArchiveReader reader) throws Exception {
+        // Single-volume copies use java.io.tmpdir, not the archive's directory.
+        java.lang.reflect.Field chainField = reader.getClass().getDeclaredField("chain");
+        chainField.setAccessible(true);
+        Object chain = chainField.get(reader);
+        java.lang.reflect.Field fileField = chain.getClass().getDeclaredField("firstVolume");
+        fileField.setAccessible(true);
+        return (File) fileField.get(chain);
     }
 
     private static byte[] encryptHeaderBlock(char[] password, byte[] salt, byte[] header) throws Exception {

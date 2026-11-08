@@ -388,6 +388,9 @@ final class AlzipArchiveReader {
             // access excludes it, but bulk must not silently report partial success.
             if (path == null) path = rawPath;
             boolean directory = (pending.fileAttribute & ALZ_FILEATTR_DIRECTORY) != 0 || path.endsWith("/");
+            if (directory && pending.uncompressedSize != 0L) {
+                throw new IOException("ALZ directory entry has nonzero data size");
+            }
             entries.add(new AlzEntry(path, directory, pending.method, pending.encrypted, pending.hasDescriptor,
                     pending.crc, pending.compressedSize, pending.uncompressedSize, pending.dataOffset,
                     pending.encryptedHeader, pending.timeMillis));
@@ -535,7 +538,7 @@ final class AlzipArchiveReader {
         try {
             if (method == COMP_STORED) return payload;
             if (method == COMP_DEFLATE) {
-                return new OwnedDeflateInputStream(payload, progress);
+                return OwnedDeflateInputStream.open(payload, progress);
             }
             if (method == COMP_BZIP2) {
                 return openAlzBzipStream(payload, progress);

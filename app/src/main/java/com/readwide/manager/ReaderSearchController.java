@@ -9,6 +9,7 @@ import androidx.annotation.Nullable;
 import com.readwide.manager.search.LargeTextSearchResult;
 import com.readwide.manager.util.SearchOptions;
 import com.readwide.manager.util.TextMatchIndex;
+import com.readwide.manager.util.TaskSubmission;
 
 import java.io.File;
 import java.io.IOException;
@@ -17,7 +18,7 @@ import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.Future;
-import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -95,6 +96,11 @@ final class ReaderSearchController {
 
     void startLargeTextSearchTotalCountInBackground(@NonNull String query,
                                                             @Nullable TextView matchStatus) {
+        startLargeTextSearchTotalCountInBackground(query, matchStatus, activity.largeTextSearchCountExecutor);
+    }
+
+    void startLargeTextSearchTotalCountInBackground(@NonNull String query,
+                                                    @Nullable TextView matchStatus, Executor worker) {
         if (!activity.largeTextEstimateActive || activity.filePath == null || query.isEmpty()) return;
         if (!activity.ensureLoadedTextCurrent()) return;
         if (getCachedLargeTextSearchTotal(query) >= 0) return;
@@ -112,54 +118,60 @@ final class ReaderSearchController {
         activity.largeTextSearchTotalCache.markInFlight(expectedPath, query, generation, optionsSignature);
         inFlightCountGeneration = countGeneration;
 
-        activity.largeTextSearchCountExecutor.execute(() -> {
-            int total = -1;
-            boolean countFailed = false;
-            try {
-                total = activity.largeTextSearchEngine.countMatches(new File(expectedPath), query, countOptions,
-                        activity.largeTextActiveCollapseBlankLines,
-                        () -> activity.activityDestroyed
-                                || generation != activity.loadGeneration.get()
-                                || expectedPath == null
-                                || !expectedPath.equals(activity.filePath)
-                                || countGeneration != activity.largeTextSearchCountGeneration.get());
-            } catch (IOException | RuntimeException | OutOfMemoryError | StackOverflowError t) {
-                // Counting is optional background work, but execute() otherwise
-                // lets decoder/allocation or regex-stack errors escape the worker.
-                // Keep the total unknown and release this request below so Find
-                // can recover after a failed count without publishing a false zero.
-                countFailed = true;
-            }
-
-            final int finalTotal = total;
-            final boolean finalCountFailed = countFailed;
-            activity.handler.post(() -> {
-                // A retry can have exactly the same path/query/load/options.
-                // The superseded callback must not clear that newer request's ticket.
-                // Cancellation without a replacement may still release its own
-                // ticket; a newer request changes this owner before being queued.
-                if (countGeneration == inFlightCountGeneration) {
-                    activity.largeTextSearchTotalCache.clearInFlightIf(expectedPath, query, generation, optionsSignature);
-                    inFlightCountGeneration = -1;
+        try {
+            TaskSubmission.submit(worker, () -> {
+                int total = -1;
+                boolean countFailed = false;
+                try {
+                    total = activity.largeTextSearchEngine.countMatches(new File(expectedPath), query, countOptions,
+                            activity.largeTextActiveCollapseBlankLines,
+                            () -> activity.activityDestroyed
+                                    || generation != activity.loadGeneration.get()
+                                    || expectedPath == null
+                                    || !expectedPath.equals(activity.filePath)
+                                    || countGeneration != activity.largeTextSearchCountGeneration.get());
+                } catch (IOException | RuntimeException | OutOfMemoryError | StackOverflowError t) {
+                    // Release the failed request without publishing a false zero.
+                    countFailed = true;
                 }
 
-                if (activity.activityDestroyed
-                        || generation != activity.loadGeneration.get()
-                        || countGeneration != activity.largeTextSearchCountGeneration.get()
-                        || !expectedPath.equals(activity.filePath)
-                        || !query.equals(activity.activeSearchQuery)) {
-                    return;
-                }
+                final int finalTotal = total;
+                final boolean finalCountFailed = countFailed;
+                activity.handler.post(() -> {
+                    // A retry can have exactly the same path/query/load/options.
+                    // The superseded callback must not clear that newer request's ticket.
+                    // Cancellation without a replacement may still release its own
+                    // ticket; a newer request changes this owner before being queued.
+                    if (countGeneration == inFlightCountGeneration) {
+                        activity.largeTextSearchTotalCache.clearInFlightIf(expectedPath, query, generation, optionsSignature);
+                        inFlightCountGeneration = -1;
+                    }
 
-                if (!activity.ensureLoadedTextCurrent()) return;
-                if (finalCountFailed || finalTotal < 0) {
-                    return;
-                }
+                    if (activity.activityDestroyed
+                            || generation != activity.loadGeneration.get()
+                            || countGeneration != activity.largeTextSearchCountGeneration.get()
+                            || !expectedPath.equals(activity.filePath)
+                            || !query.equals(activity.activeSearchQuery)) {
+                        return;
+                    }
 
-                rememberLargeTextSearchTotal(query, optionsSignature, finalTotal);
-                updateLargeTextSearchStatus(matchStatus, activity.activeSearchOrdinal, finalTotal);
+                    if (!activity.ensureLoadedTextCurrent()) return;
+                    if (finalCountFailed || finalTotal < 0) {
+                        return;
+                    }
+
+                    rememberLargeTextSearchTotal(query, optionsSignature, finalTotal);
+                    updateLargeTextSearchStatus(matchStatus, activity.activeSearchOrdinal, finalTotal);
+                });
             });
-        });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            activity.largeTextSearchCountGeneration.compareAndSet(countGeneration, countGeneration + 1);
+            if (countGeneration == inFlightCountGeneration) {
+                activity.largeTextSearchTotalCache.clearInFlightIf(expectedPath, query, generation, optionsSignature);
+                inFlightCountGeneration = -1;
+            }
+            // Keep the previous counter. A failed count is still unknown, not zero.
+        }
     }
 
     LargeTextSearchResult searchCurrentLargeTextPartitionInstant(@NonNull String query,
@@ -286,107 +298,116 @@ final class ReaderSearchController {
 
         // Keep the previous match counter visible while the background search runs.
         // Replacing it with an ellipsis made the header visibly blink on every next/previous search.
-        activity.largeTextSearchExecutor.execute(() -> {
-            LargeTextSearchResult result;
-            String error = null;
-            try {
-                File searchFile = new File(expectedPath);
-                final com.readwide.manager.search.LargeTextSearchEngine.CancelSignal cancelSignal =
-                        () -> activity.activityDestroyed
-                                || generation != activity.loadGeneration.get()
-                                || expectedPath == null
-                                || !expectedPath.equals(activity.filePath)
-                                || searchGeneration != activity.largeTextSearchGeneration.get();
-                result = targetOccurrence > 0
-                        ? activity.largeTextSearchEngine.search(searchFile, query, startPosition, forward, targetOccurrence, searchOptions, activity.largeTextActiveCollapseBlankLines, cancelSignal)
-                        : activity.largeTextSearchEngine.searchNearest(searchFile, query, startPosition, forward, searchOptions, activity.largeTextActiveCollapseBlankLines, cancelSignal);
-            } catch (Throwable t) {
-                result = new LargeTextSearchResult(-1, 1, 0, 0);
-                error = t.getClass().getSimpleName();
-            }
-
-            final LargeTextSearchResult finalResult = result;
-            final String finalError = error;
-            activity.handler.post(() -> {
-                if (activity.activityDestroyed
-                        || generation != activity.loadGeneration.get()
-                        || searchGeneration != activity.largeTextSearchGeneration.get()
-                        || !expectedPath.equals(activity.filePath)
-                        || !query.equals(activity.activeSearchQuery)) {
-                    return;
+        try {
+            TaskSubmission.submit(activity.largeTextSearchExecutor, () -> {
+                LargeTextSearchResult result;
+                String error = null;
+                try {
+                    File searchFile = new File(expectedPath);
+                    final com.readwide.manager.search.LargeTextSearchEngine.CancelSignal cancelSignal =
+                            () -> activity.activityDestroyed
+                                    || generation != activity.loadGeneration.get()
+                                    || expectedPath == null
+                                    || !expectedPath.equals(activity.filePath)
+                                    || searchGeneration != activity.largeTextSearchGeneration.get();
+                    result = targetOccurrence > 0
+                            ? activity.largeTextSearchEngine.search(searchFile, query, startPosition, forward, targetOccurrence, searchOptions, activity.largeTextActiveCollapseBlankLines, cancelSignal)
+                            : activity.largeTextSearchEngine.searchNearest(searchFile, query, startPosition, forward, searchOptions, activity.largeTextActiveCollapseBlankLines, cancelSignal);
+                } catch (Throwable t) {
+                    result = new LargeTextSearchResult(-1, 1, 0, 0);
+                    error = t.getClass().getSimpleName();
                 }
 
-                if (!activity.ensureLoadedTextCurrent()) return;
-                if (finalError != null) {
-                    if (matchStatus != null) matchStatus.setText("0 / 0");
-                    ShortToast.show(activity, activity.getString(R.string.error_prefix) + finalError);
-                    return;
-                }
+                final LargeTextSearchResult finalResult = result;
+                final String finalError = error;
+                activity.handler.post(() -> {
+                    if (activity.activityDestroyed
+                            || generation != activity.loadGeneration.get()
+                            || searchGeneration != activity.largeTextSearchGeneration.get()
+                            || !expectedPath.equals(activity.filePath)
+                            || !query.equals(activity.activeSearchQuery)) {
+                        return;
+                    }
 
-                if (finalResult.totalKnown()) {
-                    rememberLargeTextSearchTotal(query, optionsSignature, finalResult.total);
-                }
+                    if (!activity.ensureLoadedTextCurrent()) return;
+                    if (finalError != null) {
+                        if (matchStatus != null) matchStatus.setText("0 / 0");
+                        ShortToast.show(activity, activity.getString(R.string.error_prefix) + finalError);
+                        return;
+                    }
 
-                if (!finalResult.found()) {
+                    if (finalResult.totalKnown()) {
+                        rememberLargeTextSearchTotal(query, optionsSignature, finalResult.total);
+                    }
+
+                    if (!finalResult.found()) {
+                        int knownTotal = finalResult.totalKnown()
+                                ? finalResult.total
+                                : getCachedLargeTextSearchTotal(query);
+                        if (targetOccurrence > 0 && knownTotal > 0) {
+                            updateLargeTextSearchStatus(matchStatus, 0, knownTotal);
+                            ShortToast.show(activity, activity.getString(R.string.search_occurrence_out_of_range, knownTotal));
+                            return;
+                        }
+                        activity.activeSearchIndex = -1;
+                        activity.activeSearchOrdinal = 0;
+                        activity.applySearchHighlight();
+                        if (knownTotal >= 0) {
+                            updateLargeTextSearchStatus(matchStatus, 0, knownTotal);
+                        } else if (matchStatus != null) {
+                            matchStatus.setText("0 / 0");
+                        }
+                        ShortToast.show(activity, activity.getString(R.string.not_found));
+                        return;
+                    }
+
+                    activity.activeSearchIndex = finalResult.charPosition;
+                    activity.activeSearchOrdinal = Math.max(1, finalResult.ordinal);
+                    activity.applySearchHighlight();
+
+                    int totalPages = Math.max(1, activity.getDisplayedTotalPageCount());
+                    int displayPage = activity.isLargeTextExactPageIndexReady()
+                            ? Math.max(1, Math.min(totalPages, activity.findExactLargeTextPageForChar(finalResult.charPosition)))
+                            : activity.estimateDisplayedPageForLargeTextLine(finalResult.lineNumber, totalPages);
+                    int partitionStart = activity.getLargeTextPartitionStartLineForLine(finalResult.lineNumber);
+
+                    if (activity.isAbsoluteCharPositionInCurrentLargeTextBody(finalResult.charPosition)
+                            && activity.readerView != null && activity.readerView.hasCurrentTextLayout()) {
+                        activity.largeTextEstimatedTotalPages = Math.max(activity.largeTextEstimatedTotalPages, totalPages);
+                        activity.cancelLargeTextPartitionSwitchForLocalJump();
+                        activity.scrollToSearchResultPosition(finalResult.charPosition);
+                        activity.textContentReadyForPersistence = true;
+                        int localPage = Math.max(1, activity.readerView != null ? activity.readerView.getCurrentPageNumber() : 1);
+                        activity.largeTextEstimatedBasePageOffset = Math.max(0, displayPage - localPage);
+                        activity.updatePositionLabel();
+                    } else {
+                        activity.reloadLargeTextPreviewAround(
+                                finalResult.charPosition,
+                                displayPage,
+                                totalPages,
+                                null,
+                                null,
+                                partitionStart,
+                                true);
+                    }
+
                     int knownTotal = finalResult.totalKnown()
                             ? finalResult.total
                             : getCachedLargeTextSearchTotal(query);
-                    if (targetOccurrence > 0 && knownTotal > 0) {
-                        updateLargeTextSearchStatus(matchStatus, 0, knownTotal);
-                        ShortToast.show(activity, activity.getString(R.string.search_occurrence_out_of_range, knownTotal));
-                        return;
+                    updateLargeTextSearchStatus(matchStatus, finalResult.ordinal, knownTotal);
+                    if (knownTotal < 0) {
+                        startLargeTextSearchTotalCountInBackground(query, matchStatus);
                     }
-                    activity.activeSearchIndex = -1;
-                    activity.activeSearchOrdinal = 0;
-                    activity.applySearchHighlight();
-                    if (knownTotal >= 0) {
-                        updateLargeTextSearchStatus(matchStatus, 0, knownTotal);
-                    } else if (matchStatus != null) {
-                        matchStatus.setText("0 / 0");
-                    }
-                    ShortToast.show(activity, activity.getString(R.string.not_found));
-                    return;
-                }
-
-                activity.activeSearchIndex = finalResult.charPosition;
-                activity.activeSearchOrdinal = Math.max(1, finalResult.ordinal);
-                activity.applySearchHighlight();
-
-                int totalPages = Math.max(1, activity.getDisplayedTotalPageCount());
-                int displayPage = activity.isLargeTextExactPageIndexReady()
-                        ? Math.max(1, Math.min(totalPages, activity.findExactLargeTextPageForChar(finalResult.charPosition)))
-                        : activity.estimateDisplayedPageForLargeTextLine(finalResult.lineNumber, totalPages);
-                int partitionStart = activity.getLargeTextPartitionStartLineForLine(finalResult.lineNumber);
-
-                if (activity.isAbsoluteCharPositionInCurrentLargeTextBody(finalResult.charPosition)
-                        && activity.readerView != null && activity.readerView.hasCurrentTextLayout()) {
-                    activity.largeTextEstimatedTotalPages = Math.max(activity.largeTextEstimatedTotalPages, totalPages);
-                    activity.cancelLargeTextPartitionSwitchForLocalJump();
-                    activity.scrollToSearchResultPosition(finalResult.charPosition);
-                    activity.textContentReadyForPersistence = true;
-                    int localPage = Math.max(1, activity.readerView != null ? activity.readerView.getCurrentPageNumber() : 1);
-                    activity.largeTextEstimatedBasePageOffset = Math.max(0, displayPage - localPage);
-                    activity.updatePositionLabel();
-                } else {
-                    activity.reloadLargeTextPreviewAround(
-                            finalResult.charPosition,
-                            displayPage,
-                            totalPages,
-                            null,
-                            null,
-                            partitionStart,
-                            true);
-                }
-
-                int knownTotal = finalResult.totalKnown()
-                        ? finalResult.total
-                        : getCachedLargeTextSearchTotal(query);
-                updateLargeTextSearchStatus(matchStatus, finalResult.ordinal, knownTotal);
-                if (knownTotal < 0) {
-                    startLargeTextSearchTotalCountInBackground(query, matchStatus);
-                }
+                });
             });
-        });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            if (activity.largeTextSearchGeneration.compareAndSet(searchGeneration, searchGeneration + 1)
+                    && !activity.activityDestroyed && generation == activity.loadGeneration.get()
+                    && expectedPath.equals(activity.filePath) && query.equals(activity.activeSearchQuery)) {
+                ShortToast.show(activity, activity.getString(R.string.error_prefix)
+                        + failure.getClass().getSimpleName());
+            }
+        }
     }
 
     void clearTextSearchWork(boolean close) {
@@ -421,7 +442,7 @@ final class ReaderSearchController {
         final BooleanSupplier cancelled = () -> activity.activityDestroyed
                 || request != textSearchGeneration.get() || load != activity.loadGeneration.get();
         try {
-            textSearchTask = textSearchExecutor.submit(() -> {
+            textSearchTask = TaskSubmission.submit(textSearchExecutor, () -> {
                 try {
                     TextMatchIndex index = cached != null && cached.matches(content, query, options)
                             ? cached : TextMatchIndex.build(content, query, options, cancelled);
@@ -466,8 +487,15 @@ final class ReaderSearchController {
                     });
                 }
             });
-        } catch (RejectedExecutionException ignored) {
-            // The activity was closed; do not fall back to scanning on the UI thread.
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            if (isCurrentTextSearch(request, load, path, content, options)) {
+                textSearchGeneration.incrementAndGet();
+                textSearchTask = null;
+                textSearchExecutor.getQueue().clear();
+                updateLargeTextSearchStatus(matchStatus, activity.activeSearchOrdinal, -1);
+                ShortToast.show(activity, activity.getString(R.string.error_prefix)
+                        + failure.getClass().getSimpleName());
+            }
         }
     }
 

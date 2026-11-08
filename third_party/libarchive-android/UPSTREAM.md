@@ -52,6 +52,8 @@ requiring a host `patch` executable.
 Only files needed by the wrapper's native build, public headers, and license
 texts are vendored. Upstream test suites, samples, generated binaries, and Git
 metadata are intentionally excluded.
+The retained README's sample link points to that wrapper revision upstream
+because the sample is not vendored; its usage text and licenses are unchanged.
 
 Readwide's Gradle wrapper configuration uses Java 17 source/target, matching the
 app without introducing new Java APIs or changing minSdk. External native staging

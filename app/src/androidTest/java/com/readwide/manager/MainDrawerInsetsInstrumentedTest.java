@@ -1,12 +1,13 @@
 package com.readwide.manager;
 
 import android.content.Context;
-import android.graphics.Rect;
 import android.view.ContextThemeWrapper;
 import android.view.View;
 import android.view.WindowInsets;
 
 import androidx.appcompat.widget.Toolbar;
+import androidx.core.graphics.Insets;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
@@ -91,9 +92,13 @@ public class MainDrawerInsetsInstrumentedTest {
 
     @SuppressWarnings("deprecation")
     private static WindowInsets legacyInsets(int left, int top, int right, int bottom) {
-        // This constructor models the combined legacy insets used before typed
-        // status/navigation/IME queries; it remains available at minSdk 24.
-        return new WindowInsets(new Rect(left, top, right, bottom));
+        // Preserve the combined legacy mask on API 24 and later.
+        WindowInsets result = new WindowInsetsCompat.Builder()
+                .setSystemWindowInsets(Insets.of(left, top, right, bottom))
+                .build()
+                .toWindowInsets();
+        assertNotNull(result);
+        return result;
     }
 
     private static void check(Consumer<Screen> assertion) {

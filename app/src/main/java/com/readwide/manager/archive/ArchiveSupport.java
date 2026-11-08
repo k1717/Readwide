@@ -954,6 +954,9 @@ public final class ArchiveSupport {
                 replacementSources = ArchiveSourceSnapshot.capture(archive);
                 replacementSources.requireOutsideReplacementTree(destinationDir);
             } catch (IOException | SecurityException unsafeReplacement) {
+                if (unsafeReplacement instanceof ArchiveSourceSnapshot.CaptureException) {
+                    return extractionFailureResult(archive, password, unsafeReplacement, progress);
+                }
                 ArchiveCancellation.restoreIfCancelled(unsafeReplacement, progress);
                 return ExtractionResult.failed(ExtractionFailure.FAILED, unsafeReplacement.getMessage());
             }
@@ -971,6 +974,12 @@ public final class ArchiveSupport {
         try (ArchiveExtractionByteBudget.Scope ignored =
                      ArchiveExtractionByteBudget.begin(runtimeBudgetBytes)) {
             ArchiveCancellation.checkpoint(progress);
+            Type sourceType = getSupportedArchiveType(archive);
+            ArchiveSourceSnapshot extractionSources = sourceType == Type.SEVEN_Z
+                    || sourceType == Type.EGG || sourceType == Type.ALZ || sourceType == Type.RAR
+                    ? (replacementSources != null ? replacementSources : ArchiveSourceSnapshot.capture(archive))
+                    : null;
+            if (extractionSources != null) requireExtractionSourceUnchanged(extractionSources, archive, progress);
             List<EntryInfo> extractionEntries = listEntries(archive, password);
             long estimatedPayloadBytes = estimatePayloadBytesFromEntries(extractionEntries);
             if (estimatedPayloadBytes > 0L) {
@@ -1003,9 +1012,12 @@ public final class ArchiveSupport {
                 // Source/alias checks can take time. Honor cancellation before
                 // entering the backup/restore sequence that moves the original tree.
                 ArchiveCancellation.checkpoint(progress);
+                if (extractionSources != null) requireExtractionSourceUnchanged(extractionSources, archive, progress);
                 if (!replaceExistingDirectoryWithTemp(destinationDir, tempDir)) {
                     return ExtractionResult.failed(ExtractionFailure.FAILED, null);
                 }
+            } else if (extractionSources != null) {
+                requireExtractionSourceUnchanged(extractionSources, archive, progress);
             }
             return ExtractionResult.success();
         } catch (IOException | SecurityException e) {
@@ -1208,6 +1220,9 @@ public final class ArchiveSupport {
                                     spoolDirectory, LibarchiveNativeBridge.isRarFormatAvailable());
                         } catch (IOException unsupportedPpmdHeader) {
                             ArchiveCancellation.rethrowIfCancelled(unsupportedPpmdHeader, null);
+                            // Password requests and missing-volume failures must reach the caller.
+                            if (unsupportedPpmdHeader instanceof PasswordRequiredException
+                                    || unsupportedPpmdHeader instanceof RarArchiveReader.IntegrityException) throw unsupportedPpmdHeader;
                             // Broader native/decryption paths remain available for ineligible headers.
                         }
                         if (ppmd != null) return ownForwardReader(ppmd, prepared);
@@ -1534,10 +1549,12 @@ public final class ArchiveSupport {
 
         try {
             // Never move/truncate the selected archive or another declared volume.
-            // Failed metadata capture is not a reusable identity; the decoder still
-            // validates unresolved inputs and the output guard rolls them back.
-            if (archive.getCanonicalFile().equals(outFile.getCanonicalFile())
-                    || ArchiveSourceSnapshot.capture(archive).containsFile(outFile)) {
+            if (archive.getCanonicalFile().equals(outFile.getCanonicalFile())) {
+                return ExtractionResult.failed(ExtractionFailure.FAILED,
+                        "Extraction output is an archive source volume");
+            }
+            ArchiveSourceSnapshot sources = ArchiveSourceSnapshot.capture(archive);
+            if (sources.containsFile(outFile)) {
                 return ExtractionResult.failed(ExtractionFailure.FAILED,
                         "Extraction output is an archive source volume");
             }
@@ -1545,8 +1562,11 @@ public final class ArchiveSupport {
                  ArchiveExtractionByteBudget.Scope ignored =
                          ArchiveExtractionByteBudget.begin(runtimeBudgetBytes)) {
                 boolean ok;
+                boolean verifyRarSource;
                 // Do not commit until the prepared source and its temporary spool close.
                 try (PreparedArchive prepared = prepareArchiveForRead(archive)) {
+                    verifyRarSource = prepared.type == Type.RAR;
+                    if (verifyRarSource) requireExtractionSourceUnchanged(sources, archive, null);
                     switch (prepared.type) {
                         case ZIP:
                             ok = extractSingleZipEntryWithFallback(prepared.file, prepared.type, normalized, outFile, password);
@@ -1592,6 +1612,8 @@ public final class ArchiveSupport {
                 }
                 if (!ok) return ExtractionResult.failed(ExtractionFailure.FAILED, null);
                 ArchiveCancellation.checkpoint(null);
+                // Payload CRC alone cannot detect a changed member name or volume set.
+                if (verifyRarSource) requireExtractionSourceUnchanged(sources, archive, null);
                 guard.commit();
                 return ExtractionResult.success();
             }
@@ -1711,25 +1733,41 @@ public final class ArchiveSupport {
                                                                   @Nullable char[] password,
                                                                   @Nullable FileOperationProgress progress,
                                                                   @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
+        ArchiveCancellation.checkpoint(progress);
+        ArchiveSourceSnapshot sources = ArchiveSourceSnapshot.capture(archive);
+        requireExtractionSourceUnchanged(sources, archive, progress);
         Boolean supplemental = tryExtractSevenZBcj2IntoDirectory(archive, targetDir, password, progress, entryProgress);
-        if (supplemental != null) return supplemental;
+        if (supplemental != null) {
+            if (supplemental) requireExtractionSourceUnchanged(sources, archive, progress);
+            return supplemental;
+        }
+        boolean extracted;
         try {
-            return extractSevenZIntoDirectory(archive, targetDir, password, progress, entryProgress);
+            extracted = extractSevenZIntoDirectory(archive, targetDir, password, progress, entryProgress);
         } catch (PasswordRequiredException e) {
             throw e;
         } catch (IOException e) {
             ArchiveCancellation.rethrowIfCancelled(e, progress);
+            ArchiveCancellation.checkpoint(progress);
+            requireExtractionSourceUnchanged(sources, archive, progress);
             Boolean fallback = tryExtractArchiveWithLibarchiveAfterDedicatedFailure(
                     archive, type, targetDir, password, progress, entryProgress);
-            if (fallback != null) return fallback;
-            throw e;
+            if (fallback == null) throw e;
+            extracted = fallback;
         } catch (SecurityException e) {
             ArchiveCancellation.rethrowIfCancelled(e, progress);
+            ArchiveCancellation.checkpoint(progress);
+            requireExtractionSourceUnchanged(sources, archive, progress);
             Boolean fallback = tryExtractArchiveWithLibarchiveAfterDedicatedFailure(
                     archive, type, targetDir, password, progress, entryProgress);
-            if (fallback != null) return fallback;
-            throw new IOException(e);
+            if (fallback == null) throw new IOException(e);
+            extracted = fallback;
         }
+        if (extracted) {
+            ArchiveCancellation.checkpoint(progress);
+            requireExtractionSourceUnchanged(sources, archive, progress);
+        }
+        return extracted;
     }
 
     private static boolean extractTarIntoDirectoryWithFallback(@NonNull File archive,
@@ -1821,25 +1859,45 @@ public final class ArchiveSupport {
                                                                 @NonNull String entryPath,
                                                                 @NonNull File outFile,
                                                                 @Nullable char[] password) throws IOException {
+        ArchiveCancellation.checkpoint(null);
+        ArchiveSourceSnapshot sources = ArchiveSourceSnapshot.capture(archive);
+        requireExtractionSourceUnchanged(sources, archive, null);
         Boolean supplemental = tryExtractSevenZBcj2SingleEntry(archive, entryPath, outFile, password);
-        if (supplemental != null) return supplemental;
+        if (supplemental != null) {
+            if (supplemental) requireExtractionSourceUnchanged(sources, archive, null);
+            return supplemental;
+        }
+        boolean extracted;
         try {
-            return extractSingleSevenZEntry(archive, entryPath, outFile, password);
+            extracted = extractSingleSevenZEntry(archive, entryPath, outFile, password);
         } catch (PasswordRequiredException e) {
             throw e;
         } catch (IOException e) {
             ArchiveCancellation.rethrowIfCancelled(e, null);
+            requireExtractionSourceUnchanged(sources, archive, null);
             Boolean fallback = tryExtractSingleEntryWithLibarchiveAfterDedicatedFailure(
                     archive, type, entryPath, outFile, password, null);
-            if (fallback != null) return fallback;
-            throw e;
+            if (fallback == null) throw e;
+            extracted = fallback;
         } catch (SecurityException e) {
             ArchiveCancellation.rethrowIfCancelled(e, null);
+            requireExtractionSourceUnchanged(sources, archive, null);
             Boolean fallback = tryExtractSingleEntryWithLibarchiveAfterDedicatedFailure(
                     archive, type, entryPath, outFile, password, null);
-            if (fallback != null) return fallback;
-            throw new IOException(e);
+            if (fallback == null) throw new IOException(e);
+            extracted = fallback;
         }
+        if (extracted) requireExtractionSourceUnchanged(sources, archive, null);
+        return extracted;
+    }
+
+    // Run any pause wait before this check; acceptance must not wait afterward.
+    private static void requireExtractionSourceUnchanged(ArchiveSourceSnapshot sources, File archive,
+                                                    FileOperationProgress progress) throws IOException {
+        sources.requireCaptured();
+        boolean unchanged = sources.matches(archive);
+        ArchiveCancellation.checkCancelled(progress);
+        if (!unchanged) throw new IOException("Archive source changed or is unavailable");
     }
 
     private static boolean extractSingleTarEntryWithFallback(@NonNull File archive,
@@ -1879,8 +1937,8 @@ public final class ArchiveSupport {
                                                              @Nullable ArchiveExtractionProgressTracker entryProgress) throws IOException {
         ArchiveCancellation.checkpoint(progress);
         try {
-            if (!SevenZBcj2ArchiveReader.archiveUsesSpecialCoder(archive, password, progress)) return null;
-            return SevenZBcj2ArchiveReader.extractArchiveIntoDirectory(archive, targetDir, password, progress, entryProgress);
+            return SevenZBcj2ArchiveReader.tryExtractSpecialArchiveIntoDirectory(
+                    archive, targetDir, password, progress, entryProgress);
         } catch (RuntimeException e) {
             ArchiveCancellation.rethrowIfCancelled(e, progress);
             throw new IOException("7z supplemental extraction failed", e);
@@ -1894,8 +1952,7 @@ public final class ArchiveSupport {
                                                            @Nullable char[] password) throws IOException {
         ArchiveCancellation.checkpoint(null);
         try {
-            if (!SevenZBcj2ArchiveReader.archiveUsesSpecialCoder(archive, password)) return null;
-            return SevenZBcj2ArchiveReader.extractSingleEntry(archive, entryPath, outFile, password);
+            return SevenZBcj2ArchiveReader.tryExtractSpecialEntry(archive, entryPath, outFile, password);
         } catch (RuntimeException e) {
             ArchiveCancellation.rethrowIfCancelled(e, null);
             throw new IOException("7z supplemental extraction failed", e);
@@ -2038,7 +2095,9 @@ public final class ArchiveSupport {
                                                               @Nullable char[] password,
                                                               @NonNull Exception e) {
         ExtractionFailure base = ArchiveFailureClassifier.classify(e);
-        if (base != ExtractionFailure.CORRUPT_ARCHIVE
+        // Capture precedes decryption; its failure is not evidence of a bad password.
+        if (e instanceof ArchiveSourceSnapshot.CaptureException
+                || base != ExtractionFailure.CORRUPT_ARCHIVE
                 || password == null
                 || password.length == 0) {
             return base;
@@ -2772,20 +2831,32 @@ public final class ArchiveSupport {
         SevenZSplitVolumeResolver.VolumeSet splitVolumes = SevenZSplitVolumeResolver.resolve(archive);
         if (splitVolumes != null) {
             SeekableByteChannel channel = new SplitSeekableByteChannel(splitVolumes.parts);
-            try {
-                if (password != null && password.length > 0) {
-                    return new SevenZFile(channel, password);
-                }
-                return new SevenZFile(channel);
-            } catch (IOException | RuntimeException e) {
-                try { channel.close(); } catch (IOException ignored) {}
-                throw e;
-            }
+            return openSevenZChannel(channel, password);
         }
         if (password != null && password.length > 0) {
             return new SevenZFile(archive, password);
         }
         return new SevenZFile(archive);
+    }
+
+    @SuppressWarnings("deprecation")
+    private static SevenZFile openSevenZChannel(SeekableByteChannel channel, char[] password) throws IOException {
+        try {
+            if (password != null && password.length > 0) return new SevenZFile(channel, password);
+            return new SevenZFile(channel);
+        } catch (IOException | RuntimeException | Error failure) {
+            // Supplied-channel constructors leave failure cleanup to their caller.
+            try { channel.close(); }
+            catch (IOException | RuntimeException | Error cleanup) {
+                if (cleanup != failure) {
+                    try { failure.addSuppressed(cleanup); }
+                    catch (OutOfMemoryError | StackOverflowError unavailable) {
+                        // Keep the opening failure if recording cleanup also fails.
+                    }
+                }
+            }
+            throw failure;
+        }
     }
 
     /** TAR EOF can precede the compression trailer or later concatenated members. */

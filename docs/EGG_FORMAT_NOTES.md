@@ -8,7 +8,20 @@ archives). The container parser is first-party Java, but the AZO decoder is a
 modified Java port of zlib-licensed kippler/xunazo; other codecs use the bundled
 FOSS dependencies. Test sources contain generated and embedded fixtures.
 See `../THIRD_PARTY_NOTICES.md` for attribution. Historical fixture results do
-not establish runtime verification of the later source-only patches.
+not establish runtime verification of the later source-only patches. Current
+1.0.22 host checks passed 12 saved ALZip EGG families with exact original names
+and bytes, including five encrypted split families and two plaintext solid
+families. Wrong ZipCrypto passwords now report `BAD_PASSWORD` while retaining
+output protection. These producer samples do not establish encrypted-solid compatibility.
+
+Six public AZO archives also match Bandizip 6.29 through direct/public listing,
+selected extraction in both orders and bulk extraction. Four failed before the
+long-history correction described below. These AZO samples are neither encrypted
+nor split. Synthetic compressed-AZO tests separately cover ZipCrypto, AES-128/256
+and LEA-128/256 across split volumes and solid files, with CRC/authentication,
+password, cancellation and cleanup failures. See the current
+[validation scope](ARCHIVE_BOUNDARY_SUPPORT_NOTES.md#release-boundary); historical
+execution labels below describe their original checkpoints.
 
 All integers are little-endian. All top-level structures are identified by a
 uint32 signature.
@@ -19,7 +32,8 @@ with the payload window into `SplitVolumeInput`, which validates it on adoption
 instead of recording a fresh baseline. This includes the first/single volume and
 stripped continuation links; the legacy prefix without END remains accepted.
 Handoff regressions resolve once, mutate physical framing and adopt those same
-segments. They are uncompiled/unrun and do not establish additional codec coverage.
+segments. `AlzEggSourceHandoffTest` passed 17 recorded host tests, including the
+later encrypted-split review. This does not establish additional codec or device coverage.
 
 Extraction rechecks captured volume existence, length and modification time after
 parsing and before accepting output. Solid blocks check the original source even
@@ -46,6 +60,15 @@ In 1.0.21, shared `SplitVolumeInput` also retires on unchecked volume-access/rea
 failures after a partial prefix. Existing bounded views cannot resume after access
 returns. Framing, cipher ownership, authentication and codec calculations are
 unchanged; the new injected-failure regression source is uncompiled/unrun.
+
+Non-solid directory entries reject blocks with nonzero unpacked size before index
+publication or extraction. The file-size check alone cannot detect that contradiction.
+Archive-wide solid state is resolved after all headers are read: shared solid blocks
+may follow a directory header and still belong to regular files. Empty directories,
+including zero-output compressed streams, retain their previous policy.
+`EggDirectoryBlockAdmissionTest` passed eight synthetic host cases for classification,
+encrypted/split input and shared blocks. This does not establish producer compatibility
+for every directory/solid combination.
 
 ## 1.0.20 container compatibility (source reviewed, not executed)
 
@@ -92,6 +115,16 @@ boundary, preserving output-size, block CRC and file authentication checks.
 Malformed later streams and trailing junk fail. This compatibility extension
 is covered by new synthetic regression sources only; real producer execution,
 including the existing LEA-BZip2 fixture, remains pending.
+
+AZO long-history indices use seven bits and 128 length/position slots. Version
+1.0.22 corrects the Java port's four-bit/16-slot constants to match
+[xunazo's public definition](https://github.com/kippler/xunazo/blob/9503e21740079c9a439cd6592d34f9fbe72a3166/src/XAzoDec.h).
+Reading too few bits changed subsequent symbols and caused false back-reference
+or output-overrun errors. Arithmetic coding and history update order are unchanged.
+The public-sample comparison covers x86 filtering, multiple inner blocks and
+mixed-codec archives. Synthetic tests cover indices 0 through 127 at selected
+boundaries, block resets and output limits; no producer-created encrypted/split
+AZO result is claimed.
 
 AZO framing now preflights inner packed ranges and cumulative unpacked size
 against the enclosing block declaration before allocating decoded storage. One
@@ -327,6 +360,18 @@ ZipCrypto/AES continuity and malformed ranges; they are uncompiled/unrun.
 The ENCRYPT extra field (0x08D1470F) on a FILE carries `EncryptMethod u8`
 followed by method-specific data:
 
+The retained CC0 `enc_lea_bzip2.egg` sample uses AES-256 (method 2), despite its
+filename. Its declared ENCRYPT size includes the seven-byte field prefix.
+`encryptionPayloadEnd` accepts this form only for a complete 21/29-byte AES/LEA
+payload or 17-byte ZipCrypto
+payload with an exact seven/nine-byte prefix overcount and an END marker at the
+fixed payload boundary. A valid declared header tail takes precedence, including
+opaque extras and padding that itself starts with END. No signature scan or
+missing authentication footer is allowed. The original sample and derived
+boundary cases pass focused host tests. The CC0 `enc_zip20.egg` and
+`oversized_encrypt_zip20.egg` samples use the same prefix-inclusive convention
+with ZipCrypto and now match Bandizip names/bytes. This does not add encrypted-name support.
+
 - **Method 0 - ZipCrypto** (supported): payload is the 12-byte encrypted
   check data followed by a `u32 LE` CRC32. Decryption uses the classic PKWARE
   keystream: initialize the three keys from the password bytes, decrypt the
@@ -377,14 +422,15 @@ followed by method-specific data:
   finalizes the footer MAC after *every* block. Those historical single-block
   results do not establish every ALZip producer's block layout or validate
   Readwide's later multi-block/solid owner-authentication path.
-- **Methods 5/6 - LEA-128/LEA-256** (implemented, uncompiled/unrun): entries
+- **Methods 5/6 - LEA-128/LEA-256** (host-tested subset): entries
   use `EggAuthenticatedCrypto` with the MIT-attributed `EggLeaCipher`
   adaptation from alkegi/unegg. Salt/verifier/key derivation/HMAC layout matches
   the AES route, but the 16-byte counter starts at zero and increments big-endian.
   Cipher state and HMAC continue across stored blocks. A missing footer is an error;
   password/size/available-CRC/HMAC failures retain the existing output guard.
-  Three CC0 producer fixtures and block-cipher vectors are added as test sources,
-  not reported as passed. Solid cipher ownership now uses the staged route above;
+  Two retained CC0 LEA producer fixtures and block-cipher vectors pass focused
+  host tests. The third retained fixture is AES-256/BZip2, not LEA/BZip2.
+  Solid cipher ownership uses the staged route above;
   encrypted filenames remain excluded.
 
 ## Solid archives (supported)
@@ -447,6 +493,13 @@ bounded skipping under the vendor's forward-compatibility rule on page 7. This
 does not implement global decryption. New source cases protect late/split names,
 the ALZ-family bridge, untouched destinations/spools and failed-index nonpublication.
 The flag-only fixtures do not invent ciphertext or claim a producer encryption scheme.
+
+A public-corpus scan covered 69 archive families. After accounting for the
+ZipCrypto prefix-inclusive length, 67 completed metadata parsing without an
+encrypted-filename flag or GLOBAL_ENCRYPT record. Two locale-name samples remained
+incomplete and also failed Bandizip reference extraction; they do not establish
+absence or a supported alternate layout. No genuine encrypted-name test vector
+was found; archive names such as `globalencrypt.egg` are not proof of the feature.
 
 ## Not supported (deliberate)
 

@@ -170,13 +170,16 @@ public class Rar4HeaderEncryptedMultiVolumeTest {
                 password,
                 salt,
                 rar4Header(0x74, RAR4_LONG_BLOCK | splitFlags, fileBody));
-        byte[] encryptedEndHeader = encryptHeader(password, salt, rar4Header(0x7b, 0, new byte[0]));
+        byte[] endSalt = salt.clone();
+        endSalt[0] ^= 0x55;
+        byte[] encryptedEndHeader = encryptHeader(password, endSalt, rar4Header(0x7b, 0, new byte[0]));
         try (FileOutputStream out = new FileOutputStream(file)) {
             out.write(new byte[] {0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00});
             out.write(rar4Header(0x73, RAR4_MAIN_PASSWORD, new byte[] {0, 0, 0, 0, 0, 0}));
             out.write(salt);
             out.write(encryptedFileHeader);
             out.write(data);
+            out.write(endSalt);
             out.write(encryptedEndHeader);
         }
     }

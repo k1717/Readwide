@@ -31,4 +31,13 @@ public final class ImageSequenceNavigationMath {
         if (normalizedX >= 0.67f) return mirroredVisualDelta(1, mirrored);
         return 0;
     }
+
+    public static int visualTapZoneDelta(float x, float y, TapZoneProfile profile, boolean mirrored) {
+        // Preserve the image viewer's inclusive right edge at its original proportions.
+        if (profile.mode == PrefsManager.TAP_ZONE_HORIZONTAL && profile.leading == 33 && profile.trailing == 33) {
+            return visualTapZoneDelta(x, mirrored);
+        }
+        int action = TapZoneMath.actionForTap(x * 100f, y * 100f, 100, 100, true, true, profile);
+        return mirroredVisualDelta(action, mirrored);
+    }
 }

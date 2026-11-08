@@ -8,6 +8,9 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import java.io.IOException;
 import java.util.ArrayDeque;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.Assert.*;
 
@@ -155,6 +158,89 @@ public class SettingsBackupViewModelInstrumentedTest {
             assertEquals(1, completed.get());
             assertEquals(SettingsBackupViewModel.Phase.IDLE, model[0].state().getValue().phase);
         });
+    }
+
+    @Test public void retainedRejectedWorkCannotRunOrUnlockItsRetry() {
+        for (Throwable failure : new Throwable[] {new RejectedExecutionException("rejected"),
+                new OutOfMemoryError("startup allocation"), new StackOverflowError("startup stack")}) {
+            ArrayDeque<Runnable> queue = new ArrayDeque<>();
+            AtomicInteger submissions = new AtomicInteger();
+            AtomicInteger commits = new AtomicInteger();
+            SettingsBackupViewModel[] models = new SettingsBackupViewModel[2];
+            main(() -> {
+                models[0] = new SettingsBackupViewModel(task -> {
+                    queue.add(task);
+                    if (submissions.incrementAndGet() == 1) {
+                        if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+                        throw (Error) failure;
+                    }
+                });
+                models[1] = new SettingsBackupViewModel(queue::add);
+                models[0].submit(SettingsBackupViewModel.Operation.REPLACE,
+                        () -> { commits.addAndGet(100); return success(); });
+                assertEquals(SettingsBackupViewModel.Phase.FAILURE, models[0].state().getValue().phase);
+                models[0].submit(SettingsBackupViewModel.Operation.MERGE,
+                        () -> { commits.incrementAndGet(); return success(); });
+                assertTrue(models[0].isWorking());
+            });
+            queue.remove().run();
+            idle();
+            main(() -> {
+                assertEquals(0, commits.get());
+                assertTrue(models[0].isWorking());
+                models[1].submit(SettingsBackupViewModel.Operation.EXPORT,
+                        SettingsBackupViewModelInstrumentedTest::success);
+                assertEquals(SettingsBackupViewModel.Phase.FAILURE, models[1].state().getValue().phase);
+                assertEquals(1, queue.size());
+            });
+            Runnable retry = queue.remove();
+            retry.run();
+            retry.run();
+            idle();
+            main(() -> {
+                assertEquals(1, commits.get());
+                assertEquals(SettingsBackupViewModel.Phase.SUCCESS, models[0].state().getValue().phase);
+                models[0].onCleared();
+                models[1].onCleared();
+            });
+        }
+    }
+
+    @Test public void alreadyStartedWorkKeepsLockAfterExecutorThrows() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread[] worker = new Thread[1];
+        SettingsBackupViewModel[] models = new SettingsBackupViewModel[2];
+        try {
+            main(() -> {
+                models[0] = new SettingsBackupViewModel(task -> {
+                    worker[0] = new Thread(task, "backup-startup-test");
+                    worker[0].start();
+                    try { assertTrue(started.await(5, TimeUnit.SECONDS)); }
+                    catch (InterruptedException e) { throw new AssertionError(e); }
+                    throw new RejectedExecutionException("reported after start");
+                });
+                models[1] = new SettingsBackupViewModel(task -> fail("The running import owns the lock"));
+                models[0].submit(SettingsBackupViewModel.Operation.MERGE, () -> {
+                    started.countDown();
+                    if (!release.await(5, TimeUnit.SECONDS)) throw new IOException("test timed out");
+                    return success();
+                });
+                assertTrue(models[0].isWorking());
+                models[1].submit(SettingsBackupViewModel.Operation.EXPORT,
+                        SettingsBackupViewModelInstrumentedTest::success);
+                assertEquals(SettingsBackupViewModel.Phase.FAILURE, models[1].state().getValue().phase);
+            });
+            release.countDown();
+            worker[0].join(5000);
+            assertFalse(worker[0].isAlive());
+            idle();
+            main(() -> assertEquals(SettingsBackupViewModel.Phase.SUCCESS, models[0].state().getValue().phase));
+        } finally {
+            release.countDown();
+            if (worker[0] != null) worker[0].join(5000);
+            main(() -> { for (SettingsBackupViewModel model : models) if (model != null) model.onCleared(); });
+        }
     }
 
     @Test public void secondSettingsInstanceCannotInterleaveBackupWork() {

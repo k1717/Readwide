@@ -5,14 +5,12 @@ import com.readwide.manager.view.CustomReaderView;
 import java.util.ArrayList;
 
 /**
- * Pure anchor math used by the TXT large-text exact page model.
+ * Anchor math for exact pages in large TXT files.
  *
- * <p>This class intentionally has no Activity/View lifecycle dependencies so the
- * arithmetic can be regression-tested independently from ReaderActivity.</p>
+ * <p>No Activity/View lifecycle dependencies; the arithmetic can be tested
+ * independently from ReaderActivity.</p>
  */
 public final class LargeTextAnchorMath {
-    private static final int EXACT_TAP_EPS_CHARS = 8;
-
     private LargeTextAnchorMath() {
     }
 
@@ -47,21 +45,17 @@ public final class LargeTextAnchorMath {
         }
 
         if (direction > 0) {
-            // Forward tap should advance to the immediate next exact page anchor.
-            // Do not add an epsilon to currentAbs before searching: when the user
-            // manually scrolls close to the next anchor, that epsilon can jump over
-            // the next page and create a one-page skip.  The current interval already
-            // tells us which exact page owns the top row.
+            // The current interval identifies the top row's page. Move to its next
+            // anchor. Adding an epsilon to currentAbs near a boundary can skip a page.
             int target = currentIndex + 1;
             return target < anchors.size() ? target : -1;
         }
 
         int currentAnchor = Math.max(0, anchors.get(currentIndex).charPosition);
-        if (Math.max(0, currentAbs) > currentAnchor + EXACT_TAP_EPS_CHARS) {
-            // If the user is inside the current page, previous tap first snaps back
-            // to that page's exact start.  Only a second previous tap moves to the
-            // previous page.  This prevents skipping page N when the viewport is a
-            // few characters/one line below page N's anchor.
+        if (Math.max(0, currentAbs) > currentAnchor) {
+            // Any row after the anchor, including a blank or short row, belongs to
+            // this page. As in the normal reader, return to its start first;
+            // a tap at the anchor moves to the previous page.
             return currentIndex;
         }
 

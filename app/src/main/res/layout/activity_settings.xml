@@ -39,7 +39,6 @@
             android:orientation="vertical"
             android:padding="20dp">
 
-
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -134,7 +133,6 @@
                     android:textColor="?attr/colorOnSurface"
                     android:textSize="16sp" />
             </RadioGroup>
-
 
             <LinearLayout
                 android:id="@+id/main_custom_theme_section"
@@ -485,6 +483,25 @@
                 android:background="?attr/colorOutline" />
 
             <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_text_style"
+                android:text="@string/settings_section_text_style"
+                android:textColor="?attr/colorPrimary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:text="@string/settings_default_font_scope"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="13sp" />
+
+            <TextView
                 android:id="@+id/font_size_label"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -494,20 +511,6 @@
 
             <SeekBar
                 android:id="@+id/font_size_seekbar"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="18dp" />
-
-            <TextView
-                android:id="@+id/line_spacing_label"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/line_spacing_default"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="14sp" />
-
-            <SeekBar
-                android:id="@+id/line_spacing_seekbar"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="18dp" />
@@ -524,14 +527,27 @@
                 android:textStyle="bold" />
 
             <TextView
+                android:id="@+id/line_spacing_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/line_spacing_default"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="14sp" />
+
+            <SeekBar
+                android:id="@+id/line_spacing_seekbar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="18dp" />
+
+            <TextView
                 android:id="@+id/txt_boundary_description"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"
-                android:text="@string/txt_boundary_description"
+                android:text="@string/settings_help_txt_boundaries"
                 android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="13sp" />
-
 
             <TextView
                 android:id="@+id/txt_top_offset_label"
@@ -589,7 +605,6 @@
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="18dp" />
 
-
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -612,30 +627,6 @@
                 android:layout_marginTop="4dp"
                 android:layout_marginBottom="8dp"
                 android:background="?attr/colorOutline" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="4dp"
-                android:text="@string/large_txt_partition_mode"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="14sp" />
-
-            <Spinner
-                android:id="@+id/spinner_large_txt_partition_mode"
-                android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:layout_marginBottom="6dp"
-                android:background="@android:color/transparent"
-                android:popupBackground="?attr/colorSurface" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="14dp"
-                android:text="@string/large_txt_partition_mode_description"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="13sp" />
 
             <Switch
                 android:id="@+id/switch_collapse_blank_lines"
@@ -792,7 +783,6 @@
                 android:background="@android:color/transparent"
                 android:popupBackground="?attr/colorSurface" />
 
-
             <Switch
                 android:id="@+id/switch_epub_force_reader_theme_colors"
                 android:layout_width="match_parent"
@@ -861,75 +851,63 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
                 android:layout_marginBottom="8dp"
-                android:id="@+id/section_header_behavior"
-                android:text="@string/settings_section_behavior"
+                android:id="@+id/section_header_reader_display"
+                android:text="@string/settings_section_reader_display"
                 android:textColor="?attr/colorPrimary"
                 android:textSize="16sp"
                 android:textStyle="bold" />
+
+            <Switch android:id="@+id/switch_status_bar" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/show_status_bar" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:layout_marginBottom="4dp"
-                android:text="@string/archive_open_mode"
+                android:text="@string/page_status_alignment"
                 android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="14sp" />
 
             <Spinner
-                android:id="@+id/spinner_archive_open_mode"
+                android:id="@+id/spinner_page_status_alignment"
                 android:layout_width="match_parent"
                 android:layout_height="44dp"
-                android:layout_marginBottom="6dp"
                 android:background="@android:color/transparent"
                 android:popupBackground="?attr/colorSurface" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="14dp"
-                android:text="@string/archive_open_mode_description"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="13sp" />
+                android:layout_marginTop="6dp"
+                android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_reading"
+                android:text="@string/settings_section_reading"
+                android:textColor="?attr/colorPrimary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
 
-            <TextView
+            <Switch android:id="@+id/switch_keep_screen_on" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/keep_screen_on" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
+
+            <Switch android:id="@+id/switch_auto_save" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/auto_save_position" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
+
+            <Switch android:id="@+id/switch_volume_scroll" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/volume_keys_page" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_tap_zones"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:layout_marginBottom="4dp"
-                android:text="@string/archive_viewer_background_timeout"
-                android:labelFor="@id/input_archive_viewer_background_timeout"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="14sp" />
+                android:layout_marginBottom="8dp"
+                android:text="@string/settings_tap_zones" />
 
-            <EditText
-                android:id="@+id/input_archive_viewer_background_timeout"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:layout_marginBottom="6dp"
-                android:paddingStart="14dp"
-                android:paddingEnd="14dp"
-                android:paddingTop="0dp"
-                android:paddingBottom="0dp"
-                android:gravity="start|center_vertical"
-                android:digits="0123456789"
-                android:hint="@string/archive_viewer_background_timeout_hint"
-                android:inputType="number"
-                android:imeOptions="actionDone"
-                android:saveEnabled="false"
-                android:maxLength="5"
-                android:singleLine="true"
-                android:textColor="?attr/colorOnSurface"
-                android:textColorHint="?attr/colorOnSurfaceVariant" />
-
-            <TextView
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_txt_reading_options"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="14dp"
-                android:text="@string/archive_viewer_background_timeout_description"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="13sp" />
+                android:layout_marginBottom="24dp"
+                android:text="@string/settings_txt_reading_options" />
 
             <TextView
                 android:layout_width="match_parent"
@@ -1002,108 +980,85 @@
                 android:textColor="?attr/colorOnSurface"
                 android:textSize="16sp" />
 
-            <Switch android:id="@+id/switch_keep_screen_on" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/keep_screen_on" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
-            <Switch android:id="@+id/switch_auto_save" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/auto_save_position" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
-            <Switch android:id="@+id/switch_status_bar" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/show_status_bar" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:id="@+id/section_header_behavior"
+                android:text="@string/settings_section_files"
+                android:textColor="?attr/colorPrimary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="@string/page_status_alignment"
+                android:layout_marginBottom="4dp"
+                android:text="@string/archive_open_mode"
                 android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="14sp" />
 
             <Spinner
-                android:id="@+id/spinner_page_status_alignment"
+                android:id="@+id/spinner_archive_open_mode"
                 android:layout_width="match_parent"
                 android:layout_height="44dp"
+                android:layout_marginBottom="6dp"
                 android:background="@android:color/transparent"
                 android:popupBackground="?attr/colorSurface" />
 
-            <Switch android:id="@+id/switch_volume_scroll" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/volume_keys_page" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
-            <Switch android:id="@+id/switch_tap_paging" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/tap_paging_txt" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
-            <Switch android:id="@+id/switch_tap_paging_markdown" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/tap_paging_markdown" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
-            <Switch android:id="@+id/switch_tap_paging_pdf" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/tap_paging_pdf" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
-            <Switch android:id="@+id/switch_tap_paging_epub" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/tap_paging_epub" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
-            <Switch android:id="@+id/switch_tap_paging_word" android:layout_width="match_parent" android:layout_height="56dp" android:text="@string/tap_paging_word" android:textColor="?attr/colorOnSurface" android:textSize="16sp" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:text="@string/archive_open_mode_description"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="13sp" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="@string/tap_zone_mode"
+                android:layout_marginBottom="4dp"
+                android:text="@string/archive_viewer_background_timeout"
+                android:labelFor="@id/input_archive_viewer_background_timeout"
                 android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="14sp" />
 
-            <Spinner
-                android:id="@+id/spinner_tap_zone_mode"
+            <EditText
+                android:id="@+id/input_archive_viewer_background_timeout"
                 android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:background="@android:color/transparent"
-                android:popupBackground="?attr/colorSurface" />
-
-            <TextView
-                android:id="@+id/tap_zone_ratio_label"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/tap_zone_ratio_default"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="14sp" />
-
-            <TextView
-                android:id="@+id/tap_zone_leading_label"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="@string/tap_zone_leading_default"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="14sp" />
-
-            <SeekBar
-                android:id="@+id/tap_zone_leading_seekbar"
-                android:layout_width="match_parent"
-                android:layout_height="36dp"
-                android:max="75" />
-
-            <TextView
-                android:id="@+id/tap_zone_trailing_label"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="@string/tap_zone_trailing_default"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="14sp" />
-
-            <SeekBar
-                android:id="@+id/tap_zone_trailing_seekbar"
-                android:layout_width="match_parent"
-                android:layout_height="36dp"
-                android:max="75" />
+                android:layout_height="48dp"
+                android:layout_marginBottom="6dp"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:paddingTop="0dp"
+                android:paddingBottom="0dp"
+                android:gravity="start|center_vertical"
+                android:digits="0123456789"
+                android:hint="@string/archive_viewer_background_timeout_hint"
+                android:inputType="number"
+                android:imeOptions="actionDone"
+                android:saveEnabled="false"
+                android:maxLength="5"
+                android:singleLine="true"
+                android:textColor="?attr/colorOnSurface"
+                android:textColorHint="?attr/colorOnSurfaceVariant" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/page_overlap"
+                android:layout_marginBottom="14dp"
+                android:text="@string/archive_viewer_background_timeout_description"
                 android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="14sp" />
-
-            <Spinner
-                android:id="@+id/spinner_overlap_lines"
-                android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:layout_marginBottom="24dp"
-                android:background="@android:color/transparent"
-                android:popupBackground="?attr/colorSurface" />
+                android:textSize="13sp" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
                 android:id="@+id/section_header_security"
-                android:text="@string/settings_section_security"
+                android:text="@string/settings_section_security_access"
                 android:textColor="?attr/colorPrimary"
                 android:textSize="16sp"
                 android:textStyle="bold" />
@@ -1121,26 +1076,34 @@
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="24dp"
+                android:layout_marginBottom="8dp"
                 android:text="@string/change_pin" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/settings_folder_access"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="24dp"
+                android:text="@string/saf_folder_access" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
                 android:id="@+id/section_header_backup"
-                android:text="@string/settings_section_backup"
+                android:text="@string/settings_section_backup_reset"
                 android:textColor="?attr/colorPrimary"
                 android:textSize="16sp"
                 android:textStyle="bold" />
 
-            <TextView
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/settings_backup_help"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp"
-                android:text="@string/backup_description"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:textSize="13sp" />
+                android:layout_marginBottom="8dp"
+                android:text="@string/settings_help_backup" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -1152,7 +1115,7 @@
                     style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_marginEnd="8dp"
+                    android:layout_marginEnd="4dp"
                     android:layout_weight="1"
                     android:text="@string/export" />
 
@@ -1161,7 +1124,7 @@
                     style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
+                    android:layout_marginStart="4dp"
                     android:layout_weight="1"
                     android:text="@string/import_label" />
             </LinearLayout>
@@ -1171,7 +1134,7 @@
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
+                android:layout_marginTop="8dp"
                 android:layout_marginBottom="24dp"
                 android:text="@string/settings_reset" />
 
@@ -1181,8 +1144,7 @@
                 android:layout_marginTop="24dp"
                 android:layout_marginBottom="8dp"
                 android:id="@+id/section_header_updates"
-                android:visibility="gone"
-                android:text="@string/settings_section_updates"
+                android:text="@string/settings_section_app_info"
                 android:textColor="?attr/colorPrimary"
                 android:textSize="14sp"
                 android:textStyle="bold" />
@@ -1191,7 +1153,6 @@
                 android:id="@+id/update_release_link"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="32dp"
                 android:layout_marginBottom="8dp"
                 android:clickable="true"
                 android:focusable="true"

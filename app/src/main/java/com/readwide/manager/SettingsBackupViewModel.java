@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** One backup operation at a time, with rotation-safe results and no Activity references. */
 public final class SettingsBackupViewModel extends ViewModel {
@@ -44,11 +44,12 @@ public final class SettingsBackupViewModel extends ViewModel {
         return thread;
     });
     // Separate Settings instances must not interleave two imports/exports.
-    private static final AtomicBoolean BACKUP_RUNNING = new AtomicBoolean();
+    private static final AtomicReference<BackupTask> BACKUP_RUNNING = new AtomicReference<>();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final MutableLiveData<State> state = new MutableLiveData<>(idle());
     private final Executor worker;
     private volatile boolean cleared;
+    private BackupTask activeTask;
 
     public SettingsBackupViewModel() { this(WORKER); }
     SettingsBackupViewModel(Executor worker) { this.worker = worker; }
@@ -99,27 +100,65 @@ public final class SettingsBackupViewModel extends ViewModel {
 
     void submit(Operation operation, Work work) {
         if (cleared || isWorking()) return;
-        if (!BACKUP_RUNNING.compareAndSet(false, true)) {
-            state.setValue(new State(Phase.FAILURE, operation, "Another backup operation is still running"));
-            return;
-        }
+        BackupTask task = null;
         try {
+            task = new BackupTask(operation, work);
+            if (!BACKUP_RUNNING.compareAndSet(null, task)) {
+                state.setValue(new State(Phase.FAILURE, operation, "Another backup operation is still running"));
+                return;
+            }
+            activeTask = task;
             state.setValue(new State(Phase.WORKING, operation, null));
-            worker.execute(() -> {
-                State result;
-                try {
-                    result = work.run();
-                } catch (Exception | OutOfMemoryError | StackOverflowError failure) {
-                    result = failure(operation, failure);
-                } finally {
-                    BACKUP_RUNNING.set(false);
-                }
-                State completed = result;
-                main.post(() -> { if (!cleared) state.setValue(completed); });
-            });
+            worker.execute(task);
         } catch (RuntimeException | OutOfMemoryError | StackOverflowError rejected) {
-            BACKUP_RUNNING.set(false);
-            state.setValue(failure(operation, rejected));
+            // A started import owns its lock until commit/rollback finishes.
+            if (task != null) {
+                if (!task.cancelBeforeStart()) return;
+                BACKUP_RUNNING.compareAndSet(task, null);
+                if (activeTask != task) return;
+                activeTask = null;
+            }
+            if (!cleared) state.setValue(failure(operation, rejected));
+        }
+    }
+
+    private final class BackupTask implements Runnable {
+        private final Operation operation;
+        private final Work work;
+        private boolean started;
+        private boolean cancelled;
+
+        BackupTask(Operation operation, Work work) {
+            this.operation = operation;
+            this.work = work;
+        }
+
+        synchronized boolean cancelBeforeStart() {
+            if (started) return false;
+            cancelled = true;
+            return true;
+        }
+
+        @Override public void run() {
+            synchronized (this) {
+                if (cancelled || started) return;
+                started = true;
+            }
+            State result;
+            try {
+                result = work.run();
+            } catch (Exception | OutOfMemoryError | StackOverflowError failure) {
+                result = failure(operation, failure);
+            } finally {
+                BACKUP_RUNNING.compareAndSet(this, null);
+            }
+            State completed = result;
+            main.post(() -> {
+                if (!cleared && activeTask == this) {
+                    activeTask = null;
+                    state.setValue(completed);
+                }
+            });
         }
     }
 
@@ -143,6 +182,7 @@ public final class SettingsBackupViewModel extends ViewModel {
 
     @Override protected void onCleared() {
         cleared = true;
+        activeTask = null;
         state.setValue(idle());
         // Finishing Settings must not interrupt an import between file commits.
         // Rotation retains this model; a genuinely closed screen ignores late results.

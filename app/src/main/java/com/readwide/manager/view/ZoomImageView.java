@@ -13,6 +13,7 @@ import android.view.ViewConfiguration;
 import android.widget.OverScroller;
 
 import com.readwide.manager.util.ImageZoomScaleMath;
+import com.readwide.manager.util.ImageViewportMath;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -24,8 +25,8 @@ public class ZoomImageView extends AppCompatImageView {
     private static final float DOUBLE_TAP_ZOOM_FACTOR = 2f;
 
     public interface Callbacks {
-        void onSingleTap(float normalizedX);
-        boolean shouldHandleTapImmediately(float normalizedX);
+        void onSingleTap(float normalizedX, float normalizedY);
+        boolean shouldHandleTapImmediately(float normalizedX, float normalizedY);
         void onSwipeLeft();
         void onSwipeRight();
         void onZoomRequested();
@@ -62,6 +63,7 @@ public class ZoomImageView extends AppCompatImageView {
         super(context);
         setScaleType(ScaleType.MATRIX);
         setAdjustViewBounds(false);
+        setCropToPadding(true);
         scroller = new OverScroller(context);
         touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
         scaleDetector = new ScaleGestureDetector(context, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -81,7 +83,9 @@ public class ZoomImageView extends AppCompatImageView {
                 float target = current * requested;
                 if (target < minScale) requested = minScale / current;
                 if (target > maxScale) requested = maxScale / current;
-                matrix.postScale(requested, requested, detector.getFocusX(), detector.getFocusY());
+                matrix.postScale(requested, requested,
+                        detector.getFocusX() - getPaddingLeft(),
+                        detector.getFocusY() - getPaddingTop());
                 applyBounds();
                 return true;
             }
@@ -102,7 +106,7 @@ public class ZoomImageView extends AppCompatImageView {
             public boolean onSingleTapConfirmed(@NonNull MotionEvent e) {
                 if (zoomDoubleTapSequence
                         || e.getDownTime() == immediateTapHandledDownTime) return true;
-                if (callbacks != null) callbacks.onSingleTap(normalizedTapX(e));
+                if (callbacks != null) callbacks.onSingleTap(normalizedTapX(e), normalizedTapY(e));
                 return true;
             }
 
@@ -148,11 +152,30 @@ public class ZoomImageView extends AppCompatImageView {
         this.callbacks = callbacks;
     }
 
+    /** Resize the displayed content without replacing the drawable or the touch surface. */
+    public void setViewportInsets(int left, int top, int right, int bottom) {
+        left = Math.max(0, left);
+        top = Math.max(0, top);
+        right = Math.max(0, right);
+        bottom = Math.max(0, bottom);
+        if (getPaddingLeft() == left && getPaddingTop() == top
+                && getPaddingRight() == right && getPaddingBottom() == bottom) return;
+        float[] anchor = imageWidth > 0 && imageHeight > 0
+                && getContentWidth() > 0 && getContentHeight() > 0
+                ? captureViewportAnchor() : null;
+        setPadding(left, top, right, bottom);
+        configureBaseMatrix();
+        if (anchor != null && getContentWidth() > 0 && getContentHeight() > 0) {
+            restoreViewportAnchor(anchor);
+        }
+        invalidate();
+    }
+
     private boolean handleImmediatePageTap(@NonNull MotionEvent e) {
         if (e.getDownTime() == immediateTapHandledDownTime) return true;
         if (!shouldHandleTapImmediately(e)) return false;
         immediateTapHandledDownTime = e.getDownTime();
-        if (callbacks != null) callbacks.onSingleTap(normalizedTapX(e));
+        if (callbacks != null) callbacks.onSingleTap(normalizedTapX(e), normalizedTapY(e));
         return true;
     }
 
@@ -193,7 +216,7 @@ public class ZoomImageView extends AppCompatImageView {
                 && getCurrentScale() <= defaultScale + getDoubleTapBaseEpsilon()
                 && !scaleDetector.isInProgress()
                 && e.getPointerCount() == 1
-                && callbacks.shouldHandleTapImmediately(normalizedTapX(e));
+                && callbacks.shouldHandleTapImmediately(normalizedTapX(e), normalizedTapY(e));
     }
 
     public void setImageBitmapReady(@NonNull Bitmap nextBitmap) {
@@ -360,12 +383,12 @@ public class ZoomImageView extends AppCompatImageView {
         // to original 1:1, but not below it.
         minScale = ImageZoomScaleMath.minimumPinchScale(defaultScale);
         maxScale = Math.max(Math.max(Math.max(minScale, fitScale), Math.max(defaultScale, 1f)) * 5f, 5f);
-        // ImageView's onDraw already translates the canvas by padding before it
-        // applies this matrix, so center the image within the content box
-        // [0..contentW] x [0..contentH] WITHOUT adding padding again. Adding it here
-        // would double-offset the image (e.g. push it down by paddingTop).
+        // ImageView already translates its canvas by padding. Matrix offsets
+        // use content coordinates; vertical placement keeps the screen center
+        // when the panels leave enough space.
         float dx = (contentW - bw * defaultScale) * 0.5f;
-        float dy = (contentH - bh * defaultScale) * 0.5f;
+        float dy = ImageViewportMath.centeredTop(
+                bh * defaultScale, getHeight(), getPaddingTop(), getPaddingBottom());
         matrix.postScale(defaultScale, defaultScale);
         matrix.postTranslate(dx, dy);
         setImageMatrix(matrix);
@@ -378,6 +401,10 @@ public class ZoomImageView extends AppCompatImageView {
         if (normalized < 0f) return 0f;
         if (normalized > 1f) return 1f;
         return normalized;
+    }
+
+    private float normalizedTapY(@NonNull MotionEvent event) {
+        return getHeight() <= 0 ? 0.5f : Math.max(0f, Math.min(1f, event.getY() / getHeight()));
     }
 
     private void handleMove(@NonNull MotionEvent event) {
@@ -415,7 +442,7 @@ public class ZoomImageView extends AppCompatImageView {
         float target = getDoubleTapTargetScale(current);
         target = Math.min(maxScale, Math.max(minScale, target));
         float factor = target / current;
-        matrix.postScale(factor, factor, focusX, focusY);
+        matrix.postScale(factor, factor, focusX - getPaddingLeft(), focusY - getPaddingTop());
         applyBounds();
     }
 
@@ -492,6 +519,15 @@ public class ZoomImageView extends AppCompatImageView {
 
     private void setImageBitmapPreserveViewport(@NonNull Bitmap nextBitmap) {
         stopImageFling();
+        float[] anchor = captureViewportAnchor();
+        imageWidth = nextBitmap.getWidth();
+        imageHeight = nextBitmap.getHeight();
+        setImageBitmap(nextBitmap);
+        configureBaseMatrix();
+        restoreViewportAnchor(anchor);
+    }
+
+    private float[] captureViewportAnchor() {
         float oldBaseScale = defaultScale <= 0f ? (minScale <= 0f ? 1f : minScale) : defaultScale;
         float oldScaleRatio = getCurrentScale() / oldBaseScale;
         if (Float.isNaN(oldScaleRatio) || Float.isInfinite(oldScaleRatio) || oldScaleRatio <= 0f) oldScaleRatio = 1f;
@@ -508,19 +544,18 @@ public class ZoomImageView extends AppCompatImageView {
             normY = clamp01(center[1] / Math.max(1f, imageHeight));
         }
 
-        imageWidth = nextBitmap.getWidth();
-        imageHeight = nextBitmap.getHeight();
-        setImageBitmap(nextBitmap);
-        configureBaseMatrix();
+        return new float[] { normX, normY, oldScaleRatio };
+    }
 
+    private void restoreViewportAnchor(float[] anchor) {
         float current = getCurrentScale();
-        float target = Math.max(minScale, Math.min(maxScale, defaultScale * oldScaleRatio));
+        float target = Math.max(minScale, Math.min(maxScale, defaultScale * anchor[2]));
         if (current > 0f && Math.abs(target - current) > 0.001f) {
             float cx = getContentWidth() * 0.5f;
             float cy = getContentHeight() * 0.5f;
             matrix.postScale(target / current, target / current, cx, cy);
         }
-        float[] mapped = new float[] { normX * imageWidth, normY * imageHeight };
+        float[] mapped = new float[] { anchor[0] * imageWidth, anchor[1] * imageHeight };
         matrix.mapPoints(mapped);
         float desiredX = getContentWidth() * 0.5f;
         float desiredY = getContentHeight() * 0.5f;
@@ -584,7 +619,8 @@ public class ZoomImageView extends AppCompatImageView {
         }
 
         if (imageRect.height() <= contentH) {
-            dy = topBound + (contentH - imageRect.height()) * 0.5f - imageRect.top;
+            dy = ImageViewportMath.centeredTop(
+                    imageRect.height(), getHeight(), getPaddingTop(), getPaddingBottom()) - imageRect.top;
         } else if (imageRect.top > topBound) {
             dy = topBound - imageRect.top;
         } else if (imageRect.bottom < bottomBound) {

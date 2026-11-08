@@ -227,12 +227,14 @@ public class Rar4SplitPayloadRewriterTest {
     }
 
     private static byte[] rar4Header(int type, int flags, byte[] body) throws Exception {
-        return bytes(
-                uint16(0),
+        byte[] checked = bytes(
                 new byte[] {(byte) type},
                 uint16(flags),
                 uint16(7 + body.length),
                 body);
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        crc.update(checked);
+        return bytes(uint16((int) crc.getValue()), checked);
     }
 
     private static byte[] uint16(int value) {

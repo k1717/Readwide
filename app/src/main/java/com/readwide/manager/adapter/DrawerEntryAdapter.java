@@ -25,6 +25,7 @@ import java.util.Locale;
  * Adapter for the drawer's storage shortcut list (Recent, storage roots, recent folders, ...).
  */
 public class DrawerEntryAdapter extends RecyclerView.Adapter<DrawerEntryAdapter.ViewHolder> {
+    private static final Object THEME_PAYLOAD = new Object();
 
     public interface OnEntryClickListener {
         void onEntryClick(@NonNull DrawerEntry entry);
@@ -54,7 +55,6 @@ public class DrawerEntryAdapter extends RecyclerView.Adapter<DrawerEntryAdapter.
 
     public void setEntries(@NonNull List<DrawerEntry> newEntries) {
         if (entries.equals(newEntries)) {
-            notifyItemRangeChanged(0, entries.size());
             return;
         }
 
@@ -101,7 +101,8 @@ public class DrawerEntryAdapter extends RecyclerView.Adapter<DrawerEntryAdapter.
     public int getItemCount() { return entries.size(); }
 
     public void refreshTheme() {
-        notifyItemRangeChanged(0, entries.size());
+        // A theme change rebinds the existing holders without a replacement fade.
+        if (!entries.isEmpty()) notifyItemRangeChanged(0, entries.size(), THEME_PAYLOAD);
     }
 
     public class ViewHolder extends RecyclerView.ViewHolder {

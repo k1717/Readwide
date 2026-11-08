@@ -41,6 +41,8 @@ final class Rar3IndependentPayloadExtractor {
                 guard.commit();
             }
             return true;
+        } catch (IOException failure) {
+            throw Rar3PackedPayload.decodeFailure(entry, failure, progress);
         }
     }
 }

@@ -17,7 +17,7 @@ public class DeflateFailureStateTest {
                 }
                 @Override public void close() { closes[0]++; }
             };
-            OwnedDeflateInputStream stream=new OwnedDeflateInputStream(source);
+            OwnedDeflateInputStream stream=OwnedDeflateInputStream.open(source);
             assertSame(error,assertThrows(Throwable.class,stream::read));
             assertSame(error,assertThrows(Throwable.class,stream::read));
             assertSame(error,assertThrows(Throwable.class,stream::available));
@@ -26,7 +26,7 @@ public class DeflateFailureStateTest {
     }
 
     @Test public void invalidCallerRangeDoesNotRetireAHealthyDeflateStream() throws Exception {
-        try(InputStream stream=new OwnedDeflateInputStream(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{42})))) {
+        try(InputStream stream=OwnedDeflateInputStream.open(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{42})))) {
             assertThrows(IndexOutOfBoundsException.class,()->stream.read(new byte[1],Integer.MAX_VALUE,1));
             assertEquals(42,stream.read());assertEquals(-1,stream.read());
         }

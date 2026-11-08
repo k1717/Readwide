@@ -560,6 +560,120 @@ public class Rar3LogicalSolidArchiveExtractorTest {
     @Test public void storedAesSplitOnlyForwardCoverage() throws Exception { storedForward(true, true, true); }
     @Test public void storedPlainOnlyForwardWithoutNative() throws Exception { storedForward(false, false, false); }
 
+    @Test public void selectedUnsplitAesStoredSolidUsesOnlyDeclaredPlaintext() throws Exception {
+        for (int length : new int[]{0, 1, 15, 16, 17}) {
+            byte[] data = Round4Fixtures.data(length);
+            List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+            appendStored(entries, "stored.bin", data, true, false, true);
+            File output = original();
+            char[] password = PASSWORD.clone();
+
+            RarArchiveReader.extractStoredEntry(entries.get(0), output, password, entries, null);
+
+            assertArrayEquals(data, Files.readAllBytes(output.toPath()));
+            assertArrayEquals(PASSWORD, password);
+        }
+    }
+
+    @Test public void unsplitAesStoredSolidWrongPasswordRestoresExistingOutput() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        appendStored(entries, "stored.bin", Round4Fixtures.data(17), true, false, true);
+        File output = original();
+
+        assertThrows(ArchiveSupport.PasswordRequiredException.class, () -> RarArchiveReader.extractStoredEntry(
+                entries.get(0), output, "incorrect".toCharArray(), entries, null));
+
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test public void unsplitAesStoredSolidBadCrcRestoresExistingOutput() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        appendStored(entries, "stored.bin", new byte[]{42, 43}, true, false, true);
+        RarArchiveReader.RarEntry stored = entries.get(0);
+        RarArchiveReader.RarEntry damaged = new RarArchiveReader.RarEntry(stored.path, false,
+                stored.unpackedSize, stored.packedSize, stored.dataOffset, 4, 0x30, true,
+                false, false, stored.encryption, stored.dataCrc ^ 1, 0);
+        damaged.sourceArchive = stored.sourceArchive;
+        entries.set(0, damaged);
+        File output = original();
+
+        assertThrows(ArchiveSupport.PasswordRequiredException.class, () -> RarArchiveReader.extractStoredEntry(
+                damaged, output, PASSWORD, entries, null));
+
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test public void unsplitAesStoredSolidTruncatedRangeRestoresExistingOutput() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        appendStored(entries, "stored.bin", new byte[]{42, 43}, true, false, true);
+        RarArchiveReader.RarEntry stored = entries.get(0);
+        byte[] ciphertext = Files.readAllBytes(stored.sourceArchive.toPath());
+        Files.write(stored.sourceArchive.toPath(), Arrays.copyOf(ciphertext, ciphertext.length - 1));
+        File output = original();
+
+        assertThrows(java.io.EOFException.class, () -> RarArchiveReader.extractStoredEntry(
+                stored, output, PASSWORD, entries, null));
+
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test public void unsplitAesStoredSolidCancellationAfterWriteRestoresExistingOutput() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = new ArrayList<>();
+        appendStored(entries, "stored.bin", new byte[]{42, 43}, true, false, true);
+        File output = original();
+        com.readwide.manager.util.FileOperationProgress progress =
+                new com.readwide.manager.util.FileOperationProgress("RAR", null);
+        progress.setListener(snapshot -> {
+            if (snapshot.doneBytes > 0 && !snapshot.cancelled) progress.cancel();
+        });
+
+        assertThrows(java.io.InterruptedIOException.class, () -> RarArchiveReader.extractStoredEntry(
+                entries.get(0), output, PASSWORD, entries, progress));
+
+        assertTrue(progress.isCancelled());
+        assertFalse(Thread.currentThread().isInterrupted());
+        assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
+    }
+
+    @Test public void bulkUnsplitAesStoredSolidPreservesCompressedHistory() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = interleavedUnsplitAesStoredSolid();
+        File directory = temporary.newFolder();
+
+        assertTrue(Rar3LogicalSolidArchiveExtractor.tryExtractArchive(entries, directory, PASSWORD, null, null));
+
+        assertArrayEquals(new byte[]{'A', 'B'}, Files.readAllBytes(new File(directory, "primer.bin").toPath()));
+        assertArrayEquals(new byte[]{42, 43}, Files.readAllBytes(new File(directory, "stored.bin").toPath()));
+        assertArrayEquals(new byte[]{'B'}, Files.readAllBytes(new File(directory, "target.bin").toPath()));
+    }
+
+    @Test public void forwardSkipUnsplitAesStoredSolidPreservesCompressedHistoryAndRemovesSpool() throws Exception {
+        File directory = temporary.newFolder();
+        try (ArchiveSupport.ForwardArchiveReader reader = Rar3LogicalSolidArchiveExtractor.openForwardReader(
+                interleavedUnsplitAesStoredSolid(), PASSWORD, directory)) {
+            assertNotNull(reader);
+            assertEquals("primer.bin", reader.nextEntry().path);
+            assertTrue(reader.drainCurrentEntry(2));
+            assertEquals("stored.bin", reader.nextEntry().path);
+            assertTrue(reader.drainCurrentEntry(2));
+            assertEquals(0, directory.list().length);
+            assertEquals("target.bin", reader.nextEntry().path);
+            byte[] data = new byte[2];
+            assertEquals(1, reader.read(data));
+            assertEquals('B', data[0]);
+            assertNull(reader.nextEntry());
+        }
+        assertEquals(0, directory.list().length);
+    }
+
+    private List<RarArchiveReader.RarEntry> interleavedUnsplitAesStoredSolid() throws Exception {
+        List<RarArchiveReader.RarEntry> entries = fixture(true, true, false);
+        RarArchiveReader.RarEntry compressedTarget = target(entries);
+        List<RarArchiveReader.RarEntry> stored = new ArrayList<>();
+        appendStored(stored, "stored.bin", new byte[]{42, 43}, true, false, true);
+        entries.addAll(entries.indexOf(compressedTarget), stored);
+        return entries;
+    }
+
     @Test public void selectedPlainStoredSolidSplitCopiesWithoutDictionary() throws Exception {
         selectedStoredSolidSplit(false);
     }
@@ -727,22 +841,24 @@ public class Rar3LogicalSolidArchiveExtractorTest {
     }
 
     @Test public void forwardSkippedStoredMemberPreservesCompressedState() throws Exception {
-        File directory = temporary.newFolder();
-        try (ArchiveSupport.ForwardArchiveReader reader = Rar3LogicalSolidArchiveExtractor.openForwardReader(
-                interleaved(true, true, true, true), PASSWORD, directory)) {
-            assertNotNull(reader);
-            reader.nextEntry();
-            assertTrue(reader.drainCurrentEntry(2));
-            assertEquals("stored.bin", reader.nextEntry().path);
-            assertTrue(reader.drainCurrentEntry(2));
+        for (boolean storedEncrypted : new boolean[]{false, true}) for (boolean storedSplit : new boolean[]{false, true}) {
+            File directory = temporary.newFolder();
+            try (ArchiveSupport.ForwardArchiveReader reader = Rar3LogicalSolidArchiveExtractor.openForwardReader(
+                    interleaved(true, true, storedEncrypted, storedSplit), PASSWORD, directory)) {
+                assertNotNull(reader);
+                reader.nextEntry();
+                assertTrue(reader.drainCurrentEntry(2));
+                assertEquals("stored.bin", reader.nextEntry().path);
+                assertTrue(reader.drainCurrentEntry(2));
+                assertEquals(0, directory.list().length);
+                reader.nextEntry();
+                byte[] data = new byte[4];
+                assertEquals(1, reader.read(data));
+                assertEquals('B', data[0]);
+                assertNull(reader.nextEntry());
+            }
             assertEquals(0, directory.list().length);
-            reader.nextEntry();
-            byte[] data = new byte[4];
-            assertEquals(1, reader.read(data));
-            assertEquals('B', data[0]);
-            assertNull(reader.nextEntry());
         }
-        assertEquals(0, directory.list().length);
     }
 
     @Test public void badInterveningStoredCrcRetiresForwardBeforeTarget() throws Exception {

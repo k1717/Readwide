@@ -41,8 +41,11 @@ final class SettingsCollapsibleSectionController {
     private static final int[] HEADER_IDS = {
             R.id.section_header_language,
             R.id.section_header_theme,
+            R.id.section_header_text_style,
             R.id.section_header_txt_layout,
             R.id.section_header_epub_layout,
+            R.id.section_header_reader_display,
+            R.id.section_header_reading,
             R.id.section_header_behavior,
             R.id.section_header_button_order,
             R.id.section_header_security,
@@ -50,7 +53,7 @@ final class SettingsCollapsibleSectionController {
             R.id.section_header_updates
     };
     private static final String[] HEADER_KEYS = {
-            "language", "theme", "txt_layout", "epub_layout",
+            "language", "theme", "text_style", "txt_layout", "epub_layout", "reader_display", "reading",
             "behavior", "button_order", "security", "backup", "updates"
     };
     // Sections left raw: always visible, no collapse toggle (single-option folders).
@@ -58,7 +61,8 @@ final class SettingsCollapsibleSectionController {
     // Sections that belong to the View-settings (appearance/style) mode. Everything
     // else is general app/data settings. The active mode hides the other group
     // entirely so the two entry points never show each other's sections.
-    private static final String[] APPEARANCE_SECTIONS = { "theme", "txt_layout", "epub_layout" };
+    private static final String[] APPEARANCE_SECTIONS = {
+            "theme", "text_style", "txt_layout", "epub_layout", "reader_display" };
 
     private static final String MARKER_EXPANDED = "\u25BE  ";
     private static final String MARKER_COLLAPSED = "\u25B8  ";

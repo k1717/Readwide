@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:orientation="vertical">
+    <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp"
+                android:text="@string/large_txt_partition_mode"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="14sp" />
+
+    <Spinner
+                android:id="@+id/spinner_large_txt_partition_mode"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:layout_marginBottom="6dp"
+                android:background="@android:color/transparent"
+                android:popupBackground="?attr/colorSurface" />
+
+    <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:text="@string/large_txt_partition_mode_description"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="13sp" />
+
+    <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/page_overlap"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="14sp" />
+
+    <Spinner
+                android:id="@+id/spinner_overlap_lines"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:layout_marginBottom="24dp"
+                android:background="@android:color/transparent"
+                android:popupBackground="?attr/colorSurface" />
+</LinearLayout>

@@ -37,8 +37,8 @@ android {
         applicationId = "com.readwide.manager"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10021
-        versionName = "1.0.21"
+        versionCode = 10022
+        versionName = "1.0.22"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Release APKs keep Android ARM ABIs only.
@@ -157,6 +157,20 @@ tasks.matching { task ->
 // Retained compatibility APIs must be reviewed individually, not hidden globally.
 tasks.withType(JavaCompile).configureEach {
     options.compilerArgs.add('-Xlint:deprecation')
+}
+
+// Gradle command-line properties do not automatically reach the forked test JVM.
+tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
+    [
+            'textview.externalArchiveFixtureDir',
+            'textview.archiveFixtureReportOutDir',
+            'textview.rarFixtureReportOutDir',
+            'textview.archiveFixturePassword',
+            'textview.rar3SolidCbrFixture'
+    ].each { String propertyName ->
+        def value = providers.systemProperty(propertyName).orNull
+        if (value != null) systemProperty(propertyName, value)
+    }
 }
 
 

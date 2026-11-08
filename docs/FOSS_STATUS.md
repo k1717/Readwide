@@ -1,9 +1,9 @@
-# FOSS status for Readwide 1.0.21
+# FOSS status for Readwide 1.0.22
 
-This is the project-level FOSS status note for the default Readwide 1.0.21 source package and default release build. It is not legal advice; it records the current release position and the checks a reviewer should make.
+This is the project-level FOSS status note for the default Readwide 1.0.22 source baseline. It is not legal advice; final build and submission checks remain separate.
 
-Version 1.0.21 retains the permissions, dependency pins and bundled sources from
-1.0.20. That version replaced
+Version 1.0.22 retains the permissions, dependency pins and bundled sources from
+1.0.21. The inherited 1.0.20 integration replaced
 `org.brotli:dec:0.1.2` with pinned MIT Google Brotli v1.2.0 Java source in the local
 `:brotliJava` module for standard/large-window 7z payloads. Its source, license and
 reflection keep rules are included; the notice is bundled as an APK asset. See
@@ -13,7 +13,7 @@ codec sources selected from 7-Zip-zstd. No Bandizip/Ark, proprietary ESTsoft UnE
 7-Zip archive engine or UnRAR-license implementation is included. Exact source
 revisions, notices and scope are recorded in ARCHIVE_CODEC_ADDITIONS_1_0_20.md.
 This is a declared-source review, not a resolved build or F-Droid approval. See the
-[release notes](GITHUB_RELEASE_NOTES_READWIDE_1_0_21.md).
+[current source status](CURRENT_SOURCE_STATUS_1_0_22.md).
 
 ## Current assessment
 
@@ -21,7 +21,7 @@ Custom TXT contents rules retain the pure-Java Maven dependency RE2/J 1.8 under
 BSD-3-Clause. The full upstream license is retained in APK assets, the direct
 license report and source SBOM record the declaration, and no network permission
 or runtime service is added. Build, resolved-dependency licensing and final APK
-review for 1.0.21 remain pending. This is not a new F-Droid approval claim.
+review for 1.0.22 remain pending. This is not a new F-Droid approval claim.
 
 The 7z LZHAM `0x10`/`0x11` profiles use a pinned MIT decoder/common subset with four marked
 local changes and a separate Apache-2.0 JNI adapter/shared target. It privately
@@ -49,7 +49,7 @@ the full LGPL license/relinking notice. Linked-set app extraction routing is con
 in source; native runtime validation is not established by build success. See
 [CAB integration status](CAB_MULTIVOLUME_INTEGRATION_1_0_20.md).
 
-The default Readwide 1.0.21 source package is intended to remain FOSS-friendly:
+The default Readwide 1.0.22 source baseline is intended to remain FOSS-friendly:
 
 - First-party app source is Apache-2.0; separately marked native-library adapters
   retain their stated LGPL terms, including the LGPL-2.1-only CAB adapter.
@@ -83,7 +83,7 @@ The default Readwide 1.0.21 source package is intended to remain FOSS-friendly:
 | PdfBox-Android | PDF text extraction for in-document find (rendering stays on the platform PdfRenderer) | Apache-2.0 |
 | xunazo-derived AZO port | EGG AZO extraction | zlib license notice retained in source |
 
-See the 1.0.21 source/direct-dependency reports `docs/LICENSE_REPORT_READWIDE_1_0_21.md`, `docs/SBOM_READWIDE_1_0_21.spdx.json`, and `THIRD_PARTY_NOTICES.md` for detail.
+See the inherited 1.0.21 source/direct-dependency reports `docs/LICENSE_REPORT_READWIDE_1_0_21.md`, `docs/SBOM_READWIDE_1_0_21.spdx.json`, and `THIRD_PARTY_NOTICES.md` for detail. They are not newly generated 1.0.22 artifact inventories.
 
 ## RAR / CBR boundary
 
@@ -103,7 +103,7 @@ No Junrar or RARLAB UnRAR-license source code is bundled in the default build.
 
 HWP/HWPX support is read-only and text-first:
 
-- `.hwp` uses `kr.dogfoot:hwplib:1.1.11` in the 1.0.21 source.
+- `.hwp` uses `kr.dogfoot:hwplib:1.1.11` in the 1.0.22 source.
 - `.hwpx` uses `kr.dogfoot:hwpxlib:1.0.9`.
 - Both are recorded as Apache-2.0 dependencies.
 - Readwide does not bundle Hancom proprietary SDKs, LibreOffice, a server conversion service, or non-FOSS HWP code.
@@ -113,7 +113,7 @@ HWP/HWPX support is read-only and text-first:
 
 The app is a local file browser/reader and requests broad storage access for that purpose. Broad storage access is not a FOSS license issue by itself, but it is a privacy/review-sensitive Android permission and must stay documented in `PRIVACY.md`, the F-Droid metadata, and release notes.
 
-Readwide 1.0.21 retains the persisted, read-oriented Storage Access Framework tree browser introduced in 1.0.16. It introduces no dependency, network service, or permission and does not weaken the disclosure for the separate raw-path file-management mode.
+Readwide 1.0.22 extends the persisted Storage Access Framework browser with registered-folder management and provider-backed copy, move, rename, delete and folder creation. Operations require a matching grant and current provider capabilities. No dependency, network service or manifest permission is added; the separate raw-path file manager still requires its own storage access.
 
 The `FileProvider` configuration includes broad external storage sharing support so explicitly initiated open-with/share actions can grant temporary read access to selected files outside app-private storage. The provider is not exported and grants access through Android intent URI grants; this behavior still needs to remain documented because static scanners may flag broad `external-path` use.
 
@@ -141,8 +141,8 @@ When distributing APK/AAB files, keep these alongside the binary release assets:
 - `THIRD_PARTY_NOTICES.md`
 - `PRIVACY.md`
 - `docs/FOSS_STATUS.md`
-- `docs/LICENSE_REPORT_READWIDE_1_0_21.md` (current source-declared report)
-- `docs/SBOM_READWIDE_1_0_21.spdx.json` (current source-declared report)
+- `docs/LICENSE_REPORT_READWIDE_1_0_21.md` (inherited 1.0.21 source-declared report)
+- `docs/SBOM_READWIDE_1_0_21.spdx.json` (inherited 1.0.21 source-declared report)
 
 The complete source-controlled `app/src/main/assets/open_source_licenses/`
 directory is the expected APK notice inventory. It includes libarchive/codecs,

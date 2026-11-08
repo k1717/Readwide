@@ -21,6 +21,7 @@ final class MainConfirmDialogController {
                                  @NonNull String messageText,
                                  @NonNull String confirmText,
                                  @NonNull Runnable onConfirm) {
+        if (activity.activityDestroyed || activity.isFinishing() || activity.isDestroyed()) return;
         final boolean dark = activity.prefs == null || activity.prefs.shouldUseDarkColors(activity);
         final int bg = activity.prefs != null ? activity.prefs.getMainBgColor(activity) : (dark ? Color.rgb(33, 33, 33) : Color.rgb(255, 255, 255));
         final int panel = activity.prefs != null ? activity.prefs.getMainPanelColor(activity) : (dark ? Color.rgb(48, 48, 48) : Color.rgb(245, 245, 245));
@@ -62,8 +63,12 @@ final class MainConfirmDialogController {
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
         final android.app.Dialog[] ref = new android.app.Dialog[1];
+        final boolean[] confirmed = {false};
         activity.addFileOpsRow(box, confirmText, fg, panel, () -> {
-            if (ref[0] != null) ref[0].dismiss();
+            if (confirmed[0] || activity.activityDestroyed || activity.isFinishing() || activity.isDestroyed()
+                    || ref[0] == null || !ref[0].isShowing()) return;
+            confirmed[0] = true;
+            ref[0].dismiss();
             onConfirm.run();
         });
 

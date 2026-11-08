@@ -110,5 +110,18 @@ final class Rar3PackedPayload implements AutoCloseable {
         }
     }
 
+    /** Call after owned input/output cleanup so a cleanup failure cannot prompt a retry. */
+    static IOException decodeFailure(RarArchiveReader.RarEntry entry, IOException failure,
+                                     FileOperationProgress progress) throws IOException {
+        if (!(failure instanceof RarCanonicalHuffman.InvalidDataException)) return failure;
+        ArchiveCancellation.rethrowIfCancelled(failure, progress);
+        if (!entry.encrypted() || failure.getCause() != null || failure.getSuppressed().length != 0) return failure;
+        // Legacy AES has no password verifier. Invalid plaintext can mean a wrong
+        // password or damaged ciphertext; preserve the cause and allow password retry.
+        ArchiveSupport.PasswordRequiredException retry = new ArchiveSupport.PasswordRequiredException();
+        retry.initCause(failure);
+        return retry;
+    }
+
     @Override public void close() throws IOException { input.close(); }
 }

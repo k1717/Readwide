@@ -31,5 +31,5 @@ contain the Java bindings for
 .
 
 See also
-[`MainActivity.java`](sample/src/main/java/me/zhanghai/android/libarchive/sample/MainActivity.java)
+[`MainActivity.java`](https://github.com/zhanghai/libarchive-android/blob/3a592be028c7be41847f667570bd343c0010bd9d/sample/src/main/java/me/zhanghai/android/libarchive/sample/MainActivity.java)
 for an example on how to use this library to read archive files.

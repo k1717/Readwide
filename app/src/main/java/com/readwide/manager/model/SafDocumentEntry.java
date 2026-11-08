@@ -12,7 +12,9 @@ public final class SafDocumentEntry {
     @NonNull private final String mimeType;
     private final boolean directory;
     private final long size;
+    private final boolean sizeKnown;
     private final long lastModified;
+    private final int flags;
 
     public SafDocumentEntry(@NonNull Uri uri,
                             @NonNull String documentId,
@@ -20,14 +22,17 @@ public final class SafDocumentEntry {
                             @NonNull String mimeType,
                             boolean directory,
                             long size,
-                            long lastModified) {
+                            long lastModified,
+                            int flags) {
         this.uri = uri;
         this.documentId = documentId;
         this.name = name;
         this.mimeType = mimeType;
         this.directory = directory;
         this.size = Math.max(0L, size);
+        this.sizeKnown = size >= 0;
         this.lastModified = Math.max(0L, lastModified);
+        this.flags = flags;
     }
 
     @NonNull public Uri getUri() { return uri; }
@@ -36,5 +41,7 @@ public final class SafDocumentEntry {
     @NonNull public String getMimeType() { return mimeType; }
     public boolean isDirectory() { return directory; }
     public long getSize() { return size; }
+    public boolean isSizeKnown() { return sizeKnown; }
     public long getLastModified() { return lastModified; }
+    public int getFlags() { return flags; }
 }

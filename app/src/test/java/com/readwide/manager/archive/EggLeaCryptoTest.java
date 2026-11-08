@@ -14,7 +14,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
-/** Source-only regression additions; CC0 producer samples are not runtime dependencies. */
+/** CC0 producer samples are not runtime dependencies. */
 public class EggLeaCryptoTest {
     @Rule public TemporaryFolder temp = new TemporaryFolder();
     private static final char[] PASSWORD = "test1234".toCharArray();
@@ -29,7 +29,7 @@ public class EggLeaCryptoTest {
     }
     @Test public void realLea128SelectedAndBulk() throws Exception { producer("lea128.egg"); }
     @Test public void realLea256SelectedAndBulk() throws Exception { producer("lea256.egg"); }
-    @Test public void realLeaBzip2() throws Exception {
+    @Test public void producerAes256Bzip2WithPrefixInclusiveEncryptionSize() throws Exception {
         File archive = fixture("enc_lea_bzip2.egg");
         File output = temp.newFile();
         assertTrue(EggArchiveReader.extractSingleEntry(archive, "text.txt", output, PASSWORD));
@@ -38,7 +38,8 @@ public class EggLeaCryptoTest {
     @Test public void wrongPasswordPreservesExistingOutput() throws Exception {
         File archive = fixture("enc_lea_bzip2.egg"), output = temp.newFile();
         Files.write(output.toPath(), new byte[]{42});
-        assertThrows(IOException.class, () -> EggArchiveReader.extractSingleEntry(archive, "text.txt", output, "wrong".toCharArray()));
+        IOException failure = assertThrows(IOException.class, () -> EggArchiveReader.extractSingleEntry(archive, "text.txt", output, "wrong".toCharArray()));
+        assertEquals("Invalid password for EGG entry", failure.getMessage());
         assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
     }
     @Test public void tamperedAuthenticationFooterPreservesExistingOutput() throws Exception {
@@ -51,7 +52,8 @@ public class EggLeaCryptoTest {
         data[payload + 1 + saltLength + 2] ^= 1;
         Files.write(archive.toPath(), data);
         File output = temp.newFile(); Files.write(output.toPath(), new byte[]{42});
-        assertThrows(IOException.class, () -> EggArchiveReader.extractSingleEntry(archive, "text.txt", output, PASSWORD));
+        IOException failure = assertThrows(IOException.class, () -> EggArchiveReader.extractSingleEntry(archive, "text.txt", output, PASSWORD));
+        assertEquals("EGG data authentication failed", failure.getMessage());
         assertArrayEquals(new byte[]{42}, Files.readAllBytes(output.toPath()));
     }
     @Test public void rejectsInvalidCipherParameters() {

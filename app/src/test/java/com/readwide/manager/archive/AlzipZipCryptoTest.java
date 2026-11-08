@@ -173,12 +173,13 @@ public class AlzipZipCryptoTest {
     @Test public void allCrcMismatchesRejectThePassword() throws Exception {
         byte[][] fixture = collidingPasswordFixture(new byte[]{1,2,3,4}, "MS949", 0x55);
         int[] attempts = {0};
-        assertThrows(java.io.IOException.class, () -> AlzipZipCrypto.checked(
+        AlzipZipCrypto.PasswordException rejected = assertThrows(AlzipZipCrypto.PasswordException.class, () -> AlzipZipCrypto.checked(
                 "비밀번호".toCharArray(), fixture[0], 0x55, true, candidate -> {
                     attempts[0]++;
                     return false;
                 }));
         assertTrue(attempts[0] >= 2);
+        assertEquals(ArchiveSupport.ExtractionFailure.BAD_PASSWORD, ArchiveFailureClassifier.classify(rejected));
     }
 
     // Deterministically create a producer-style header that also passes the

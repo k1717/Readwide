@@ -24,11 +24,14 @@ public final class ArchiveSourceSnapshot {
     private final String family;
     private final List<Stamp> volumes;
     private final String fingerprint;
+    @Nullable private final Exception captureFailure;
 
-    private ArchiveSourceSnapshot(@Nullable String selectedPath, String family, List<Stamp> volumes) {
+    private ArchiveSourceSnapshot(@Nullable String selectedPath, String family, List<Stamp> volumes,
+                                  @Nullable Exception captureFailure) {
         this.selectedPath = selectedPath;
         this.family = family;
         this.volumes = Collections.unmodifiableList(new ArrayList<>(volumes));
+        this.captureFailure = captureFailure;
         // Failed capture must never alias a previously verified plaintext cache.
         this.fingerprint = selectedPath == null
                 ? UUID.randomUUID().toString().replace("-", "").substring(0, 24)
@@ -87,10 +90,22 @@ public final class ArchiveSourceSnapshot {
             }
             if (!selectedFound) throw new IOException("Selected volume is not in the resolved chain");
             ArchiveCancellation.checkpoint(null);
-            return new ArchiveSourceSnapshot(selectedStamp.path, family, stamps);
+            return new ArchiveSourceSnapshot(selectedStamp.path, family, stamps, null);
         } catch (IOException | SecurityException unavailable) {
             ArchiveCancellation.restoreIfCancelled(unavailable, null);
-            return new ArchiveSourceSnapshot(null, "unresolved", Collections.emptyList());
+            return new ArchiveSourceSnapshot(null, "unresolved", Collections.emptyList(), unavailable);
+        }
+    }
+
+    /** Retain the capture cause without making a failed snapshot reusable. */
+    void requireCaptured() throws CaptureException {
+        if (selectedPath == null) throw new CaptureException(captureFailure);
+    }
+
+    static final class CaptureException extends IOException {
+        CaptureException(@Nullable Exception cause) {
+            super("Cannot resolve archive sources"
+                    + (cause != null && cause.getMessage() != null ? ": " + cause.getMessage() : ""), cause);
         }
     }
 
@@ -125,7 +140,7 @@ public final class ArchiveSourceSnapshot {
 
     /** Replacing a tree must not remove any source volume; unresolved capture is not permission. */
     void requireOutsideReplacementTree(@NonNull File destination) throws IOException {
-        if (selectedPath == null) throw new IOException("Cannot resolve archive sources for destination replacement");
+        requireCaptured();
         File root = destination.getCanonicalFile();
         for (Stamp stamp : volumes) {
             ArchiveCancellation.checkpoint(null);

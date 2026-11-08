@@ -23,10 +23,13 @@ import com.readwide.manager.util.EpubFontPreferenceMath;
 import com.readwide.manager.util.ArchiveViewerTimeoutPolicy;
 import com.readwide.manager.util.FontManager;
 import com.readwide.manager.util.PrefsManager;
+import com.readwide.manager.util.TaskSubmission;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntSupplier;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 final class SettingsReaderControlsController {
     private static final int STEP_PX = 5;
@@ -37,20 +40,27 @@ final class SettingsReaderControlsController {
     private final PrefsManager prefs;
     private java.util.concurrent.ExecutorService fontWorker;
     private java.util.concurrent.Future<?> fontLoad;
+    private int fontLoadGeneration;
     private android.app.Dialog fontDialog;
     private android.app.Dialog epubChoiceDialog;
+    private android.app.Dialog readerOptionDialog;
     private boolean closed;
 
     SettingsReaderControlsController(@NonNull SettingsActivity activity) {
         this.activity = activity;
         this.prefs = activity.prefs;
+        activity.getLifecycle().addObserver(new androidx.lifecycle.DefaultLifecycleObserver() {
+            @Override public void onPause(androidx.lifecycle.LifecycleOwner owner) {
+                if (readerOptionDialog != null) readerOptionDialog.dismiss();
+            }
+        });
     }
 
     void setupReaderControls() {
         setupFontSize();
         setupLineSpacing();
         setupTextZoneTuning();
-        setupLargeTextPartitionMode();
+        setupReadingOptionDialogs();
         setupArchiveOpenMode();
         setupArchiveViewerBackgroundTimeout();
         setupEpubDefaultFont();
@@ -179,8 +189,62 @@ final class SettingsReaderControlsController {
         });
     }
 
-    private void setupLargeTextPartitionMode() {
-        Spinner modeSpinner = activity.findViewById(R.id.spinner_large_txt_partition_mode);
+    private void setupReadingOptionDialogs() {
+        activity.findViewById(R.id.btn_txt_reading_options).setOnClickListener(v -> {
+            if (closed) return;
+            android.app.Dialog dialog = startReaderOptionDialog();
+            LinearLayout panel = activity.createRoundedSettingsDialogPanel();
+            panel.addView(activity.makeSettingsDialogTitle(
+                    activity.getString(R.string.settings_txt_reading_options), activity.dialogTextColor()));
+            View controls = activity.getLayoutInflater().inflate(R.layout.dialog_txt_reading_options, panel, false);
+            setupLargeTextPartitionMode(controls, dialog);
+            bindPagingOverlapSpinner(controls, dialog);
+            activity.styleSettingsDialogControls(controls);
+            SettingsPreferenceViewState.useStoredValues(controls);
+            panel.addView(controls);
+            addOptionClose(dialog, panel);
+            activity.showRoundedSettingsDialog(dialog, panel);
+        });
+        bindHelp(R.id.txt_boundary_description, R.string.settings_help_txt_boundaries, R.string.txt_boundary_description);
+        bindHelp(R.id.settings_backup_help, R.string.settings_help_backup, R.string.backup_description);
+    }
+
+    private void bindHelp(int id, int title, int message) {
+        View entry = activity.findViewById(id);
+        entry.setOnClickListener(v -> {
+            if (closed) return;
+            android.app.Dialog dialog = startReaderOptionDialog();
+            LinearLayout panel = activity.createRoundedSettingsDialogPanel();
+            panel.addView(activity.makeSettingsDialogTitle(activity.getString(title), activity.dialogTextColor()));
+            panel.addView(activity.makeSettingsDialogMessage(activity.getString(message), activity.dialogSubTextColor()));
+            addOptionClose(dialog, panel);
+            activity.showRoundedSettingsDialog(dialog, panel);
+        });
+        entry.setFocusable(true);
+    }
+
+    private android.app.Dialog startReaderOptionDialog() {
+        if (readerOptionDialog != null) readerOptionDialog.dismiss();
+        android.app.Dialog dialog = activity.createRoundedSettingsDialog();
+        readerOptionDialog = dialog;
+        dialog.setOnDismissListener(d -> { if (readerOptionDialog == dialog) readerOptionDialog = null; });
+        return dialog;
+    }
+
+    private void addOptionClose(android.app.Dialog dialog, LinearLayout panel) {
+        View close = activity.makeSettingsDialogButtonNoShade(activity.getString(R.string.close),
+                activity.dialogTextColor(), activity.dialogOutlineColor());
+        close.setOnClickListener(v -> dialog.dismiss());
+        panel.addView(close);
+    }
+
+    private boolean ownsReaderOptionDialog(android.app.Dialog dialog) {
+        return !closed && readerOptionDialog == dialog && dialog.isShowing()
+                && !activity.isFinishing() && !activity.isDestroyed();
+    }
+
+    private void setupLargeTextPartitionMode(View root, android.app.Dialog dialog) {
+        Spinner modeSpinner = root.findViewById(R.id.spinner_large_txt_partition_mode);
         if (modeSpinner == null) return;
 
         String[] choices = {
@@ -193,9 +257,9 @@ final class SettingsReaderControlsController {
                 () -> prefs.getLargeTextPartitionMode() == PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
                         ? PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
                         : PrefsManager.LARGE_TEXT_PARTITION_MODE_STANDARD,
-                position -> prefs.setLargeTextPartitionMode(position == PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
+                position -> { if (ownsReaderOptionDialog(dialog)) prefs.setLargeTextPartitionMode(position == PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
                         ? PrefsManager.LARGE_TEXT_PARTITION_MODE_HIGH_BUFFER
-                        : PrefsManager.LARGE_TEXT_PARTITION_MODE_STANDARD));
+                        : PrefsManager.LARGE_TEXT_PARTITION_MODE_STANDARD); });
     }
 
     private void setupArchiveOpenMode() {
@@ -304,6 +368,7 @@ final class SettingsReaderControlsController {
         fontDialog = dialog;
         dialog.setOnDismissListener(ignored -> {
             if (fontDialog != dialog) return;
+            ++fontLoadGeneration;
             fontDialog = null;
             if (fontLoad != null) fontLoad.cancel(true);
             fontLoad = null;
@@ -350,43 +415,70 @@ final class SettingsReaderControlsController {
         loading.setText(R.string.loading);
         loading.setTextColor(sub);
         list.addView(loading);
-        if (fontWorker == null) fontWorker = java.util.concurrent.Executors.newSingleThreadExecutor();
+        loadEpubFontNames(dialog, loading,
+                () -> FontManager.getInstance().getUserAddedFontNames(activity.getApplicationContext()), loaded -> {
+            list.removeView(loading);
+            for (String name : loaded) {
+                int before = options.size();
+                addEpubFontOptionIfMissing(options, name, name);
+                if (before == options.size()) continue;
+                TextView row = activity.makeSettingsSelectionRow(name, name.equals(current), text, sub, outline);
+                row.setOnClickListener(v -> {
+                    prefs.setEpubFontFamily(name);
+                    updateEpubDefaultFontValue(valueView);
+                    dialog.dismiss();
+                });
+                list.addView(row);
+            }
+        });
+    }
+
+    void loadEpubFontNames(android.app.Dialog dialog, TextView loading,
+                          Supplier<List<String>> readNames, Consumer<List<String>> onLoaded) {
+        if (closed || fontDialog != dialog) return;
+        final int generation = ++fontLoadGeneration;
         // Even isScanned()/getUserAddedFontNames() take the font manager's scan
         // lock. Keep every font-manager call off the UI thread, including warm opens.
-        fontLoad = fontWorker.submit(() -> {
-            List<String> names;
-            try {
-                names = FontManager.getInstance().getUserAddedFontNames(activity.getApplicationContext());
-            } catch (RuntimeException unavailable) {
-                names = java.util.Collections.emptyList();
-            }
-            if (Thread.currentThread().isInterrupted()) return;
-            final List<String> loaded = names;
-            activity.runOnUiThread(() -> {
-                if (closed || activity.isFinishing() || activity.isDestroyed()
-                        || fontDialog != dialog || !dialog.isShowing()) return;
-                fontLoad = null;
-                list.removeView(loading);
-                for (String name : loaded) {
-                    int before = options.size();
-                    addEpubFontOptionIfMissing(options, name, name);
-                    if (before == options.size()) continue;
-                    TextView row = activity.makeSettingsSelectionRow(name, name.equals(current), text, sub, outline);
-                    row.setOnClickListener(v -> {
-                        prefs.setEpubFontFamily(name);
-                        updateEpubDefaultFontValue(valueView);
-                        dialog.dismiss();
-                    });
-                    list.addView(row);
+        try {
+            if (fontWorker == null) fontWorker = java.util.concurrent.Executors.newSingleThreadExecutor();
+            fontLoad = TaskSubmission.submit(fontWorker, () -> {
+                final List<String> loaded;
+                try {
+                    loaded = readNames.get();
+                } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                    activity.runOnUiThread(() -> failFontLoad(dialog, loading, generation, failure));
+                    return;
                 }
+                if (Thread.currentThread().isInterrupted()) return;
+                activity.runOnUiThread(() -> {
+                    if (!isCurrentFontLoad(dialog, generation)) return;
+                    fontLoad = null;
+                    onLoaded.accept(loaded);
+                });
             });
-        });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            failFontLoad(dialog, loading, generation, failure);
+        }
+    }
+
+    private boolean isCurrentFontLoad(android.app.Dialog dialog, int generation) {
+        return !closed && !activity.isFinishing() && !activity.isDestroyed()
+                && fontDialog == dialog && dialog.isShowing() && generation == fontLoadGeneration;
+    }
+
+    private void failFontLoad(android.app.Dialog dialog, TextView loading, int generation, Throwable failure) {
+        if (!isCurrentFontLoad(dialog, generation)) return;
+        ++fontLoadGeneration;
+        fontLoad = null;
+        loading.setText(activity.getString(R.string.error_prefix) + failure.getClass().getSimpleName());
     }
 
     void close() {
         closed = true;
+        ++fontLoadGeneration;
         if (fontDialog != null) fontDialog.dismiss();
         if (epubChoiceDialog != null) epubChoiceDialog.dismiss();
+        if (readerOptionDialog != null) readerOptionDialog.dismiss();
         if (fontLoad != null) fontLoad.cancel(true);
         if (fontWorker != null) fontWorker.shutdownNow();
     }
@@ -580,15 +672,7 @@ final class SettingsReaderControlsController {
         bindSwitch(R.id.switch_status_bar, prefs.getShowStatusBar(), prefs::setShowStatusBar);
         bindPageStatusAlignmentSpinner();
         bindSwitch(R.id.switch_volume_scroll, prefs.getVolumeKeyScroll(), prefs::setVolumeKeyScroll);
-        bindSwitch(R.id.switch_tap_paging, prefs.getTapPagingEnabled(), prefs::setTapPagingEnabled);
-        bindSwitch(R.id.switch_tap_paging_markdown, prefs.getMarkdownTapPagingEnabled(), prefs::setMarkdownTapPagingEnabled);
-        bindSwitch(R.id.switch_tap_paging_pdf, prefs.getPdfTapPagingEnabled(), prefs::setPdfTapPagingEnabled);
-        bindSwitch(R.id.switch_tap_paging_epub, prefs.getEpubTapPagingEnabled(), prefs::setEpubTapPagingEnabled);
-        bindSwitch(R.id.switch_tap_paging_word, prefs.getWordTapPagingEnabled(), prefs::setWordTapPagingEnabled);
         bindSwitch(R.id.switch_epub_force_reader_theme_colors, prefs.getEpubForceReaderThemeColors(), prefs::setEpubForceReaderThemeColors);
-        bindTapZoneModeSpinner();
-        setupTapZoneRatioControl();
-        bindPagingOverlapSpinner();
         bindTextAlignmentSpinner();
     }
 
@@ -624,19 +708,8 @@ final class SettingsReaderControlsController {
         bindSettingsSpinnerSelection(spinner, prefs::getTextAlignment, prefs::setTextAlignment);
     }
 
-    private void bindTapZoneModeSpinner() {
-        Spinner spinner = activity.findViewById(R.id.spinner_tap_zone_mode);
-        if (spinner == null) return;
-        String[] choices = {
-                activity.getString(R.string.tap_zone_vertical),
-                activity.getString(R.string.tap_zone_horizontal)
-        };
-        spinner.setAdapter(makeSettingsSpinnerAdapter(choices));
-        bindSettingsSpinnerSelection(spinner, prefs::getTapZoneMode, prefs::setTapZoneMode);
-    }
-
-    private void bindPagingOverlapSpinner() {
-        Spinner spinner = activity.findViewById(R.id.spinner_overlap_lines);
+    private void bindPagingOverlapSpinner(View root, android.app.Dialog dialog) {
+        Spinner spinner = root.findViewById(R.id.spinner_overlap_lines);
         if (spinner == null) return;
         String[] choices = {
                 activity.getString(R.string.no_overlap),
@@ -646,7 +719,8 @@ final class SettingsReaderControlsController {
                 activity.getString(R.string.keep_4_lines)
         };
         spinner.setAdapter(makeSettingsSpinnerAdapter(choices));
-        bindSettingsSpinnerSelection(spinner, prefs::getPagingOverlapLines, prefs::setPagingOverlapLines);
+        bindSettingsSpinnerSelection(spinner, prefs::getPagingOverlapLines,
+                position -> { if (ownsReaderOptionDialog(dialog)) prefs.setPagingOverlapLines(position); });
     }
 
     private void bindSettingsSpinnerSelection(@NonNull Spinner spinner,
@@ -668,67 +742,6 @@ final class SettingsReaderControlsController {
                 if (position != storedSelection.getAsInt()) setter.set(position);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
-        });
-    }
-
-    private void setupTapZoneRatioControl() {
-        SeekBar leadingSeekBar = activity.findViewById(R.id.tap_zone_leading_seekbar);
-        SeekBar trailingSeekBar = activity.findViewById(R.id.tap_zone_trailing_seekbar);
-        TextView ratioLabel = activity.findViewById(R.id.tap_zone_ratio_label);
-        TextView leadingLabel = activity.findViewById(R.id.tap_zone_leading_label);
-        TextView trailingLabel = activity.findViewById(R.id.tap_zone_trailing_label);
-        if (leadingSeekBar == null || trailingSeekBar == null || ratioLabel == null
-                || leadingLabel == null || trailingLabel == null) return;
-
-        final boolean[] suppress = new boolean[]{false};
-        int leading = clampTapEdgePercent(prefs.getTapLeadingZonePercent());
-        int trailing = clampTapEdgePercent(prefs.getTapTrailingZonePercent());
-        if (leading + trailing > 90) trailing = Math.max(5, 90 - leading);
-
-        leadingSeekBar.setMax(75);
-        trailingSeekBar.setMax(75);
-        leadingSeekBar.setProgress(leading - 5);
-        trailingSeekBar.setProgress(trailing - 5);
-        updateTapZoneRatioLabels(ratioLabel, leadingLabel, trailingLabel, leading, trailing);
-
-        leadingSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (suppress[0]) return;
-                int leading = progress + 5;
-                int trailing = trailingSeekBar.getProgress() + 5;
-                if (leading + trailing > 90) {
-                    trailing = Math.max(5, 90 - leading);
-                    suppress[0] = true;
-                    trailingSeekBar.setProgress(trailing - 5);
-                    suppress[0] = false;
-                }
-                updateTapZoneRatioLabels(ratioLabel, leadingLabel, trailingLabel, leading, trailing);
-                if (fromUser) prefs.setTapZonePercents(leading, trailing);
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {
-                prefs.setTapZonePercents(seekBar.getProgress() + 5, trailingSeekBar.getProgress() + 5);
-            }
-        });
-
-        trailingSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (suppress[0]) return;
-                int leading = leadingSeekBar.getProgress() + 5;
-                int trailing = progress + 5;
-                if (leading + trailing > 90) {
-                    leading = Math.max(5, 90 - trailing);
-                    suppress[0] = true;
-                    leadingSeekBar.setProgress(leading - 5);
-                    suppress[0] = false;
-                }
-                updateTapZoneRatioLabels(ratioLabel, leadingLabel, trailingLabel, leading, trailing);
-                if (fromUser) prefs.setTapZonePercents(leading, trailing);
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {
-                prefs.setTapZonePercents(leadingSeekBar.getProgress() + 5, seekBar.getProgress() + 5);
-            }
         });
     }
 
@@ -775,23 +788,6 @@ final class SettingsReaderControlsController {
     private int roundToInsetStep(int px) {
         int clamped = Math.max(0, Math.min(MAX_INSET_PX, px));
         return Math.round(clamped / (float) STEP_PX) * STEP_PX;
-    }
-
-    private int clampTapEdgePercent(int percent) {
-        return Math.max(5, Math.min(80, percent));
-    }
-
-    private void updateTapZoneRatioLabels(TextView ratioLabel, TextView leadingLabel,
-                                          TextView trailingLabel, int leadingPercent,
-                                          int trailingPercent) {
-        int leading = clampTapEdgePercent(leadingPercent);
-        int trailing = clampTapEdgePercent(trailingPercent);
-        if (leading + trailing > 90) trailing = Math.max(5, 90 - leading);
-        int middle = Math.max(10, 100 - leading - trailing);
-
-        ratioLabel.setText(activity.getString(R.string.tap_zone_ratio_format, leading, middle, trailing));
-        leadingLabel.setText(activity.getString(R.string.tap_zone_leading_format, leading));
-        trailingLabel.setText(activity.getString(R.string.tap_zone_trailing_format, trailing));
     }
 
     private interface IntSetter {

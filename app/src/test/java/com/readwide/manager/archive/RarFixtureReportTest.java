@@ -177,7 +177,10 @@ public class RarFixtureReportTest {
 
     private static byte[] rar4Header(int type, int flags, byte[] body) throws Exception {
         int size = 7 + body.length;
-        return bytes(uint16(0), new byte[] {(byte) type}, uint16(flags), uint16(size), body);
+        byte[] headerData = bytes(new byte[] {(byte) type}, uint16(flags), uint16(size), body);
+        CRC32 crc = new CRC32();
+        crc.update(headerData);
+        return bytes(uint16((int) crc.getValue()), headerData);
     }
 
     private static byte[] bytes(byte[]... parts) throws Exception {

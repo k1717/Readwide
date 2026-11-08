@@ -14,32 +14,32 @@ public class DeflateRound5Test {
         for(int i=0;i<120;i++){
             byte[] raw=new byte[random.nextInt(20000)];random.nextBytes(raw);byte[] packed=Round4Fixtures.deflate(raw);
             InputStream shortInput=new ByteArrayInputStream(packed){@Override public synchronized int read(byte[] b,int o,int n){return super.read(b,o,Math.min(n,1+random.nextInt(113)));}};
-            try(InputStream stream=new OwnedDeflateInputStream(shortInput)){assertArrayEquals(raw,stream.readAllBytes());}
+            try(InputStream stream=OwnedDeflateInputStream.open(shortInput)){assertArrayEquals(raw,stream.readAllBytes());}
         }
     }
     @Test public void truncatedDeflateFailureStaysTerminal()throws Exception{
-        try(InputStream s=new OwnedDeflateInputStream(new ByteArrayInputStream(new byte[0]))){IOException first=assertThrows(IOException.class,()->s.read());assertSame(first,assertThrows(IOException.class,()->s.read()));}
+        try(InputStream s=OwnedDeflateInputStream.open(new ByteArrayInputStream(new byte[0]))){IOException first=assertThrows(IOException.class,()->s.read());assertSame(first,assertThrows(IOException.class,()->s.read()));}
     }
     @Test public void deflateInvalidDataFailureStaysTerminal()throws Exception{
-        try(InputStream s=new OwnedDeflateInputStream(new ByteArrayInputStream(new byte[]{7}))){IOException first=assertThrows(IOException.class,()->s.read());assertSame(first,assertThrows(IOException.class,()->s.read()));}
+        try(InputStream s=OwnedDeflateInputStream.open(new ByteArrayInputStream(new byte[]{7}))){IOException first=assertThrows(IOException.class,()->s.read());assertSame(first,assertThrows(IOException.class,()->s.read()));}
     }
     @Test public void deflateCancellationStaysTerminalAfterFlagCleared()throws Exception{
-        try(InputStream s=new OwnedDeflateInputStream(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{1})))){
+        try(InputStream s=OwnedDeflateInputStream.open(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{1})))){
             IOException first;try{Thread.currentThread().interrupt();first=assertThrows(InterruptedIOException.class,()->s.read());}finally{Thread.interrupted();}
             assertSame(first,assertThrows(IOException.class,()->s.read()));
         }
     }
     @Test public void deflateZeroProgressCannotResumeAfterFailure()throws Exception{
         byte[] packed=Round4Fixtures.deflate(new byte[]{1});InputStream input=new ByteArrayInputStream(packed){boolean first=true;@Override public synchronized int read(byte[] b,int o,int n){if(first){first=false;return 0;}return super.read(b,o,n);}};
-        try(InputStream s=new OwnedDeflateInputStream(input)){IOException first=assertThrows(IOException.class,()->s.read());assertSame(first,assertThrows(IOException.class,()->s.read()));}
+        try(InputStream s=OwnedDeflateInputStream.open(input)){IOException first=assertThrows(IOException.class,()->s.read());assertSame(first,assertThrows(IOException.class,()->s.read()));}
     }
     @Test public void deflateInvalidArgumentsDoNotPoisonStream()throws Exception{
-        try(InputStream s=new OwnedDeflateInputStream(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{5})))){
+        try(InputStream s=OwnedDeflateInputStream.open(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{5})))){
             assertThrows(IndexOutOfBoundsException.class,()->s.read(new byte[1],-1,1));assertThrows(NullPointerException.class,()->s.read(null,0,1));assertEquals(0,s.read(new byte[1],1,0));assertEquals(5,s.read());assertEquals(-1,s.read());
         }
     }
     @Test public void deflateCloseIsIdempotentAndDisablesReads()throws Exception{
-        int[] calls={0};InputStream input=new ByteArrayInputStream(new byte[0]){public void close(){calls[0]++;}};InputStream s=new OwnedDeflateInputStream(input);s.close();s.close();assertEquals(1,calls[0]);assertThrows(IOException.class,()->s.read());
+        int[] calls={0};InputStream input=new ByteArrayInputStream(new byte[0]){public void close(){calls[0]++;}};InputStream s=OwnedDeflateInputStream.open(input);s.close();s.close();assertEquals(1,calls[0]);assertThrows(IOException.class,()->s.read());
     }
     @Test public void sevenZRegistryUsesOwnedJdkDeflate()throws Exception{
         byte[] raw=Round4Fixtures.data(10000);SevenZCoderRegistry.Prepared prepared=SevenZCoderRegistry.require(new byte[]{4,1,8}).prepare(new byte[0],raw.length);

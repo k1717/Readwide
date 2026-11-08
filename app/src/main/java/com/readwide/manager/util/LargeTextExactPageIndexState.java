@@ -43,9 +43,9 @@ public final class LargeTextExactPageIndexState {
     }
 
     /**
-     * Retire a different page model before the debounced replacement starts.
-     * Matching layout notifications keep both ready anchors and in-flight cache
-     * validation. An uninitialized state has no old model to retire.
+     * Invalidate a changed page model before the debounced rebuild starts.
+     * Matching layout notifications preserve ready anchors and ongoing cache
+     * validation. An uninitialized state needs no invalidation.
      */
     public boolean invalidateIfSignatureChanged(@NonNull String currentSignature) {
         synchronized (lock) {
@@ -67,8 +67,8 @@ public final class LargeTextExactPageIndexState {
             if (nextSignature.equals(signature) && (building || ready)) {
                 return -1;
             }
-            ready = false;
             anchors = new ArrayList<>();
+            ready = false;
             building = true;
             checkingCache = true;
             failed = false;
@@ -82,13 +82,31 @@ public final class LargeTextExactPageIndexState {
         return expectedGeneration == generation.get();
     }
 
+    /** Invalidate only the matching pending task, including work queued before submission failed. */
+    public boolean failCurrentBuild(int expectedGeneration, @NonNull String expectedSignature,
+                                    @NonNull String reason) {
+        synchronized (lock) {
+            if (!building || expectedGeneration != generation.get()
+                    || !expectedSignature.equals(signature)) return false;
+            generation.incrementAndGet();
+            building = false;
+            checkingCache = false;
+            ready = false;
+            // Reuse beginBuild's empty list; startup OOM handling must not allocate another.
+            anchors.clear();
+            failed = true;
+            failure = reason;
+            return true;
+        }
+    }
+
     public boolean isCheckingCache() {
         synchronized (lock) {
             return checkingCache && !ready && !failed;
         }
     }
 
-    /** Only the current worker may turn cache validation into a genuine recount. */
+    /** Only the current worker may switch from cache validation to page counting. */
     public boolean beginCalculation(int expectedGeneration, @NonNull String expectedSignature) {
         synchronized (lock) {
             if (!building || expectedGeneration != generation.get() || !expectedSignature.equals(signature)) return false;
@@ -175,7 +193,7 @@ public final class LargeTextExactPageIndexState {
         }
     }
 
-    /** Read-only lookup: no anchor copy, no guessed page from a previous layout. */
+    /** Look up the page in the current layout without copying anchors. */
     public int[] pageForCharIfUsable(@NonNull String currentSignature, int position) {
         synchronized (lock) {
             if (currentSignature.isEmpty() || !ready || anchors.isEmpty()
@@ -200,7 +218,7 @@ public final class LargeTextExactPageIndexState {
         }
     }
 
-    /** Select one destination under the lock instead of copying every page per tap. */
+    /** Select the destination under the lock without copying the full anchor list. */
     @Nullable
     public TapTarget tapTargetIfUsable(@NonNull String currentSignature, int currentAbs, int direction) {
         synchronized (lock) {
@@ -208,7 +226,7 @@ public final class LargeTextExactPageIndexState {
                     || !currentSignature.equals(signature)) return null;
             int index = LargeTextAnchorMath.findTapTargetAnchorIndex(anchors, currentAbs, direction);
             if (index < 0) return new TapTarget(0, anchors.size(), null);
-            // Keep the existing queued-delta arithmetic and final-page behavior.
+            // Apply remaining queued steps, clamping the destination to the page range.
             if (Math.abs(direction) > 1) {
                 int extraSteps = Math.abs(direction) - 1;
                 index += direction > 0 ? extraSteps : -extraSteps;

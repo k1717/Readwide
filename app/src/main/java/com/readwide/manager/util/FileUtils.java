@@ -3,6 +3,7 @@ package com.readwide.manager.util;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
+import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.text.Html;
 import android.text.Spanned;
@@ -270,6 +271,8 @@ public class FileUtils {
         // use the previous file; only other inactive URI directories are eligible
         // for the pre-copy age/size prune.
         pruneOpenedFilesCache(cacheDir, uriDir);
+        UriCopyIntegrity.checkCancelled();
+        UriCopyIntegrity.Metadata sourceMetadata = queryUriCopyMetadata(context, uri);
 
         // Never truncate the currently readable cache file in place. A live
         // singleTop viewer (PDFBox search/TTS in particular) can still hold or
@@ -280,29 +283,17 @@ public class FileUtils {
         File stagingFile = File.createTempFile("opened_uri_", ".copying", uriDir);
         boolean committed = false;
         try {
+            long copied;
             try (InputStream is = context.getContentResolver().openInputStream(uri);
                  FileOutputStream fos = new FileOutputStream(stagingFile)) {
                 if (is == null) throw new IOException("Cannot open URI");
-
-                byte[] buffer = new byte[8192];
-                int bytesRead;
-                long copied = 0L;
-
-                while (true) {
-                    if (Thread.currentThread().isInterrupted()) {
-                        throw new InterruptedIOException("URI copy cancelled");
-                    }
-                    bytesRead = is.read(buffer);
-                    if (bytesRead == -1) break;
-                    copied += bytesRead;
-                    if (copied > MAX_OPENED_URI_COPY_BYTES) {
-                        throw new IOException("External file exceeds size limit");
-                    }
-                    fos.write(buffer, 0, bytesRead);
-                }
+                copied = UriCopyIntegrity.copy(is, fos, sourceMetadata, MAX_OPENED_URI_COPY_BYTES);
                 fos.flush();
                 fos.getFD().sync();
             }
+            UriCopyIntegrity.checkCancelled();
+            UriCopyIntegrity.verify(sourceMetadata, queryUriCopyMetadata(context, uri), copied);
+            UriCopyIntegrity.checkCancelled();
             try {
                 android.system.Os.rename(
                         stagingFile.getAbsolutePath(), localFile.getAbsolutePath());
@@ -321,6 +312,28 @@ public class FileUtils {
         deleteSiblingsInDirectory(uriDir, localFile);
         pruneOpenedFilesCache(cacheDir, uriDir);
         return localFile;
+    }
+
+    private static UriCopyIntegrity.Metadata queryUriCopyMetadata(Context context, Uri uri) {
+        if ("file".equals(uri.getScheme()) && uri.getPath() != null) {
+            File file = new File(uri.getPath());
+            return file.isFile()
+                    ? new UriCopyIntegrity.Metadata(file.length(), file.lastModified())
+                    : UriCopyIntegrity.Metadata.UNKNOWN;
+        }
+        if (!"content".equals(uri.getScheme())) return UriCopyIntegrity.Metadata.UNKNOWN;
+        // A null projection also works with providers that reject document-only columns.
+        try (Cursor cursor = context.getContentResolver().query(uri, null, null, null, null)) {
+            if (cursor == null || !cursor.moveToFirst()) return UriCopyIntegrity.Metadata.UNKNOWN;
+            int sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
+            int modifiedIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED);
+            long size = sizeIndex >= 0 && !cursor.isNull(sizeIndex) ? cursor.getLong(sizeIndex) : -1L;
+            long modified = modifiedIndex >= 0 && !cursor.isNull(modifiedIndex)
+                    ? cursor.getLong(modifiedIndex) : 0L;
+            return new UriCopyIntegrity.Metadata(size, modified);
+        } catch (Exception ignored) {
+            return UriCopyIntegrity.Metadata.UNKNOWN;
+        }
     }
 
     // Reduce a content-provider display name to a safe single path segment: strip path

@@ -52,8 +52,10 @@ public class BookmarkManager {
 
     private static BookmarkManager instance;
     private final Context context;
-    private List<Bookmark> bookmarks;
-    private Map<String, ReaderState> readingStates;
+    private List<Bookmark> bookmarks = new ArrayList<>();
+    private Map<String, ReaderState> readingStates = new HashMap<>();
+    private boolean bookmarksLoaded;
+    private boolean readingStatesLoaded;
     private long readingStateRevision;
     private final CoalescingSnapshotWriter<Map<String, ReaderState>> readingStateWriter;
 
@@ -90,10 +92,12 @@ public class BookmarkManager {
     // ========== Bookmark Operations ==========
 
     public synchronized List<Bookmark> getAllBookmarks() {
+        ensureBookmarksLoaded();
         return new ArrayList<>(bookmarks);
     }
 
     public synchronized List<Bookmark> getBookmarksForFile(String filePath) {
+        if (!ensureBookmarksLoaded()) return new ArrayList<>();
         List<Bookmark> result = collectBookmarksForExactPath(filePath);
 
         // Fast path above avoids any file I/O during normal use.  Portable matching
@@ -123,12 +127,14 @@ public class BookmarkManager {
     }
 
     public synchronized void addBookmark(Bookmark bookmark) {
+        if (!ensureBookmarksLoaded()) return;
         enrichPortableIdentity(bookmark);
         bookmarks.add(bookmark);
         saveBookmarks();
     }
 
     public synchronized void updateBookmark(Bookmark bookmark) {
+        if (!ensureBookmarksLoaded()) return;
         enrichPortableIdentity(bookmark);
         for (int i = 0; i < bookmarks.size(); i++) {
             if (bookmarks.get(i).getId().equals(bookmark.getId())) {
@@ -148,6 +154,7 @@ public class BookmarkManager {
      */
     public synchronized void saveBookmarkPageMetadataRefresh(List<Bookmark> changedBookmarks) {
         if (changedBookmarks == null || changedBookmarks.isEmpty()) return;
+        if (!ensureBookmarksLoaded()) return;
         boolean changed = false;
         for (Bookmark changedBookmark : changedBookmarks) {
             if (changedBookmark == null || changedBookmark.getId() == null) continue;
@@ -165,6 +172,7 @@ public class BookmarkManager {
     }
 
     public synchronized void deleteBookmark(String bookmarkId) {
+        if (!ensureBookmarksLoaded()) return;
         Iterator<Bookmark> it = bookmarks.iterator();
         while (it.hasNext()) {
             if (it.next().getId().equals(bookmarkId)) {
@@ -176,6 +184,7 @@ public class BookmarkManager {
     }
 
     public synchronized void deleteBookmarksForFile(String filePath) {
+        if (!ensureBookmarksLoaded()) return;
         Iterator<Bookmark> it = bookmarks.iterator();
         while (it.hasNext()) {
             Bookmark bookmark = it.next();
@@ -190,10 +199,12 @@ public class BookmarkManager {
     // ========== Reading State Operations ==========
 
     public synchronized ReaderState getReadingState(String filePath) {
+        ensureReadingStatesLoaded();
         return readingStates.get(filePath);
     }
 
     public synchronized void saveReadingState(ReaderState state) {
+        if (!ensureReadingStatesLoaded()) return;
         try {
             state.setLastReadAt(System.currentTimeMillis());
             readingStates.put(state.getFilePath(), state);
@@ -209,6 +220,7 @@ public class BookmarkManager {
      * operations still use synchronous, revision-ordered checkpoints below.
      */
     public synchronized void saveReadingStateDeferred(ReaderState state) {
+        if (!ensureReadingStatesLoaded()) return;
         try {
             // Copy before mutating the supplied state: it may already be the
             // current in-memory state returned by getReadingState().
@@ -224,6 +236,7 @@ public class BookmarkManager {
     }
 
     public synchronized void deleteReadingState(String filePath) {
+        if (!ensureReadingStatesLoaded()) return;
         readingStates.remove(filePath);
         saveReadingStates();
     }
@@ -239,6 +252,8 @@ public class BookmarkManager {
      */
     public synchronized void moveFileReferences(String oldPath, String newPath) {
         if (oldPath == null || newPath == null || oldPath.equals(newPath)) return;
+        ensureReadingStatesLoaded();
+        ensureBookmarksLoaded();
 
         boolean statesChanged = false;
         ReaderState state = readingStates.remove(oldPath);
@@ -271,6 +286,8 @@ public class BookmarkManager {
      */
     public synchronized void movePathPrefixReferences(String oldRootPath, String newRootPath) {
         if (oldRootPath == null || newRootPath == null || oldRootPath.equals(newRootPath)) return;
+        ensureReadingStatesLoaded();
+        ensureBookmarksLoaded();
         String oldPrefix = oldRootPath.endsWith(File.separator) ? oldRootPath : oldRootPath + File.separator;
         String newPrefix = newRootPath.endsWith(File.separator) ? newRootPath : newRootPath + File.separator;
 
@@ -335,6 +352,7 @@ public class BookmarkManager {
      * Clear all recent-file entries / saved reading states without touching bookmarks.
      */
     public synchronized void clearReadingStates() {
+        if (!ensureReadingStatesLoaded()) return;
         readingStates.clear();
         saveReadingStates();
     }
@@ -343,6 +361,7 @@ public class BookmarkManager {
      * Get recently read files, sorted by last read time (most recent first).
      */
     public synchronized List<ReaderState> getRecentFiles(int limit) {
+        ensureReadingStatesLoaded();
         List<ReaderState> states = new ArrayList<>(readingStates.values());
         Collections.sort(states, (a, b) -> Long.compare(b.getLastReadAt(), a.getLastReadAt()));
         if (states.size() > limit) {
@@ -356,6 +375,7 @@ public class BookmarkManager {
      * Avoids sorting the whole recent-file map when only emptiness matters.
      */
     public synchronized boolean hasRecentFiles() {
+        ensureReadingStatesLoaded();
         return !readingStates.isEmpty();
     }
 
@@ -366,6 +386,7 @@ public class BookmarkManager {
      * User can save this to a file for backup.
      */
     public synchronized String exportAll() {
+        requireLoadedStores();
         ensurePortableIdentitiesForExistingBookmarks();
         try {
             JSONObject root = new JSONObject();
@@ -674,6 +695,8 @@ public class BookmarkManager {
     private void commitImport(BackupImportData data, boolean merge, ThemeManager themes,
                               DocumentAnnotationManager annotations, PrefsManager preferences) throws Exception {
         if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException();
+        // Rollback needs complete local snapshots, including for a replace import.
+        requireLoadedStores();
         final List<Bookmark> previousBooks = bookmarks;
         final Map<String, ReaderState> previousStates = readingStates;
         boolean refreshPages = data.bookmarks != null || data.states != null || data.settings != null;
@@ -1659,6 +1682,7 @@ public class BookmarkManager {
      * e.g., replacePathPrefix("/storage/AAAA-BBBB", "/storage/CCCC-DDDD")
      */
     public synchronized int replacePathPrefix(String oldPrefix, String newPrefix) {
+        if (!ensureBookmarksLoaded() || !ensureReadingStatesLoaded()) return 0;
         int count = 0;
 
         // Update bookmarks
@@ -1721,25 +1745,27 @@ public class BookmarkManager {
 
     // ========== Private I/O ==========
 
-    private void loadBookmarks() {
-        bookmarks = new ArrayList<>();
-        String json = readFile(BOOKMARKS_FILE);
-        if (json == null) return;
-
+    private boolean loadBookmarks() {
         try {
-            JSONObject root = new JSONObject(json);
-            JSONArray arr = root.optJSONArray("bookmarks");
-            if (arr != null) {
+            String json = readFile(BOOKMARKS_FILE);
+            List<Bookmark> loaded = new ArrayList<>();
+            if (json != null) {
+                JSONArray arr = new JSONObject(json).getJSONArray("bookmarks");
                 for (int i = 0; i < arr.length(); i++) {
-                    bookmarks.add(Bookmark.fromJson(arr.getJSONObject(i)));
+                    loaded.add(Bookmark.fromJson(arr.getJSONObject(i)));
                 }
             }
-        } catch (JSONException e) {
-            Log.e(TAG, "Failed to load bookmarks", e);
+            bookmarks = loaded;
+            bookmarksLoaded = true;
+            return true;
+        } catch (Exception | OutOfMemoryError | StackOverflowError e) {
+            reportSaveFailure("Failed to load bookmarks; original file preserved", e);
+            return false;
         }
     }
 
     private void saveBookmarks() {
+        if (!bookmarksLoaded) return;
         try {
             JSONObject root = new JSONObject();
             root.put("version", FORMAT_VERSION);
@@ -1754,27 +1780,44 @@ public class BookmarkManager {
         }
     }
 
-    private void loadReadingStates() {
-        readingStates = new HashMap<>();
-        String json = readFile(STATES_FILE);
-        if (json == null) return;
-
+    private boolean loadReadingStates() {
         try {
-            JSONObject root = new JSONObject(json);
-            JSONObject statesObj = root.optJSONObject("states");
-            if (statesObj != null) {
+            String json = readFile(STATES_FILE);
+            Map<String, ReaderState> loaded = new HashMap<>();
+            if (json != null) {
+                JSONObject statesObj = new JSONObject(json).getJSONObject("states");
                 Iterator<String> keys = statesObj.keys();
                 while (keys.hasNext()) {
                     String key = keys.next();
-                    readingStates.put(key, ReaderState.fromJson(statesObj.getJSONObject(key)));
+                    loaded.put(key, ReaderState.fromJson(statesObj.getJSONObject(key)));
                 }
             }
-        } catch (JSONException e) {
-            Log.e(TAG, "Failed to load reading states", e);
+            readingStates = loaded;
+            readingStatesLoaded = true;
+            return true;
+        } catch (Exception | OutOfMemoryError | StackOverflowError e) {
+            reportSaveFailure("Failed to load reading states; original file preserved", e);
+            return false;
+        }
+    }
+
+    private boolean ensureBookmarksLoaded() {
+        return bookmarksLoaded || loadBookmarks();
+    }
+
+    private boolean ensureReadingStatesLoaded() {
+        return readingStatesLoaded || loadReadingStates();
+    }
+
+    private void requireLoadedStores() {
+        if (!ensureBookmarksLoaded() || !ensureReadingStatesLoaded()) {
+            throw new IllegalStateException("Saved bookmarks or reading positions could not be loaded. "
+                    + "The original files have been kept; retry after restoring access or repairing the saved data.");
         }
     }
 
     private synchronized void saveReadingStates() {
+        if (!readingStatesLoaded) return;
         ++readingStateRevision;
         try {
             readingStateWriter.writeNow(snapshotReadingStates());
@@ -1784,6 +1827,7 @@ public class BookmarkManager {
     }
 
     private synchronized CoalescingSnapshotWriter.Snapshot<Map<String, ReaderState>> snapshotReadingStates() {
+        if (!readingStatesLoaded) throw new IllegalStateException("Reading positions have not loaded");
         Map<String, ReaderState> snapshot = new HashMap<>();
         for (Map.Entry<String, ReaderState> entry : readingStates.entrySet()) {
             snapshot.put(entry.getKey(), entry.getValue().copy());
@@ -1802,14 +1846,9 @@ public class BookmarkManager {
         return root.toString(2);
     }
 
-    private String readFile(String fileName) {
+    private String readFile(String fileName) throws IOException {
         File file = new File(context.getFilesDir(), fileName);
-        try {
-            return AtomicUtf8File.readIfPresent(file);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to read " + fileName, e);
-            return null;
-        }
+        return AtomicUtf8File.readIfPresent(file);
     }
 
     private void writeFile(String fileName, String content) {

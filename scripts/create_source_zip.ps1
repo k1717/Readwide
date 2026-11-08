@@ -68,6 +68,7 @@ $excludedDirectories = @(
 $excludedNames = @(
     '.DS_Store', 'Thumbs.db', 'desktop.ini', 'GoogleService-Info.plist',
     'google-services.json', 'keystore.properties', 'local.properties',
+    'GITHUB_UPLOAD_NOTES.md',
     'search_func.txt', 'search_funcs.txt', 'search_ui.txt', 'secrets.properties'
 )
 $excludedSuffixes = @(

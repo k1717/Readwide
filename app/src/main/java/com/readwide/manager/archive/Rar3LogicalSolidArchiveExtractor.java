@@ -36,6 +36,8 @@ final class Rar3LogicalSolidArchiveExtractor {
                     } else {
                         Rar3Unpacker.unpackToDiscard(context, progress);
                     }
+                } catch (IOException failure) {
+                    throw Rar3PackedPayload.decodeFailure(step.entry, failure, progress);
                 }
             }
             return true;
@@ -183,9 +185,15 @@ final class Rar3LogicalSolidArchiveExtractor {
                 if (entry.directory) {
                     if (output != null) RarOutputFileGuard.ensureDirectory(output);
                 } else if (step.stored) {
-                    // Copy/verify separately; do not reset or feed the compressed history.
-                    if (output == null) throw new IOException("Stored RAR verification requires a destination");
-                    RarArchiveReader.extractStoredEntry(entry, output, password, step.parts, progress);
+                    // Stored bytes must not reset or feed the compressed history.
+                    if (output == null) {
+                        try { discardStored(step, progress); }
+                        catch (IOException failure) {
+                            if (entry.splitAfter) throw RarSplitStoredFailure.wrap(entry, null, failure);
+                            throw failure;
+                        }
+                    }
+                    else RarArchiveReader.extractStoredEntry(entry, output, password, step.parts, progress);
                 } else {
                     if (!entry.solid) state = step.checked ? new Rar3SolidState() : null;
                     try (Rar3PackedPayload payload = Rar3PackedPayload.open(entry, step.parts, password, progress)) {
@@ -213,6 +221,8 @@ final class Rar3LogicalSolidArchiveExtractor {
                             checkpoint(progress);
                             guard.commit();
                         }
+                    } catch (IOException failure) {
+                        throw Rar3PackedPayload.decodeFailure(entry, failure, progress);
                     }
                 }
                 checkpoint(progress);
@@ -227,6 +237,45 @@ final class Rar3LogicalSolidArchiveExtractor {
         }
         private void checkRunEnd(Step step) throws IOException {
             if (!step.continuesSolid && state != null) state.deferredFilters().requireEmpty();
+        }
+        private void discardStored(Step step, FileOperationProgress progress) throws IOException {
+            boolean encrypted = step.entry.encrypted();
+            if (encrypted && (password == null || password.length == 0)) throw new ArchiveSupport.PasswordRequiredException();
+            RarStoredPayloadIO.DataCheck check = new RarStoredPayloadIO.DataCheck(RarVolumeChain.last(step.parts));
+            long remaining = step.entry.unpackedSize;
+            if (encrypted) {
+                javax.crypto.Cipher cipher = Rar3Crypto.createAesCbcDecryptCipher(password, step.entry.encryption.salt, progress);
+                java.io.OutputStream checksum = new java.io.OutputStream() {
+                    private final byte[] single = new byte[1];
+                    @Override public void write(int value) { single[0] = (byte) value; check.update(single, 0, 1); }
+                    @Override public void write(byte[] bytes, int offset, int length) { check.update(bytes, offset, length); }
+                };
+                // Consume all ciphertext and finalize CBC, including padding-only volumes.
+                // Only declared plaintext bytes enter the final checksum.
+                remaining = RarCryptoStreams.decryptSegmentsToStream(RarVolumeChain.payloadSegments(step.parts),
+                        cipher, checksum, remaining, "RAR3/RAR4 AES decrypt failed", progress, true);
+            } else {
+                byte[] bytes = new byte[64 * 1024];
+                // Segment reads retain intermediate-volume CRC and physical bounds checks.
+                try (InputStream input = new RarPackedInputStream(RarVolumeChain.payloadSegments(step.parts), progress)) {
+                    while (true) {
+                        checkpoint(progress);
+                        int count = input.read(bytes);
+                        if (count < 0) break;
+                        if (count == 0 || count > remaining) throw new IOException("Stored RAR logical size mismatch");
+                        check.update(bytes, 0, count);
+                        remaining -= count;
+                        if (progress != null) progress.addDoneBytes(count);
+                    }
+                }
+            }
+            checkpoint(progress);
+            if (remaining != 0) throw new IOException("Truncated stored RAR payload");
+            if (!check.matches(null)) {
+                if (encrypted) throw new ArchiveSupport.PasswordRequiredException();
+                throw new IOException("RAR checksum mismatch");
+            }
+            checkpoint(progress);
         }
         private void releaseState() {
             if (state != null) state.invalidate();
@@ -301,21 +350,18 @@ final class Rar3LogicalSolidArchiveExtractor {
                     decoded = true;
                     return;
                 }
-                boolean stored = currentStep.stored;
-                if (retain || stored) {
+                if (retain) {
                     if (!directory.isDirectory() && !directory.mkdirs()) {
                         throw new IOException("Cannot create RAR spool directory");
                     }
                     spool = File.createTempFile("rar3_logical_verified_", ".spool", directory);
                     decoder.extractNext(spool, null);
                     // Do not publish any bytes before the entire entry passes size/CRC checks.
-                    if (retain) {
-                        verifiedSize = remainingBytes = spool.length();
-                        input = new BufferedInputStream(new FileInputStream(spool));
-                    } else clearSpool();
+                    verifiedSize = remainingBytes = spool.length();
+                    input = new BufferedInputStream(new FileInputStream(spool));
                 } else {
-                    // Skipped compressed entries still advance and verify solid history,
-                    // but do not need a decoded file or a whole-entry heap buffer.
+                    // Compressed skips advance solid history; stored skips only
+                    // verify their own bytes. Neither needs a decoded file.
                     decoder.extractNext(null, null);
                 }
                 decoded = true;

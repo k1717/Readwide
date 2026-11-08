@@ -56,8 +56,8 @@ final class RarVolumeChain {
             chain.add(candidate);
             if (!candidate.splitAfter) return chain;
         }
-        throw new RarArchiveReader.UnsupportedRarFeatureException(
-                foundHead ? "Missing RAR split continuation" : "RAR split head is missing");
+        if (foundHead) throw new RarArchiveReader.IntegrityException("Missing RAR split continuation");
+        throw new RarArchiveReader.UnsupportedRarFeatureException("RAR split head is missing");
     }
 
     /** One topology pass for whole-archive/forward operations; no payload I/O or crypto. */
@@ -122,7 +122,7 @@ final class RarVolumeChain {
         }
         Index finish() throws IOException {
             checkpoint();
-            if (!pending.isEmpty()) throw new RarArchiveReader.UnsupportedRarFeatureException("Missing RAR split continuation");
+            if (!pending.isEmpty()) throw new RarArchiveReader.IntegrityException("Missing RAR split continuation");
             return new Index(chains);
         }
     }

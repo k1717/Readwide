@@ -11,7 +11,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.util.Arrays;
-import java.util.zip.CRC32;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
@@ -22,9 +21,9 @@ import javax.crypto.spec.SecretKeySpec;
  * with visible headers.
  *
  * <p>RAR3/RAR4 header encryption leaves the marker and main archive header visible. If the main
- * header has the password flag, an 8-byte salt follows it and all subsequent header blocks are
- * AES-CBC encrypted and padded to a 16-byte boundary. This helper decrypts only those header
- * blocks, removes the main-header password flag and header salt, and copies file payload bytes
+ * header has the password flag, each subsequent header has an 8-byte salt followed by an
+ * AES-CBC encrypted block padded to a 16-byte boundary. This helper decrypts only those header
+ * blocks, removes the main-header password flag and header salts, and copies file payload bytes
  * unchanged. File data encryption, compression, split handling, and CRC verification remain owned
  * by the existing visible-header RAR paths.</p>
  */
@@ -41,7 +40,6 @@ final class Rar4HeaderEncryptedArchiveRewriter {
     private static final int RAR4_HEADER_END = 0x7b;
     private static final int RAR4_MAIN_PASSWORD = 0x0080;
     private static final int RAR4_LONG_BLOCK = 0x8000;
-    private static final int RAR4_FILE_LARGE = 0x0100;
 
     private Rar4HeaderEncryptedArchiveRewriter() {}
 
@@ -74,6 +72,7 @@ final class Rar4HeaderEncryptedArchiveRewriter {
                                          @Nullable FileOperationProgress progress) throws IOException {
         checkpoint(progress);
         if (password.length == 0) throw new ArchiveSupport.PasswordRequiredException();
+        Rar3Crypto.Parameters parameters = null;
         try (RandomAccessFile in = new RandomAccessFile(archive, "r");
              FileOutputStream out = new FileOutputStream(output)) {
             MainHeader main = readEncryptedMainHeader(in);
@@ -81,19 +80,27 @@ final class Rar4HeaderEncryptedArchiveRewriter {
                 throw new RarArchiveReader.UnsupportedRarFeatureException(
                         "Archive is not a RAR3/RAR4 header-encrypted archive");
             }
-            byte[] salt = new byte[8];
-            in.seek(main.saltOffset);
-            in.readFully(salt);
-            Rar3Crypto.Parameters parameters = Rar3Crypto.deriveParameters(password, salt, progress);
-
             out.write(RAR4_SIGNATURE);
             writeRar4Header(out, RAR4_HEADER_MAIN, main.flags & ~RAR4_MAIN_PASSWORD, main.body);
 
-            long position = main.saltOffset + salt.length;
-            boolean sawEnd = false;
+            byte[] salt = new byte[8];
+            byte[] previousSalt = null;
+            long position = main.saltOffset;
+            boolean sawHeader = false;
             while (position < in.length()) {
                 checkpoint(progress);
+                if (in.length() - position < salt.length + AES_BLOCK_SIZE) throw new BadRarPasswordException();
+                in.seek(position);
+                in.readFully(salt);
+                position += salt.length;
+                if (parameters == null || !Arrays.equals(previousSalt, salt)) {
+                    clearParameters(parameters);
+                    parameters = null;
+                    parameters = Rar3Crypto.deriveParameters(password, salt, progress);
+                    previousSalt = salt.clone();
+                }
                 DecryptedHeader header = readEncryptedHeader(in, position, parameters);
+                sawHeader = true;
                 out.write(header.plainHeader);
                 position += header.encryptedHeaderSize;
                 if (header.dataSize > 0L) {
@@ -101,15 +108,11 @@ final class Rar4HeaderEncryptedArchiveRewriter {
                     position += header.dataSize;
                 }
                 if (header.type == RAR4_HEADER_END) {
-                    sawEnd = true;
                     break;
                 }
             }
-            // Some damaged archives omit ENDARC. If at least all headers decrypted cleanly, let the
-            // normal parser/libarchive decide whether the rewritten stream is acceptable.
-            if (!sawEnd && out.getChannel().position() <= RAR4_SIGNATURE.length) {
-                throw new BadRarPasswordException();
-            }
+            // A complete encrypted header is required even when a damaged archive omits ENDARC.
+            if (!sawHeader) throw new BadRarPasswordException();
             checkpoint(progress);
         } catch (BadRarPasswordException e) {
             safeDelete(output);
@@ -117,7 +120,15 @@ final class Rar4HeaderEncryptedArchiveRewriter {
         } catch (IOException | RuntimeException e) {
             safeDelete(output);
             throw e;
+        } finally {
+            clearParameters(parameters);
         }
+    }
+
+    private static void clearParameters(@Nullable Rar3Crypto.Parameters parameters) {
+        if (parameters == null) return;
+        Arrays.fill(parameters.key, (byte) 0);
+        Arrays.fill(parameters.iv, (byte) 0);
     }
 
     @Nullable
@@ -125,9 +136,9 @@ final class Rar4HeaderEncryptedArchiveRewriter {
         RarArchiveLocator.Signature signature = RarArchiveLocator.findSignature(in);
         if (signature == null || signature.version != 4) return null;
         long headerStart = signature.offset + RarArchiveLocator.signatureLength(signature.version);
-        if (in.length() - headerStart < 7 + 8) return null;
+        if (in.length() - headerStart < 7) return null;
         in.seek(headerStart);
-        readUInt16LE(in); // Header CRC. Rewritten output recalculates the main header CRC.
+        int headerCrc = readUInt16LE(in);
         int type = in.readUnsignedByte();
         int flags = readUInt16LE(in);
         int headerSize = readUInt16LE(in);
@@ -135,9 +146,10 @@ final class Rar4HeaderEncryptedArchiveRewriter {
         if (type != RAR4_HEADER_MAIN || headerSize < 7) return null;
         long bodyStart = in.getFilePointer();
         long bodyEnd = headerStart + headerSize;
-        if (bodyEnd < bodyStart || bodyEnd + 8 > in.length()) return null;
+        if (bodyEnd < bodyStart || bodyEnd > in.length()) return null;
         byte[] body = new byte[(int) (bodyEnd - bodyStart)];
         in.readFully(body);
+        Rar4HeaderChecksum.verify(headerCrc, type, flags, body);
         if ((flags & RAR4_MAIN_PASSWORD) == 0) return null;
         return new MainHeader(flags, body, bodyEnd);
     }
@@ -147,7 +159,7 @@ final class Rar4HeaderEncryptedArchiveRewriter {
                                                        long position,
                                                        @NonNull Rar3Crypto.Parameters parameters) throws IOException,
             BadRarPasswordException {
-        if (position < 0L || position + AES_BLOCK_SIZE > in.length()) throw new BadRarPasswordException();
+        if (position < 0L || AES_BLOCK_SIZE > in.length() - position) throw new BadRarPasswordException();
         byte[] firstEncrypted = new byte[AES_BLOCK_SIZE];
         in.seek(position);
         in.readFully(firstEncrypted);
@@ -159,7 +171,7 @@ final class Rar4HeaderEncryptedArchiveRewriter {
             throw new BadRarPasswordException();
         }
         long encryptedHeaderSize = align16(headerSize);
-        if (encryptedHeaderSize <= 0L || position + encryptedHeaderSize > in.length()) {
+        if (encryptedHeaderSize <= 0L || encryptedHeaderSize > in.length() - position) {
             throw new BadRarPasswordException();
         }
         byte[] encrypted = new byte[(int) encryptedHeaderSize];
@@ -169,7 +181,7 @@ final class Rar4HeaderEncryptedArchiveRewriter {
         byte[] plainHeader = Arrays.copyOf(decrypted, headerSize);
         if (!hasValidHeaderCrc(plainHeader)) throw new BadRarPasswordException();
         long dataSize = payloadSize(type, flags, plainHeader);
-        if (dataSize < 0L || position + encryptedHeaderSize + dataSize > in.length()) {
+        if (dataSize < 0L || dataSize > in.length() - position - encryptedHeaderSize) {
             throw new BadRarPasswordException();
         }
         return new DecryptedHeader(type, plainHeader, encryptedHeaderSize, dataSize);
@@ -194,14 +206,12 @@ final class Rar4HeaderEncryptedArchiveRewriter {
     }
 
     private static long payloadSize(int type, int flags, @NonNull byte[] plainHeader) throws IOException {
-        if (type == RAR4_HEADER_FILE) {
-            if (plainHeader.length < 7 + 25) throw new BadRarPasswordException();
-            long packedSize = uint32(plainHeader, 7);
-            if ((flags & RAR4_FILE_LARGE) != 0) {
-                if (plainHeader.length < 7 + 33) throw new BadRarPasswordException();
-                packedSize |= uint32(plainHeader, 7 + 25) << 32;
+        if (type == RAR4_HEADER_FILE || type == 0x7a) {
+            try {
+                return Rar4BlockSize.packedSize(flags, plainHeader, 7);
+            } catch (IOException invalidSize) {
+                throw new BadRarPasswordException();
             }
-            return packedSize;
         }
         if ((flags & RAR4_LONG_BLOCK) != 0) {
             if (plainHeader.length < 11) throw new BadRarPasswordException();
@@ -222,9 +232,12 @@ final class Rar4HeaderEncryptedArchiveRewriter {
     private static boolean hasValidHeaderCrc(@NonNull byte[] plainHeader) {
         if (plainHeader.length < 7) return false;
         int expected = uint16(plainHeader, 0);
-        CRC32 crc32 = new CRC32();
-        crc32.update(plainHeader, 2, plainHeader.length - 2);
-        return ((int) crc32.getValue() & 0xffff) == expected;
+        try {
+            return Rar4HeaderChecksum.calculate(plainHeader[2] & 0xff, uint16(plainHeader, 3),
+                    Arrays.copyOfRange(plainHeader, 7, plainHeader.length)) == expected;
+        } catch (IOException invalidHeader) {
+            return false;
+        }
     }
 
     private static void copyRange(@NonNull RandomAccessFile in,
@@ -259,14 +272,7 @@ final class Rar4HeaderEncryptedArchiveRewriter {
                                         int flags,
                                         @NonNull byte[] headerData) throws IOException {
         int size = 7 + headerData.length;
-        CRC32 crc32 = new CRC32();
-        crc32.update(type & 0xff);
-        crc32.update(flags & 0xff);
-        crc32.update((flags >>> 8) & 0xff);
-        crc32.update(size & 0xff);
-        crc32.update((size >>> 8) & 0xff);
-        crc32.update(headerData, 0, headerData.length);
-        writeUInt16LE(out, (int) crc32.getValue() & 0xffff);
+        writeUInt16LE(out, Rar4HeaderChecksum.calculate(type, flags, headerData));
         out.write(type & 0xff);
         writeUInt16LE(out, flags);
         writeUInt16LE(out, size);

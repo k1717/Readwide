@@ -24,9 +24,11 @@ final class ArchiveFailureClassifier {
         java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         for (Throwable cause = e; cause != null && seen.add(cause); cause = cause.getCause()) {
             if (cause instanceof java.io.InterruptedIOException) return ArchiveSupport.ExtractionFailure.FAILED;
+            if (cause instanceof AlzipZipCrypto.PasswordException) return ArchiveSupport.ExtractionFailure.BAD_PASSWORD;
             if (cause instanceof ArchiveSupport.PasswordRequiredException) return ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED;
             if (cause instanceof ArchiveSupport.UnsupportedArchiveFeatureException) return ArchiveSupport.ExtractionFailure.UNSUPPORTED_FEATURE;
             if (cause instanceof java.io.EOFException
+                    || cause instanceof RarArchiveReader.IntegrityException
                     || cause instanceof SevenZBcj2ArchiveReader.IntegrityException
                     || cause instanceof Rar5CompressedArchiveExtractor.ChecksumException) {
                 return ArchiveSupport.ExtractionFailure.CORRUPT_ARCHIVE;

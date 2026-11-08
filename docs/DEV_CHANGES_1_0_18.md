@@ -1,6 +1,6 @@
 # Readwide 1.0.18 development changes
 
-This note records the implementation delta from 1.0.17, grouped by subsystem. Format-specific performance details are in archive performance notes; both documents describe the current implementation.
+This note records the implementation changes from 1.0.17 to 1.0.18, grouped by subsystem. Its support and validation limits describe that release, not later versions.
 
 ## Adjustable archive viewer background timeout
 

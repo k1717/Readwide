@@ -11,6 +11,8 @@ final class PreferenceBackupSchema {
 
     static Class<?> valueType(String key) {
         if (key == null) return null;
+        Class<?> tapProfileType = TapZoneProfile.preferenceType(key);
+        if (tapProfileType != null) return tapProfileType;
         switch (key) {
             case "brightness_value":
             case "font_size":

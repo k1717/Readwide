@@ -190,10 +190,13 @@ public class PrefsManager {
     public void importSettingsFromJson(JSONObject root, boolean merge) throws JSONException, java.io.IOException {
         if (root == null) return;
         Map<String, ?> before = snapshotForImport();
-        try { replaceImportSettings(planImportSettings(root, merge, before)); }
-        catch (java.io.IOException | RuntimeException failure) {
+        Map<String, Object> planned = planImportSettings(root, merge, before);
+        try { replaceImportSettings(planned); }
+        catch (java.io.IOException | RuntimeException | OutOfMemoryError | StackOverflowError failure) {
             try { replaceImportSettings(before); }
-            catch (Exception rollback) { failure.addSuppressed(rollback); }
+            catch (Exception | OutOfMemoryError | StackOverflowError rollback) {
+                attachPreferenceRecoveryFailure(failure, rollback);
+            }
             throw failure;
         }
     }
@@ -401,7 +404,7 @@ public class PrefsManager {
 
     public void resetReaderAndAppSettings() throws java.io.IOException {
         Map<String, ?> before = snapshotForImport();
-        String[] keys = new String[]{
+        String[] keys = TapZoneProfile.withResetKeys(new String[]{
                 "font_size",
                 "line_spacing",
                 "font_family",
@@ -444,6 +447,7 @@ public class PrefsManager {
                 "pdf_tap_paging_enabled",
                 "epub_tap_paging_enabled",
                 "word_tap_paging_enabled",
+                "image_tap_paging_enabled",
                 "tap_zone_mode",
                 "tap_leading_zone_percent",
                 "tap_trailing_zone_percent",
@@ -475,12 +479,12 @@ public class PrefsManager {
                 "reader_search_case_sensitive",
                 "reader_search_whole_word",
                 "reader_search_regex"
-        };
+        });
         try {
             SharedPreferences.Editor editor = prefs.edit();
             for (String key : keys) editor.remove(key);
             if (!editor.commit()) throw new java.io.IOException("Could not save reset settings");
-        } catch (java.io.IOException | RuntimeException failure) {
+        } catch (java.io.IOException | RuntimeException | OutOfMemoryError | StackOverflowError failure) {
             // A failed commit can already have changed SharedPreferences memory.
             // Restore only the reset keys, not unrelated values saved meanwhile.
             try {
@@ -490,15 +494,25 @@ public class PrefsManager {
                     else rollback.remove(key);
                 }
                 if (!rollback.commit()) throw new java.io.IOException("Could not restore previous settings");
-            } catch (Exception rollbackFailure) {
-                if (rollbackFailure != failure) failure.addSuppressed(rollbackFailure);
-                throw new java.io.IOException(
-                        "Settings reset failed; restoring previous settings also failed", failure);
+            } catch (Exception | OutOfMemoryError | StackOverflowError rollbackFailure) {
+                attachPreferenceRecoveryFailure(failure, rollbackFailure);
+                if (!(failure instanceof Error)) {
+                    throw new java.io.IOException(
+                            "Settings reset failed; restoring previous settings also failed", failure);
+                }
             }
             throw failure;
         }
         applyDarkMode(getDarkMode());
         applyLanguage(getLanguageMode());
+    }
+
+    private static void attachPreferenceRecoveryFailure(Throwable failure, Throwable recovery) {
+        if (failure == recovery) return;
+        try { failure.addSuppressed(recovery); }
+        catch (OutOfMemoryError | StackOverflowError unavailable) {
+            // Preserve the original failure if diagnostics cannot allocate.
+        }
     }
 
     public float getFontSize() { return prefs.getFloat("font_size", DEFAULT_FONT_SIZE); }
@@ -1781,6 +1795,72 @@ public class PrefsManager {
         return getTapPagingEnabled();
     }
     public int getTapZoneMode() { return prefs.getInt("tap_zone_mode", TAP_ZONE_HORIZONTAL); }
+    public boolean usesTxtTapZones(TapZoneProfile.Viewer viewer) {
+        return viewer != TapZoneProfile.Viewer.TXT && prefs.getBoolean(
+                TapZoneProfile.key(viewer, "use_txt"), viewer != TapZoneProfile.Viewer.IMAGE);
+    }
+
+    public TapZoneProfile getViewerTapZones(TapZoneProfile.Viewer viewer) {
+        TapZoneProfile base = new TapZoneProfile(getTapZoneMode(),
+                getTapLeadingZonePercent(), getTapTrailingZonePercent());
+        if (viewer == TapZoneProfile.Viewer.TXT || usesTxtTapZones(viewer)) return base;
+        if (viewer == TapZoneProfile.Viewer.IMAGE) base = new TapZoneProfile(TAP_ZONE_HORIZONTAL, 33, 33);
+        return new TapZoneProfile(prefs.getInt(TapZoneProfile.key(viewer, "mode"), base.mode),
+                prefs.getInt(TapZoneProfile.key(viewer, "leading"), base.leading),
+                prefs.getInt(TapZoneProfile.key(viewer, "trailing"), base.trailing));
+    }
+
+    public void setUsesTxtTapZones(TapZoneProfile.Viewer viewer, boolean useTxt) {
+        if (viewer == TapZoneProfile.Viewer.TXT) return;
+        SharedPreferences.Editor edit = prefs.edit();
+        // Capture the current effective values once; later toggles retain the custom profile.
+        if (!prefs.contains(TapZoneProfile.key(viewer, "mode"))) {
+            putViewerTapZones(edit, viewer, getViewerTapZones(viewer));
+        }
+        edit.putBoolean(TapZoneProfile.key(viewer, "use_txt"), useTxt).apply();
+    }
+
+    public void setViewerTapZones(TapZoneProfile.Viewer viewer, TapZoneProfile profile) {
+        SharedPreferences.Editor edit = prefs.edit();
+        putViewerTapZones(edit, viewer, profile);
+        edit.apply();
+    }
+
+    private static void putViewerTapZones(SharedPreferences.Editor edit,
+                                         TapZoneProfile.Viewer viewer, TapZoneProfile profile) {
+        if (viewer == TapZoneProfile.Viewer.TXT) {
+            edit.putInt("tap_zone_mode", profile.mode)
+                    .putInt("tap_leading_zone_percent", profile.leading)
+                    .putInt("tap_trailing_zone_percent", profile.trailing);
+        } else {
+            edit.putInt(TapZoneProfile.key(viewer, "mode"), profile.mode)
+                    .putInt(TapZoneProfile.key(viewer, "leading"), profile.leading)
+                    .putInt(TapZoneProfile.key(viewer, "trailing"), profile.trailing);
+        }
+    }
+
+    public boolean getViewerTapPagingEnabled(TapZoneProfile.Viewer viewer) {
+        switch (viewer) {
+            case EPUB: return getEpubTapPagingEnabled();
+            case PDF: return getPdfTapPagingEnabled();
+            case MARKDOWN: return getMarkdownTapPagingEnabled();
+            case WORD: return getWordTapPagingEnabled();
+            case IMAGE: return getImageTapPagingEnabled();
+            default: return getTapPagingEnabled();
+        }
+    }
+
+    public void setViewerTapPagingEnabled(TapZoneProfile.Viewer viewer, boolean enabled) {
+        switch (viewer) {
+            case EPUB: setEpubTapPagingEnabled(enabled); break;
+            case PDF: setPdfTapPagingEnabled(enabled); break;
+            case MARKDOWN: setMarkdownTapPagingEnabled(enabled); break;
+            case WORD: setWordTapPagingEnabled(enabled); break;
+            case IMAGE: setImageTapPagingEnabled(enabled); break;
+            default: setTapPagingEnabled(enabled);
+        }
+    }
+
     public void setTapZoneMode(int mode) {
         int clamped = (mode == TAP_ZONE_HORIZONTAL) ? TAP_ZONE_HORIZONTAL : TAP_ZONE_VERTICAL;
         prefs.edit().putInt("tap_zone_mode", clamped).apply();

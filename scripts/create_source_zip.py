@@ -40,6 +40,7 @@ EXCLUDED_NAMES = {
     "desktop.ini",
     "GoogleService-Info.plist",
     "google-services.json",
+    "GITHUB_UPLOAD_NOTES.md",
     "keystore.properties",
     "local.properties",
     "search_func.txt",

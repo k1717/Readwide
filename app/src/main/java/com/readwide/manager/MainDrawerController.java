@@ -23,7 +23,8 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
+
+import com.readwide.manager.util.SharedStoragePaths;
 
 final class MainDrawerController {
     private final MainActivity activity;
@@ -140,11 +141,7 @@ final class MainDrawerController {
                     internal.getAbsolutePath()));
         }
 
-        // A persisted provider tree replaces the raw-root shortcut set instead
-        // of appearing as a second storage mode. This keeps one predictable
-        // Internal Storage entry on devices whose raw directory enumeration is
-        // unavailable. SD/Downloads return automatically when provider mode is
-        // no longer active.
+        // A folder grant does not remove working raw-storage shortcuts.
         if (!providerPrimary
                 && activity.hasRawStorageBrowserAuthorization()) {
             for (File sd : detectExternalSdCards()) {
@@ -210,8 +207,11 @@ final class MainDrawerController {
         if (lp == null) return;
 
         int rows = Math.max(0, Math.min(itemCount, maxRows));
-        lp.height = rows <= 0 ? 0 : activity.dpToPx(rows * 48);
-        list.setLayoutParams(lp);
+        int height = rows <= 0 ? 0 : activity.dpToPx(rows * 48);
+        if (lp.height != height) {
+            lp.height = height;
+            list.setLayoutParams(lp);
+        }
         list.setVisibility(rows <= 0 ? View.GONE : View.VISIBLE);
         list.setNestedScrollingEnabled(itemCount > maxRows);
         list.setOverScrollMode(itemCount > maxRows
@@ -226,10 +226,12 @@ final class MainDrawerController {
 
         if (rawLp instanceof LinearLayout.LayoutParams) {
             LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) rawLp;
-            lp.height = 0;
-            lp.weight = 1f;
-            list.setLayoutParams(lp);
-        } else {
+            if (lp.height != 0 || lp.weight != 1f) {
+                lp.height = 0;
+                lp.weight = 1f;
+                list.setLayoutParams(lp);
+            }
+        } else if (rawLp.height != 0) {
             rawLp.height = 0;
             list.setLayoutParams(rawLp);
         }
@@ -348,50 +350,66 @@ final class MainDrawerController {
 
     /**
      * Locate non-emulated external storage volumes (SD cards, USB OTG).
-     * Cached after the first successful detection so the drawer rebuild
-     * does not re-scan /storage and re-query getExternalFilesDirs() up to
-     * 50 times per onResume.
+     * Reuse scans briefly within a drawer rebuild. Resume invalidates the cache
+     * so returning from storage permission or connection changes refreshes it.
      */
     List<File> detectExternalSdCards() {
-        if (activity.cachedSdCards != null) return activity.cachedSdCards;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (activity.cachedSdCards != null && now - lastStorageScan < 2000L) return activity.cachedSdCards;
+        lastStorageScan = now;
 
-        Set<String> seen = new LinkedHashSet<>();
         List<File> result = new ArrayList<>();
+        File primary = Environment.getExternalStorageDirectory();
 
         // Method 1: scan /storage for siblings of "emulated"
         File storage = new File("/storage");
-        File[] storageChildren = storage.listFiles();
+        File[] storageChildren = null;
+        try { storageChildren = storage.listFiles(); }
+        catch (SecurityException unavailable) { /* Other discovery paths may still work. */ }
         if (storageChildren != null) {
             for (File f : storageChildren) {
                 String name = f.getName();
                 if (name.equals("emulated") || name.equals("self")
                         || name.equals("enc_emulated") || name.startsWith(".")) continue;
-                if (!f.isDirectory() || !f.canRead()) continue;
-                String path = f.getAbsolutePath();
-                if (seen.add(path)) result.add(f);
+                SharedStoragePaths.addReadableRoot(result, f, primary);
             }
         }
 
-        // Method 2: derive from getExternalFilesDirs (skip the first = internal)
-        File[] appDirs = activity.getExternalFilesDirs(null);
-        if (appDirs.length > 1) {
-            for (int i = 1; i < appDirs.length; i++) {
-                File d = appDirs[i];
-                if (d == null) continue;
-                String p = d.getAbsolutePath();
-                int idx = p.indexOf("/Android");
-                if (idx > 0) {
-                    File root = new File(p.substring(0, idx));
-                    if (root.exists() && root.canRead() && seen.add(root.getAbsolutePath())) {
-                        result.add(root);
+        File[] appDirs = null;
+        try { appDirs = activity.getExternalFilesDirs(null); }
+        catch (RuntimeException unavailable) { /* Storage service may be reconnecting. */ }
+        if (appDirs != null) {
+            for (File directory : appDirs) {
+                SharedStoragePaths.addReadableRoot(result,
+                        SharedStoragePaths.rootFromAppFiles(directory, activity.getPackageName()), primary);
+            }
+        }
+
+        // USB volumes need not appear in getExternalFilesDirs or a readable /storage listing.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                android.os.storage.StorageManager manager = activity.getSystemService(
+                        android.os.storage.StorageManager.class);
+                if (manager != null) {
+                    for (android.os.storage.StorageVolume volume : manager.getStorageVolumes()) {
+                        if (volume == null || volume.isPrimary() || volume.isEmulated()) continue;
+                        String state = volume.getState();
+                        if (Environment.MEDIA_MOUNTED.equals(state)
+                                || Environment.MEDIA_MOUNTED_READ_ONLY.equals(state)) {
+                            SharedStoragePaths.addReadableRoot(result, volume.getDirectory(), primary);
+                        }
                     }
                 }
+            } catch (RuntimeException unavailable) {
+                // Keep the roots discovered before a detach or storage-service failure.
             }
         }
 
         activity.cachedSdCards = result;
         return activity.cachedSdCards;
     }
+
+    private long lastStorageScan;
 
     void setupDrawerBottomActions() {
         View openFile = activity.findViewById(R.id.drawer_btn_open_file);

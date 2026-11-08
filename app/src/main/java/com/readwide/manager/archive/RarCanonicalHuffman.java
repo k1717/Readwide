@@ -5,6 +5,12 @@ import java.io.IOException;
 import java.util.Arrays;
 
 final class RarCanonicalHuffman {
+    /** Invalid decoded symbols/tables, distinct from source I/O and physical EOF. */
+    static final class InvalidDataException extends IOException {
+        private static final long serialVersionUID = 1L;
+        InvalidDataException(String message) { super(message); }
+    }
+
     private static final int MAX_BITS = 15;
     private static final int LOOKUP_BITS = 8;
 
@@ -75,7 +81,7 @@ final class RarCanonicalHuffman {
         for (int index = 0; index < lengthCount; index++) {
             int length = codeLengths[offset + index];
             if (length < 0 || length > MAX_BITS) {
-                throw new IOException("Invalid RAR Huffman code length");
+                throw new InvalidDataException("Invalid RAR Huffman code length");
             }
             if (length == 0) continue;
             counts[length]++;
@@ -93,7 +99,7 @@ final class RarCanonicalHuffman {
         for (int bits = 1; bits <= MAX_BITS; bits++) {
             code = (code + counts[bits - 1]) << 1;
             if (code + counts[bits] > (1 << bits)) {
-                throw new IOException("Oversubscribed RAR Huffman table");
+                throw new InvalidDataException("Oversubscribed RAR Huffman table");
             }
             nextCode[bits] = code;
         }
@@ -125,7 +131,7 @@ final class RarCanonicalHuffman {
     }
 
     int decode(RarBitInput input) throws IOException {
-        if (maxLength == 0) throw new IOException("RAR Huffman decode from empty table");
+        if (maxLength == 0) throw new InvalidDataException("RAR Huffman decode from empty table");
         // Never require a full lookup prefix at a valid short-code stream tail.
         // RarBitInput retains prefetched bytes across aligned PPMd transitions.
         if (input.hasBits(lookupBits)) {
@@ -151,7 +157,7 @@ final class RarCanonicalHuffman {
                 return symbolsByCode[firstIndex + index];
             }
         }
-        throw new IOException("Invalid RAR Huffman code");
+        throw new InvalidDataException("Invalid RAR Huffman code");
     }
 
 }

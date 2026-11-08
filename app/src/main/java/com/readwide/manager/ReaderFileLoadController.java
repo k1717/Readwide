@@ -13,9 +13,11 @@ import com.readwide.manager.util.FileUtils;
 import com.readwide.manager.util.PrefsManager;
 import com.readwide.manager.util.TextDisplayRuleManager;
 import com.readwide.manager.util.TxtBlankLineCollapser;
+import com.readwide.manager.util.TaskSubmission;
 
 import java.io.File;
 import java.util.Locale;
+import java.util.concurrent.Executor;
 
 final class ReaderFileLoadController {
     private final ReaderActivity activity;
@@ -72,7 +74,7 @@ final class ReaderFileLoadController {
                 sourceIntent.getBooleanExtra(ReaderActivity.EXTRA_JUMP_PREFER_ANCHOR_PARTITION, false);
         final android.content.Context appContext = activity.getApplicationContext();
 
-        activity.executor.execute(() -> {
+        submitLoadTask(generation, activity.executor, () -> {
             if (activity.activityDestroyed || generation != activity.loadGeneration.get()) return;
             try {
                 LoadedTarget target = resolveTarget(appContext, path, uriStr);
@@ -104,13 +106,24 @@ final class ReaderFileLoadController {
                         jumpPosition,
                         jumpAnchorBefore,
                         jumpAnchorAfter, identity);
-            } catch (Exception | OutOfMemoryError e) {
+            } catch (Exception | OutOfMemoryError | StackOverflowError e) {
                 // Text decoding/transformation can exhaust memory before a view
                 // exists. Report this load's failure; do not leave an uncaught
                 // worker error or start another equally large allocation.
                 postLoadError(generation, e);
             }
         });
+    }
+
+    void submitLoadTask(int generation, Executor worker, Runnable action) {
+        try {
+            TaskSubmission.submit(worker, action);
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            // Retire callbacks from work that started before submission failed.
+            if (activity.loadGeneration.compareAndSet(generation, generation + 1)) {
+                postLoadError(generation + 1, failure);
+            }
+        }
     }
 
     private void clearViewerStateForLoad(String path, boolean samePathReload) {
@@ -345,9 +358,13 @@ final class ReaderFileLoadController {
     private void postLoadError(int generation, @NonNull Throwable e) {
         activity.handler.post(() -> {
             if (activity.activityDestroyed || generation != activity.loadGeneration.get()) return;
-            activity.progressText.setText(String.format(Locale.getDefault(), "%s%s",
-                    activity.getString(R.string.error_prefix), e.getMessage()));
-            ShortToast.show(activity, activity.getString(R.string.error_prefix) + e.getMessage());
+            activity.textContentReadyForPersistence = false;
+            if (activity.progressBar != null) activity.progressBar.setVisibility(android.view.View.GONE);
+            String message = e.getMessage();
+            if (message == null || message.isEmpty()) message = e.getClass().getSimpleName();
+            if (activity.progressText != null) activity.progressText.setText(String.format(Locale.getDefault(), "%s%s",
+                    activity.getString(R.string.error_prefix), message));
+            ShortToast.show(activity, activity.getString(R.string.error_prefix) + message);
         });
     }
 

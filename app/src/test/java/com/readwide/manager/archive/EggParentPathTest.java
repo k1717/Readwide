@@ -27,7 +27,7 @@ public class EggParentPathTest {
         List<ArchiveSupport.EntryInfo> entries = EggArchiveReader.listEntries(archive, null);
         assertEquals(3, entries.size());
         assertEquals("comic/chapter/page.jpg", entries.get(0).path);
-        assertEquals("comic/chapter", entries.get(1).path);
+        assertEquals("comic/chapter/", entries.get(1).path);
         assertTrue(entries.get(1).directory);
         extracted(archive, "comic/chapter/page.jpg", data);
     }

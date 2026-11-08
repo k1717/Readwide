@@ -431,14 +431,19 @@ public class SevenZBcj2ArchiveReaderTest {
             File[] first = spool.listFiles();
             assertEquals(1, first.length);
             assertEquals(4, first[0].length());
-            // The folder is now fully decoded; advancing must not reopen the archive.
-            assertTrue(archive.delete());
+            // Compare the live spool handle; deleting the open source is not portable on Windows.
+            java.lang.reflect.Field inputField = reader.getClass().getDeclaredField("input");
+            inputField.setAccessible(true);
+            Object verifiedInput = inputField.get(reader);
+            org.junit.Assert.assertNotNull(verifiedInput);
             assertEquals("2.bin", reader.nextEntry().path);
             assertForwardBytes(reader, new byte[]{3, 4});
+            org.junit.Assert.assertSame(verifiedInput, inputField.get(reader));
             assertEquals(first[0], spool.listFiles()[0]);
             org.junit.Assert.assertNull(reader.nextEntry());
             assertEquals(0, spool.list().length);
         }
+        assertTrue(archive.delete());
     }
 
     @Test

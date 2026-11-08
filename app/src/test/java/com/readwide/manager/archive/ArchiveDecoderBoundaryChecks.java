@@ -47,50 +47,50 @@ final class ArchiveDecoderBoundaryChecks {
     }
     static void invalidDeflateCount(int count)throws Exception {
         int[] calls={0};InputStream source=new InputStream(){public int read(){throw new AssertionError("scalar read");}public int read(byte[] b,int o,int n){calls[0]++;return count;}};
-        try(InputStream in=new OwnedDeflateInputStream(source)){
+        try(InputStream in=OwnedDeflateInputStream.open(source)){
             IOException e=io(()->in.read(new byte[8]),"progress");
             require(e==io(in::read,"progress")&&e==io(in::available,"progress"),"sticky invalid count");
             require(calls[0]==1,"source retried after failure");
         }
     }
     static void deflateTruncatedSourceSticky()throws Exception {
-        try(InputStream in=new OwnedDeflateInputStream(new ByteArrayInputStream(new byte[0]))){IOException e=io(in::read,null);require(e instanceof EOFException,"EOF type");require(e==io(in::read,null),"sticky EOF");}
+        try(InputStream in=OwnedDeflateInputStream.open(new ByteArrayInputStream(new byte[0]))){IOException e=io(in::read,null);require(e instanceof EOFException,"EOF type");require(e==io(in::read,null),"sticky EOF");}
     }
     static void deflateSourceFailureIdentity()throws Exception {
         IOException expected=new IOException("injected source failure");
-        try(InputStream in=new OwnedDeflateInputStream(new InputStream(){public int read()throws IOException{throw expected;}public int read(byte[] b,int o,int n)throws IOException{throw expected;}})){
+        try(InputStream in=OwnedDeflateInputStream.open(new InputStream(){public int read()throws IOException{throw expected;}public int read(byte[] b,int o,int n)throws IOException{throw expected;}})){
             require(expected==io(in::read,null),"original source error");require(expected==io(in::read,null),"sticky error");
         }
     }
     static void deflateLateInvalidCount()throws Exception {
         byte[] packed=Round4Fixtures.deflate(Round4Fixtures.data(100000));int[] calls={0};
         InputStream source=new InputStream(){public int read(){throw new AssertionError();}public int read(byte[] b,int o,int n){if(calls[0]++>0)return -2;System.arraycopy(packed,0,b,o,500);return 500;}};
-        try(InputStream in=new OwnedDeflateInputStream(source)){require(in.read(new byte[100])>0,"initial data");IOException e=io(in::readAllBytes,"progress");require(e==io(in::read,"progress"),"late sticky error");}
+        try(InputStream in=OwnedDeflateInputStream.open(source)){require(in.read(new byte[100])>0,"initial data");IOException e=io(in::readAllBytes,"progress");require(e==io(in::read,"progress"),"late sticky error");}
     }
     static void deflateKnownPayloads()throws Exception {
-        for(int size:new int[]{0,1,255,65536,196609}){byte[] p=Round4Fixtures.data(size);try(InputStream in=new OwnedDeflateInputStream(new ByteArrayInputStream(Round4Fixtures.deflate(p)))){equal(p,in.readAllBytes(),"raw Deflate "+size);require(in.read()==-1,"EOF");}}
+        for(int size:new int[]{0,1,255,65536,196609}){byte[] p=Round4Fixtures.data(size);try(InputStream in=OwnedDeflateInputStream.open(new ByteArrayInputStream(Round4Fixtures.deflate(p)))){equal(p,in.readAllBytes(),"raw Deflate "+size);require(in.read()==-1,"EOF");}}
     }
     static void deflateShortCompressedReads()throws Exception {
         byte[] plain=Round4Fixtures.data(90003),packed=Round4Fixtures.deflate(plain);
-        for(int chunk:new int[]{1,2,3,7,37,1023})try(InputStream in=new OwnedDeflateInputStream(new ByteArrayInputStream(packed){@Override public synchronized int read(byte[] b,int o,int n){return super.read(b,o,Math.min(n,chunk));}})){equal(plain,in.readAllBytes(),"short reads "+chunk);}
+        for(int chunk:new int[]{1,2,3,7,37,1023})try(InputStream in=OwnedDeflateInputStream.open(new ByteArrayInputStream(packed){@Override public synchronized int read(byte[] b,int o,int n){return super.read(b,o,Math.min(n,chunk));}})){equal(plain,in.readAllBytes(),"short reads "+chunk);}
     }
     static void deflateMixedReadAndSkip()throws Exception {
-        byte[] p=Round4Fixtures.data(20003);try(InputStream in=new OwnedDeflateInputStream(new ByteArrayInputStream(Round4Fixtures.deflate(p)))){
+        byte[] p=Round4Fixtures.data(20003);try(InputStream in=OwnedDeflateInputStream.open(new ByteArrayInputStream(Round4Fixtures.deflate(p)))){
             int pos=0;Random random=new Random(57);while(pos<p.length){if(random.nextBoolean()){int n=Math.min(1+random.nextInt(300),p.length-pos);require(in.skip(n)==n,"skip count");pos+=n;}else{require(in.read()==(p[pos++]&255),"scalar value");}}require(in.read()==-1,"end after skip");
         }
     }
     static void deflateCancellationSticky()throws Exception {
-        try(InputStream in=new OwnedDeflateInputStream(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{1})))){
+        try(InputStream in=OwnedDeflateInputStream.open(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{1})))){
             Thread.currentThread().interrupt();IOException e;try{e=io(in::read,null);}finally{Thread.interrupted();}require(e instanceof InterruptedIOException,"cancellation type");require(e==io(in::read,null),"sticky cancellation");
         }
     }
     static void deflateCloseFailureClosesOnce()throws Exception {
         int[] closes={0};IOException expected=new IOException("injected close");
-        InputStream in=new OwnedDeflateInputStream(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{1})){@Override public void close()throws IOException{closes[0]++;throw expected;}});
+        InputStream in=OwnedDeflateInputStream.open(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{1})){@Override public void close()throws IOException{closes[0]++;throw expected;}});
         require(in.read()==1,"valid read");require(expected==io(in::close,null),"close error identity");in.close();require(closes[0]==1,"idempotent close");io(in::read,"closed");
     }
     static void deflateInvalidArgumentsDoNotPoison()throws Exception {
-        try(InputStream in=new OwnedDeflateInputStream(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{7})))){
+        try(InputStream in=OwnedDeflateInputStream.open(new ByteArrayInputStream(Round4Fixtures.deflate(new byte[]{7})))){
             try{in.read(new byte[1],Integer.MAX_VALUE,1);throw new AssertionError("bounds");}catch(IndexOutOfBoundsException good){}
             require(in.read(new byte[0])==0&&in.read()==7,"bad caller arguments must not consume data");
         }

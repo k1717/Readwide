@@ -11,8 +11,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 /**
- * Persisted Storage Access Framework tree state shared by the main drawer and
- * the URI-backed fallback browser.
+ * Persisted Storage Access Framework tree state shared by Settings and the
+ * URI-backed fallback browser.
  *
  * <p>No filesystem path is derived from a document URI. Providers are addressed
  * only through {@link DocumentsContract}, which keeps this path usable across
@@ -22,6 +22,10 @@ final class SafStorageAccess {
     private static final String PREFS = "saf_storage_access";
     private static final String KEY_TREE_URI = "tree_uri";
     private static final String KEY_TREE_LABEL = "tree_label";
+    private static final String KEY_REGISTERED_TREES = "registered_trees";
+    private static final String LABEL_PREFIX = "registered_label:";
+    private static final java.util.Map<Uri, Integer> pinnedTrees = new java.util.HashMap<>();
+    private static long treeGeneration;
 
     private SafStorageAccess() {}
 
@@ -49,7 +53,7 @@ final class SafStorageAccess {
      * read-only provider. Returns false only when no persistent read grant can
      * be retained.
      */
-    static boolean takePersistableTreeGrant(
+    private static boolean takePersistableTreeGrant(
             @NonNull Context context, @NonNull Uri treeUri) {
         try {
             context.getContentResolver().takePersistableUriPermission(
@@ -69,7 +73,7 @@ final class SafStorageAccess {
         }
     }
 
-    static void rememberTree(@NonNull Context context, @NonNull Uri treeUri) {
+    static boolean selectTree(@NonNull Context context, @NonNull Uri treeUri) {
         String label;
         try {
             String rootId = DocumentsContract.getTreeDocumentId(treeUri);
@@ -78,57 +82,200 @@ final class SafStorageAccess {
         } catch (Exception ignored) {
             label = queryDisplayName(context, treeUri);
         }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit()
+        return registerTreeGrant(context, treeUri, label);
+    }
+
+    private static synchronized boolean registerTreeGrant(Context context, Uri treeUri, String label) {
+        if (!isTree(treeUri)) return false;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        java.util.Set<String> trees = registeredUris(prefs);
+        // Registration, removal and the last pin release share the same lock.
+        if (!takePersistableTreeGrant(context, treeUri)) return false;
+        trees.add(treeUri.toString());
+        SharedPreferences.Editor editor = prefs.edit();
+        retainLegacyLabel(prefs, editor);
+        editor.putStringSet(KEY_REGISTERED_TREES, trees)
+                .putString(LABEL_PREFIX + treeUri, label)
                 .putString(KEY_TREE_URI, treeUri.toString())
                 .putString(KEY_TREE_LABEL, label)
                 .apply();
+        treeGeneration++;
+        return true;
     }
 
-    static void forgetTree(@NonNull Context context) {
+    static final class RegisteredTree {
+        final Uri uri;
+        final String label;
+
+        RegisteredTree(Uri uri, String label) { this.uri = uri; this.label = label; }
+    }
+
+    enum Removal { REMOVED, BUSY, FAILED, NOT_REGISTERED }
+
+    // Old installations store only the last tree. Read it as a one-item registry
+    // until the first edit writes the collection and its labels together.
+    private static java.util.Set<String> registeredUris(SharedPreferences prefs) {
+        java.util.Set<String> result = new java.util.HashSet<>();
+        if (prefs.contains(KEY_REGISTERED_TREES)) {
+            java.util.Set<String> stored = prefs.getStringSet(KEY_REGISTERED_TREES, null);
+            if (stored == null) throw new IllegalStateException("Missing folder registry");
+            for (String raw : stored) {
+                if (raw == null || !isTree(Uri.parse(raw))) {
+                    throw new IllegalStateException("Invalid registered folder");
+                }
+                result.add(raw);
+            }
+        } else {
+            String legacy = prefs.getString(KEY_TREE_URI, null);
+            if (legacy != null && isTree(Uri.parse(legacy))) result.add(legacy);
+        }
+        return result;
+    }
+
+    private static boolean isTree(Uri uri) {
+        return uri != null && "content".equals(uri.getScheme())
+                && uri.getAuthority() != null && !uri.getAuthority().isEmpty()
+                && DocumentsContract.isTreeUri(uri);
+    }
+
+    private static void retainLegacyLabel(SharedPreferences prefs, SharedPreferences.Editor editor) {
+        if (prefs.contains(KEY_REGISTERED_TREES)) return;
+        String legacy = prefs.getString(KEY_TREE_URI, null);
+        if (legacy != null) editor.putString(LABEL_PREFIX + legacy,
+                prefs.getString(KEY_TREE_LABEL, null));
+    }
+
+    @NonNull
+    static synchronized java.util.List<RegisteredTree> getRegisteredTrees(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        java.util.List<RegisteredTree> result = new java.util.ArrayList<>();
+        for (String raw : registeredUris(prefs)) {
+            String label = prefs.getString(LABEL_PREFIX + raw, null);
+            if (label == null && raw.equals(prefs.getString(KEY_TREE_URI, null))) {
+                label = prefs.getString(KEY_TREE_LABEL, null);
+            }
+            Uri uri = Uri.parse(raw);
+            if (label == null || label.trim().isEmpty()) label = DocumentsContract.getTreeDocumentId(uri);
+            result.add(new RegisteredTree(uri, label));
+        }
+        result.sort((a, b) -> {
+            int name = a.label.compareToIgnoreCase(b.label);
+            return name != 0 ? name : a.uri.toString().compareTo(b.uri.toString());
+        });
+        return result;
+    }
+
+    static synchronized boolean useRegisteredTree(Context context, Uri tree) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (tree == null || !registeredUris(prefs).contains(tree.toString())
+                || !hasPersistedReadPermission(context, tree)) return false;
+        for (RegisteredTree entry : getRegisteredTrees(context)) {
+            if (!entry.uri.equals(tree)) continue;
+            prefs.edit().putString(KEY_TREE_URI, tree.toString())
+                    .putString(KEY_TREE_LABEL, entry.label).apply();
+            treeGeneration++;
+            return true;
+        }
+        return false;
+    }
+
+    static synchronized Removal removeRegisteredTree(Context context, Uri tree) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        java.util.Set<String> trees = registeredUris(prefs);
+        if (tree == null || !trees.contains(tree.toString())) return Removal.NOT_REGISTERED;
+        if (isPinned(tree)) return Removal.BUSY;
+        if (!releaseGrant(context, tree)) return Removal.FAILED;
+        trees.remove(tree.toString());
+        SharedPreferences.Editor editor = prefs.edit();
+        retainLegacyLabel(prefs, editor);
+        editor.putStringSet(KEY_REGISTERED_TREES, trees).remove(LABEL_PREFIX + tree);
+        if (tree.equals(getRememberedTree(context))) {
+            editor.remove(KEY_TREE_URI).remove(KEY_TREE_LABEL);
+        }
+        editor.apply();
+        treeGeneration++;
+        return Removal.REMOVED;
+    }
+
+    private static synchronized void forgetTree(@NonNull Context context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .remove(KEY_TREE_URI)
                 .remove(KEY_TREE_LABEL)
                 .apply();
+        treeGeneration++;
     }
 
-    static void releasePreviousGrantIfDifferent(
-            @NonNull Context context, @NonNull Uri replacement) {
-        Uri previous = getRememberedTree(context);
-        if (previous == null || previous.equals(replacement)) return;
-        releaseGrant(context, previous);
+    static synchronized void pinTree(Uri tree) {
+        if (tree == null) return;
+        pinnedTrees.put(tree, pinnedTrees.getOrDefault(tree, 0) + 1);
     }
 
-    private static void releaseGrant(@NonNull Context context, @NonNull Uri treeUri) {
+    private static synchronized boolean isPinned(Uri tree) { return pinnedTrees.containsKey(tree); }
+
+    static synchronized void unpinTree(Context context, Uri tree) {
+        if (tree == null) return;
+        int count = pinnedTrees.getOrDefault(tree, 0);
+        if (count == 0) return;
+        if (count > 1) pinnedTrees.put(tree, count - 1);
+        else pinnedTrees.remove(tree);
+        if (!isPinned(tree)) {
+            try {
+                SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                if (!registeredUris(prefs).contains(tree.toString())) releaseGrant(context, tree);
+            } catch (RuntimeException unreadableRegistry) {
+                // Unknown registration state must not revoke a saved folder.
+            }
+        }
+    }
+
+    private static boolean releaseGrant(@NonNull Context context, @NonNull Uri treeUri) {
         try {
             context.getContentResolver().releasePersistableUriPermission(
                     treeUri,
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                             | android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            return true;
         } catch (Exception writeWasNotGranted) {
             try {
                 context.getContentResolver().releasePersistableUriPermission(
                         treeUri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                return true;
             } catch (Exception ignored) {
-                // Provider may already have revoked or forgotten the old grant.
+                // A missing grant is already removed; an unreadable grant list is not proof.
+                try {
+                    for (UriPermission grant : context.getContentResolver().getPersistedUriPermissions()) {
+                        if (grant != null && treeUri.equals(grant.getUri())
+                                && (grant.isReadPermission() || grant.isWritePermission())) return false;
+                    }
+                    return true;
+                } catch (RuntimeException unavailable) { return false; }
             }
         }
     }
 
     @Nullable
     static Uri getUsableTree(@NonNull Context context) {
-        Uri treeUri = getRememberedTree(context);
-        if (treeUri == null) return null;
-        if (!hasPersistedReadPermission(context, treeUri)) {
-            forgetTree(context);
-            return null;
+        Uri treeUri;
+        long generation;
+        synchronized (SafStorageAccess.class) {
+            treeUri = getRememberedTree(context);
+            generation = treeGeneration;
         }
-        return treeUri;
+        if (treeUri == null) return null;
+        boolean readable = hasPersistedReadPermission(context, treeUri);
+        synchronized (SafStorageAccess.class) {
+            if (generation != treeGeneration || !treeUri.equals(getRememberedTree(context))) return null;
+            if (!readable) {
+                // Keep the registration so permission can be renewed after disconnect/revocation.
+                return null;
+            }
+            return treeUri;
+        }
     }
 
     @Nullable
-    static Uri getRememberedTree(@NonNull Context context) {
+    static synchronized Uri getRememberedTree(@NonNull Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String raw = prefs.getString(KEY_TREE_URI, null);
         if (raw == null || raw.trim().isEmpty()) return null;
@@ -147,10 +294,19 @@ final class SafStorageAccess {
     }
 
     static boolean hasPersistedReadPermission(@NonNull Context context, @NonNull Uri treeUri) {
+        return hasPersistedPermission(context, treeUri, false);
+    }
+
+    static boolean hasPersistedWritePermission(@NonNull Context context, @NonNull Uri treeUri) {
+        return hasPersistedPermission(context, treeUri, true);
+    }
+
+    private static boolean hasPersistedPermission(Context context, Uri treeUri, boolean requireWrite) {
         try {
             for (UriPermission permission : context.getContentResolver().getPersistedUriPermissions()) {
                 if (permission != null
                         && permission.isReadPermission()
+                        && (!requireWrite || permission.isWritePermission())
                         && treeUri.equals(permission.getUri())) {
                     return true;
                 }

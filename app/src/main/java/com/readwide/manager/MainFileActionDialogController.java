@@ -22,8 +22,12 @@ import androidx.annotation.NonNull;
 
 import com.readwide.manager.archive.ArchiveCancellation;
 import com.readwide.manager.util.FileClipboardController;
+import com.readwide.manager.util.FileDeletionPlan;
 import com.readwide.manager.util.FileOperationProgress;
+import com.readwide.manager.util.FileRenamePlan;
 import com.readwide.manager.util.FileSystemOps;
+import com.readwide.manager.util.FileTreeProgressTracker;
+import com.readwide.manager.util.TaskSubmission;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -35,6 +39,7 @@ import java.util.List;
  */
 final class MainFileActionDialogController {
     private final MainActivity activity;
+    private boolean preparingDelete;
 
     MainFileActionDialogController(@NonNull MainActivity activity) {
         this.activity = activity;
@@ -149,6 +154,15 @@ final class MainFileActionDialogController {
 
     void showRenameDialog(File file) {
         if (activity.activityDestroyed) return;
+        final FileRenamePlan plan;
+        try {
+            plan = FileRenamePlan.capture(file);
+        } catch (java.io.IOException | SecurityException unavailable) {
+            if (!activity.offerSafFileOperationAccess(java.util.Collections.singletonList(file))) {
+                ShortToast.show(activity, R.string.rename_failed);
+            }
+            return;
+        }
         final boolean dark = activity.prefs == null || activity.prefs.shouldUseDarkColors(activity);
         final int bg = activity.prefs != null ? activity.prefs.getMainBgColor(activity) : (dark ? Color.rgb(33, 33, 33) : Color.rgb(255, 255, 255));
         final int panel = activity.prefs != null ? activity.prefs.getMainPanelColor(activity) : (dark ? Color.rgb(48, 48, 48) : Color.rgb(245, 245, 245));
@@ -207,12 +221,25 @@ final class MainFileActionDialogController {
             if (activity.activityDestroyed || ref[0] == null || !ref[0].isShowing()) return;
             String newName = input.getText().toString().trim();
             if (newName.isEmpty()) return;
-            if (renameFileAndReferences(file, newName)) {
+            if (!FileSystemOps.isSingleEntryName(newName)) {
+                ShortToast.show(activity, R.string.rename_failed);
+                return;
+            }
+            if (!plan.isUnchanged()) {
+                ShortToast.show(activity, R.string.file_operation_source_unavailable);
+                ref[0].dismiss();
+                return;
+            }
+            if (renameFileAndReferences(file, newName, plan)) {
                 if (ref[0] != null) ref[0].dismiss();
                 activity.refreshVisibleFileListAfterFileSystemChange();
                 ShortToast.show(activity, activity.getString(R.string.renamed));
             } else {
-                ShortToast.show(activity, activity.getString(R.string.rename_failed));
+                if (activity.offerSafFileOperationAccess(java.util.Collections.singletonList(file))) {
+                    ref[0].dismiss();
+                } else {
+                    ShortToast.show(activity, activity.getString(R.string.rename_failed));
+                }
             }
         });
 
@@ -243,13 +270,13 @@ final class MainFileActionDialogController {
         dialog.show();
     }
 
-    private boolean renameFileAndReferences(File source, String newName) {
+    private boolean renameFileAndReferences(File source, String newName, FileRenamePlan plan) {
         File parent = source.getParentFile();
         if (parent == null) return false;
         String oldPath = source.getAbsolutePath();
         String newPath = new File(parent, newName).getAbsolutePath();
-        boolean wasDirectory = source.isDirectory();
-        if (!FileSystemOps.renameInPlace(source, newName)) return false;
+        boolean wasDirectory = plan.isDirectory();
+        if (!plan.rename(newName)) return false;
         if (activity.bookmarkManager != null) {
             activity.bookmarkManager.moveReferences(oldPath, newPath, wasDirectory);
         }
@@ -260,6 +287,33 @@ final class MainFileActionDialogController {
     }
 
     void showDeleteConfirm(File file) {
+        if (activity.activityDestroyed || preparingDelete) return;
+        preparingDelete = true;
+        try {
+            TaskSubmission.submit(activity.folderValidationExecutor, () -> {
+                FileDeletionPlan captured = null;
+                try {
+                    captured = FileDeletionPlan.capture(file);
+                } catch (java.io.IOException | RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                    ArchiveCancellation.restoreIfCancelled(failure, null);
+                }
+                final FileDeletionPlan plan = captured;
+                activity.runOnUiThread(() -> {
+                    preparingDelete = false;
+                    if (activity.activityDestroyed || activity.isFinishing()) return;
+                    if (plan != null) showDeleteConfirm(file, plan);
+                    else if (!activity.offerSafDeleteAccess(java.util.Collections.singletonList(file))) {
+                        ShortToast.show(activity, R.string.delete_failed);
+                    }
+                });
+            });
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            preparingDelete = false;
+            ShortToast.show(activity, R.string.delete_failed);
+        }
+    }
+
+    private void showDeleteConfirm(File file, FileDeletionPlan plan) {
         final boolean dark = activity.prefs == null || activity.prefs.shouldUseDarkColors(activity);
         final int bg = activity.prefs != null ? activity.prefs.getMainBgColor(activity) : (dark ? Color.rgb(33, 33, 33) : Color.rgb(255, 255, 255));
         final int panel = activity.prefs != null ? activity.prefs.getMainPanelColor(activity) : (dark ? Color.rgb(48, 48, 48) : Color.rgb(245, 245, 245));
@@ -360,10 +414,11 @@ final class MainFileActionDialogController {
         activity.overrideDialogWidth(dialog, activity.compactDeleteConfirmDialogWidthPx());
         cancel.setOnClickListener(v -> dialog.dismiss());
         delete.setOnClickListener(v -> {
-            if (activity.activityDestroyed || !delete.isEnabled()) return;
+            if (activity.activityDestroyed || activity.isFinishing() || activity.isDestroyed()
+                    || !dialog.isShowing() || !delete.isEnabled()) return;
             delete.setEnabled(false);
             String deletedPath = file.getAbsolutePath();
-            boolean deletedDirectory = file.isDirectory();
+            boolean deletedDirectory = plan.isDirectory();
             dialog.dismiss();
             FileOperationProgress progress = activity.showFileOperationProgress(
                     activity.getString(R.string.file_deleting),
@@ -371,13 +426,16 @@ final class MainFileActionDialogController {
             File parent = file.getParentFile();
             if (parent != null) progress.setFolder(parent.getName().length() > 0 ? parent.getName() : parent.getAbsolutePath());
             boolean accepted = activity.executeFolderBackgroundTask(() -> {
-                boolean deleted = false;
+                FileDeletionPlan.Result result = FileDeletionPlan.Result.FAILED;
                 try {
-                    deleted = FileSystemOps.delete(file, progress);
+                    FileTreeProgressTracker tracker = FileTreeProgressTracker.create(progress, file);
+                    progress.setTotalBytes(plan.totalBytes());
+                    if (tracker != null && tracker.isReady()) result = plan.delete(progress, tracker);
                 } catch (RuntimeException failure) {
                     ArchiveCancellation.restoreIfCancelled(failure, progress);
                 } finally {
-                    final boolean completed = deleted;
+                    final boolean completed = result == FileDeletionPlan.Result.DELETED;
+                    final boolean changed = result == FileDeletionPlan.Result.CHANGED;
                     activity.runOnUiThread(() -> {
                         activity.finishFileOperationProgress(progress);
                         if (completed) {
@@ -390,8 +448,11 @@ final class MainFileActionDialogController {
                         // A failed recursive delete may still have removed some
                         // children, so refresh for every worker outcome.
                         activity.refreshVisibleFileListAfterDelete();
+                        if (!completed && !changed && !progress.isCancelled()
+                                && activity.offerSafDeleteAccess(java.util.Collections.singletonList(file))) return;
                         ShortToast.show(activity, completed ? R.string.deleted
-                                : progress.isCancelled() ? R.string.file_operation_cancelled : R.string.delete_failed);
+                                : progress.isCancelled() ? R.string.file_operation_cancelled
+                                : changed ? R.string.raw_delete_changed : R.string.delete_failed);
                     });
                 }
             });
@@ -516,7 +577,23 @@ final class MainFileActionDialogController {
     }
 
     void showNewFolderDialog() {
-        if (activity.currentDirectory == null) return;
+        if (activity.activityDestroyed || activity.isFinishing() || activity.isDestroyed()
+                || activity.currentDirectory == null) return;
+        final File parentDirectory = activity.currentDirectory;
+        final FileRenamePlan parentPlan;
+        try {
+            // The path can name another directory after a mount or folder replacement.
+            parentPlan = FileRenamePlan.capture(parentDirectory);
+            if (!parentPlan.isDirectory()) {
+                ShortToast.show(activity, R.string.folder_create_failed);
+                return;
+            }
+        } catch (java.io.IOException | SecurityException unavailable) {
+            if (!activity.offerSafFileOperationAccess(java.util.Collections.singletonList(parentDirectory))) {
+                ShortToast.show(activity, R.string.folder_create_failed);
+            }
+            return;
+        }
         final boolean dark = activity.prefs == null || activity.prefs.shouldUseDarkColors(activity);
         final int bg = activity.prefs != null ? activity.prefs.getMainBgColor(activity) : (dark ? Color.rgb(33, 33, 33) : Color.rgb(255, 255, 255));
         final int panel = activity.prefs != null ? activity.prefs.getMainPanelColor(activity) : (dark ? Color.rgb(48, 48, 48) : Color.rgb(245, 245, 245));
@@ -562,15 +639,31 @@ final class MainFileActionDialogController {
 
         final android.app.Dialog[] ref = new android.app.Dialog[1];
         activity.addFileOpsRow(box, activity.getString(R.string.create), fg, panel, () -> {
+            if (activity.activityDestroyed || activity.isFinishing() || activity.isDestroyed()
+                    || ref[0] == null || !ref[0].isShowing()) return;
             String name = input.getText().toString().trim();
             if (name.isEmpty()) return;
-            File newDir = new File(activity.currentDirectory, name);
-            if (newDir.mkdirs()) {
+            if (!FileSystemOps.isSingleEntryName(name)) {
+                ShortToast.show(activity, R.string.folder_create_failed);
+                return;
+            }
+            if (!parentPlan.isUnchanged()) {
+                ShortToast.show(activity, R.string.file_operation_source_unavailable);
+                ref[0].dismiss();
+                return;
+            }
+            File newDir = new File(parentDirectory, name);
+            if (newDir.mkdir()) {
                 if (ref[0] != null) ref[0].dismiss();
                 activity.refreshVisibleFileListAfterFileSystemChange();
                 ShortToast.show(activity, activity.getString(R.string.folder_created));
             } else {
-                ShortToast.show(activity, activity.getString(R.string.folder_create_failed));
+                if (!newDir.exists() && activity.offerSafFileOperationAccess(
+                        java.util.Collections.singletonList(parentDirectory))) {
+                    ref[0].dismiss();
+                } else {
+                    ShortToast.show(activity, activity.getString(R.string.folder_create_failed));
+                }
             }
         });
 

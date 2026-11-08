@@ -441,10 +441,12 @@ public class EggArchiveReaderTest {
     @Test
     public void splitDiscovery_invalidOrOverflowingSelectedOrdinalFails() throws Exception {
         for (String number : new String[] {"0", "9223372036854775808"}) {
+            File selected = new File(tempFolder.newFolder(), "invalid.vol" + number + ".egg");
+            Files.write(selected.toPath(), new byte[0]);
             try {
-                EggArchiveReader.resolveFirstVolume(new File(tempFolder.getRoot(), "invalid.vol" + number + ".egg"));
+                EggArchiveReader.resolveFirstVolume(selected);
                 fail("Invalid ordinals must not alias volume 1");
-            } catch (IOException expected) { assertTrue(expected.getMessage().contains("Invalid")); }
+            } catch (IOException expected) { assertTrue(expected.getMessage(), expected.getMessage().contains("Invalid")); }
         }
     }
 
@@ -925,6 +927,7 @@ public class EggArchiveReaderTest {
         pathField.setAccessible(true);
         handleField.setAccessible(true);
         File original = null;
+        Throwable failure = null;
         try {
             reader.nextEntry();
             assertEquals(1, reader.read(new byte[1]));
@@ -935,7 +938,11 @@ public class EggArchiveReaderTest {
             if (failHandleClose) {
                 ((java.io.RandomAccessFile) handleField.get(reader)).close();
                 handleField.set(reader, new java.io.RandomAccessFile(original, "r") {
+                    private boolean closing;
                     @Override public void close() throws IOException {
+                        // Some host JDKs re-enter close while releasing the descriptor.
+                        if (closing) return;
+                        closing = true;
                         super.close();
                         throw new IOException("Injected handle-close failure");
                     }
@@ -956,9 +963,16 @@ public class EggArchiveReaderTest {
             reader.close();
             assertFalse(original.exists());
             assertRetiredForward(reader);
+        } catch (Exception | AssertionError e) {
+            failure = e;
+            throw e;
         } finally {
             if (original != null && original.exists()) pathField.set(reader, original);
-            reader.close();
+            try { reader.close(); }
+            catch (IOException cleanup) {
+                if (failure == null) throw cleanup;
+                failure.addSuppressed(cleanup);
+            }
         }
         assertEquals(0, directory.list().length);
     }
@@ -1054,7 +1068,7 @@ public class EggArchiveReaderTest {
             EggArchiveReader.extractSingleEntry(archive, "zero-azo", output, null);
             fail("Nonempty AZO output cannot satisfy a zero-size declaration");
         } catch (IOException expected) {
-            assertTrue(expected.getMessage().contains("declared unpacked size"));
+            assertTrue(expected.getMessage(), expected.getMessage().contains("declared output size"));
             assertFalse(output.exists());
         }
     }
@@ -1197,6 +1211,8 @@ public class EggArchiveReaderTest {
     public void encryptedEgg_zipCrypto_decryptsWithCorrectPassword() throws Exception {
         File archive = buildEggArchive("secret.txt", "secret payload".getBytes(StandardCharsets.UTF_8), 0, true);
         File out = tempFolder.newFile("egg-encrypted.txt");
+        byte[] sentinel = new byte[]{42};
+        Files.write(out.toPath(), sentinel);
 
         assertTrue(ArchiveSupport.requiresPasswordForExtraction(archive));
 
@@ -1204,13 +1220,13 @@ public class EggArchiveReaderTest {
                 archive, "secret.txt", out, null);
         assertFalse(withoutPassword.success);
         assertEquals(ArchiveSupport.ExtractionFailure.PASSWORD_REQUIRED, withoutPassword.failure);
-        assertFalse(out.exists());
+        org.junit.Assert.assertArrayEquals(sentinel, Files.readAllBytes(out.toPath()));
 
         ArchiveSupport.ExtractionResult wrongPassword = ArchiveSupport.extractSingleEntryDetailed(
                 archive, "secret.txt", out, "wrong-pw".toCharArray());
         assertFalse(wrongPassword.success);
         assertEquals(ArchiveSupport.ExtractionFailure.BAD_PASSWORD, wrongPassword.failure);
-        assertFalse(out.exists());
+        org.junit.Assert.assertArrayEquals(sentinel, Files.readAllBytes(out.toPath()));
 
         ArchiveSupport.ExtractionResult correct = ArchiveSupport.extractSingleEntryDetailed(
                 archive, "secret.txt", out, TEST_PASSWORD.toCharArray());

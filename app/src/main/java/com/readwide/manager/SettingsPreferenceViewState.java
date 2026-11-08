@@ -12,8 +12,10 @@ final class SettingsPreferenceViewState {
 
     static void useStoredValues(View view) {
         if (view == null) return;
-        if (view instanceof Switch || view instanceof SeekBar || view instanceof Spinner) {
+        if (view instanceof Switch || view instanceof SeekBar || view instanceof Spinner
+                || view.getId() == R.id.input_archive_viewer_background_timeout) {
             // A pre-reset/import hierarchy snapshot must not overwrite newer preferences.
+            // The timeout field also saves immediately; color HEX fields remain drafts.
             view.setSaveFromParentEnabled(false);
             return;
         }

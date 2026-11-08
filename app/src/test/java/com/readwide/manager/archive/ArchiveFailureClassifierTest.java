@@ -7,6 +7,29 @@ import org.junit.Test;
 import java.io.IOException;
 
 public class ArchiveFailureClassifierTest {
+    @Test public void zipCryptoHeaderRejectionIsBadPassword() {
+        IOException failure = org.junit.Assert.assertThrows(AlzipZipCrypto.PasswordException.class,
+                () -> AlzipZipCrypto.checked("wrong".toCharArray(), new byte[12], 255, true));
+        assertEquals(ArchiveSupport.ExtractionFailure.BAD_PASSWORD, ArchiveFailureClassifier.classify(failure));
+    }
+
+    @Test public void wrappedZipCryptoRejectionDoesNotDependOnMessage() {
+        IOException failure = new IOException("extract",
+                new AlzipZipCrypto.PasswordException("No candidate accepted"));
+        assertEquals(ArchiveSupport.ExtractionFailure.BAD_PASSWORD, ArchiveFailureClassifier.classify(failure));
+    }
+
+    @Test public void zipCryptoRejectionStillYieldsToCancellation() {
+        IOException failure = new AlzipZipCrypto.PasswordException("No candidate accepted");
+        failure.addSuppressed(new java.io.InterruptedIOException("cancelled"));
+        assertEquals(ArchiveSupport.ExtractionFailure.FAILED, ArchiveFailureClassifier.classify(failure));
+    }
+
+    @Test public void zipCryptoSourceIoFailureIsNotAPasswordRejection() {
+        assertEquals(ArchiveSupport.ExtractionFailure.FAILED,
+                ArchiveFailureClassifier.classify(new IOException("Cannot read ALZ/EGG ZipCrypto payload")));
+    }
+
     @Test public void cancellationWinsOverTypedPasswordWrapper() {
         ArchiveSupport.PasswordRequiredException failure = new ArchiveSupport.PasswordRequiredException();
         failure.initCause(new java.io.InterruptedIOException("cancelled"));

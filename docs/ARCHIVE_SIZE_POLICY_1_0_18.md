@@ -19,7 +19,7 @@ The viewer also removes its separate sequential 2 GiB entry/drain
 ceiling and routes image output through that guarded stream too. Guarded Java
 writes refresh measurable free space roughly every MiB, including while a solid
 EGG block spool and an image output coexist. This is periodic checking, not a
-reservation against concurrent writers. See `ARCHIVE_VIEWER_PERFORMANCE_1_0_18.md`.
+reservation against concurrent writers. See the [1.0.18 extraction accounting notes](DEV_CHANGES_1_0_18.md#egg-volume-handling-and-storage-based-extraction-accounting).
 
 If storage availability cannot be queried (zero/negative result or security
 exception), no fixed size substitute is imposed: counters retain their
@@ -56,20 +56,20 @@ format's field widths or filesystem/device constraints.
 The previous RAR5 streaming change removed its 64 MiB packed / 256 MiB
 unpacked per-file caps. Encrypted temporary paging removes its 64 MiB history
 ceiling; RAM remains bounded while older
-history consumes storage. See `RAR5_RAR7_PAGED_HISTORY_1_0_18.md`. RAR3 PPMd now
+history consumes storage. See the [1.0.18 RAR5 history notes](DEV_CHANGES_1_0_18.md#rar5rar6rar7-streaming-and-integrity). RAR3 PPMd now
 also streams without its old packed-entry/cumulative-output caps, retaining
 32 MiB of rolling history and its model heap; see
-`RAR3_PPMD_AND_RAR5_CHECKSUMS_1_0_18.md`.
+[the 1.0.18 RAR3/RAR4 notes](DEV_CHANGES_1_0_18.md#rar3rar4-streaming-mixed-modes-and-standard-filters).
 7z PPMd streaming removes the branch's 512 MiB packed/decoded array guards;
 its 256 MiB model guard and the 512 MiB metadata guards remain.
 The mixed-capable RAR path also streams production RAR classic-LZ output through a bounded
 standard-filter queue. The mixed raw history grows with actual output from 4 MiB
-to at most 32 MiB; it is not a file-size limit. See `RAR_MIXED_AND_7Z_CODERS_1_0_18.md`.
+to at most 32 MiB; it is not a file-size limit. See the [1.0.18 mixed-mode scope](DEV_CHANGES_1_0_18.md#rar3rar4-streaming-mixed-modes-and-standard-filters).
 See `PPMD_LZ_STREAMING_GAPS_1_0_18.md`; these changes are runtime-unverified.
 EGG AZO blocks retain their separate memory/size boundaries.
 The 7z BCJ2 fallback now streams its Copy/LZMA/LZMA2/AES chains
 without the former 512 MiB file/folder cap; see
-`SEVENZ_STREAMING_READWIDE_1_0_18.md`. Unsupported codecs remain unsupported. No claim of unlimited
+[the 1.0.18 special-7z notes](DEV_CHANGES_1_0_18.md#streaming-and-split-special-7z-decoding). Unsupported codecs remain unsupported. No claim of unlimited
 compatibility across all archives is made.
 
 ## Verification status
@@ -80,6 +80,6 @@ block/file lengths, preserved free-space reserves, and counters crossing
 128 GiB without writing huge files. A generated 513 MiB EGG Deflate output
 test is opt-in with the JVM property `readwide.largeArchiveTests=true`.
 
-The maintainer reported a successful 1.0.18 build before the later timeout-field
-and translation changes; those follow-ups are not covered. Unit-test and device
-results have not been reported; see [release readiness](RELEASE_READINESS_1_0_18.md). Static source/package checks do not establish runtime success.
+An earlier 1.0.18 build was reported successful. It predates the timeout-field
+and translation changes, which still need verification. Unit-test and device
+results have not been reported; see the [1.0.18 validation record](DEV_CHANGES_1_0_18.md#validation-boundary). Static source/package checks do not establish runtime success.

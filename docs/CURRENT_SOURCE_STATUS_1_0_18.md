@@ -1,21 +1,20 @@
 # Current source status — Readwide 1.0.18
 
-This is the current-source summary, not a claim that every change has passed
-runtime validation. The dated batch sections in the performance note describe
-implementation history: a gap stated in an early batch may be addressed later.
+This summary records the 1.0.18 source and its validation limits at that time.
+The [1.0.18 development notes](DEV_CHANGES_1_0_18.md) summarize its implementation;
+later releases may address gaps retained in this historical record.
 
 ## Identity and verification
 
 - A later presentation/resource follow-up rounds and pads the timeout field and
   refines 216 strings across 22 locales. It has static checks only and is not
-  covered by the maintainer's earlier successful build report.
+  covered by the earlier successful build report.
 - `app/build.gradle`: applicationId `com.readwide.manager`, versionName `1.0.18`,
   versionCode `10018`, compileSdk 35. Root AGP is 9.2.0; wrapper is Gradle 9.4.1.
-- The maintainer reported a successful earlier 1.0.18 snapshot build, before the
-  UI/resource follow-up above. No build log, artifact
-  hash, signing result or unit-test/device result was supplied with that report.
-  That report supersedes the old unbuilt status only for that snapshot; the older second-batch
-  APK record and batch-time validation notes remain historical.
+- An earlier 1.0.18 snapshot build was reported successful, before the UI/resource
+  changes above. The report included no build log, artifact hash, signing result
+  or unit-test/device result. It supersedes the unbuilt status only for that
+  snapshot. The older APK record and earlier validation notes remain historical.
 - New regression methods are present; their execution results have not been reported. Source structure, package
   contents and hashes are checked separately; none prove device compatibility.
 - No dependency, permission, signing-key or public release/tag changes were made
@@ -28,18 +27,18 @@ File/Recent thumbnails now track attached-holder demand, remove unused queued
 work and use a separate bounded cache-only PNG lookup queue. Completed covers
 update matching visible icons without a full-dataset scan/rebind; retries are
 coalesced. Eight binding regressions are unexecuted; cold cover generation still
-has latency. See [thumbnail scrolling](THUMBNAIL_SCROLL_FIXES_1_0_18.md).
+has latency. See the [1.0.18 thumbnail scheduling summary](DEV_CHANGES_1_0_18.md#file-list-thumbnail-scheduling).
 
 PDF read-aloud now preserves inferred spaces and refuses ambiguous glyph-run
 geometry without rejecting speech. Checkpoints carry a PDF extraction-format
 version; legacy/unknown offsets resume at their saved page start. Twelve new
-regressions are unexecuted. See [PDF read-aloud details](PDF_READ_ALOUD_FIXES_1_0_18.md).
+regressions are unexecuted. See the [1.0.18 PDF read-aloud summary](DEV_CHANGES_1_0_18.md#pdf-restoration-search-and-read-aloud).
 
 PDF query edits/dismissal invalidate old navigation results immediately. Pending
 scans are coalesced, options are snapshotted and one compiled query is reused
 across pages. Original-text offsets and inferred whitespace keep glyph indices
 aligned. Whole-document extraction and cooperative cancellation remain; eleven
-regression sources are unexecuted. See [PDF search details](PDF_SEARCH_FIXES_1_0_18.md).
+regression sources are unexecuted. See the [1.0.18 PDF search summary](DEV_CHANGES_1_0_18.md#pdf-restoration-search-and-read-aloud).
 
 ## Current archive scope
 
@@ -48,7 +47,8 @@ raw dictionary and standard-filter queue; production LZ output streams. A new
 CRC/boundary-checked fallback admits plain single-volume compressed solid runs
 with valid primers. Special 7z graphs now accept Deflate/Deflate64/BZip2/Delta and
 six BCJ filters via bundled codecs. Twenty new regressions are unexecuted.
-See [exact scope and remaining gaps](RAR_MIXED_AND_7Z_CODERS_1_0_18.md).
+See the [1.0.18 RAR scope](DEV_CHANGES_1_0_18.md#rar3rar4-streaming-mixed-modes-and-standard-filters)
+and [special-7z scope](DEV_CHANGES_1_0_18.md#streaming-and-split-special-7z-decoding).
 
 RAR5/RAR7 paged history retains the declared logical dictionary with bounded RAM
 and encrypted temporary storage; the new path still needs real-device validation.
@@ -56,10 +56,9 @@ Resolved-volume metadata guards protect preparation/handoff, but complete shared
 preview-cache identity/invalidation across all volumes remains unfinished.
 Source-level scheduling/indexing improvements have not been benchmarked.
 
-Earlier implementation stages are retained in the
-[performance history](ARCHIVE_VIEWER_PERFORMANCE_1_0_18.md), not repeated here as
-current limitations. See the [release handoff checklist](RELEASE_READINESS_1_0_18.md)
-for the maintainer's remaining validation and intentionally deferred work.
+The [1.0.18 scheduling summary](DEV_CHANGES_1_0_18.md#archive-viewer-scheduling-and-metadata-reuse)
+describes queue and index reuse. Its [validation record](DEV_CHANGES_1_0_18.md#validation-boundary)
+separates the reported earlier build from the unverified follow-up changes.
 
 | Area | Implemented source path | Still not established / retained boundary |
 | --- | --- | --- |
@@ -78,8 +77,8 @@ or decoder-memory guards remain. ALZ/EGG metadata-cache admission budgets govern
 retention only: oversized indexes remain usable uncached. Shared preview-image
 identity/retention is separate from the newer all-volume metadata indexes.
 
-See [performance implementation history](ARCHIVE_VIEWER_PERFORMANCE_1_0_18.md),
-[RAR details](RAR3_PPMD_AND_RAR5_CHECKSUMS_1_0_18.md),
+See the [1.0.18 RAR3/RAR4 summary](DEV_CHANGES_1_0_18.md#rar3rar4-streaming-mixed-modes-and-standard-filters),
+[RAR5/RAR6/RAR7 summary](DEV_CHANGES_1_0_18.md#rar5rar6rar7-streaming-and-integrity),
 [size policy](ARCHIVE_SIZE_POLICY_1_0_18.md), [EGG notes](EGG_FORMAT_NOTES.md),
 and [third-party attribution](../THIRD_PARTY_NOTICES.md).
 
@@ -87,8 +86,8 @@ and [third-party attribution](../THIRD_PARTY_NOTICES.md).
 
 `DEV_CHANGES_*`, `GITHUB_RELEASE_NOTES_*`, dated audits and 1.0.2 status matrices
 record their named versions. Do not replace their original version numbers or
-past test outcomes with 1.0.18 claims. For current publication wording, use this
-summary, the README, current release notes and the latest format-specific scope.
+past test outcomes with 1.0.18 claims. This summary describes 1.0.18 only; use the
+[documentation index](README.md) for the current release and format-specific scope.
 
-Build instructions in `RELEASE_BUILD.md` describe maintainer commands to run;
-their presence is not evidence that those commands ran on this source snapshot.
+`RELEASE_BUILD.md` lists build commands. It does not record their execution on
+this source snapshot.

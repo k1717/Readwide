@@ -81,7 +81,7 @@ public class SevenZDecodePlanTest {
                 {copy(), coder("00", null, 2, 1)},
                 {copy(), coder("00", null, 1, 2)},
                 {copy(), coder("21", new byte[]{0x40}, 1, 1)},
-                {copy(), coder("06F10701", new byte[]{1}, 1, 1)}
+                {copy(), coder("06F10701", new byte[]{0x41}, 1, 1)}
         };
         for (SevenZDecodePlan.Coder[] coders : invalid) {
             assertThrows(IOException.class, () -> SevenZDecodePlan.compile(coders, new long[2],

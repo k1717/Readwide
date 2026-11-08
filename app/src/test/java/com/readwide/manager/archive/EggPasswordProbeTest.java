@@ -120,7 +120,7 @@ public class EggPasswordProbeTest {
         assertThrows(IOException.class, () -> probe(new ByteArrayInputStream(new byte[0]), 4, 8, 0, 1, null));
         assertThrows(IOException.class, () -> probe(new ByteArrayInputStream(new byte[0]), 0, -1, 0, 1, null));
         assertThrows(ArchiveSupport.UnsupportedArchiveFeatureException.class,
-                () -> probe(new ByteArrayInputStream(new byte[0]), 3, Integer.MAX_VALUE, 0, 1, null));
+                () -> probe(new ByteArrayInputStream(new byte[0]), 3, (long) Integer.MAX_VALUE + 1, 0, 1, null));
     }
 
     private static boolean probe(InputStream input, int method, long packed, long unpacked, long crc,

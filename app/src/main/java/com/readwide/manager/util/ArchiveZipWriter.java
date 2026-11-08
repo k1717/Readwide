@@ -70,6 +70,9 @@ public final class ArchiveZipWriter {
                             throw new IOException("ZIP creation does not follow links or special files");
                         }
                         entry.recheck();
+                        FileMutationGuard sourceGuard = entry.kind == FileTreeWalk.Kind.FILE
+                                ? FileMutationGuard.capture(entry.file) : null;
+                        entry.recheck();
                         String rawName = rootName + (entry.relative.isEmpty() ? "" : "/" + entry.relative);
                         String name = safeName(rawName, entry.kind == FileTreeWalk.Kind.DIRECTORY);
                         if (!names.add(name)) throw new IOException("Duplicate ZIP entry: " + name);
@@ -82,7 +85,9 @@ public final class ArchiveZipWriter {
                             if (tracker != null) tracker.onFile(entry.file);
                             else if (progress != null) progress.setDetail(entry.file.getName());
                             long remaining = entry.bytes;
-                            try (InputStream input = new BufferedInputStream(new FileInputStream(entry.file))) {
+                            try (FileInputStream opened = new FileInputStream(entry.file);
+                                 InputStream input = new BufferedInputStream(opened)) {
+                                sourceGuard.verifyOpened(opened);
                                 int count;
                                 while ((count = input.read(buffer)) != -1) {
                                     checkpoint(progress);
@@ -93,9 +98,13 @@ public final class ArchiveZipWriter {
                                     remaining -= count;
                                     if (progress != null) progress.addDoneBytes(count);
                                 }
+                                // Byte count alone misses same-size edits, including changes
+                                // made by progress callbacks after the last output chunk.
+                                sourceGuard.verifyOpened(opened);
                             }
                             if (remaining != 0L) throw new IOException("ZIP source truncated during creation");
                             entry.recheck();
+                            sourceGuard.recheck();
                         }
                         zip.closeEntry();
                         return true;
